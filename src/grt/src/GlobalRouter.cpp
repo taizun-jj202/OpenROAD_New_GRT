@@ -4,6 +4,7 @@
 #include "grt/GlobalRouter.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -39,6 +40,7 @@
 #include "db_sta/dbSta.hh"
 #include "grt/GRoute.h"
 #include "grt/Rudy.h"
+#include "grt/SprouteAdapter.h"
 #include "odb/db.h"
 #include "odb/dbSet.h"
 #include "odb/dbShape.h"
@@ -75,6 +77,7 @@ GlobalRouter::GlobalRouter(utl::Logger* logger,
       opendp_(opendp),
       fastroute_(nullptr),
       cugr_(nullptr),
+      router_type_(RouterType::FastRoute),
       grid_origin_(0, 0),
       groute_renderer_(nullptr),
       grid_(new Grid),
@@ -102,6 +105,7 @@ GlobalRouter::GlobalRouter(utl::Logger* logger,
   fastroute_
       = new FastRouteCore(db_, logger_, callback_handler_, stt_builder_, sta_);
   cugr_ = new CUGR(db_, logger_, stt_builder_);
+  sproute_adapter_ = std::make_unique<SprouteAdapter>(logger_);
 }
 
 void GlobalRouter::initGui(std::unique_ptr<AbstractRoutingCongestionDataSource>
@@ -128,6 +132,11 @@ void GlobalRouter::clear()
   fastroute_->clear();
   vertical_capacities_.clear();
   horizontal_capacities_.clear();
+  sproute_grid_data_ = SprouteGridData();
+  sproute_nets_.clear();
+  sproute_grid_ready_ = false;
+  sproute_nets_ready_ = false;
+  sproute_total_overflow_ = 0;
   initialized_ = false;
 }
 
@@ -147,6 +156,11 @@ std::vector<Net*> GlobalRouter::initFastRoute(int min_routing_layer,
                                               int max_routing_layer)
 {
   fastroute_->clear();
+  sproute_grid_ready_ = false;
+  sproute_nets_ready_ = false;
+  sproute_grid_data_ = SprouteGridData();
+  sproute_nets_.clear();
+  sproute_total_overflow_ = 0;
   h_nets_in_pos_.clear();
   v_nets_in_pos_.clear();
   ensureLayerForGuideDimension(max_routing_layer);
@@ -158,6 +172,7 @@ std::vector<Net*> GlobalRouter::initFastRoute(int min_routing_layer,
   initRoutingTracks(max_routing_layer);
   initCoreGrid(max_routing_layer);
   setCapacities(min_routing_layer, max_routing_layer);
+  captureSprouteGridData();
 
   applyAdjustments(min_routing_layer, max_routing_layer);
   perturbCapacities();
@@ -199,8 +214,12 @@ void GlobalRouter::applyAdjustments(int min_routing_layer,
 // previous congestion report file.
 void GlobalRouter::saveCongestion()
 {
-  is_congested_ = fastroute_->totalOverflow() > 0;
-  fastroute_->saveCongestion();
+  if (router_type_ == RouterType::Sproute) {
+    is_congested_ = sproute_total_overflow_ > 0;
+  } else {
+    is_congested_ = fastroute_->totalOverflow() > 0;
+    fastroute_->saveCongestion();
+  }
 }
 
 NetRouteMap& GlobalRouter::getRoutes()
@@ -333,6 +352,10 @@ void GlobalRouter::globalRoute(bool save_guides,
     grouter_cbk_ = new GRouteDbCbk(this);
     grouter_cbk_->addOwner(block_);
   } else {
+    RouterType active_router = router_type_;
+    if (use_cugr_) {
+      active_router = RouterType::CUGR;
+    }
     try {
       if (end_incremental) {
         updateDirtyRoutes();
@@ -347,14 +370,23 @@ void GlobalRouter::globalRoute(bool save_guides,
         getMinMaxLayer(min_layer, max_layer);
 
         std::vector<Net*> nets = initFastRoute(min_layer, max_layer);
-        if (use_cugr_) {
+        if (active_router == RouterType::CUGR) {
           int min_layer, max_layer;
           getMinMaxLayer(min_layer, max_layer);
           cugr_->init(min_layer, max_layer);
           cugr_->route();
           routes_ = cugr_->getRoutes();
+        } else if (active_router == RouterType::Sproute) {
+          if (!hasSprouteGridData() || !hasSprouteNetData()) {
+            logger_->error(GRT,
+                           6002,
+                           "SPRoute router selected, but grid/net data is "
+                           "not initialized.");
+          }
+          sproute_adapter_->initialize(sproute_grid_data_, sproute_nets_);
+          routes_ = sproute_adapter_->run();
         } else {
-          if (verbose_) {
+          if (verbose_ && active_router == RouterType::FastRoute) {
             reportResources();
           }
 
@@ -370,7 +402,7 @@ void GlobalRouter::globalRoute(bool save_guides,
     updateDbCongestion();
     saveCongestion();
 
-    if (verbose_ && !use_cugr_) {
+    if (verbose_ && active_router == RouterType::FastRoute) {
       reportCongestion();
     }
     computeWirelength();
@@ -389,7 +421,9 @@ void GlobalRouter::globalRoute(bool save_guides,
 
   if (is_congested_) {
     // Suggest adjustment value
-    suggestAdjustment();
+    if (router_type_ == RouterType::FastRoute) {
+      suggestAdjustment();
+    }
     if (allow_congestion_) {
       logger_->warn(GRT,
                     115,
@@ -434,7 +468,14 @@ void GlobalRouter::updateDbCongestion()
 {
   int min_layer, max_layer;
   getMinMaxLayer(min_layer, max_layer);
-  if (use_cugr_) {
+  if (router_type_ == RouterType::Sproute) {
+    if (sproute_adapter_ != nullptr) {
+      if (block_ == nullptr) {
+        block_ = db_->getChip()->getBlock();
+      }
+      sproute_adapter_->updateDbCongestion(block_);
+    }
+  } else if (use_cugr_) {
     cugr_->updateDbCongestion();
   } else {
     fastroute_->updateDbCongestion(min_layer, max_layer);
@@ -723,10 +764,66 @@ void GlobalRouter::setCapacities(int min_routing_layer, int max_routing_layer)
   }
 }
 
+void GlobalRouter::captureSprouteGridData()
+{
+  sproute_grid_data_.origin = odb::Point(grid_->getXMin(), grid_->getYMin());
+  sproute_grid_data_.tile_size = grid_->getTileSize();
+  sproute_grid_data_.x_grids = grid_->getXGrids();
+  sproute_grid_data_.y_grids = grid_->getYGrids();
+  sproute_grid_data_.num_layers = grid_->getNumLayers();
+  sproute_grid_data_.dbu_per_micron = db_->getTech()->getDbUnitsPerMicron();
+  sproute_grid_data_.h_capacities = horizontal_capacities_;
+  sproute_grid_data_.v_capacities = vertical_capacities_;
+  sproute_grid_data_.layer_directions.clear();
+  sproute_grid_data_.layer_directions.resize(grid_->getNumLayers());
+  odb::dbTech* tech = db_->getTech();
+  for (int l = 1; l <= grid_->getNumLayers(); l++) {
+    odb::dbTechLayer* tech_layer = tech->findRoutingLayer(l);
+    if (tech_layer != nullptr) {
+      sproute_grid_data_.layer_directions[l - 1]
+          = tech_layer->getDirection().getValue();
+    } else {
+      sproute_grid_data_.layer_directions[l - 1]
+          = odb::dbTechLayerDir::Value::NONE;
+    }
+  }
+  sproute_grid_ready_ = true;
+}
+
 void GlobalRouter::setPerturbationAmount(int perturbation)
 {
   perturbation_amount_ = perturbation;
 };
+
+void GlobalRouter::setUseCUGR(bool use_cugr)
+{
+  use_cugr_ = use_cugr;
+  if (use_cugr_) {
+    router_type_ = RouterType::CUGR;
+  } else if (router_type_ == RouterType::CUGR) {
+    router_type_ = RouterType::FastRoute;
+  }
+}
+
+void GlobalRouter::setRouterType(const std::string& router_name)
+{
+  std::string normalized = router_name;
+  std::transform(normalized.begin(),
+                 normalized.end(),
+                 normalized.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+
+  if (normalized == "sproute") {
+    router_type_ = RouterType::Sproute;
+    use_cugr_ = false;
+  } else if (normalized == "cugr") {
+    router_type_ = RouterType::CUGR;
+    use_cugr_ = true;
+  } else {
+    router_type_ = RouterType::FastRoute;
+    use_cugr_ = false;
+  }
+}
 
 void GlobalRouter::updateDirtyNets(std::vector<Net*>& dirty_nets)
 {
@@ -1161,6 +1258,9 @@ float GlobalRouter::getNetSlack(Net* net)
 void GlobalRouter::initNetlist(std::vector<Net*>& nets)
 {
   pad_pins_connections_.clear();
+  sproute_nets_.clear();
+  sproute_nets_.reserve(nets.size());
+  sproute_nets_ready_ = false;
 
   int min_degree = std::numeric_limits<int>::max();
   // Do NOT use numeric_limits<int>::min() to init
@@ -1206,6 +1306,7 @@ void GlobalRouter::initNetlist(std::vector<Net*>& nets)
   // position
   addResourcesForPinAccess();
   fastroute_->initAuxVar();
+  sproute_nets_ready_ = true;
 }
 
 bool GlobalRouter::pinPositionsChanged(Net* net)
@@ -1283,6 +1384,30 @@ void GlobalRouter::makeFastrouteNet(Net* net)
       && net->getDbNet() == fastroute_->getDebugNet()) {
     saveSttInputFile(net);
   }
+
+  recordSprouteNetData(
+      net, pins_on_grid, root_idx, min_layer, max_layer, is_clock);
+}
+
+void GlobalRouter::recordSprouteNetData(Net* net,
+                                        const std::vector<RoutePt>& pins_on_grid,
+                                        int root_idx,
+                                        int min_layer,
+                                        int max_layer,
+                                        bool is_clock)
+{
+  if (pins_on_grid.empty()) {
+    return;
+  }
+
+  SprouteNetData net_data;
+  net_data.db_net = net->getDbNet();
+  net_data.pins = pins_on_grid;
+  net_data.root_pin_index = root_idx;
+  net_data.min_layer = min_layer;
+  net_data.max_layer = max_layer;
+  net_data.is_clock = is_clock;
+  sproute_nets_.push_back(std::move(net_data));
 }
 
 void GlobalRouter::saveSttInputFile(Net* net)
@@ -3812,6 +3937,26 @@ Net* GlobalRouter::getNet(odb::dbNet* db_net)
 int GlobalRouter::getTileSize() const
 {
   return grid_->getTileSize();
+}
+
+bool GlobalRouter::hasSprouteGridData() const
+{
+  return sproute_grid_ready_;
+}
+
+bool GlobalRouter::hasSprouteNetData() const
+{
+  return sproute_nets_ready_;
+}
+
+const SprouteGridData& GlobalRouter::getSprouteGridData() const
+{
+  return sproute_grid_data_;
+}
+
+const std::vector<SprouteNetData>& GlobalRouter::getSprouteNets() const
+{
+  return sproute_nets_;
 }
 
 void GlobalRouter::initClockNets()

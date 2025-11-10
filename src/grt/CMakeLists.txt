@@ -9,6 +9,7 @@ find_package(OpenMP REQUIRED)
 
 add_subdirectory(src/fastroute)
 add_subdirectory(src/cugr)
+add_subdirectory(src/sproute)
 
 swig_lib(NAME      grt
          NAMESPACE grt
@@ -23,6 +24,7 @@ add_library(grt_lib
   src/RepairAntennas.cpp
   src/Rudy.cpp
   src/GlobalRouter.cpp
+  src/sproute/SprouteAdapter.cpp
 )
 
 target_include_directories(grt_lib
@@ -36,6 +38,7 @@ target_link_libraries(grt_lib
     utl_lib
     FastRoute4.1
     CUGR
+    SPROUTE_ENGINE
     ant_lib
     dpl_lib
     dbSta_lib

@@ -103,11 +103,43 @@ enum class NetType
   All
 };
 
+enum class RouterType
+{
+  FastRoute,
+  Sproute,
+  CUGR
+};
+
 using Guides = std::vector<std::pair<int, odb::Rect>>;
 using LayerId = int;
 using TileSet = std::set<std::pair<int, int>>;
 using RoutePointToPinsMap = std::map<RoutePt, RoutePointPins>;
 using PointPair = std::pair<odb::Point, odb::Point>;
+
+class SprouteAdapter;
+
+struct SprouteGridData
+{
+  odb::Point origin{0, 0};
+  int tile_size{0};
+  int x_grids{0};
+  int y_grids{0};
+  int num_layers{0};
+  int dbu_per_micron{1000};
+  std::vector<int> h_capacities;
+  std::vector<int> v_capacities;
+  std::vector<odb::dbTechLayerDir::Value> layer_directions;
+};
+
+struct SprouteNetData
+{
+  odb::dbNet* db_net{nullptr};
+  std::vector<RoutePt> pins;
+  int root_pin_index{-1};
+  int min_layer{0};
+  int max_layer{0};
+  bool is_clock{false};
+};
 
 class GlobalRouter
 {
@@ -153,7 +185,7 @@ class GlobalRouter
   void setAllowCongestion(bool allow_congestion);
   void setResistanceAware(bool resistance_aware);
   void setMacroExtension(int macro_extension);
-  void setUseCUGR(bool use_cugr) { use_cugr_ = use_cugr; };
+  void setUseCUGR(bool use_cugr);
 
   // flow functions
   void readGuides(const char* file_name);
@@ -183,6 +215,10 @@ class GlobalRouter
   NetRouteMap getPartialRoutes();
   Net* getNet(odb::dbNet* db_net);
   int getTileSize() const;
+  bool hasSprouteGridData() const;
+  bool hasSprouteNetData() const;
+  const SprouteGridData& getSprouteGridData() const;
+  const std::vector<SprouteNetData>& getSprouteNets() const;
   bool isNonLeafClock(odb::dbNet* db_net);
 
   bool hasAvailableResources(bool is_horizontal,
@@ -248,6 +284,7 @@ class GlobalRouter
   void setCapacitiesPerturbationPercentage(float percentage);
   void setPerturbationAmount(int perturbation);
   void perturbCapacities();
+  void setRouterType(const std::string& router_name);
 
   void initDebugFastRoute(std::unique_ptr<AbstractFastRouteRenderer> renderer);
   AbstractFastRouteRenderer* getDebugFastRoute() const;
@@ -461,6 +498,13 @@ class GlobalRouter
   void initGridAndNets();
   void ensureLayerForGuideDimension(int max_routing_layer);
   void configFastRoute();
+  void captureSprouteGridData();
+  void recordSprouteNetData(Net* net,
+                            const std::vector<RoutePt>& pins_on_grid,
+                            int root_idx,
+                            int min_layer,
+                            int max_layer,
+                            bool is_clock);
 
   utl::Logger* logger_;
   utl::CallBackHandler* callback_handler_;
@@ -470,6 +514,7 @@ class GlobalRouter
   // Objects variables
   FastRouteCore* fastroute_;
   CUGR* cugr_;
+  RouterType router_type_{RouterType::FastRoute};
   odb::Point grid_origin_;
   std::unique_ptr<AbstractGrouteRenderer> groute_renderer_;
   NetRouteMap routes_;
@@ -479,6 +524,10 @@ class GlobalRouter
   Grid* grid_;
   std::map<int, odb::dbTechLayer*> routing_layers_;
   std::vector<RoutingTracks> routing_tracks_;
+  std::unique_ptr<SprouteAdapter> sproute_adapter_;
+  SprouteGridData sproute_grid_data_;
+  std::vector<SprouteNetData> sproute_nets_;
+  int sproute_total_overflow_{0};
 
   // Flow variables
   bool is_incremental;
@@ -490,6 +539,8 @@ class GlobalRouter
   bool resistance_aware_{false};
   std::vector<int> vertical_capacities_;
   std::vector<int> horizontal_capacities_;
+  bool sproute_grid_ready_{false};
+  bool sproute_nets_ready_{false};
   int macro_extension_;
   bool initialized_;
   int total_diodes_count_;

@@ -147,6 +147,12 @@ set_use_cugr(bool use_cugr)
 }
 
 void
+set_router_type(const char* router_name)
+{
+  getGlobalRouter()->setRouterType(router_name);
+}
+
+void
 global_route(bool start_incremental, bool end_incremental)
 {
   getGlobalRouter()->globalRoute(true, start_incremental, end_incremental);
