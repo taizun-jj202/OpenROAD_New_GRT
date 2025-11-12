@@ -10,7 +10,46 @@
 #include "grGen.h"
 #include "utl/Logger.h"
 
+#ifdef HORIZONTAL
+#undef HORIZONTAL
+#endif
+#ifdef VERTICAL
+#undef VERTICAL
+#endif
+
 namespace grt {
+
+namespace {
+
+const Edge3D dummy_edge{};
+
+const Edge3D& horizontalEdge(const SprouteGridData& grid,
+                             int layer,
+                             int y,
+                             int x)
+{
+  if (grid.x_grids <= 1) {
+    return dummy_edge;
+  }
+  const int per_layer = (grid.x_grids - 1) * grid.y_grids;
+  const int idx = layer * per_layer + y * (grid.x_grids - 1) + x;
+  return h_edges3D[idx];
+}
+
+const Edge3D& verticalEdge(const SprouteGridData& grid,
+                           int layer,
+                           int y,
+                           int x)
+{
+  if (grid.y_grids <= 1) {
+    return dummy_edge;
+  }
+  const int per_layer = grid.x_grids * (grid.y_grids - 1);
+  const int idx = layer * per_layer + y * grid.x_grids + x;
+  return v_edges3D[idx];
+}
+
+}  // namespace
 
 SprouteEngine::SprouteEngine(utl::Logger* logger) : logger_(logger)
 {
@@ -347,7 +386,7 @@ void SprouteEngine::updateDbCongestion(odb::dbBlock* block)
         if (x_grids > 1 && capH > 0) {
           const int hx = std::max(
               0, std::min(x, x_grids - 2));
-          const Edge3D& hedge = horizontalEdge(layer, y, hx);
+          const Edge3D& hedge = horizontalEdge(grid_, layer, y, hx);
           const uint16_t blockageH
               = capH > hedge.cap ? capH - hedge.cap : 0;
           usageH = hedge.usage + blockageH;
@@ -356,7 +395,7 @@ void SprouteEngine::updateDbCongestion(odb::dbBlock* block)
         if (y_grids > 1 && capV > 0) {
           const int vy = std::max(
               0, std::min(y, y_grids - 2));
-          const Edge3D& vedge = verticalEdge(layer, vy, x);
+          const Edge3D& vedge = verticalEdge(grid_, layer, vy, x);
           const uint16_t blockageV
               = capV > vedge.cap ? capV - vedge.cap : 0;
           usageV = vedge.usage + blockageV;
@@ -368,28 +407,6 @@ void SprouteEngine::updateDbCongestion(odb::dbBlock* block)
       }
     }
   }
-}
-
-const Edge3D& SprouteEngine::horizontalEdge(int layer, int y, int x) const
-{
-  static Edge3D dummy{};
-  if (grid_.x_grids <= 1) {
-    return dummy;
-  }
-  const int per_layer = (grid_.x_grids - 1) * grid_.y_grids;
-  const int idx = layer * per_layer + y * (grid_.x_grids - 1) + x;
-  return h_edges3D[idx];
-}
-
-const Edge3D& SprouteEngine::verticalEdge(int layer, int y, int x) const
-{
-  static Edge3D dummy{};
-  if (grid_.y_grids <= 1) {
-    return dummy;
-  }
-  const int per_layer = grid_.x_grids * (grid_.y_grids - 1);
-  const int idx = layer * per_layer + y * grid_.x_grids + x;
-  return v_edges3D[idx];
 }
 
 }  // namespace grt

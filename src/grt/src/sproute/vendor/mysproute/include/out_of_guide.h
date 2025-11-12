@@ -1,6 +1,10 @@
 #ifndef OUT_OF_GUIDE_H
 #define OUT_OF_GUIDE_H
 
+namespace parser {
+int find_Gcell(int pin_in, std::vector<int> GcellBoundaries);
+}
+
 void write_guide_points() {
 
 

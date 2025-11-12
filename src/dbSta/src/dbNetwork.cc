@@ -1768,7 +1768,9 @@ const char* dbNetwork::pathName(const Net* net) const
                      db_mod->getName(),
                      block_->getHierarchyDelimiter());
     }
-    full_path_buf.append(modnet_name);
+    const std::string_view modnet_view{modnet_name};
+    full_path_buf.append(
+        modnet_view.data(), modnet_view.data() + modnet_view.size());
     full_path_buf.push_back('\0');
     return tmpStringCopy(full_path_buf.data());
   }

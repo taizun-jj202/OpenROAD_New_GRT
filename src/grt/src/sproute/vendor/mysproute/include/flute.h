@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <math.h>
+#include <string>
+#include <iostream>
 //#include "flute_mst.h"
 
 /*****************************/

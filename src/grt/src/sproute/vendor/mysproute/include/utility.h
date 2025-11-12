@@ -7,6 +7,7 @@
 #include "DataType.h"
 #include "flute.h"
 #include "DataProc.h"
+#include "grGen.h"
 #include "out_of_guide.h"
 #include "algo.h"
 

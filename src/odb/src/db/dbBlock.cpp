@@ -3775,7 +3775,10 @@ std::string _dbBlock::makeNewName(
                    parent->getHierarchicalName(),
                    block->getHierarchyDelimiter());
   }
-  buf.append(fmt::string_view(base_name));
+  if (base_name != nullptr) {
+    fmt::string_view base_view(base_name);
+    buf.append(base_view.data(), base_view.data() + base_view.size());
+  }
   buf.push_back('\0');  // Null-terminate for find* functions
 
   // If uniquify is IF_NEEDED*, check for uniqueness before adding a suffix.

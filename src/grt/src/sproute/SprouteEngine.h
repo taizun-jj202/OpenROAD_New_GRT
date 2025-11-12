@@ -65,8 +65,6 @@ class SprouteEngine
                   int grid_y1,
                   int grid_l1) const;
   int toDbLayer(int sproute_layer) const;
-  const Edge3D& horizontalEdge(int layer, int y, int x) const;
-  const Edge3D& verticalEdge(int layer, int y, int x) const;
 
   utl::Logger* logger_;
   SprouteGridData grid_;
