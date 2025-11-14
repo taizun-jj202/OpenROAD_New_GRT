@@ -91,7 +91,7 @@ void mazeRouteMSMDDetPart_Astar_Region(int iter, int expand, float costHeight,
                           int ripup_threshold, int mazeedge_Threshold,
                           Bool Ordering, int cost_type, int parts,
                           std::vector<std::vector<int>>& region_part, galois::LargeArray<bool> &done, 
-                          galois::substrate::PerThreadStorage<THREAD_LOCAL_STORAGE>& thread_local_storage,
+                          SproutePerThreadStorage& thread_local_storage,
                           float* color_map) {
   // LOCK = 0;
   float forange;

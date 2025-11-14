@@ -145,6 +145,10 @@ void readGR(parser::grGenerator& grGen, Algo algo)
         strcpy(netName, grGen.grnets.at(i).name.c_str());
         netID = grGen.grnets.at(i).idx;
         numPins = grGen.grnets.at(i).numPins;
+        if (numPins <= 0)
+        {
+            continue;
+        }
         if(numPins > 1000)
             cout << "reading large net: " << netName << " " << numPins << endl;
         //cout << netName << " " << netID << " " << numPins << endl;
@@ -189,6 +193,10 @@ void readGR(parser::grGenerator& grGen, Algo algo)
                     }
                     if(!remove) // the pin is in different grid from other pins
                     {
+                        if (pinInd >= MAXNETDEG)
+                        {
+                            break;
+                        }
                         pinXarray[pinInd] = (pinX == xGrid)? (pinX - 1) : pinX;
                         pinYarray[pinInd] = (pinY == yGrid)? (pinY - 1) : pinY;
                         pinLarray[pinInd] = pinL;
@@ -198,6 +206,11 @@ void readGR(parser::grGenerator& grGen, Algo algo)
                 }
             }
         
+            if(pinInd == 0)
+            {
+                continue;
+            }
+
             if(pinInd>1) // valid net
             {
                 MD = max(MD, pinInd);
@@ -385,14 +398,16 @@ void readGR(parser::grGenerator& grGen, Algo algo)
         }
     }
 
-    for(auto capReduction : *(grGen.capReductions_p))
+    if (grGen.capReductions_p != nullptr)
     {
-        int x1 = capReduction.x;	
-        int y1 = capReduction.y;
-        int k = capReduction.z; //bottom layer is 0
-
-        if (lefDB.layers.at(k * 2).direction == "HORIZONTAL")//horizontal edge
+        for(auto capReduction : *(grGen.capReductions_p))
         {
+            int x1 = capReduction.x;	
+            int y1 = capReduction.y;
+            int k = capReduction.z; //bottom layer is 0
+
+            if (lefDB.layers.at(k * 2).direction == "HORIZONTAL")//horizontal edge
+            {
 			float local_rudy;
 			if(x1 <= xGrid - 2)
 				local_rudy = 0.5 * (rudy[y1*xGrid + x1] + rudy[y1*xGrid + x1 + 1]);
@@ -434,16 +449,17 @@ void readGR(parser::grGenerator& grGen, Algo algo)
             v_edges[grid].cap-=reduce;
             v_edges[grid].red += reduce;
             
-        }
-        else
-        {
+            }
+            else
+            {
             cout << "unknown layer direction in cap reduction" << endl;
             exit(1);
         }
 
     }
+    }
 
-	invalidNetsAdj(invalid_nets, xGrid, yGrid);
+		invalidNetsAdj(invalid_nets, xGrid, yGrid);
 
 	/*int tmpX = 145, tmpY = 87;
 	int grid2D = tmpY*xGrid+tmpX;

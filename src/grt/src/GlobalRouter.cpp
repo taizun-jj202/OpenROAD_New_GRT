@@ -385,6 +385,13 @@ void GlobalRouter::globalRoute(bool save_guides,
           }
           sproute_adapter_->initialize(sproute_grid_data_, sproute_nets_);
           routes_ = sproute_adapter_->run();
+          addRemainingGuides(routes_, nets, min_layer, max_layer);
+          connectPadPins(routes_);
+          for (auto& net_route : routes_) {
+            std::vector<Pin>& pins = db_net_map_[net_route.first]->getPins();
+            GRoute& route = net_route.second;
+            mergeSegments(pins, route);
+          }
         } else {
           if (verbose_ && active_router == RouterType::FastRoute) {
             reportResources();

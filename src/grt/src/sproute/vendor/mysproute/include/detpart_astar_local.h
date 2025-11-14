@@ -106,7 +106,7 @@ void mazeRouteMSMDDetPart_Astar_Local(int iter, int expand, float costHeight,
                           int ripup_threshold, int mazeedge_Threshold,
                           Bool Ordering, int cost_type, int parts,
                           std::vector<std::vector<int>>& vecParts, galois::LargeArray<bool> &done, 
-                          galois::substrate::PerThreadStorage<THREAD_LOCAL_STORAGE>& thread_local_storage) {
+                          SproutePerThreadStorage& thread_local_storage) {
   // LOCK = 0;
   float forange;
   int astar_weight = 1.0;

@@ -23,7 +23,9 @@ typedef struct {
 } Segment;              // A Segment is a 2-pin connection
 
 typedef struct {
-  char name[30]; // net name
+  // OpenROAD nets often exceed the 30-char limit from the original code,
+  // so give the local buffer plenty of headroom to avoid overflow.
+  char name[256]; // net name
   int netIDorg;  // orginal net ID in the input file
   short numPins; // number of pins in the net
   short deg; // net degree (number of MazePoints connecting by the net, pins in

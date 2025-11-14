@@ -461,7 +461,7 @@ void mazeRouteMSMDDetPart_Astar(int iter, int expand, float costHeight,
     StNetOrder();
   }
 
-  galois::substrate::PerThreadStorage<THREAD_LOCAL_STORAGE>
+  SproutePerThreadStorage
       thread_local_storage{};
   // for(nidRPC=0; nidRPC<numValidNets; nidRPC++)//parallelize
   astar_PerThread_PQ perthread_pq;

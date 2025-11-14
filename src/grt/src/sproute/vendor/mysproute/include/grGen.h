@@ -109,7 +109,7 @@ public:
 	int numAdjust;
 	galois::InsertBag<CapReduction>* capReductions_p;
 
-	grGenerator() {}
+	grGenerator() : capReductions_p(nullptr) {}
 
 	grGenerator(lefDataBase& lefDB, defDataBase& defDB, galois::InsertBag<CapReduction>& capReductions)
 	{

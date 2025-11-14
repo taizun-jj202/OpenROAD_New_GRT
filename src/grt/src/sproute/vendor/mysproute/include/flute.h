@@ -7,6 +7,7 @@
 #include <math.h>
 #include <string>
 #include <iostream>
+#include <cstdlib>
 //#include "flute_mst.h"
 
 /*****************************/
@@ -129,6 +130,34 @@ DTYPE wirelength(Tree t);
 void printtree(Tree t);
 void plottree(Tree t);
 
+#ifdef _WIN32
+#define SPROUTE_PATH_SEP '\\'
+#else
+#define SPROUTE_PATH_SEP '/'
+#endif
+
+inline const char* sprouteDefaultFluteDir()
+{
+  const char* env_dir = std::getenv("SPROUTE_FLUTE_DIR");
+  if (env_dir != nullptr && env_dir[0] != '\0') {
+    return env_dir;
+  }
+#ifdef SPROUTE_LUT_DIR
+  return SPROUTE_LUT_DIR;
+#else
+  return "";
+#endif
+}
+
+inline std::string sprouteNormalizeDir(const char* raw_dir)
+{
+  std::string dir = raw_dir != nullptr ? raw_dir : "";
+  if (!dir.empty() && dir.back() != '/' && dir.back() != '\\') {
+    dir.push_back(SPROUTE_PATH_SEP);
+  }
+  return dir;
+}
+
 #define MAX_HEAP_SIZE (MAXD * 2)
 int max_heap_size = MAX_HEAP_SIZE;
 void init_param() {
@@ -157,11 +186,9 @@ void readLUT(const char* fluteDir) {
       charnum[i] = 0;
   }
 
-  string powvfile, postfile;
-  powvfile = fluteDir;
-  powvfile += POWVFILE;
-  postfile = fluteDir;
-  postfile += POSTFILE;
+  std::string baseDir = sprouteNormalizeDir(fluteDir);
+  string powvfile = baseDir + POWVFILE;
+  string postfile = baseDir + POSTFILE;
 
   fpwv = fopen(powvfile.c_str(), "r");
   if (fpwv == NULL) {
@@ -232,88 +259,7 @@ void readLUT(const char* fluteDir) {
 }
 
 void readLUT() {
-  unsigned char charnum[256], line[32], *linep, c;
-  FILE *fpwv, *fprt;
-  struct csoln* p;
-  int d, i, j, k, kk, ns, nn;
-
-  init_param();
-
-  for (i = 0; i <= 255; i++) {
-    if ('0' <= i && i <= '9')
-      charnum[i] = i - '0';
-    else if (i >= 'A')
-      charnum[i] = i - 'A' + 10;
-    else // if (i=='$' || i=='\n' || ... )
-      charnum[i] = 0;
-  }
-
-  fpwv = fopen(POWVFILE, "r");
-  if (fpwv == NULL) {
-    printf("Error in opening %s\n", POWVFILE);
-    exit(1);
-  }
-
-#if ROUTING == 1
-  fprt = fopen(POSTFILE, "r");
-  if (fprt == NULL) {
-    printf("Error in opening %s\n", POSTFILE);
-    exit(1);
-  }
-#endif
-
-  for (d = 4; d <= D; d++) {
-    if (fscanf(fpwv, "d=%d\n", &d) != 1)
-      abort_with_message("Unable to get needed info from POWV.");
-#if ROUTING == 1
-    if (fscanf(fprt, "d=%d\n", &d) != 1)
-      abort_with_message("Unable to get needed info from POST.");
-#endif
-    for (k = 0; k < numgrp[d]; k++) {
-      ns = (int)charnum[fgetc(fpwv)];
-
-      if (ns == 0) { // same as some previous group
-        if (fscanf(fpwv, "%d\n", &kk) != 1)
-          abort_with_message("Unable to get needed info from POWV.");
-        numsoln[d][k] = numsoln[d][kk];
-        LUT[d][k]     = LUT[d][kk];
-      } else {
-        fgetc(fpwv); // '\n'
-        numsoln[d][k] = ns;
-        p             = (struct csoln*)malloc(ns * sizeof(struct csoln));
-        LUT[d][k]     = p;
-        for (i = 1; i <= ns; i++) {
-          linep     = (unsigned char*)fgets((char*)line, 32, fpwv);
-          p->parent = charnum[*(linep++)];
-          j         = 0;
-          while ((p->seg[j++] = charnum[*(linep++)]) != 0)
-            ;
-          j = 10;
-          while ((p->seg[j--] = charnum[*(linep++)]) != 0)
-            ;
-#if ROUTING == 1
-          nn = 2 * d - 2;
-          if (!fread(line, 1, d - 2, fprt))
-            abort_with_message("Unable to get needed info from POST.");
-          linep = line;
-          for (j = d; j < nn; j++) {
-            c                = charnum[*(linep++)];
-            p->rowcol[j - d] = c;
-          }
-          if (!fread(line, 1, nn / 2 + 1, fprt))
-            abort_with_message("Unable to get needed info from POST.");
-          linep = line; // last char \n
-          for (j = 0; j < nn;) {
-            c                = *(linep++);
-            p->neighbor[j++] = c / 16;
-            p->neighbor[j++] = c % 16;
-          }
-#endif
-          p++;
-        }
-      }
-    }
-  }
+  readLUT(sprouteDefaultFluteDir());
 }
 
 DTYPE flute_wl(int d, DTYPE x[], DTYPE y[], int acc) {

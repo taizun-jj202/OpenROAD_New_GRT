@@ -26,6 +26,8 @@
 
 #include "galois/LargeArray.h"
 
+#include "ThreadStorageAdapter.h"
+
 // using namespace std;
 
 #define PARENT(i) (i - 1) / 2
@@ -307,6 +309,8 @@ struct THREAD_LOCAL_STORAGE {
     free(v_local_usage);
   }
 };
+
+using SproutePerThreadStorage = sproute::ThreadStorage<THREAD_LOCAL_STORAGE>;
 
 void convertToMazerouteNet(int netID) {
   short *gridsX, *gridsY;
@@ -1297,7 +1301,7 @@ void reInitTree(int netID) {
 
 void mazeRouteMSMD(int iter, int expand, float costHeight, int ripup_threshold,
                    int mazeedge_Threshold, Bool Ordering, int cost_type, galois::LargeArray<bool>& done,
-                   galois::substrate::PerThreadStorage<THREAD_LOCAL_STORAGE>& thread_local_storage) {
+                   SproutePerThreadStorage& thread_local_storage) {
   // LOCK = 0;
   float forange;
   // allocate memory for distance and parent and pop_heap
@@ -2236,7 +2240,7 @@ void mazeRouteMSMD_block(int iter, int expand, float costHeight,
     // printf("order?\n");
   }
 
-  galois::substrate::PerThreadStorage<THREAD_LOCAL_STORAGE>
+  SproutePerThreadStorage
       thread_local_storage{};
   // for(nidRPC=0; nidRPC<numValidNets; nidRPC++)//parallelize
   PerThread_PQ perthread_pq;

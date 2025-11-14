@@ -1,6 +1,7 @@
 #include "SprouteEngine.h"
 
 #include <algorithm>
+#include <memory>
 #include <sstream>
 #include <unordered_map>
 #include <utility>
@@ -20,6 +21,13 @@
 namespace grt {
 
 namespace {
+
+void ensureGaloisRuntime()
+{
+  static std::unique_ptr<galois::SharedMemSys> runtime
+      = std::make_unique<galois::SharedMemSys>();
+  (void) runtime;
+}
 
 const Edge3D dummy_edge{};
 
@@ -72,7 +80,7 @@ NetRouteMap SprouteEngine::run()
   prepareLefDefMetadata();
   parser::grGenerator generator = buildGenerator();
 
-  galois::SharedMemSys galois_runtime;
+  ensureGaloisRuntime();
   if (numThreads <= 0) {
     numThreads = 1;
   }
@@ -83,6 +91,12 @@ NetRouteMap SprouteEngine::run()
       generator.grid.z, generator.grid.x, generator.grid.y);
   galois::StatTimer timer("sproute_timer");
   timer.start();
+  if (generator.capReductions_p == nullptr) {
+    logger_->warn(utl::GRT,
+                  400,
+                  "SPRoute generator has no localized capacity reductions; "
+                  "continuing without adjustments.");
+  }
   runFastRoute(generator,
                /*benchFile=*/"",
                /*OutFileName=*/"",
@@ -200,6 +214,7 @@ parser::grGenerator SprouteEngine::buildGenerator() const
 
   generator.vCap = grid_.v_capacities;
   generator.hCap = grid_.h_capacities;
+  generator.capReductions_p = nullptr;
 
   generator.numNets = static_cast<int>(input_.nets.size());
   generator.grnets.reserve(generator.numNets);

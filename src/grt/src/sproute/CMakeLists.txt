@@ -71,3 +71,8 @@ target_link_libraries(SPROUTE_ENGINE
     ${GALOIS_SHMEM_LIB}
     ${GALOIS_SUPPORT_LIB}
     Threads::Threads)
+
+target_compile_definitions(SPROUTE_ENGINE
+  PRIVATE
+    SPROUTE_LUT_DIR="${CMAKE_SOURCE_DIR}/src/stt/src/flt/etc/"
+)
