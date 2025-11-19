@@ -1,0 +1,8 @@
+OpenROAD v2.0-26064-g7226967b89 
+Features included (+) or not (-): +GPU +GUI +Python
+This program is licensed under the BSD-3 license. See the LICENSE file for details.
+Components of this program may be licensed under more restrictive licenses which must be honored.
+[INFO ODB-0227] LEF file: Nangate45/Nangate45_tech.lef, created 22 layers, 27 vias
+[INFO ODB-0227] LEF file: Nangate45/Nangate45_stdcell.lef, created 135 library cells
+[ERROR STA-1398] aes is not a verilog module.
+Error: upto_gr_aesNan45.tcl, 17 STA-1398
