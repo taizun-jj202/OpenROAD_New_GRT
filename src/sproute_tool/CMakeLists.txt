@@ -1,6 +1,8 @@
+set(SPROUTE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(SPROUTE_VENDOR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor/mysproute)
 
-set(GALOIS_ROOT "/home/tsjafri/TAIZUN/Galois" CACHE PATH "Path to Galois source/build tree")
+# Pin Galois to the in-tree copy for reproducibility.
+set(GALOIS_ROOT "/home/tsjafri/TAIZUN/OpenROAD/src/sproute_tool/Galois" CACHE PATH "Path to Galois source/build tree" FORCE)
 
 set(GALOIS_INCLUDE_DIRS
     ${GALOIS_ROOT}/libgalois/include
@@ -40,39 +42,42 @@ endif()
 file(GLOB SPROUTE_VENDOR_CPP "${SPROUTE_VENDOR_DIR}/src/*.cpp")
 file(GLOB SPROUTE_VENDOR_C "${SPROUTE_VENDOR_DIR}/src/*.c")
 
+# Build all vendor sources as C++ to match the Galois/STL usage in SPRoute.
 set_source_files_properties(${SPROUTE_VENDOR_C} PROPERTIES LANGUAGE CXX)
 
-add_library(SPROUTE_ENGINE STATIC
-  SprouteEngine.cpp
+add_library(sproute_tool STATIC
+  ${SPROUTE_ROOT}/SprouteEngine.cpp
   ${SPROUTE_VENDOR_CPP}
   ${SPROUTE_VENDOR_C}
 )
 
-target_include_directories(SPROUTE_ENGINE
+target_include_directories(sproute_tool
   PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
+    ${SPROUTE_ROOT}
+    ${SPROUTE_VENDOR_DIR}/include
   PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/sta
-    ${CMAKE_SOURCE_DIR}/src/sta/include
-    ${CMAKE_BINARY_DIR}/src/sta/include
-    ${CMAKE_BINARY_DIR}/src/sta/include/sta
+    ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/grt/include
     ${CMAKE_SOURCE_DIR}/src/utl/include
     ${CMAKE_SOURCE_DIR}/src/odb/include
     ${CMAKE_SOURCE_DIR}/src/odb/src/def/def
     ${CMAKE_SOURCE_DIR}/src/odb/src/lef/lef
-    ${SPROUTE_VENDOR_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/sta
+    ${CMAKE_SOURCE_DIR}/src/sta/include
+    ${CMAKE_BINARY_DIR}/src/sta/include
+    ${CMAKE_BINARY_DIR}/src/sta/include/sta
     ${GALOIS_INCLUDE_DIRS}
 )
 
-target_link_libraries(SPROUTE_ENGINE
+target_link_libraries(sproute_tool
   PRIVATE
     ${GALOIS_SHMEM_LIB}
     ${GALOIS_SUPPORT_LIB}
-    Threads::Threads)
+    Threads::Threads
+)
 
-target_compile_definitions(SPROUTE_ENGINE
+target_compile_definitions(sproute_tool
   PRIVATE
     SPROUTE_LUT_DIR="${CMAKE_SOURCE_DIR}/src/stt/src/flt/etc/"
 )
