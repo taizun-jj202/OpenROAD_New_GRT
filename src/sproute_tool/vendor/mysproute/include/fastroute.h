@@ -1,3 +1,4 @@
+// Original path  : /home/tsjafri/TAIZUN/OpenROAD/src/sproute_tool/vendor/mysproute/include/fastroute.h
 #ifndef FASTROUTE_H
 #define FASTROUTE_H
 
@@ -6,6 +7,9 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <vector>
+#include <iostream>
+#include <string>
 
 #include "galois/Galois.h"
 #include "galois/Reduction.h"
@@ -53,7 +57,9 @@ void readGR(parser::grGenerator& grGen, Algo algo)
     int pinX, pinY, pinL, netID, numPins, pinInd, grid, newnetID, invalid_netID, segcount, minwidth;
     float pinX_in,pinY_in;
     int maxDeg = 0;
-    int pinXarray[MAXNETDEG], pinYarray[MAXNETDEG], pinLarray[MAXNETDEG];
+    std::vector<int> pinXarray;
+    std::vector<int> pinYarray;
+    std::vector<int> pinLarray;
     char netName[STRINGLEN];
     Bool remove;
     int numAdjust, cap, reduce, reducedCap;
@@ -121,6 +127,7 @@ void readGR(parser::grGenerator& grGen, Algo algo)
 
     printf("total vertical capacity %d\n", vCapacity);
     printf("total horizontal capacity %d\n", hCapacity);
+	printf("DEBUG1 TZ\n");
     printf("num net %d\n", numNets);
 
     // allocate memory for nets
@@ -142,11 +149,20 @@ void readGR(parser::grGenerator& grGen, Algo algo)
     for(int i=0; i<numNets; i++)
     {
         net++;
-        strcpy(netName, grGen.grnets.at(i).name.c_str());
+        const std::string& gr_name = grGen.grnets.at(i).name;
+        strncpy(netName, gr_name.c_str(), STRINGLEN - 1);
+        netName[STRINGLEN - 1] = '\0';
         netID = grGen.grnets.at(i).idx;
         numPins = grGen.grnets.at(i).numPins;
         if (numPins <= 0)
         {
+            continue;
+        }
+        if (numPins > MAXNETDEG) {
+            std::cout << "[SPRoute] Skipping net '" << netName
+                      << "' with " << numPins
+                      << " pins because it exceeds MAXNETDEG (" << MAXNETDEG
+                      << ")." << std::endl;
             continue;
         }
         if(numPins > 1000)
@@ -155,6 +171,9 @@ void readGR(parser::grGenerator& grGen, Algo algo)
         if (1)
         {
             pinInd = 0;
+            pinXarray.assign(numPins, 0);
+            pinYarray.assign(numPins, 0);
+            pinLarray.assign(numPins, 0);
             for(int j=0; j<numPins; j++) {
                 //fscanf(fp, "%f	%f	%d\n", &pinX_in, &pinY_in, &pinL);
                 pinX_in = grGen.grnets.at(i).pins.at(j).x;
@@ -197,6 +216,12 @@ void readGR(parser::grGenerator& grGen, Algo algo)
                         {
                             break;
                         }
+                        if (pinInd >= static_cast<int>(pinXarray.size())) {
+                            const size_t new_size = pinXarray.empty() ? 1024 : pinXarray.size() * 2;
+                            pinXarray.resize(new_size);
+                            pinYarray.resize(new_size);
+                            pinLarray.resize(new_size);
+                        }
                         pinXarray[pinInd] = (pinX == xGrid)? (pinX - 1) : pinX;
                         pinYarray[pinInd] = (pinY == yGrid)? (pinY - 1) : pinY;
                         pinLarray[pinInd] = pinL;
@@ -215,7 +240,8 @@ void readGR(parser::grGenerator& grGen, Algo algo)
             {
                 MD = max(MD, pinInd);
                 TD += pinInd;        
-                strcpy(nets[newnetID]->name, netName);
+                strncpy(nets[newnetID]->name, netName, sizeof(nets[newnetID]->name) - 1);
+                nets[newnetID]->name[sizeof(nets[newnetID]->name) - 1] = '\0';
                 nets[newnetID]->netIDorg = netID;
                 nets[newnetID]->numPins = numPins;
                 nets[newnetID]->deg = pinInd;
@@ -236,7 +262,9 @@ void readGR(parser::grGenerator& grGen, Algo algo)
             } // if valid net
             else
             {
-                strcpy(invalid_nets[invalid_netID]->name, netName);
+                strncpy(invalid_nets[invalid_netID]->name, netName,
+                        sizeof(invalid_nets[invalid_netID]->name) - 1);
+                invalid_nets[invalid_netID]->name[sizeof(invalid_nets[invalid_netID]->name) - 1] = '\0';
                 invalid_nets[invalid_netID]->netIDorg = netID;
                 invalid_nets[invalid_netID]->numPins = numPins;
                 invalid_nets[invalid_netID]->deg = pinInd;
