@@ -1,6 +1,7 @@
 #include "SprouteEngine.h"
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <sstream>
 #include <unordered_map>
@@ -119,9 +120,13 @@ void SprouteEngine::buildInput()
   for (const auto& net : nets_) {
     SprouteInputNet input_net;
     input_net.db_net = net.db_net;
+    std::string base_name;
     if (net.db_net != nullptr) {
-      input_net.name = net.db_net->getConstName();
+      base_name = net.db_net->getConstName();
+    } else {
+      base_name = "sproute_net_" + std::to_string(input_.nets.size());
     }
+    input_net.name = sanitizeNetName(base_name);
     input_net.is_clock = net.is_clock;
     input_net.min_layer = net.min_layer;
     input_net.max_layer = net.max_layer;
@@ -351,6 +356,24 @@ int SprouteEngine::toDbLayer(int sproute_layer) const
     layer = grid_.num_layers;
   }
   return layer;
+}
+
+std::string SprouteEngine::sanitizeNetName(const std::string& name) const
+{
+  constexpr size_t kLimit = 96;  // SPRoute internal buffers default to 100.
+  if (name.size() < kLimit) {
+    return name;
+  }
+  const size_t hash_value = std::hash<std::string>{}(name);
+  std::ostringstream oss;
+  oss << std::hex << hash_value;
+  const std::string hash = oss.str();
+  const size_t suffix_len = hash.size() + 1;  // include '_' separator.
+  const size_t prefix_len = (suffix_len < kLimit) ? (kLimit - suffix_len) : 0;
+  std::string result = name.substr(0, prefix_len);
+  result.push_back('_');
+  result += hash;
+  return result;
 }
 
 void SprouteEngine::updateDbCongestion(odb::dbBlock* block)

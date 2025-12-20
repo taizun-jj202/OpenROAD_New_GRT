@@ -65,6 +65,7 @@ class SprouteEngine
                   int grid_y1,
                   int grid_l1) const;
   int toDbLayer(int sproute_layer) const;
+  std::string sanitizeNetName(const std::string& name) const;
 
   utl::Logger* logger_;
   SprouteGridData grid_;
