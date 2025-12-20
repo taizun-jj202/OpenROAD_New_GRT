@@ -1,5 +1,6 @@
 #ifndef _DATATYPE_H_
 #define _DATATYPE_H_
+#define STRINGLEN 1024
 
 #define MAXDEMAND 500  // MAX # Segments over an edge
 #define MAXLAYER 20    // MAX # Layer of a routing
@@ -25,7 +26,7 @@ typedef struct {
 typedef struct {
   // OpenROAD nets often exceed the 30-char limit from the original code,
   // so give the local buffer plenty of headroom to avoid overflow.
-  char name[256]; // net name
+  char name[STRINGLEN]; // net name
   int netIDorg;  // orginal net ID in the input file
   short numPins; // number of pins in the net
   short deg; // net degree (number of MazePoints connecting by the net, pins in

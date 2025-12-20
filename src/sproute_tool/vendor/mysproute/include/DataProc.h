@@ -23,7 +23,7 @@
 using namespace std;
 
 #define BUFFERSIZE 800
-#define STRINGLEN 100
+#define STRINGLEN 1024
 #define MAXNETDEG 5000
 
 #define MAXLEN 20000
@@ -241,10 +241,12 @@ void readFile(const char* benchFile) {
 
   printf("total vertical capacity %d\n", vCapacity);
   printf("total horizontal capacity %d\n", hCapacity);
-  printf("num net %d\n", numNets);
+  printf("[SPR_TZZ] num net %d\n", numNets);
 
   // allocate memory for nets
+  printf("[SPR_TZ] Performing memory allocation to `nets` var");
   nets         = (Net**)malloc(numNets * sizeof(Net*));
+  printf("[SPR_TZ] Allocated bytes (variable : net()) : %zu \n", numNets * sizeof(Net*));
   invalid_nets = (Net**)malloc(numNets * sizeof(Net*));
   for (i = 0; i < numNets; i++) {
     nets[i]         = (Net*)malloc(sizeof(Net));
