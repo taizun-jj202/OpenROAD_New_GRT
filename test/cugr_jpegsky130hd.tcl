@@ -1,31 +1,46 @@
 set router_label "CUGR"
 set extra_router_args {-use_cugr}
-set post_gr_db "/home/tsjafri/TAIZUN/TESTS/JPEG/jpeg_cugr_after_gr.db"
-set post_dr_db "/home/tsjafri/TAIZUN/TESTS/JPEG/jpeg_cugr_after_dr.db"
-set dr_drc_rpt "/home/tsjafri/TAIZUN/TESTS/JPEG/jpeg_cugr_drc.rpt"
-set dr_stats_rpt "/home/tsjafri/TAIZUN/TESTS/JPEG/jpeg_cugr_dr_stats.rpt"
+# set gr_log "/home/tsjafri/TAIZUN/TESTS/ORFS+OpenROAD/OR_jpeg/GR_cugr.log"
+# set dr_log "/home/tsjafri/TAIZUN/TESTS/OpenROAD/jpeg_sky130hd/DR_cugr.log"
+
+
+# file mkdir [file dirname $gr_log]
+# file mkdir [file dirname $dr_log]
 
 rename ::global_route ::orig_global_route
 proc ::global_route {args} {
-  global extra_router_args router_label post_gr_db post_dr_db dr_drc_rpt dr_stats_rpt
+  # set t0 [clock milliseconds]
+  global extra_router_args router_label   
   set final_args [concat $args $extra_router_args]
-  set t0 [clock milliseconds]
-  uplevel 1 [list ::orig_global_route] $final_args
-  set dt [expr {[clock milliseconds] - $t0}]
-  puts "$router_label global_route took $dt ms"
-  if {$post_gr_db ne ""} {
-    write_db $post_gr_db
-  }
+  # set dt [expr {[clock milliseconds] - $t0}]
+  # set gr_chan [open $gr_log w]
+  # puts $gr_chan "[$router_label] global_route args: $final_args"
+  # flush $gr_chan
+  # redirect $gr_chan {
+  #   uplevel 1 [list ::orig_global_route] $final_args
+  # }
+  # puts $gr_chan "$router_label global_route took $dt ms"
+  # close $gr_chan
+  # if {$post_gr_db ne ""} {
+  #   write_db $post_gr_db
+  # }
   # run detailed routing for reporting purposes; GR timing already captured above
-  if {[info commands detailed_route] ne ""} {
-    detailed_route \
-      -output_drc $dr_drc_rpt \
-      -output_guide "" \
-      -output_maze $dr_stats_rpt
-  }
-  if {$post_dr_db ne ""} {
-    write_db $post_dr_db
-  }
+  # if {[info commands detailed_route] ne ""} {
+  #   set dr_chan [open $dr_log w]
+  #   puts $dr_chan "[$router_label] detailed_route start"
+  #   flush $dr_chan
+  #   redirect $dr_chan {
+  #     detailed_route \
+  #       -output_drc $dr_drc_rpt \
+  #       -output_guide "" \
+  #       -output_maze $dr_stats_rpt
+  #   }
+  #   puts $dr_chan "[$router_label] detailed_route finished"
+  #   close $dr_chan
+  # }
+  # if {$post_dr_db ne ""} {
+  #   write_db $post_dr_db
+  # }
   exit
 }
 
