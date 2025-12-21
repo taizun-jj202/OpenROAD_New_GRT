@@ -71,6 +71,7 @@ class GlobalRouter;
 class AbstractRoutingCongestionDataSource;
 class GRouteDbCbk;
 class Rudy;
+class NewGR1;
 
 struct RegionAdjustment
 {
@@ -107,7 +108,8 @@ enum class RouterType
 {
   FastRoute,
   Sproute,
-  CUGR
+  CUGR,
+  NewGR1
 };
 
 using Guides = std::vector<std::pair<int, odb::Rect>>;
@@ -427,6 +429,9 @@ class GlobalRouter
   NetRouteMap findRouting(std::vector<Net*>& nets,
                           int min_routing_layer,
                           int max_routing_layer);
+  NetRouteMap runNewGr1Routing(std::vector<Net*>& nets,
+                               int min_routing_layer,
+                               int max_routing_layer);
   void print(GRoute& route);
   void printSegment(const GSegment& segment);
   void reportLayerSettings(int min_routing_layer, int max_routing_layer);
@@ -585,6 +590,7 @@ class GlobalRouter
 
   friend class IncrementalGRoute;
   friend class GRouteDbCbk;
+  friend class NewGR1;
   friend class RepairAntennas;
 };
 
