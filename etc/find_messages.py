@@ -40,6 +40,7 @@
 # ../../etc/FindMessages.py > messages.txt
 
 import argparse
+import fnmatch
 import glob
 import os
 import re
@@ -102,6 +103,30 @@ warn_regexp_tcl = re.compile(
 )
 
 
+def load_ignore_patterns(root_dir):
+    ignore_file = os.path.join(root_dir, ".messagesignore")
+    patterns = []
+    if os.path.exists(ignore_file):
+        with open(ignore_file, encoding="utf-8") as file_handle:
+            for line in file_handle:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                patterns.append(line)
+    return patterns
+
+
+def should_ignore(path, root_dir, patterns):
+    if not patterns:
+        return False
+    rel_path = os.path.relpath(path, root_dir)
+    rel_path = rel_path.replace("\\", "/")
+    for pattern in patterns:
+        if fnmatch.fnmatch(rel_path, pattern):
+            return True
+    return False
+
+
 def scan_file(path, file_name, msgs):
     # Grab the file contents as a single string
     with open(os.path.join(path, file_name), encoding="utf-8") as file_handle:
@@ -144,14 +169,33 @@ def main():
 
     # "tool id" -> "file:line message"
     msgs = defaultdict(set)
+    ignore_patterns = load_ignore_patterns(args.dir)
 
     if args.local:  # no recursion
         files = [
             os.path.basename(file) for file in glob.glob(os.path.join(args.dir, "*"))
         ]
+        files = [
+            file
+            for file in files
+            if not should_ignore(os.path.join(args.dir, file), args.dir, ignore_patterns)
+        ]
         scan_dir(args.dir, files, msgs)
     else:
-        for path, _, files in os.walk(args.dir):
+        for path, dirnames, files in os.walk(args.dir):
+            if should_ignore(path, args.dir, ignore_patterns):
+                dirnames[:] = []
+                continue
+            dirnames[:] = [
+                dirname
+                for dirname in dirnames
+                if not should_ignore(os.path.join(path, dirname), args.dir, ignore_patterns)
+            ]
+            files = [
+                file_name
+                for file_name in files
+                if not should_ignore(os.path.join(path, file_name), args.dir, ignore_patterns)
+            ]
             scan_dir(path, files, msgs)
 
     # Group numbers by set name
