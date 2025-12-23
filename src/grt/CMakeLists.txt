@@ -21,7 +21,7 @@ add_library(grt_lib
   src/Net.cpp
   src/Pin.cpp
   src/RepairAntennas.cpp
-  src/NEW_GR1/NewGR1.cpp
+  src/NEWGR/NewGR.cpp
   src/Rudy.cpp
   src/GlobalRouter.cpp
   src/SprouteAdapter.cpp

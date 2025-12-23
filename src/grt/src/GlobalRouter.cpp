@@ -29,7 +29,7 @@
 #include "AbstractRoutingCongestionDataSource.h"
 #include "CUGR.h"
 #include "FastRoute.h"
-#include "NEW_GR1/NewGR1.h"
+#include "NEWGR/NewGR.h"
 #include "Grid.h"
 #include "Net.h"
 #include "RepairAntennas.h"
@@ -393,8 +393,8 @@ void GlobalRouter::globalRoute(bool save_guides,
             GRoute& route = net_route.second;
             mergeSegments(pins, route);
           }
-        } else if (active_router == RouterType::NewGR1) {
-          routes_ = runNewGr1Routing(nets, min_layer, max_layer);
+        } else if (active_router == RouterType::NewGR) {
+          routes_ = runNewGrRouting(nets, min_layer, max_layer);
         } else {
           if (verbose_ && active_router == RouterType::FastRoute) {
             reportResources();
@@ -614,11 +614,11 @@ NetRouteMap GlobalRouter::findRouting(std::vector<Net*>& nets,
   return routes;
 }
 
-NetRouteMap GlobalRouter::runNewGr1Routing(std::vector<Net*>& nets,
-                                           int min_routing_layer,
-                                           int max_routing_layer)
+NetRouteMap GlobalRouter::runNewGrRouting(std::vector<Net*>& nets,
+                                          int min_routing_layer,
+                                          int max_routing_layer)
 {
-  NewGR1 router(this, fastroute_, cugr_, logger_);
+  NewGR router(this, fastroute_, cugr_, logger_);
   return router.run(nets, min_routing_layer, max_routing_layer);
 }
 
@@ -834,8 +834,9 @@ void GlobalRouter::setRouterType(const std::string& router_name)
   if (normalized == "sproute") {
     router_type_ = RouterType::Sproute;
     use_cugr_ = false;
-  } else if (normalized == "new_gr1" || normalized == "newgr1") {
-    router_type_ = RouterType::NewGR1;
+  } else if (normalized == "newgr" || normalized == "new_gr"
+             || normalized == "newgr2" || normalized == "new_gr2") {
+    router_type_ = RouterType::NewGR;
     use_cugr_ = false;
   } else if (normalized == "cugr") {
     router_type_ = RouterType::CUGR;
