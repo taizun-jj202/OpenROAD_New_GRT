@@ -1130,16 +1130,7 @@ void FastRouteCore::initViaBudgets()
     if (net == nullptr) {
       continue;
     }
-    const int num_edges = sttrees_[netID].num_edges();
-    const int pin_count = net->getNumPins();
-    int budget = std::max(1, num_edges / 3);
-    if (pin_count <= 3) {
-      budget = 1;
-    }
-    if (pin_count >= 10) {
-      budget = std::max(budget, pin_count / 2);
-    }
-    net->setViaBudgetLimit(budget);
+    net->setViaBudgetLimit(0);
   }
 }
 
