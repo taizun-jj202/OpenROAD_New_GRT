@@ -635,6 +635,35 @@ void FastRouteCore::assignEdge(const int netID,
            * std::max(1, static_cast<int>(net->getLayerEdgeCost(pref_layer)));
   };
 
+  auto computeCongestionPenalty = [&](int grid_idx, int base_cost) -> int {
+    if (base_cost <= 0 || routelen <= 0) {
+      return 0;
+    }
+    grid_idx = clamp_grid_idx(grid_idx);
+    const int x = grids[grid_idx].x;
+    const int y = grids[grid_idx].y;
+    if (x < 0 || y < 0 || x >= x_grid_ || y >= y_grid_) {
+      return 0;
+    }
+
+    long long total_usage = 0;
+    long long total_capacity = 0;
+    for (int layer = 0; layer < num_layers_; layer++) {
+      const Edge3D& h_edge = h_edges_3D_[layer][y][x];
+      const Edge3D& v_edge = v_edges_3D_[layer][y][x];
+      total_usage += static_cast<long long>(h_edge.usage) + v_edge.usage;
+      total_capacity += static_cast<long long>(h_edge.cap) + v_edge.cap;
+    }
+
+    double congestion_ratio = 1.0;
+    if (total_capacity > 0) {
+      congestion_ratio
+          = static_cast<double>(total_usage) / static_cast<double>(total_capacity);
+    }
+    const double penalty = static_cast<double>(base_cost) * congestion_ratio * 4.0;
+    return static_cast<int>(std::round(penalty));
+  };
+
   // Enable resistance aware layer assignment only if the net needs it
   if (enable_resistance_aware_) {
     resistance_aware_ = net->isResAware();
@@ -824,11 +853,14 @@ void FastRouteCore::assignEdge(const int netID,
 
           int base_via_cost = abs(i - l) * 20000;
           const int penalty_idx = clamp_grid_idx(k);
+          const int congestion_penalty
+              = computeCongestionPenalty(penalty_idx, base_via_cost);
           int total_via_cost = base_via_cost + via_resistance_cost
                                + congestionCost(l,
                                                 i,
                                                 penalty_idx,
                                                 base_via_cost)
+                               + congestion_penalty
                                + preferredViaPenalty(l, i, penalty_idx);
 
           if (gridD[i][k] > gridD[l][k] + total_via_cost) {
@@ -867,11 +899,14 @@ void FastRouteCore::assignEdge(const int netID,
         }
         int base_via_cost = abs(i - l) * 20000;
         const int penalty_idx = clamp_grid_idx(routelen - 1);
+        const int congestion_penalty
+            = computeCongestionPenalty(penalty_idx, base_via_cost);
         int total_cost = base_via_cost + via_resistance_cost
                          + congestionCost(l,
                                           i,
                                           penalty_idx,
                                           base_via_cost)
+                         + congestion_penalty
                          + preferredViaPenalty(l, i, penalty_idx);
 
         if (gridD[i][k] > gridD[l][k] + total_cost) {
@@ -973,11 +1008,14 @@ void FastRouteCore::assignEdge(const int netID,
 
           int base_via_cost = abs(i - l) * 20000;
           const int penalty_idx = clamp_grid_idx(k - 1);
+          const int congestion_penalty
+              = computeCongestionPenalty(penalty_idx, base_via_cost);
           int total_via_cost = base_via_cost + via_resistance_cost
                                + congestionCost(l,
                                                 i,
                                                 penalty_idx,
                                                 base_via_cost)
+                               + congestion_penalty
                                + preferredViaPenalty(l, i, penalty_idx);
 
           if (gridD[i][k] > gridD[l][k] + total_via_cost) {
@@ -1016,11 +1054,14 @@ void FastRouteCore::assignEdge(const int netID,
         }
         int base_via_cost = abs(i - l) * 20000;
         const int penalty_idx = clamp_grid_idx(0);
+        const int congestion_penalty
+            = computeCongestionPenalty(penalty_idx, base_via_cost);
         int total_cost = base_via_cost + via_resistance_cost
                          + congestionCost(l,
                                           i,
                                           penalty_idx,
                                           base_via_cost)
+                         + congestion_penalty
                          + preferredViaPenalty(l, i, penalty_idx);
 
         if (gridD[i][0] > gridD[l][0] + total_cost) {
