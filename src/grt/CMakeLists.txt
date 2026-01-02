@@ -5,10 +5,14 @@ include("openroad")
 
 project(grt)
 
+# Option to switch between FastRoute4.1 and NEWGR
+option(USE_NEWGR "Build with the new NEWGR router" OFF)
+
 find_package(OpenMP REQUIRED)
 
 add_subdirectory(src/fastroute)
 add_subdirectory(src/cugr)
+add_subdirectory(src/NEWGR)
 
 swig_lib(NAME      grt
          NAMESPACE grt
@@ -21,7 +25,6 @@ add_library(grt_lib
   src/Net.cpp
   src/Pin.cpp
   src/RepairAntennas.cpp
-  src/NEWGR/NewGR.cpp
   src/Rudy.cpp
   src/GlobalRouter.cpp
   src/SprouteAdapter.cpp
@@ -34,9 +37,18 @@ target_include_directories(grt_lib
     src
 )
 
+# Conditionally link the router implementation for grt_lib
+if(USE_NEWGR)
+  message(STATUS "Building grt_lib with NEWGR router")
+  target_link_libraries(grt_lib PRIVATE NEWGR_lib)
+else()
+  message(STATUS "Building grt_lib with default FastRoute4.1 router")
+  target_link_libraries(grt_lib PRIVATE FastRoute4.1)
+endif()
+
 target_link_libraries(grt_lib
+  PRIVATE
     utl_lib
-    FastRoute4.1
     CUGR
     sproute_tool
     ant_lib
@@ -87,10 +99,18 @@ if (Python3_FOUND AND BUILD_PYTHON)
       include
   )
 
+  # Conditionally link the router implementation for grt_py
+  if(USE_NEWGR)
+    message(STATUS "Building grt_py with NEWGR router")
+    target_link_libraries(grt_py PUBLIC NEWGR_lib)
+  else()
+    message(STATUS "Building grt_py with default FastRoute4.1 router")
+    target_link_libraries(grt_py PUBLIC FastRoute4.1)
+  endif()
+
   target_link_libraries(grt_py
     PUBLIC
       utl_lib
-      FastRoute4.1
       CUGR
       drt_lib
       ant_lib
