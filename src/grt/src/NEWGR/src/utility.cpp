@@ -532,6 +532,17 @@ void FastRouteCore::assignEdge(const int netID,
 
   FrNet* net = nets_[netID];
   const int8_t net_cost = net->getEdgeCost();
+  const bool has_via_budget = net->hasViaBudgetLimit();
+  const int initial_via_budget = net->getRemainingViaBudget();
+  bool forbid_new_vias = has_via_budget && initial_via_budget <= 0;
+  bool budget_guard_logged = false;
+  auto logBudgetGuard = [&]() {
+    if (!budget_guard_logged) {
+      std::printf("NEW_ALGO_LOGIC_ACTIVE: Via budget clamp on net %s\n",
+                  net->getName());
+      budget_guard_logged = true;
+    }
+  };
   auto& treeedges = sttrees_[netID].edges;
   auto& treenodes = sttrees_[netID].nodes;
   TreeEdge* treeedge = &(treeedges[edgeID]);
@@ -800,6 +811,10 @@ void FastRouteCore::assignEdge(const int netID,
     for (k = 0; k < routelen; k++) {
       for (int l = 0; l < num_layers_; l++) {
         for (int i = 0; i < num_layers_; i++) {
+          if (forbid_new_vias && i != l) {
+            logBudgetGuard();
+            continue;
+          }
           // Calculate via cost with resistance
           int via_resistance_cost = 0;
           if (i != l) {
@@ -841,6 +856,10 @@ void FastRouteCore::assignEdge(const int netID,
 
     for (int l = 0; l < num_layers_; l++) {
       for (int i = 0; i < num_layers_; i++) {
+        if (forbid_new_vias && i != l) {
+          logBudgetGuard();
+          continue;
+        }
         int via_resistance_cost = 0;
         if (i != l) {
           via_resistance_cost = getViaResistance(l, i);
@@ -941,6 +960,10 @@ void FastRouteCore::assignEdge(const int netID,
     for (k = routelen; k > 0; k--) {
       for (int l = 0; l < num_layers_; l++) {
         for (int i = 0; i < num_layers_; i++) {
+          if (forbid_new_vias && i != l) {
+            logBudgetGuard();
+            continue;
+          }
           // Calculate via cost with resistance
           int via_resistance_cost = 0;
           if (i != l) {
@@ -982,6 +1005,10 @@ void FastRouteCore::assignEdge(const int netID,
 
     for (int l = 0; l < num_layers_; l++) {
       for (int i = 0; i < num_layers_; i++) {
+        if (forbid_new_vias && i != l) {
+          logBudgetGuard();
+          continue;
+        }
         int via_resistance_cost = 0;
         if (i != l) {
           via_resistance_cost = getViaResistance(l, i);
@@ -1063,6 +1090,24 @@ void FastRouteCore::assignEdge(const int netID,
   }
   treeedge->assigned = true;
 
+  if (has_via_budget) {
+    int via_used = 0;
+    for (int idx = 0; idx < routelen; idx++) {
+      via_used += std::abs(grids[idx + 1].layer - grids[idx].layer);
+    }
+    if (via_used > 0) {
+      if (initial_via_budget < std::numeric_limits<int>::max()
+          && via_used > initial_via_budget) {
+        via_used = initial_via_budget;
+      }
+      net->consumeVias(via_used);
+      if (!forbid_new_vias && net->getRemainingViaBudget() == 0) {
+        std::printf("NEW_ALGO_LOGIC_ACTIVE: Via budget exhausted for net %s\n",
+                    net->getName());
+      }
+    }
+  }
+
   for (k = 0; k < routelen; k++) {
     if (grids[k].x == grids[k + 1].x) {
       const int min_y = std::min(grids[k].y, grids[k + 1].y);
@@ -1075,6 +1120,26 @@ void FastRouteCore::assignEdge(const int netID,
       h_edges_3D_[grids[k].layer][grids[k].y][min_x].usage
           += net->getLayerEdgeCost(grids[k].layer);
     }
+  }
+}
+
+void FastRouteCore::initViaBudgets()
+{
+  for (const int& netID : net_ids_) {
+    FrNet* net = nets_[netID];
+    if (net == nullptr) {
+      continue;
+    }
+    const int num_edges = sttrees_[netID].num_edges();
+    const int pin_count = net->getNumPins();
+    int budget = std::max(1, num_edges / 3);
+    if (pin_count <= 3) {
+      budget = 1;
+    }
+    if (pin_count >= 10) {
+      budget = std::max(budget, pin_count / 2);
+    }
+    net->setViaBudgetLimit(budget);
   }
 }
 
@@ -1281,6 +1346,7 @@ void FastRouteCore::layerAssignment()
     }
   }
 
+  initViaBudgets();
   layerAssignmentV4();
   ConvertToFull3DType2();
 }

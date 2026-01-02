@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <ostream>
@@ -113,6 +114,26 @@ struct FrNet  // A Net is a set of connected MazePoints
   bool isSoftNDR() { return is_soft_ndr_; }
   void setIsResAware(bool res_aware) { is_res_aware_ = res_aware; }
   bool isResAware() { return is_res_aware_; }
+  void setViaBudgetLimit(int budget)
+  {
+    via_budget_limit_ = budget;
+    vias_used_ = 0;
+  }
+  bool hasViaBudgetLimit() const { return via_budget_limit_ >= 0; }
+  int getRemainingViaBudget() const
+  {
+    if (via_budget_limit_ < 0) {
+      return std::numeric_limits<int>::max();
+    }
+    return std::max(0, via_budget_limit_ - vias_used_);
+  }
+  void consumeVias(int vias)
+  {
+    if (via_budget_limit_ < 0) {
+      return;
+    }
+    vias_used_ = std::min(via_budget_limit_, vias_used_ + std::max(0, vias));
+  }
 
  private:
   odb::dbNet* db_net_;
@@ -128,6 +149,8 @@ struct FrNet  // A Net is a set of connected MazePoints
   float slack_;
   bool is_soft_ndr_ = false;
   bool is_res_aware_ = false;
+  int via_budget_limit_{-1};
+  int vias_used_{0};
   // Non-null when an NDR has been applied to the net.
   std::unique_ptr<std::vector<int8_t>> edge_cost_per_layer_;
 };

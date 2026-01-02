@@ -517,6 +517,7 @@ class FastRouteCore
                         int nodeID,
                         int16_t& bot_pin_l,
                         int16_t& top_pin_l);
+  void initViaBudgets();
   int threeDVIA();
   void fixEdgeAssignment(int& net_layer,
                          const multi_array<Edge3D, 3>& edges_3D,
