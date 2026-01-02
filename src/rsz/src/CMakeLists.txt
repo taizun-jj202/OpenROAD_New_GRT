@@ -46,11 +46,13 @@ target_include_directories(rsz
     ${OPENSTA_HOME}
     ${OPENSTA_HOME}/include/sta
     .
+    ${PROJECT_SOURCE_DIR}/src/dpl/include
 )
 
 target_include_directories(rsz_lib
   PUBLIC
     ../include
+    ${PROJECT_SOURCE_DIR}/src/dpl/include
 )
 
 target_link_libraries(rsz_lib

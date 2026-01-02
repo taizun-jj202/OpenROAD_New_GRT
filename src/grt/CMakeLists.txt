@@ -37,14 +37,23 @@ target_include_directories(grt_lib
     src
 )
 
-# Conditionally link the router implementation for grt_lib
 if(USE_NEWGR)
-  message(STATUS "Building grt_lib with NEWGR router")
-  target_link_libraries(grt_lib PRIVATE NEWGR_lib)
+  target_include_directories(grt_lib
+    PRIVATE
+      src/NEWGR
+      src/NEWGR/include
+  )
 else()
-  message(STATUS "Building grt_lib with default FastRoute4.1 router")
-  target_link_libraries(grt_lib PRIVATE FastRoute4.1)
+  target_include_directories(grt_lib
+    PRIVATE
+      src/fastroute
+      src/fastroute/include
+  )
 endif()
+
+# Conditionally link the router implementation for grt_lib
+message(STATUS "Building grt_lib with NEWGR router")
+target_link_libraries(grt_lib PRIVATE NEWGR_lib)
 
 target_link_libraries(grt_lib
   PRIVATE
@@ -77,6 +86,20 @@ target_include_directories(grt
     src
 )
 
+if(USE_NEWGR)
+  target_include_directories(grt
+    PRIVATE
+      src/NEWGR
+      src/NEWGR/include
+  )
+else()
+  target_include_directories(grt
+    PRIVATE
+      src/fastroute
+      src/fastroute/include
+  )
+endif()
+
 target_link_libraries(grt
     grt_lib
     dbSta
@@ -98,6 +121,19 @@ if (Python3_FOUND AND BUILD_PYTHON)
     PUBLIC
       include
   )
+  if(USE_NEWGR)
+    target_include_directories(grt_py
+      PRIVATE
+        src/NEWGR
+        src/NEWGR/include
+    )
+  else()
+    target_include_directories(grt_py
+      PRIVATE
+        src/fastroute
+        src/fastroute/include
+    )
+  endif()
 
   # Conditionally link the router implementation for grt_py
   if(USE_NEWGR)

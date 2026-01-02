@@ -593,7 +593,8 @@ void FastRouteCore::assignEdge(const int netID,
       return 1.0;
     }
     const double demand
-        = static_cast<double>(std::max(1, net->getLayerEdgeCost(layer)));
+        = static_cast<double>(
+            std::max(1, static_cast<int>(net->getLayerEdgeCost(layer))));
     const double normalized = static_cast<double>(available) / demand - 1.0;
     return 1.0 / (1.0 + std::exp(via_penalty_slope * normalized));
   };
@@ -631,7 +632,7 @@ void FastRouteCore::assignEdge(const int netID,
       logged_preference_guard = true;
     }
     return preferred_layer_penalty_factor
-           * std::max(1, net->getLayerEdgeCost(pref_layer));
+           * std::max(1, static_cast<int>(net->getLayerEdgeCost(pref_layer)));
   };
 
   // Enable resistance aware layer assignment only if the net needs it
@@ -1130,7 +1131,11 @@ void FastRouteCore::initViaBudgets()
     if (net == nullptr) {
       continue;
     }
-    net->setViaBudgetLimit(0);
+    const int pin_count = std::max(1, net->getNumPins());
+    const int num_edges = sttrees_[netID].num_edges();
+    const int pin_budget = std::max(8, pin_count / 2);
+    const int edge_budget = std::max(8, num_edges / 2);
+    net->setViaBudgetLimit(pin_budget + edge_budget);
   }
 }
 
