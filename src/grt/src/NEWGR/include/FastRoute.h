@@ -164,6 +164,19 @@ class FastRouteCore
   void initBlockedIntervals(std::vector<int>& track_space);
   void initAuxVar();
   NetRouteMap run();
+  void updateNetViaUsage();
+  bool prepareViaOptimizationCandidates(int max_candidates);
+  void pruneViaOptimizationCandidates();
+  bool hasViaOptimizationCandidates() const;
+  bool runViaOptimizationPhase(const CostParams& cost_params,
+                               int expand,
+                               int ripup_threshold,
+                               int maze_edge_threshold,
+                               bool ordering,
+                               int via,
+                               int L,
+                               float& slack_th);
+  bool isViaOptimizationCandidate(int net_id) const;
   int totalOverflow() const { return total_overflow_; }
   bool has2Doverflow() const { return has_2D_overflow_; }
   void getBlockage(odb::dbTechLayer* layer,
@@ -641,6 +654,10 @@ class FastRouteCore
   bool regular_y_;
   int layer_assign_iter_snapshot_{0};
   int layer_assign_total_iters_snapshot_{1};
+  std::vector<int> net_via_usage_;
+  std::vector<bool> via_optimization_candidates_;
+  bool via_optimization_mode_{false};
+  int via_optimization_threshold_{0};
 
   std::vector<short> v_capacity_3D_;
   std::vector<short> h_capacity_3D_;

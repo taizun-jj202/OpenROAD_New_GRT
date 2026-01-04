@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <numeric>
 #include <ostream>
 #include <queue>
 #include <random>
@@ -371,6 +372,123 @@ int FastRouteCore::threeDVIA()
   }
 
   return (numVIA);
+}
+
+void FastRouteCore::updateNetViaUsage()
+{
+  if (net_via_usage_.size() < nets_.size()) {
+    net_via_usage_.assign(nets_.size(), 0);
+  } else {
+    std::fill(net_via_usage_.begin(), net_via_usage_.end(), 0);
+  }
+
+  for (const int& netID : net_ids_) {
+    if (netID >= net_via_usage_.size() || nets_[netID] == nullptr) {
+      continue;
+    }
+    int vias = 0;
+    const auto& treeedges = sttrees_[netID].edges;
+    for (const TreeEdge& treeedge : treeedges) {
+      if (treeedge.len == 0) {
+        continue;
+      }
+      const auto& grids = treeedge.route.grids;
+      for (int i = 0; i < treeedge.route.routelen; i++) {
+        if (grids[i].layer != grids[i + 1].layer) {
+          vias++;
+        }
+      }
+    }
+    net_via_usage_[netID] = vias;
+  }
+}
+
+bool FastRouteCore::prepareViaOptimizationCandidates(int max_candidates)
+{
+  if (net_via_usage_.empty()) {
+    updateNetViaUsage();
+  }
+  if (via_optimization_candidates_.size() < nets_.size()) {
+    via_optimization_candidates_.assign(nets_.size(), false);
+  } else {
+    std::fill(via_optimization_candidates_.begin(),
+              via_optimization_candidates_.end(),
+              false);
+  }
+
+  std::vector<std::pair<int, int>> ranked;
+  ranked.reserve(net_ids_.size());
+  long long total_vias = 0;
+  int counted_nets = 0;
+  for (const int& netID : net_ids_) {
+    if (netID >= net_via_usage_.size() || nets_[netID] == nullptr) {
+      continue;
+    }
+    const int vias = net_via_usage_[netID];
+    total_vias += vias;
+    counted_nets++;
+    ranked.emplace_back(netID, vias);
+  }
+
+  if (ranked.empty()) {
+    via_optimization_threshold_ = 0;
+    return false;
+  }
+
+  const int average_vias
+      = counted_nets > 0 ? static_cast<int>(total_vias / counted_nets) : 0;
+  via_optimization_threshold_ = std::max(average_vias + 5, 20);
+
+  std::sort(ranked.begin(),
+            ranked.end(),
+            [](const auto& lhs, const auto& rhs) {
+              return lhs.second > rhs.second;
+            });
+
+  int selected = 0;
+  for (const auto& [netID, vias] : ranked) {
+    if (vias < via_optimization_threshold_) {
+      break;
+    }
+    via_optimization_candidates_[netID] = true;
+    selected++;
+    if (selected >= max_candidates) {
+      break;
+    }
+  }
+
+  return selected > 0;
+}
+
+void FastRouteCore::pruneViaOptimizationCandidates()
+{
+  if (via_optimization_candidates_.empty()) {
+    return;
+  }
+  for (size_t netID = 0; netID < via_optimization_candidates_.size(); netID++) {
+    if (!via_optimization_candidates_[netID]) {
+      continue;
+    }
+    if (netID >= net_via_usage_.size()
+        || net_via_usage_[netID] < via_optimization_threshold_) {
+      via_optimization_candidates_[netID] = false;
+    }
+  }
+}
+
+bool FastRouteCore::hasViaOptimizationCandidates() const
+{
+  return std::any_of(via_optimization_candidates_.begin(),
+                     via_optimization_candidates_.end(),
+                     [](bool flagged) { return flagged; });
+}
+
+bool FastRouteCore::isViaOptimizationCandidate(int net_id) const
+{
+  if (net_id < 0 || net_id >= via_optimization_candidates_.size()) {
+    return false;
+  }
+  return via_optimization_candidates_[net_id];
 }
 
 void FastRouteCore::fixEdgeAssignment(int& net_layer,

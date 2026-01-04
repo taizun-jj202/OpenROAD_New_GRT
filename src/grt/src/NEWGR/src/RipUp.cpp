@@ -225,6 +225,10 @@ bool FastRouteCore::newRipupCheck(const TreeEdge* treeedge,
       needRipup = true;
     }
   }
+  if (!needRipup && via_optimization_mode_
+      && isViaOptimizationCandidate(netID)) {
+    needRipup = true;
+  }
   if (needRipup) {
     const int8_t edgeCost = net->getEdgeCost();
 

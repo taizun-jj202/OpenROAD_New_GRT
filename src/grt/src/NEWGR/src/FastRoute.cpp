@@ -85,6 +85,10 @@ void FastRouteCore::clear()
   has_2D_overflow_ = false;
   layer_assign_iter_snapshot_ = 0;
   layer_assign_total_iters_snapshot_ = 1;
+  net_via_usage_.clear();
+  via_optimization_candidates_.clear();
+  via_optimization_mode_ = false;
+  via_optimization_threshold_ = 0;
 
   graph2d_.clear();
   seglist_.clear();
@@ -1626,6 +1630,16 @@ NetRouteMap FastRouteCore::run()
     }
   }
 
+  CostParams via_opt_cost_params(logistic_coef, costheight_, slope);
+  runViaOptimizationPhase(via_opt_cost_params,
+                          enlarge_,
+                          Ripvalue,
+                          mazeedge_threshold_,
+                          false,
+                          VIA,
+                          L,
+                          slack_th);
+
   freeRR();
 
   removeLoops();
@@ -1683,6 +1697,50 @@ NetRouteMap FastRouteCore::run()
   NetRouteMap routes = getRoutes();
   net_ids_.clear();
   return routes;
+}
+
+bool FastRouteCore::runViaOptimizationPhase(const CostParams& cost_params,
+                                            const int expand,
+                                            const int ripup_threshold,
+                                            const int maze_edge_threshold,
+                                            const bool ordering,
+                                            const int via,
+                                            const int L,
+                                            float& slack_th)
+{
+  constexpr int overflow_trigger = 800;
+  if (total_overflow_ > overflow_trigger) {
+    return false;
+  }
+
+  updateNetViaUsage();
+  if (!prepareViaOptimizationCandidates(40)) {
+    return false;
+  }
+
+  via_optimization_mode_ = true;
+  bool improved = false;
+  const int max_iterations = std::max(2, overflow_iterations_ / 10);
+  for (int iter = 0; iter < max_iterations; iter++) {
+    if (!hasViaOptimizationCandidates()) {
+      break;
+    }
+    mazeRouteMSMD(overflow_iterations_ + iter + 1,
+                  expand,
+                  ripup_threshold,
+                  maze_edge_threshold,
+                  ordering,
+                  via * 2,
+                  L,
+                  cost_params,
+                  slack_th);
+    updateNetViaUsage();
+    pruneViaOptimizationCandidates();
+    improved = true;
+  }
+  via_optimization_mode_ = false;
+  via_optimization_candidates_.clear();
+  return improved;
 }
 
 void FastRouteCore::applySoftNDR(const std::vector<int>& net_ids)
