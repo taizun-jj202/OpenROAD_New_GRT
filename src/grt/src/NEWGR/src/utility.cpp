@@ -838,12 +838,15 @@ void FastRouteCore::assignEdge(const int netID,
             via_resistance_cost = getViaResistance(l, i);  // Scale factor
           }
 
-          int base_via_cost = std::abs(i - l) * base_via_multiplier;
+          const int layer_delta = std::abs(i - l);
+          const int static_base_cost = layer_delta * 2;
+          int base_via_cost = layer_delta * base_via_multiplier;
           const int penalty_idx = clamp_grid_idx(k);
           const int congestion_penalty
               = computeCongestionPenalty(
                   penalty_idx, base_via_cost, congestion_penalty_weight);
-          int total_via_cost = base_via_cost + via_resistance_cost
+          int total_via_cost = static_base_cost + base_via_cost
+                               + via_resistance_cost
                                + congestionCost(l,
                                                 i,
                                                 penalty_idx,
@@ -885,12 +888,14 @@ void FastRouteCore::assignEdge(const int netID,
         if (i != l) {
           via_resistance_cost = getViaResistance(l, i);
         }
-        int base_via_cost = std::abs(i - l) * base_via_multiplier;
+        const int layer_delta = std::abs(i - l);
+        const int static_base_cost = layer_delta * 2;
+        int base_via_cost = layer_delta * base_via_multiplier;
         const int penalty_idx = clamp_grid_idx(routelen - 1);
         const int congestion_penalty
             = computeCongestionPenalty(
                 penalty_idx, base_via_cost, congestion_penalty_weight);
-        int total_cost = base_via_cost + via_resistance_cost
+        int total_cost = static_base_cost + base_via_cost + via_resistance_cost
                          + congestionCost(l,
                                           i,
                                           penalty_idx,
@@ -995,12 +1000,15 @@ void FastRouteCore::assignEdge(const int netID,
             via_resistance_cost = getViaResistance(l, i);  // Scale factor
           }
 
-          int base_via_cost = std::abs(i - l) * base_via_multiplier;
+          const int layer_delta = std::abs(i - l);
+          const int static_base_cost = layer_delta * 2;
+          int base_via_cost = layer_delta * base_via_multiplier;
           const int penalty_idx = clamp_grid_idx(k - 1);
           const int congestion_penalty
               = computeCongestionPenalty(
                   penalty_idx, base_via_cost, congestion_penalty_weight);
-          int total_via_cost = base_via_cost + via_resistance_cost
+          int total_via_cost = static_base_cost + base_via_cost
+                               + via_resistance_cost
                                + congestionCost(l,
                                                 i,
                                                 penalty_idx,
@@ -1042,12 +1050,14 @@ void FastRouteCore::assignEdge(const int netID,
         if (i != l) {
           via_resistance_cost = getViaResistance(l, i);
         }
-        int base_via_cost = std::abs(i - l) * base_via_multiplier;
+        const int layer_delta = std::abs(i - l);
+        const int static_base_cost = layer_delta * 2;
+        int base_via_cost = layer_delta * base_via_multiplier;
         const int penalty_idx = clamp_grid_idx(0);
         const int congestion_penalty
             = computeCongestionPenalty(
                 penalty_idx, base_via_cost, congestion_penalty_weight);
-        int total_cost = base_via_cost + via_resistance_cost
+        int total_cost = static_base_cost + base_via_cost + via_resistance_cost
                          + congestionCost(l,
                                           i,
                                           penalty_idx,
