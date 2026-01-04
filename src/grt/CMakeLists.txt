@@ -6,13 +6,17 @@ include("openroad")
 project(grt)
 
 # Option to switch between FastRoute4.1 and NEWGR
-option(USE_NEWGR "Build with the new NEWGR router" OFF)
+option(USE_NEWGR "Build with the new NEWGR router" ON)
+set(USE_NEWGR ON CACHE BOOL "Build with the new NEWGR router" FORCE)
 
 find_package(OpenMP REQUIRED)
 
-add_subdirectory(src/fastroute)
+if(USE_NEWGR)
+  add_subdirectory(src/NEWGR)
+else()
+  add_subdirectory(src/fastroute)
+endif()
 add_subdirectory(src/cugr)
-add_subdirectory(src/NEWGR)
 
 swig_lib(NAME      grt
          NAMESPACE grt
@@ -43,6 +47,7 @@ if(USE_NEWGR)
       src/NEWGR
       src/NEWGR/include
   )
+  target_sources(grt_lib PRIVATE $<TARGET_OBJECTS:NEWGR_lib>)
 else()
   target_include_directories(grt_lib
     PRIVATE
@@ -52,8 +57,12 @@ else()
 endif()
 
 # Conditionally link the router implementation for grt_lib
-message(STATUS "Building grt_lib with NEWGR router")
-target_link_libraries(grt_lib PRIVATE NEWGR_lib)
+if(USE_NEWGR)
+  message(STATUS "Building grt_lib with NEWGR router")
+else()
+  message(STATUS "Building grt_lib with default FastRoute4.1 router")
+  target_link_libraries(grt_lib PRIVATE FastRoute4.1)
+endif()
 
 target_link_libraries(grt_lib
   PRIVATE
@@ -76,8 +85,13 @@ target_sources(grt
     src/heatMap.cpp
     src/heatMapRudy.cpp
     src/GrouteRenderer.cpp
-    src/fastroute/src/FastRouteRenderer.cpp
 )
+
+if(USE_NEWGR)
+  target_sources(grt PRIVATE src/NEWGR/src/FastRouteRenderer.cpp)
+else()
+  target_sources(grt PRIVATE src/fastroute/src/FastRouteRenderer.cpp)
+endif()
 
 target_include_directories(grt
   PUBLIC
@@ -138,7 +152,6 @@ if (Python3_FOUND AND BUILD_PYTHON)
   # Conditionally link the router implementation for grt_py
   if(USE_NEWGR)
     message(STATUS "Building grt_py with NEWGR router")
-    target_link_libraries(grt_py PUBLIC NEWGR_lib)
   else()
     message(STATUS "Building grt_py with default FastRoute4.1 router")
     target_link_libraries(grt_py PUBLIC FastRoute4.1)

@@ -185,6 +185,7 @@ class GlobalRouter
   void setCongestionReportFile(const char* file_name);
   void setGridOrigin(int x, int y);
   void setAllowCongestion(bool allow_congestion);
+  bool isCongestionAllowed() const;
   void setResistanceAware(bool resistance_aware);
   void setMacroExtension(int macro_extension);
   void setUseCUGR(bool use_cugr);

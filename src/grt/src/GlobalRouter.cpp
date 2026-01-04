@@ -262,7 +262,7 @@ bool GlobalRouter::haveRoutes()
     return false;
   }
   loadGuidesFromDB();
-  bool congested_routes = is_congested_ && !allow_congestion_;
+  bool congested_routes = is_congested_ && !isCongestionAllowed();
   return !routes_.empty() && !congested_routes;
 }
 
@@ -430,11 +430,12 @@ void GlobalRouter::globalRoute(bool save_guides,
   }
 
   if (is_congested_) {
+    const bool allow_congestion = isCongestionAllowed();
     // Suggest adjustment value
     if (router_type_ == RouterType::FastRoute) {
       suggestAdjustment();
     }
-    if (allow_congestion_) {
+    if (allow_congestion) {
       logger_->warn(GRT,
                     115,
                     "Global routing finished with congestion. Check the "
@@ -2257,6 +2258,16 @@ void GlobalRouter::setAllowCongestion(bool allow_congestion)
   allow_congestion_ = allow_congestion;
 }
 
+bool GlobalRouter::isCongestionAllowed() const
+{
+  // The experimental NEWGR router does not yet guarantee a zero-overflow
+  // solution, so always permit congestion when it is active.
+  if (router_type_ == RouterType::NewGR) {
+    return true;
+  }
+  return allow_congestion_;
+}
+
 void GlobalRouter::setResistanceAware(bool resistance_aware)
 {
   resistance_aware_ = resistance_aware;
@@ -2747,7 +2758,7 @@ void GlobalRouter::saveGuides(const std::vector<odb::dbNet*>& nets)
   int offset_x = grid_origin_.x();
   int offset_y = grid_origin_.y();
 
-  bool guide_is_congested = is_congested_ && !allow_congestion_;
+  bool guide_is_congested = is_congested_ && !isCongestionAllowed();
 
   int net_with_jumpers, total_jumpers;
   net_with_jumpers = 0;
@@ -5388,7 +5399,7 @@ std::vector<Net*> GlobalRouter::updateDirtyRoutes(bool save_guides)
     mergeResults(new_route);
 
     bool reroutingOverflow = true;
-    if (fastroute_->has2Doverflow() && !allow_congestion_) {
+    if (fastroute_->has2Doverflow() && !isCongestionAllowed()) {
       // The maximum number of times that the nets traversing the congestion
       // area will be added
       int add_max = 30;

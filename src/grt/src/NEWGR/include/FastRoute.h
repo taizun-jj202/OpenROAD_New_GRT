@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <set>
 #include <string>
@@ -638,6 +639,8 @@ class FastRouteCore
   float h_capacity_lb_;
   bool regular_x_;
   bool regular_y_;
+  int layer_assign_iter_snapshot_{0};
+  int layer_assign_overflow_snapshot_{std::numeric_limits<int>::max()};
 
   std::vector<short> v_capacity_3D_;
   std::vector<short> h_capacity_3D_;
