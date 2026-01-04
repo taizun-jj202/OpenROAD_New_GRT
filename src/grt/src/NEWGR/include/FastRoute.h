@@ -640,7 +640,7 @@ class FastRouteCore
   bool regular_x_;
   bool regular_y_;
   int layer_assign_iter_snapshot_{0};
-  int layer_assign_overflow_snapshot_{std::numeric_limits<int>::max()};
+  int layer_assign_total_iters_snapshot_{1};
 
   std::vector<short> v_capacity_3D_;
   std::vector<short> h_capacity_3D_;

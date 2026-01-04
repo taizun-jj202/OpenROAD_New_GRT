@@ -643,11 +643,11 @@ void FastRouteCore::assignEdge(const int netID,
     return 0;
   };
 
-  constexpr int optimization_iter_threshold = 6;
-  constexpr int optimization_overflow_threshold = 2500;
+  const double optimization_trigger
+      = 0.7 * static_cast<double>(layer_assign_total_iters_snapshot_);
   const bool optimization_mode
-      = (layer_assign_iter_snapshot_ >= optimization_iter_threshold)
-        || (layer_assign_overflow_snapshot_ <= optimization_overflow_threshold);
+      = static_cast<double>(layer_assign_iter_snapshot_)
+        > optimization_trigger;
   const int base_via_multiplier = optimization_mode ? 20000 : 10;
   const double congestion_penalty_weight = optimization_mode ? 10.0 : 0.5;
 

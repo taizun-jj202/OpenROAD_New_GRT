@@ -84,7 +84,7 @@ void FastRouteCore::clear()
   total_overflow_ = 0;
   has_2D_overflow_ = false;
   layer_assign_iter_snapshot_ = 0;
-  layer_assign_overflow_snapshot_ = std::numeric_limits<int>::max();
+  layer_assign_total_iters_snapshot_ = 1;
 
   graph2d_.clear();
   seglist_.clear();
@@ -1633,7 +1633,7 @@ NetRouteMap FastRouteCore::run()
   getOverflow2Dmaze(&maxOverflow, &tUsage);
 
   layer_assign_iter_snapshot_ = std::max(1, i - 1);
-  layer_assign_overflow_snapshot_ = total_overflow_;
+  layer_assign_total_iters_snapshot_ = std::max(1, overflow_iterations_);
   layerAssignment();
 
   if (logger_->debugCheck(GNR, "grtSteps", 1)) {
