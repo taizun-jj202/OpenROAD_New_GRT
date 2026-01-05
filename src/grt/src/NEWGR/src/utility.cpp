@@ -403,6 +403,30 @@ void FastRouteCore::updateNetViaUsage()
   }
 }
 
+int FastRouteCore::getNetViaCount(const int net_id) const
+{
+  if (net_id < 0 || net_id >= nets_.size() || nets_[net_id] == nullptr) {
+    return 0;
+  }
+  if (net_id >= sttrees_.size()) {
+    return 0;
+  }
+
+  const auto& treeedges = sttrees_[net_id].edges;
+  int vias = 0;
+  for (const TreeEdge& treeedge : treeedges) {
+    if (treeedge.len == 0) {
+      continue;
+    }
+    for (int i = 0; i < treeedge.route.routelen; i++) {
+      if (treeedge.route.grids[i].layer != treeedge.route.grids[i + 1].layer) {
+        vias++;
+      }
+    }
+  }
+  return vias;
+}
+
 bool FastRouteCore::prepareViaOptimizationCandidates(int max_candidates)
 {
   if (net_via_usage_.empty()) {

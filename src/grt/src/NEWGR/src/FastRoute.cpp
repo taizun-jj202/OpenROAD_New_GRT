@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <cstdio>
 #include <memory>
 #include <tuple>
 #include <unordered_set>
@@ -1748,6 +1749,14 @@ bool FastRouteCore::runViaOptimizationPhase(const CostParams& cost_params,
     if (!hasViaOptimizationCandidates()) {
       break;
     }
+    std::vector<std::pair<int, int>> via_counts_before;
+    via_counts_before.reserve(net_ids_.size());
+    for (const int net_id : net_ids_) {
+      if (net_id < 0 || !isViaOptimizationCandidate(net_id)) {
+        continue;
+      }
+      via_counts_before.emplace_back(net_id, getNetViaCount(net_id));
+    }
     mazeRouteMSMD(overflow_iterations_ + iter + 1,
                   expand,
                   ripup_threshold,
@@ -1758,6 +1767,25 @@ bool FastRouteCore::runViaOptimizationPhase(const CostParams& cost_params,
                   cost_params,
                   slack_th,
                   true);
+    for (const auto& [net_id, vias_before] : via_counts_before) {
+      const int vias_after = getNetViaCount(net_id);
+      const bool valid_net
+          = net_id >= 0 && net_id < nets_.size() && nets_[net_id] != nullptr;
+      const char* net_name
+          = valid_net ? nets_[net_id]->getName() : "<unknown>";
+      if (vias_before != vias_after) {
+        std::printf(
+            "VERIFICATION SUCCESS: Via count for net %s changed from %d to %d\n",
+            net_name,
+            vias_before,
+            vias_after);
+      } else {
+        std::printf("VERIFICATION FAILURE: Via count for net %s did NOT change "
+                    "(still %d)\n",
+                    net_name,
+                    vias_before);
+      }
+    }
     updateNetViaUsage();
     pruneViaOptimizationCandidates();
     improved = true;

@@ -534,6 +534,7 @@ class FastRouteCore
                         int16_t& top_pin_l);
   void initViaBudgets();
   int threeDVIA();
+  int getNetViaCount(int net_id) const;
   void fixEdgeAssignment(int& net_layer,
                          const multi_array<Edge3D, 3>& edges_3D,
                          int x,
