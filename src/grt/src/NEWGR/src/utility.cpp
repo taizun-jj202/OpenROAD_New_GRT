@@ -643,7 +643,8 @@ void FastRouteCore::updateSlacks(float percentage)
 
 void FastRouteCore::assignEdge(const int netID,
                                const int edgeID,
-                               const bool processDIR)
+                               const bool processDIR,
+                               const bool is_via_opt_reroute)
 {
   int k;
   int endLayer = 0;
@@ -654,6 +655,7 @@ void FastRouteCore::assignEdge(const int netID,
   const int initial_via_budget = net->getRemainingViaBudget();
   bool forbid_new_vias = has_via_budget && initial_via_budget <= 0;
   bool budget_guard_logged = false;
+  bool logged_massive_via_penalty = false;
   auto logBudgetGuard = [&]() {
     if (!budget_guard_logged) {
       std::printf("NEW_ALGO_LOGIC_ACTIVE: Via budget clamp on net %s\n",
@@ -950,13 +952,27 @@ void FastRouteCore::assignEdge(const int netID,
             logBudgetGuard();
             continue;
           }
+          const int layer_delta = std::abs(i - l);
+          if (is_via_opt_reroute && layer_delta > 0) {
+            const int massive_penalty = layer_delta * 50000;
+            if (gridD[i][k] > gridD[l][k] + massive_penalty) {
+              gridD[i][k] = gridD[l][k] + massive_penalty;
+              via_link[i][k] = l;
+            }
+            if (!logged_massive_via_penalty) {
+              std::printf("Applying massive via penalty to candidate net %s\n",
+                          net->getName());
+              logged_massive_via_penalty = true;
+            }
+            continue;
+          }
+
           // Calculate via cost with resistance
           int via_resistance_cost = 0;
           if (i != l) {
             via_resistance_cost = getViaResistance(l, i);  // Scale factor
           }
 
-          const int layer_delta = std::abs(i - l);
           const int static_base_cost = layer_delta * 2;
           int base_via_cost = layer_delta * base_via_multiplier;
           const int penalty_idx = clamp_grid_idx(k);
@@ -1002,11 +1018,24 @@ void FastRouteCore::assignEdge(const int netID,
           logBudgetGuard();
           continue;
         }
+        const int layer_delta = std::abs(i - l);
+        if (is_via_opt_reroute && layer_delta > 0) {
+          const int massive_penalty = layer_delta * 50000;
+          if (gridD[i][k] > gridD[l][k] + massive_penalty) {
+            gridD[i][k] = gridD[l][k] + massive_penalty;
+            via_link[i][k] = l;
+          }
+          if (!logged_massive_via_penalty) {
+            std::printf("Applying massive via penalty to candidate net %s\n",
+                        net->getName());
+            logged_massive_via_penalty = true;
+          }
+          continue;
+        }
         int via_resistance_cost = 0;
         if (i != l) {
           via_resistance_cost = getViaResistance(l, i);
         }
-        const int layer_delta = std::abs(i - l);
         const int static_base_cost = layer_delta * 2;
         int base_via_cost = layer_delta * base_via_multiplier;
         const int penalty_idx = clamp_grid_idx(routelen - 1);
@@ -1112,13 +1141,27 @@ void FastRouteCore::assignEdge(const int netID,
             logBudgetGuard();
             continue;
           }
+          const int layer_delta = std::abs(i - l);
+          if (is_via_opt_reroute && layer_delta > 0) {
+            const int massive_penalty = layer_delta * 50000;
+            if (gridD[i][k] > gridD[l][k] + massive_penalty) {
+              gridD[i][k] = gridD[l][k] + massive_penalty;
+              via_link[i][k] = l;
+            }
+            if (!logged_massive_via_penalty) {
+              std::printf("Applying massive via penalty to candidate net %s\n",
+                          net->getName());
+              logged_massive_via_penalty = true;
+            }
+            continue;
+          }
+
           // Calculate via cost with resistance
           int via_resistance_cost = 0;
           if (i != l) {
             via_resistance_cost = getViaResistance(l, i);  // Scale factor
           }
 
-          const int layer_delta = std::abs(i - l);
           const int static_base_cost = layer_delta * 2;
           int base_via_cost = layer_delta * base_via_multiplier;
           const int penalty_idx = clamp_grid_idx(k - 1);
@@ -1164,11 +1207,24 @@ void FastRouteCore::assignEdge(const int netID,
           logBudgetGuard();
           continue;
         }
+        const int layer_delta = std::abs(i - l);
+        if (is_via_opt_reroute && layer_delta > 0) {
+          const int massive_penalty = layer_delta * 50000;
+          if (gridD[i][0] > gridD[l][0] + massive_penalty) {
+            gridD[i][0] = gridD[l][0] + massive_penalty;
+            via_link[i][0] = l;
+          }
+          if (!logged_massive_via_penalty) {
+            std::printf("Applying massive via penalty to candidate net %s\n",
+                        net->getName());
+            logged_massive_via_penalty = true;
+          }
+          continue;
+        }
         int via_resistance_cost = 0;
         if (i != l) {
           via_resistance_cost = getViaResistance(l, i);
         }
-        const int layer_delta = std::abs(i - l);
         const int static_base_cost = layer_delta * 2;
         int base_via_cost = layer_delta * base_via_multiplier;
         const int penalty_idx = clamp_grid_idx(0);
@@ -1317,6 +1373,10 @@ void FastRouteCore::layerAssignmentV4()
   std::queue<int> edgeQueue;
   for (int i = 0; i < tree_order_pv_.size(); i++) {
     int netID = tree_order_pv_[i].treeIndex;
+    const bool via_opt_reroute
+        = via_opt_reroute_context_active_
+          && netID >= 0 && netID < via_opt_reroute_nets_.size()
+          && via_opt_reroute_nets_[netID];
 
     auto& treeedges = sttrees_[netID].edges;
     auto& treenodes = sttrees_[netID].nodes;
@@ -1337,7 +1397,7 @@ void FastRouteCore::layerAssignmentV4()
       edgeQueue.pop();
       TreeEdge* treeedge = &(treeedges[edgeID]);
       if (treenodes[treeedge->n1a].assigned) {
-        assignEdge(netID, edgeID, true);
+        assignEdge(netID, edgeID, true, via_opt_reroute);
         treeedge->assigned = true;
         if (!treenodes[treeedge->n2a].assigned) {
           for (int k = 0; k < treenodes[treeedge->n2a].conCNT; k++) {
@@ -1350,7 +1410,7 @@ void FastRouteCore::layerAssignmentV4()
           treenodes[treeedge->n2a].assigned = true;
         }
       } else {
-        assignEdge(netID, edgeID, false);
+        assignEdge(netID, edgeID, false, via_opt_reroute);
         treeedge->assigned = true;
         if (!treenodes[treeedge->n1a].assigned) {
           for (int k = 0; k < treenodes[treeedge->n1a].conCNT; k++) {
@@ -1505,6 +1565,10 @@ void FastRouteCore::layerAssignment()
   initViaBudgets();
   layerAssignmentV4();
   ConvertToFull3DType2();
+  if (!via_opt_reroute_nets_.empty()) {
+    std::fill(via_opt_reroute_nets_.begin(), via_opt_reroute_nets_.end(), false);
+  }
+  via_opt_reroute_context_active_ = false;
 }
 
 void FastRouteCore::printEdge3D(const int netID, const int edgeID)

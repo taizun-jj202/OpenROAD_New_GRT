@@ -87,6 +87,8 @@ void FastRouteCore::clear()
   layer_assign_total_iters_snapshot_ = 1;
   net_via_usage_.clear();
   via_optimization_candidates_.clear();
+  via_opt_reroute_nets_.clear();
+  via_opt_reroute_context_active_ = false;
   via_optimization_mode_ = false;
   via_optimization_threshold_ = 0;
 
@@ -1405,7 +1407,8 @@ NetRouteMap FastRouteCore::run()
                   VIA,
                   L,
                   cost_params,
-                  slack_th);
+                  slack_th,
+                  false);
 
     int last_cong = past_cong;
     past_cong = getOverflow2Dmaze(&maxOverflow, &tUsage);
@@ -1444,7 +1447,8 @@ NetRouteMap FastRouteCore::run()
                       VIA,
                       L,
                       cost_params,
-                      slack_th);
+                      slack_th,
+                      false);
         last_cong = past_cong;
         past_cong = getOverflow2Dmaze(&maxOverflow, &tUsage);
 
@@ -1493,7 +1497,8 @@ NetRouteMap FastRouteCore::run()
                       VIA,
                       L,
                       cost_params,
-                      slack_th);
+                      slack_th,
+                      false);
         last_cong = past_cong;
         past_cong = getOverflow2Dmaze(&maxOverflow, &tUsage);
         if (past_cong < last_cong) {
@@ -1709,6 +1714,14 @@ bool FastRouteCore::runViaOptimizationPhase(const CostParams& cost_params,
                                             float& slack_th)
 {
   constexpr int overflow_trigger = 800;
+  if (via_opt_reroute_nets_.size() < nets_.size()) {
+    via_opt_reroute_nets_.assign(nets_.size(), false);
+  } else {
+    std::fill(via_opt_reroute_nets_.begin(),
+              via_opt_reroute_nets_.end(),
+              false);
+  }
+  via_opt_reroute_context_active_ = false;
   if (total_overflow_ > overflow_trigger) {
     return false;
   }
@@ -1719,6 +1732,16 @@ bool FastRouteCore::runViaOptimizationPhase(const CostParams& cost_params,
   }
 
   via_optimization_mode_ = true;
+  via_opt_reroute_context_active_ = true;
+  if (!via_optimization_candidates_.empty()) {
+    const size_t limit
+        = std::min(via_optimization_candidates_.size(), via_opt_reroute_nets_.size());
+    for (size_t net_id = 0; net_id < limit; net_id++) {
+      if (via_optimization_candidates_[net_id]) {
+        via_opt_reroute_nets_[net_id] = true;
+      }
+    }
+  }
   bool improved = false;
   const int max_iterations = std::max(2, overflow_iterations_ / 10);
   for (int iter = 0; iter < max_iterations; iter++) {
@@ -1733,7 +1756,8 @@ bool FastRouteCore::runViaOptimizationPhase(const CostParams& cost_params,
                   via * 2,
                   L,
                   cost_params,
-                  slack_th);
+                  slack_th,
+                  true);
     updateNetViaUsage();
     pruneViaOptimizationCandidates();
     improved = true;

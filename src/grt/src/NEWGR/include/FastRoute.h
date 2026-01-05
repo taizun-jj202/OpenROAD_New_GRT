@@ -309,7 +309,8 @@ class FastRouteCore
                      int via,
                      int L,
                      const CostParams& cost_params,
-                     float& slack_th);
+                     float& slack_th,
+                     bool is_via_opt_reroute = false);
   void convertToMazeroute();
   int getOverflow2D(int* maxOverflow);
   int getOverflow2Dmaze(int* maxOverflow, int* tUsage);
@@ -543,7 +544,10 @@ class FastRouteCore
                          int& best_cost,
                          multi_array<int, 2>& layer_grid,
                          int net_cost);
-  void assignEdge(int netID, int edgeID, bool processDIR);
+  void assignEdge(int netID,
+                  int edgeID,
+                  bool processDIR,
+                  bool is_via_opt_reroute);
   int getLayerResistance(int layer, int length, FrNet* net);
   int getViaResistance(int from_layer, int to_layer);
   bool needResistanceAware(int net_id);
@@ -656,6 +660,8 @@ class FastRouteCore
   int layer_assign_total_iters_snapshot_{1};
   std::vector<int> net_via_usage_;
   std::vector<bool> via_optimization_candidates_;
+  std::vector<bool> via_opt_reroute_nets_;
+  bool via_opt_reroute_context_active_{false};
   bool via_optimization_mode_{false};
   int via_optimization_threshold_{0};
 

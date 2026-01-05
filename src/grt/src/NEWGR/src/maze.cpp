@@ -1043,12 +1043,16 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
                                   const int via,
                                   const int L,
                                   const CostParams& cost_params,
-                                  float& slack_th)
+                                  float& slack_th,
+                                  const bool is_via_opt_reroute)
 {
   // maze routing for multi-source, multi-destination
   int tmpX, tmpY;
 
   const int max_usage_multiplier = 40;
+  if (is_via_opt_reroute && via_opt_reroute_nets_.size() < nets_.size()) {
+    via_opt_reroute_nets_.resize(nets_.size(), false);
+  }
 
   for (int i = 0; i < max_usage_multiplier * h_capacity_; i++) {
     h_cost_table_.push_back(getCost(i, true, cost_params));
