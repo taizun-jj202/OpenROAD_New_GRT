@@ -12,6 +12,7 @@
 #include <random>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -103,15 +104,21 @@ void FastRouteCore::ConvertToFull3DType2()
 
 static bool compareNetPins(const OrderNetPin& a, const OrderNetPin& b)
 {
-  // Sorting by ndr_priority, resistance aware, slack, length_per_pin, minX, and
-  // treeIndex
-  return std::tie(a.ndr_priority,
+  // Sorting by via proneness first to prioritize planar nets, followed by
+  // existing tie-breakers (ndr_priority, pin metrics, slack, etc.)
+  return std::tie(a.via_proneness,
+                  a.ndr_priority,
+                  a.pin_count,
+                  a.pin_bbox_span,
                   a.res_aware,
                   a.slack,
                   a.length_per_pin,
                   a.minX,
                   a.treeIndex)
-         < std::tie(b.ndr_priority,
+         < std::tie(b.via_proneness,
+                    b.ndr_priority,
+                    b.pin_count,
+                    b.pin_bbox_span,
                     b.res_aware,
                     b.slack,
                     b.length_per_pin,
@@ -148,8 +155,34 @@ void FastRouteCore::netpinOrderInc()
 
     int res_aware = nets_[netID]->isResAware() ? 0 : 1;
 
+    const auto& pin_layers = nets_[netID]->getPinL();
+    std::unordered_set<int> unique_layers(pin_layers.begin(), pin_layers.end());
+    const int via_proneness
+        = std::max(1, static_cast<int>(unique_layers.size()));
+
+    const auto& pin_x = nets_[netID]->getPinX();
+    const auto& pin_y = nets_[netID]->getPinY();
+    int pin_bbox_span = 0;
+    if (!pin_x.empty()) {
+      const auto [min_x_it, max_x_it]
+          = std::minmax_element(pin_x.begin(), pin_x.end());
+      const auto [min_y_it, max_y_it]
+          = std::minmax_element(pin_y.begin(), pin_y.end());
+      pin_bbox_span = (*max_x_it - *min_x_it) + (*max_y_it - *min_y_it);
+    }
+    const int pin_count
+        = std::max(1, static_cast<int>(nets_[netID]->getNumPins()));
+
     tree_order_pv_.push_back(
-        {netID, xmin, length_per_pin, ndr_priority, res_aware, slack});
+        {netID,
+         xmin,
+         length_per_pin,
+         ndr_priority,
+         res_aware,
+         slack,
+         via_proneness,
+         pin_count,
+         pin_bbox_span});
   }
 
   std::stable_sort(

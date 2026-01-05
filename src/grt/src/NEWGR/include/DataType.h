@@ -269,6 +269,9 @@ struct OrderNetPin
   int ndr_priority;      // NDR nets are assigned first
   int res_aware;
   float slack;
+  int via_proneness;
+  int pin_count;
+  int pin_bbox_span;
 };
 
 struct OrderTree
