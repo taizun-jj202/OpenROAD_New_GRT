@@ -1410,6 +1410,19 @@ NetRouteMap FastRouteCore::run()
                   cost_params,
                   slack_th,
                   false);
+    if (i == overflow_iterations_ - 1) {
+      std::printf(
+          "FORCED EXECUTION: Entering runViaOptimizationPhase on final "
+          "iteration.\n");
+      runViaOptimizationPhase(cost_params,
+                              enlarge_,
+                              Ripvalue,
+                              mazeedge_threshold_,
+                              !(i % 3),
+                              VIA,
+                              L,
+                              slack_th);
+    }
 
     int last_cong = past_cong;
     past_cong = getOverflow2Dmaze(&maxOverflow, &tUsage);
