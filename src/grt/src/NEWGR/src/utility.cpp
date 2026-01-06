@@ -12,7 +12,6 @@
 #include <random>
 #include <set>
 #include <string>
-#include <unordered_set>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -104,21 +103,15 @@ void FastRouteCore::ConvertToFull3DType2()
 
 static bool compareNetPins(const OrderNetPin& a, const OrderNetPin& b)
 {
-  // Sorting by via proneness first to prioritize planar nets, followed by
-  // existing tie-breakers (ndr_priority, pin metrics, slack, etc.)
-  return std::tie(a.via_proneness,
-                  a.ndr_priority,
-                  a.pin_count,
-                  a.pin_bbox_span,
+  // Sorting by ndr_priority, resistance aware, slack, length_per_pin, minX, and
+  // treeIndex
+  return std::tie(a.ndr_priority,
                   a.res_aware,
                   a.slack,
                   a.length_per_pin,
                   a.minX,
                   a.treeIndex)
-         < std::tie(b.via_proneness,
-                    b.ndr_priority,
-                    b.pin_count,
-                    b.pin_bbox_span,
+         < std::tie(b.ndr_priority,
                     b.res_aware,
                     b.slack,
                     b.length_per_pin,
@@ -130,86 +123,15 @@ void FastRouteCore::netpinOrderInc()
 {
   tree_order_pv_.clear();
 
-  auto estimateCongestionRatio = [&](int min_x,
-                                     int max_x,
-                                     int min_y,
-                                     int max_y) -> double {
-    if (!graph2d_.hasEdges() || x_grid_ <= 0 || y_grid_ <= 0) {
-      return 1.0;
-    }
-    min_x = std::clamp(min_x, 0, x_grid_ - 1);
-    max_x = std::clamp(max_x, min_x, x_grid_ - 1);
-    min_y = std::clamp(min_y, 0, y_grid_ - 1);
-    max_y = std::clamp(max_y, min_y, y_grid_ - 1);
-
-    const int span_x = std::max(1, max_x - min_x + 1);
-    const int span_y = std::max(1, max_y - min_y + 1);
-    const int stride_x = std::max(1, span_x / 4);
-    const int stride_y = std::max(1, span_y / 4);
-
-    double accum_ratio = 0.0;
-    int samples = 0;
-    auto sampleHorizontal = [&](int x, int y) {
-      if (x_grid_ < 2) {
-        return;
-      }
-      x = std::clamp(x, 0, x_grid_ - 2);
-      y = std::clamp(y, 0, y_grid_ - 1);
-      const int cap = std::max(1, static_cast<int>(graph2d_.getCapH(x, y)));
-      const int usage = graph2d_.getUsageH(x, y);
-      accum_ratio += static_cast<double>(usage) / cap;
-      samples++;
-    };
-    auto sampleVertical = [&](int x, int y) {
-      if (y_grid_ < 2) {
-        return;
-      }
-      x = std::clamp(x, 0, x_grid_ - 1);
-      y = std::clamp(y, 0, y_grid_ - 2);
-      const int cap = std::max(1, static_cast<int>(graph2d_.getCapV(x, y)));
-      const int usage = graph2d_.getUsageV(x, y);
-      accum_ratio += static_cast<double>(usage) / cap;
-      samples++;
-    };
-
-    for (int y = min_y; y <= max_y; y += stride_y) {
-      for (int x = min_x; x < max_x; x += stride_x) {
-        sampleHorizontal(x, y);
-      }
-    }
-    for (int x = min_x; x <= max_x; x += stride_x) {
-      for (int y = min_y; y < max_y; y += stride_y) {
-        sampleVertical(x, y);
-      }
-    }
-
-    if (samples == 0) {
-      return 1.0;
-    }
-    return accum_ratio / samples;
-  };
-
   for (const int& netID : net_ids_) {
     int16_t xmin = std::numeric_limits<int16_t>::max();
-    int16_t ymin = std::numeric_limits<int16_t>::max();
-    int16_t xmax = std::numeric_limits<int16_t>::min();
-    int16_t ymax = std::numeric_limits<int16_t>::min();
     int totalLength = 0;
     const auto& treenodes = sttrees_[netID].nodes;
     const StTree* stree = &(sttrees_[netID]);
     const int num_edges = stree->num_edges();
     for (int ind = 0; ind < num_edges; ind++) {
       totalLength += stree->edges[ind].len;
-      const int n1 = stree->edges[ind].n1;
-      const int n2 = stree->edges[ind].n2;
-      xmin = std::min<int16_t>(xmin, treenodes[n1].x);
-      xmin = std::min<int16_t>(xmin, treenodes[n2].x);
-      xmax = std::max<int16_t>(xmax, treenodes[n1].x);
-      xmax = std::max<int16_t>(xmax, treenodes[n2].x);
-      ymin = std::min<int16_t>(ymin, treenodes[n1].y);
-      ymin = std::min<int16_t>(ymin, treenodes[n2].y);
-      ymax = std::max<int16_t>(ymax, treenodes[n1].y);
-      ymax = std::max<int16_t>(ymax, treenodes[n2].y);
+      xmin = std::min(xmin, treenodes[stree->edges[ind].n1].x);
     }
 
     const float length_per_pin = (float) totalLength / stree->num_terminals;
@@ -226,67 +148,8 @@ void FastRouteCore::netpinOrderInc()
 
     int res_aware = nets_[netID]->isResAware() ? 0 : 1;
 
-    const auto& pin_layers = nets_[netID]->getPinL();
-    std::unordered_set<int> unique_layers(pin_layers.begin(), pin_layers.end());
-    const int unique_layer_count
-        = std::max(1, static_cast<int>(unique_layers.size()));
-
-    const auto& pin_x = nets_[netID]->getPinX();
-    const auto& pin_y = nets_[netID]->getPinY();
-    int pin_bbox_span = 0;
-    if (!pin_x.empty()) {
-      const auto [min_x_it, max_x_it]
-          = std::minmax_element(pin_x.begin(), pin_x.end());
-      const auto [min_y_it, max_y_it]
-          = std::minmax_element(pin_y.begin(), pin_y.end());
-      pin_bbox_span = (*max_x_it - *min_x_it) + (*max_y_it - *min_y_it);
-    }
-    const int pin_count
-        = std::max(1, static_cast<int>(nets_[netID]->getNumPins()));
-
-    const double congestion_ratio
-        = estimateCongestionRatio(xmin, xmax, ymin, ymax);
-
-    // Weighted via-proneness score:
-    //  - layer weight dominates (forces multi-layer nets later)
-    //  - nets with many pins or wide spatial footprint receive extra penalty
-    //  - planar, compact nets get a discount so they route early even if large
-    int via_proneness = unique_layer_count * 1000;
-    const int pin_penalty = std::max(0, pin_count - 4) * 60;
-    const int span_penalty = pin_bbox_span / 2;
-    via_proneness += pin_penalty + span_penalty;
-
-    if (unique_layer_count >= 3 && pin_count >= 10) {
-      via_proneness += 2000;
-    }
-    if (pin_bbox_span > 2000 && pin_count > 6) {
-      via_proneness += 1500;
-    }
-    if (unique_layer_count == 1 && pin_count <= 4 && pin_bbox_span < 600) {
-      via_proneness /= 2;
-    }
-    const int congestion_penalty
-        = static_cast<int>(std::round(congestion_ratio * 1200));
-    via_proneness += congestion_penalty;
-    if (congestion_ratio > 1.5) {
-      via_proneness += 2000;
-    } else if (congestion_ratio > 1.1) {
-      via_proneness += 800;
-    } else if (congestion_ratio < 0.8) {
-      via_proneness -= 300;
-    }
-    via_proneness = std::max(1, via_proneness);
-
     tree_order_pv_.push_back(
-        {netID,
-         xmin,
-         length_per_pin,
-         ndr_priority,
-         res_aware,
-         slack,
-         via_proneness,
-         pin_count,
-         pin_bbox_span});
+        {netID, xmin, length_per_pin, ndr_priority, res_aware, slack});
   }
 
   std::stable_sort(
@@ -864,6 +727,53 @@ void FastRouteCore::assignEdge(const int netID,
     return std::clamp(idx, 0, routelen - 1);
   };
 
+  auto sampleEdgeRatio = [](const Edge3D& edge) -> double {
+    if (edge.cap <= 0) {
+      return 1.0;
+    }
+    return static_cast<double>(edge.usage) / edge.cap;
+  };
+
+  auto localLayerCongestion = [&](int layer, int grid_idx) -> double {
+    if (layer < 0 || layer >= num_layers_ || routelen < 0) {
+      return 0.0;
+    }
+    const int idx = clamp_grid_idx(grid_idx);
+    const int gx = grids[idx].x;
+    const int gy = grids[idx].y;
+    double accum = 0.0;
+    int samples = 0;
+    if (gx >= 0 && gx < x_grid_ - 1 && gy >= 0 && gy < y_grid_) {
+      accum += sampleEdgeRatio(h_edges_3D_[layer][gy][gx]);
+      samples++;
+    }
+    if (gy >= 0 && gy < y_grid_ - 1 && gx >= 0 && gx < x_grid_) {
+      accum += sampleEdgeRatio(v_edges_3D_[layer][gy][gx]);
+      samples++;
+    }
+    if (samples == 0) {
+      return 0.0;
+    }
+    return accum / samples;
+  };
+
+  auto congestionPenalty = [&](int from_layer,
+                               int to_layer,
+                               int grid_idx,
+                               int base_cost) -> int {
+    const double from_ratio = localLayerCongestion(from_layer, grid_idx);
+    const double to_ratio = localLayerCongestion(to_layer, grid_idx);
+    const double avg_ratio = (from_ratio + to_ratio) * 0.5;
+    const double logistic
+        = 1.0 / (1.0 + std::exp(-6.0 * (avg_ratio - 1.0)));
+    const double ratio_penalty = std::max(0.0, avg_ratio - 0.9);
+    const double penalty_scale = logistic + 0.5 * ratio_penalty;
+    if (penalty_scale <= 0.0) {
+      return 0;
+    }
+    return static_cast<int>(std::round(base_cost * penalty_scale));
+  };
+
   auto logisticPenalty = [&](int layer, int grid_idx) -> double {
     if (routelen <= 0 || layer < 0 || layer >= num_layers_) {
       return 0.0;
@@ -1147,6 +1057,7 @@ void FastRouteCore::assignEdge(const int netID,
                                                 penalty_idx,
                                                 base_via_cost)
                                + congestion_penalty
+                               + congestionPenalty(l, i, k, base_via_cost)
                                + preferredViaPenalty(l, i, penalty_idx);
 
           if (gridD[i][k] > gridD[l][k] + total_via_cost) {
@@ -1209,6 +1120,7 @@ void FastRouteCore::assignEdge(const int netID,
                                           penalty_idx,
                                           base_via_cost)
                          + congestion_penalty
+                         + congestionPenalty(l, i, routelen - 1, base_via_cost)
                          + preferredViaPenalty(l, i, penalty_idx);
 
         if (gridD[i][k] > gridD[l][k] + total_cost) {
@@ -1336,6 +1248,7 @@ void FastRouteCore::assignEdge(const int netID,
                                                 penalty_idx,
                                                 base_via_cost)
                                + congestion_penalty
+                               + congestionPenalty(l, i, k - 1, base_via_cost)
                                + preferredViaPenalty(l, i, penalty_idx);
 
           if (gridD[i][k] > gridD[l][k] + total_via_cost) {
@@ -1398,6 +1311,7 @@ void FastRouteCore::assignEdge(const int netID,
                                           penalty_idx,
                                           base_via_cost)
                          + congestion_penalty
+                         + congestionPenalty(l, i, 0, base_via_cost)
                          + preferredViaPenalty(l, i, penalty_idx);
 
         if (gridD[i][0] > gridD[l][0] + total_cost) {
