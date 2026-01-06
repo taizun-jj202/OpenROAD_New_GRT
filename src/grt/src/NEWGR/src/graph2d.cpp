@@ -16,7 +16,7 @@
 #include "DataType.h"
 #include "FastRoute.h"
 
-namespace grt {
+namespace grt::newgr {
 
 // Initializes the 2D graph with grid dimensions, capacities, and layers.
 void Graph2D::init(const int x_grid,
@@ -721,4 +721,4 @@ void Graph2D::updateNDRCapLayer(const int x,
   }
 }
 
-}  // namespace grt
+}  // namespace grt::newgr

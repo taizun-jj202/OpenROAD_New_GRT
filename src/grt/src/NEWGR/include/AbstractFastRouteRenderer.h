@@ -6,7 +6,7 @@
 #include "DataType.h"
 #include "stt/SteinerTreeBuilder.h"
 
-namespace grt {
+namespace grt::newgr {
 
 enum class TreeStructure
 {
@@ -29,4 +29,4 @@ class AbstractFastRouteRenderer
   virtual void redrawAndPause() = 0;
 };
 
-}  // namespace grt
+}  // namespace grt::newgr

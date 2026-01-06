@@ -45,7 +45,7 @@ namespace sta {
 class dbSta;
 }
 
-namespace grt {
+namespace grt::newgr {
 
 using boost::multi_array;
 using boost::icl::interval;
@@ -632,6 +632,8 @@ class FastRouteCore
   bool verbose_;
   float critical_nets_percentage_;
   int via_cost_;
+  int layer_assign_iter_snapshot_{0};
+  int layer_assign_total_iters_snapshot_{1};
   int mazeedge_threshold_;
   float v_capacity_lb_;
   float h_capacity_lb_;
@@ -710,4 +712,4 @@ class FastRouteCore
   multi_array<int, 3> d2_3D_;
 };
 
-}  // namespace grt
+}  // namespace grt::newgr

@@ -15,7 +15,7 @@
 #include "odb/geom.h"
 #include "utl/Logger.h"
 
-namespace grt {
+namespace grt::newgr {
 
 using utl::GNR;
 
@@ -2214,4 +2214,4 @@ void FastRouteCore::SaveLastRouteLen()
   }
 }
 
-}  // namespace grt
+}  // namespace grt::newgr

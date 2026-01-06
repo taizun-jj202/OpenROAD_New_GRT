@@ -8,11 +8,8 @@ namespace grt {
 
 using utl::GNR;
 
-NewGR::NewGR(GlobalRouter* grouter,
-             FastRouteCore* fastroute,
-             CUGR* cugr,
-             utl::Logger* logger)
-    : grouter_(grouter), fastroute_(fastroute), cugr_(cugr), logger_(logger)
+NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
+    : grouter_(grouter), cugr_(cugr), logger_(logger)
 {
 }
 

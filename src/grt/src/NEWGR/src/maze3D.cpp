@@ -12,7 +12,7 @@
 #include "odb/db.h"
 #include "utl/Logger.h"
 
-namespace grt {
+namespace grt::newgr {
 
 using utl::GNR;
 
@@ -1504,4 +1504,4 @@ void FastRouteCore::mazeRouteMSMDOrder3D(int expand,
   }
 }
 
-}  // namespace grt
+}  // namespace grt::newgr

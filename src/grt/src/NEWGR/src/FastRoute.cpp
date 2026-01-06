@@ -21,7 +21,7 @@
 #include "stt/SteinerTreeBuilder.h"
 #include "utl/Logger.h"
 
-namespace grt {
+namespace grt::newgr {
 
 using utl::GNR;
 
@@ -56,6 +56,8 @@ FastRouteCore::FastRouteCore(odb::dbDatabase* db,
       verbose_(false),
       critical_nets_percentage_(10),
       via_cost_(0),
+      layer_assign_iter_snapshot_(0),
+      layer_assign_total_iters_snapshot_(1),
       mazeedge_threshold_(0),
       v_capacity_lb_(0),
       h_capacity_lb_(0),
@@ -83,6 +85,8 @@ void FastRouteCore::clear()
   h_capacity_ = 0;
   total_overflow_ = 0;
   has_2D_overflow_ = false;
+  layer_assign_iter_snapshot_ = 0;
+  layer_assign_total_iters_snapshot_ = 1;
 
   graph2d_.clear();
   seglist_.clear();
@@ -1630,6 +1634,8 @@ NetRouteMap FastRouteCore::run()
 
   getOverflow2Dmaze(&maxOverflow, &tUsage);
 
+  layer_assign_iter_snapshot_ = std::max(1, i - 1);
+  layer_assign_total_iters_snapshot_ = std::max(1, overflow_iterations_);
   layerAssignment();
 
   if (logger_->debugCheck(GNR, "grtSteps", 1)) {
@@ -1909,13 +1915,10 @@ void FastRouteCore::computeCongestionInformation()
   }
 }
 
-////////////////////////////////////////////////////////////////
-
-const char* getNetName(odb::dbNet* db_net);
-
 const char* FrNet::getName() const
 {
-  return getNetName(getDbNet());
+  const odb::dbNet* net = getDbNet();
+  return net ? net->getConstName() : "";
 }
 
 ////////////////////////////////////////////////////////////////
@@ -2047,4 +2050,4 @@ void FrNet::reset(odb::dbNet* db_net,
   pin_l_.clear();
 }
 
-}  // namespace grt
+}  // namespace grt::newgr

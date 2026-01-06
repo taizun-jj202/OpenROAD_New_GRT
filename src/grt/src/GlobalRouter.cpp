@@ -618,7 +618,7 @@ NetRouteMap GlobalRouter::runNewGrRouting(std::vector<Net*>& nets,
                                           int min_routing_layer,
                                           int max_routing_layer)
 {
-  NewGR router(this, fastroute_, cugr_, logger_);
+  NewGR router(this, cugr_, logger_);
   return router.run(nets, min_routing_layer, max_routing_layer);
 }
 

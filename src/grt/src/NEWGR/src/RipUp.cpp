@@ -11,7 +11,7 @@
 #include "FastRoute.h"
 #include "utl/Logger.h"
 
-namespace grt {
+namespace grt::newgr {
 
 using utl::GNR;
 
@@ -475,4 +475,4 @@ void FastRouteCore::newRipupNet(const int netID)
   }
 }
 
-}  // namespace grt
+}  // namespace grt::newgr

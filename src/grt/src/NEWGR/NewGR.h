@@ -4,13 +4,14 @@
 
 namespace grt {
 
+namespace newgr {
+class FastRouteCore;
+}
+
 class NewGR
 {
  public:
-  NewGR(GlobalRouter* grouter,
-        FastRouteCore* fastroute,
-        CUGR* cugr,
-        utl::Logger* logger);
+  NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger);
 
   NetRouteMap run(std::vector<Net*>& nets,
                   int min_routing_layer,
@@ -18,7 +19,6 @@ class NewGR
 
  private:
   GlobalRouter* grouter_;
-  FastRouteCore* fastroute_;
   CUGR* cugr_;
   utl::Logger* logger_;
 };

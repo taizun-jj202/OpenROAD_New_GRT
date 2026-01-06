@@ -18,7 +18,7 @@ class dbNet;
 
 using int64 = std::int64_t;
 
-namespace grt {
+namespace grt::newgr {
 
 enum class RouteType
 {
@@ -246,6 +246,7 @@ struct OrderNetPin
   int ndr_priority;      // NDR nets are assigned first
   int res_aware;
   float slack;
+  double difficulty;
 };
 
 struct OrderTree
@@ -263,4 +264,4 @@ struct OrderNetEdge
 
 using utl::format_as;
 
-}  // namespace grt
+}  // namespace grt::newgr

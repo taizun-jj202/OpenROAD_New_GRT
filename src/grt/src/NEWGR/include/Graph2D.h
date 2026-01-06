@@ -14,7 +14,7 @@
 #include "boost/multi_array.hpp"
 #include "utl/Logger.h"
 
-namespace grt {
+namespace grt::newgr {
 
 using boost::multi_array;
 
@@ -167,4 +167,4 @@ class Graph2D
   std::set<std::pair<int, int>> v_used_ggrid_;
 };
 
-}  // namespace grt
+}  // namespace grt::newgr

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2023-2025, The OpenROAD Authors
 
-#include "FastRouteRenderer.h"
+#include "../include/FastRouteRenderer.h"
 
 #include <cmath>
 #include <vector>
@@ -10,7 +10,7 @@
 #include "odb/db.h"
 #include "stt/SteinerTreeBuilder.h"
 
-namespace grt {
+namespace grt::newgr {
 
 FastRouteRenderer::FastRouteRenderer(odb::dbTech* tech)
     : treeStructure_(TreeStructure::steinerTreeByStt),
@@ -163,4 +163,4 @@ void FastRouteRenderer::drawObjects(gui::Painter& painter)
   }
 }
 
-}  // namespace grt
+}  // namespace grt::newgr

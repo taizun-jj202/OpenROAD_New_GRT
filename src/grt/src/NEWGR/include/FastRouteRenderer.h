@@ -11,7 +11,7 @@
 #include "odb/db.h"
 #include "stt/SteinerTreeBuilder.h"
 
-namespace grt {
+namespace grt::newgr {
 
 class FastRouteRenderer : public gui::Renderer, public AbstractFastRouteRenderer
 {
@@ -57,4 +57,4 @@ class FastRouteRenderer : public gui::Renderer, public AbstractFastRouteRenderer
   int tile_size_, x_corner_, y_corner_;
 };
 
-}  // namespace grt
+}  // namespace grt::newgr

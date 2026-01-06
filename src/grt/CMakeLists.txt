@@ -5,9 +5,16 @@ include("openroad")
 
 project(grt)
 
+# Option to build the experimental NEWGR router alongside the legacy
+# FastRoute4.1 implementation.
+option(USE_NEWGR "Build with the new NEWGR router" ON)
+
 find_package(OpenMP REQUIRED)
 
 add_subdirectory(src/fastroute)
+if(USE_NEWGR)
+  add_subdirectory(src/NEWGR)
+endif()
 add_subdirectory(src/cugr)
 
 swig_lib(NAME      grt
@@ -21,7 +28,6 @@ add_library(grt_lib
   src/Net.cpp
   src/Pin.cpp
   src/RepairAntennas.cpp
-  src/NEWGR/NewGR.cpp
   src/Rudy.cpp
   src/GlobalRouter.cpp
   src/SprouteAdapter.cpp
@@ -33,6 +39,24 @@ target_include_directories(grt_lib
   PRIVATE
     src
 )
+
+target_include_directories(grt_lib
+  PRIVATE
+    src/fastroute
+    src/fastroute/include
+)
+
+if(USE_NEWGR)
+  target_include_directories(grt_lib
+    PRIVATE
+      src/NEWGR
+      src/NEWGR/include
+  )
+  target_sources(grt_lib PRIVATE $<TARGET_OBJECTS:NEWGR_lib> src/NEWGR/NewGR.cpp)
+  target_compile_definitions(grt_lib PUBLIC GRT_ENABLE_NEWGR=1)
+else()
+  target_compile_definitions(grt_lib PUBLIC GRT_ENABLE_NEWGR=0)
+endif()
 
 target_link_libraries(grt_lib
     utl_lib
@@ -55,7 +79,6 @@ target_sources(grt
     src/heatMap.cpp
     src/heatMapRudy.cpp
     src/GrouteRenderer.cpp
-    src/fastroute/src/FastRouteRenderer.cpp
 )
 
 target_include_directories(grt
@@ -63,7 +86,19 @@ target_include_directories(grt
     include
   PRIVATE
     src
+    src/fastroute
+    src/fastroute/include
 )
+
+target_sources(grt PRIVATE src/fastroute/src/FastRouteRenderer.cpp)
+if(USE_NEWGR)
+  target_sources(grt PRIVATE src/NEWGR/src/FastRouteRenderer.cpp)
+  target_include_directories(grt
+    PRIVATE
+      src/NEWGR
+      src/NEWGR/include
+  )
+endif()
 
 target_link_libraries(grt
     grt_lib
@@ -72,6 +107,11 @@ target_link_libraries(grt
     stt
     rsz
 )
+if(USE_NEWGR)
+  target_compile_definitions(grt PRIVATE GRT_ENABLE_NEWGR=1)
+else()
+  target_compile_definitions(grt PRIVATE GRT_ENABLE_NEWGR=0)
+endif()
 
 if (Python3_FOUND AND BUILD_PYTHON)
   swig_lib(NAME          grt_py
@@ -85,6 +125,9 @@ if (Python3_FOUND AND BUILD_PYTHON)
   target_include_directories(grt_py
     PUBLIC
       include
+    PRIVATE
+      src/fastroute
+      src/fastroute/include
   )
 
   target_link_libraries(grt_py
@@ -101,6 +144,17 @@ if (Python3_FOUND AND BUILD_PYTHON)
       OpenSTA
       Boost::boost
   )
+
+  if(USE_NEWGR)
+    target_include_directories(grt_py
+      PRIVATE
+        src/NEWGR
+        src/NEWGR/include
+    )
+    target_compile_definitions(grt_py PRIVATE GRT_ENABLE_NEWGR=1)
+  else()
+    target_compile_definitions(grt_py PRIVATE GRT_ENABLE_NEWGR=0)
+  endif()
 
 endif()
 

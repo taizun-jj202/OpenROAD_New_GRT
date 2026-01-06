@@ -14,7 +14,7 @@
 #include "odb/geom.h"
 #include "utl/Logger.h"
 
-namespace grt {
+namespace grt::newgr {
 
 using utl::GNR;
 
@@ -766,4 +766,4 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
              numShift);
 }
 
-}  // namespace grt
+}  // namespace grt::newgr

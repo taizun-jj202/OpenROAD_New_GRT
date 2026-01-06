@@ -12,7 +12,7 @@
 #include "FastRoute.h"
 #include "utl/Logger.h"
 
-namespace grt {
+namespace grt::newgr {
 
 using utl::GNR;
 
@@ -1432,4 +1432,4 @@ void FastRouteCore::newrouteLInMaze(const int netID)
   }  // loop i
 }
 
-}  // namespace grt
+}  // namespace grt::newgr
