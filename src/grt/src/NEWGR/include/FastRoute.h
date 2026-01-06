@@ -318,6 +318,7 @@ class FastRouteCore
                    std::vector<std::pair<short, short>>& blocked_positions,
                    std::vector<GPoint3D>& new_route);
   void convertToMazerouteNet(int netID);
+  long computeNetWirelength(int net_id) const;
   void setupHeap(int netID,
                  int edgeID,
                  std::vector<double*>& src_heap,

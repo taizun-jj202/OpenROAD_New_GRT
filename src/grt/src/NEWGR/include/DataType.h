@@ -253,7 +253,7 @@ struct OrderTree
 {
   int length;
   int treeIndex;
-  int16_t xmin;
+  double xmin;
 };
 
 struct OrderNetEdge

@@ -419,6 +419,27 @@ int FastRouteCore::threeDVIA()
   return (numVIA);
 }
 
+long FastRouteCore::computeNetWirelength(const int netID) const
+{
+  if (netID < 0 || netID >= sttrees_.size()) {
+    return 0;
+  }
+
+  long length = 0;
+  const auto& treeedges = sttrees_[netID].edges;
+  for (const TreeEdge& treeedge : treeedges) {
+    if (treeedge.route.routelen <= 0) {
+      continue;
+    }
+    const auto& grids = treeedge.route.grids;
+    for (int i = 0; i < treeedge.route.routelen; i++) {
+      length += std::abs(grids[i].x - grids[i + 1].x)
+                + std::abs(grids[i].y - grids[i + 1].y);
+    }
+  }
+  return length;
+}
+
 void FastRouteCore::fixEdgeAssignment(int& net_layer,
                                       const multi_array<Edge3D, 3>& edges_3D,
                                       const int x,
@@ -1496,7 +1517,7 @@ void FastRouteCore::StNetOrder()
     const int netID = net_ids_[j];
 
     StTree* stree = &(sttrees_[netID]);
-    tree_order_cong_[j].xmin = 0;
+    double overflow_score = 0.0;
     tree_order_cong_[j].treeIndex = netID;
 
     for (int ind = 0; ind < stree->num_edges(); ind++) {
@@ -1509,17 +1530,40 @@ void FastRouteCore::StNetOrder()
           const int min_y = std::min(grids[i].y, grids[i + 1].y);
           const int cap = getEdgeCapacity(
               nets_[netID], grids[i].x, min_y, EdgeDirection::Vertical);
-          tree_order_cong_[j].xmin
+          overflow_score
               += std::max(0, graph2d_.getUsageV(grids[i].x, min_y) - cap);
         } else {  // a horizontal edge
           const int min_x = std::min(grids[i].x, grids[i + 1].x);
           const int cap = getEdgeCapacity(
               nets_[netID], min_x, grids[i].y, EdgeDirection::Horizontal);
-          tree_order_cong_[j].xmin
+          overflow_score
               += std::max(0, graph2d_.getUsageH(min_x, grids[i].y) - cap);
         }
       }
     }
+
+    int min_x = std::numeric_limits<int>::max();
+    int min_y = std::numeric_limits<int>::max();
+    int max_x = std::numeric_limits<int>::min();
+    int max_y = std::numeric_limits<int>::min();
+    for (const TreeNode& node : stree->nodes) {
+      min_x = std::min(min_x, static_cast<int>(node.x));
+      min_y = std::min(min_y, static_cast<int>(node.y));
+      max_x = std::max(max_x, static_cast<int>(node.x));
+      max_y = std::max(max_y, static_cast<int>(node.y));
+    }
+    const int bbox_span
+        = (min_x <= max_x && min_y <= max_y)
+              ? (max_x - min_x) + (max_y - min_y)
+              : 0;
+    double length_penalty = 0.0;
+    if (bbox_span > 0) {
+      const double actual_length = static_cast<double>(computeNetWirelength(netID));
+      const double inflation = actual_length / bbox_span;
+      length_penalty = std::max(0.0, inflation - 1.0);
+    }
+    constexpr double length_weight = 50.0;
+    tree_order_cong_[j].xmin = overflow_score + length_weight * length_penalty;
   }
 
   std::stable_sort(
@@ -1531,7 +1575,7 @@ void FastRouteCore::StNetOrder()
     auto order_element = tree_order_cong_[ord_elID];
     if (nets_[order_element.treeIndex]->getSlack()
         == std::ceil(std::numeric_limits<float>::lowest())) {
-      if (order_element.xmin == 0
+      if (std::abs(order_element.xmin) < 1e-3
           && (ord_elID >= (net_ids_.size() * 30 / 100))) {
         nets_[order_element.treeIndex]->setSlack(
             std::numeric_limits<float>::max());
