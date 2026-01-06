@@ -1232,16 +1232,26 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
       const auto [xmin, xmax] = std::minmax(n1x, n2x);
 
       enlarge_ = std::min(origENG, (iter / 6 + 3) * treeedge->route.routelen);
+      const int manhattan_len = treeedge->len;
+      const int min_local_expand = 3;
+      const double expand_ratio = 0.35;
+      const int dynamic_cap
+          = min_local_expand
+            + static_cast<int>(std::round(manhattan_len * expand_ratio));
+      const int effective_enlarge
+          = std::max(min_local_expand, std::min(enlarge_, dynamic_cap));
 
       int decrease = 0;
 
       if (nets_[netID]->isCritical()) {
-        decrease = std::min((iter / 7) * 5, enlarge_ / 2);
+        decrease = std::min((iter / 7) * 5, effective_enlarge / 2);
       }
-      const int regionX1 = std::max(xmin - enlarge_ + decrease, 0);
-      const int regionX2 = std::min(xmax + enlarge_ - decrease, x_grid_ - 1);
-      const int regionY1 = std::max(ymin - enlarge_ + decrease, 0);
-      const int regionY2 = std::min(ymax + enlarge_ - decrease, y_grid_ - 1);
+      const int regionX1 = std::max(xmin - effective_enlarge + decrease, 0);
+      const int regionX2
+          = std::min(xmax + effective_enlarge - decrease, x_grid_ - 1);
+      const int regionY1 = std::max(ymin - effective_enlarge + decrease, 0);
+      const int regionY2
+          = std::min(ymax + effective_enlarge - decrease, y_grid_ - 1);
 
       // initialize d1[][] and d2[][] as BIG_INT
       for (int i = regionY1; i <= regionY2; i++) {
