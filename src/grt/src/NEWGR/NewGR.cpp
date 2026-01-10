@@ -55,6 +55,7 @@ struct Hotspot
 {
   int gx = 0;
   int gy = 0;
+  float severity = 1.0f;
   bool affect_horizontal = false;
   bool affect_vertical = false;
 };
@@ -124,7 +125,11 @@ void adjustEdgeCapacity(GlobalRouter* grouter,
 void applySoftCapacityScaling(GlobalRouter* grouter,
                               const RudyGrid& normalized_rudy,
                               int min_layer,
-                              int max_layer)
+                              int max_layer,
+                              float min_ratio_base = 0.50f,
+                              float max_ratio_base = 0.92f,
+                              float slope = 6.0f,
+                              float midpoint = 0.45f)
 {
   Grid* grid = grouter->grid();
   if (normalized_rudy.empty() || grid == nullptr) {
@@ -164,13 +169,16 @@ void applySoftCapacityScaling(GlobalRouter* grouter,
   for (int layer = min_layer; layer <= max_layer; ++layer) {
     const float layer_factor
         = static_cast<float>(layer - min_layer) / static_cast<float>(layer_span);
-    const float min_ratio = 0.50f + 0.15f * layer_factor;
-    const float max_ratio = 0.92f + 0.05f * layer_factor;
+    const float min_ratio = std::clamp(
+        min_ratio_base + 0.12f * layer_factor, 0.05f, 0.99f);
+    const float max_ratio = std::clamp(
+        max_ratio_base + 0.04f * layer_factor, min_ratio, 0.995f);
 
     for (int y = 0; y < usable_y; ++y) {
       for (int x = 0; x < usable_x - 1; ++x) {
         const float normalized = 0.5f * (getNormalized(x, y) + getNormalized(x + 1, y));
-        const float ratio = logistic_ratio(normalized, 6.0f, 0.45f, min_ratio, max_ratio);
+        const float ratio
+            = logistic_ratio(normalized, slope, midpoint, min_ratio, max_ratio);
         adjustEdgeCapacity(grouter, x, y, x + 1, y, layer, ratio);
       }
     }
@@ -178,7 +186,8 @@ void applySoftCapacityScaling(GlobalRouter* grouter,
     for (int y = 0; y < usable_y - 1; ++y) {
       for (int x = 0; x < usable_x; ++x) {
         const float normalized = 0.5f * (getNormalized(x, y) + getNormalized(x, y + 1));
-        const float ratio = logistic_ratio(normalized, 6.0f, 0.45f, min_ratio, max_ratio);
+        const float ratio
+            = logistic_ratio(normalized, slope, midpoint, min_ratio, max_ratio);
         adjustEdgeCapacity(grouter, x, y, x, y + 1, layer, ratio);
       }
     }
@@ -190,7 +199,8 @@ void applyHotspotPenalties(GlobalRouter* grouter,
                            int min_layer,
                            int max_layer,
                            int halo,
-                           float base_ratio)
+                           float base_ratio,
+                           float severity_weight = 0.5f)
 {
   Grid* grid = grouter->grid();
   if (hotspots.empty() || grid == nullptr) {
@@ -207,6 +217,7 @@ void applyHotspotPenalties(GlobalRouter* grouter,
         = static_cast<float>(layer - min_layer) / static_cast<float>(layer_span);
     const float layer_ratio
         = std::clamp(base_ratio + 0.1f * layer_factor, 0.4f, 0.95f);
+    const float scaled_severity_weight = std::clamp(severity_weight, 0.0f, 1.0f);
 
     for (const Hotspot& hotspot : hotspots) {
       for (int dx = -halo; dx <= halo; ++dx) {
@@ -216,11 +227,17 @@ void applyHotspotPenalties(GlobalRouter* grouter,
           if (gx < 0 || gy < 0 || gx >= x_grids || gy >= y_grids) {
             continue;
           }
+          const float ratio_scale = std::clamp(
+              1.0f - scaled_severity_weight * (hotspot.severity - 1.0f), 0.5f, 1.5f);
+          const float adjusted_ratio
+              = std::clamp(layer_ratio * ratio_scale, 0.25f, 0.98f);
           if (hotspot.affect_horizontal && gx < x_grids - 1) {
-            adjustEdgeCapacity(grouter, gx, gy, gx + 1, gy, layer, layer_ratio);
+            adjustEdgeCapacity(
+                grouter, gx, gy, gx + 1, gy, layer, adjusted_ratio);
           }
           if (hotspot.affect_vertical && gy < y_grids - 1) {
-            adjustEdgeCapacity(grouter, gx, gy, gx, gy + 1, layer, layer_ratio);
+            adjustEdgeCapacity(
+                grouter, gx, gy, gx, gy + 1, layer, adjusted_ratio);
           }
         }
       }
@@ -268,7 +285,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     const double via_weight
         = static_cast<double>(std::max(grouter_->grid_->getTileSize(), 1))
-          * 5.0;
+          * 3.0;
     metrics.score = static_cast<double>(metrics.wirelength_dbu)
                     + via_weight * static_cast<double>(metrics.via_count);
     return metrics;
@@ -317,6 +334,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       return hotspots;
     }
 
+    grouter_->fastroute_->computeCongestionInformation();
+
     std::vector<CongestionInformation> vertical;
     std::vector<CongestionInformation> horizontal;
     grouter_->fastroute_->getCongestionGrid(vertical, horizontal);
@@ -330,6 +349,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     auto append_hotspots = [&](const std::vector<CongestionInformation>& edges,
                                bool is_vertical) {
       for (const auto& info : edges) {
+        const int capacity = std::max(info.congestion.capacity, 1);
+        const float usage_ratio
+            = static_cast<float>(info.congestion.usage)
+              / static_cast<float>(capacity);
+        if (usage_ratio < 0.6f) {
+          continue;
+        }
         const int gx
             = std::clamp((info.segment.init_x - x_min) / tile_size, 0, x_grids);
         const int gy
@@ -337,6 +363,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         Hotspot hotspot;
         hotspot.gx = std::clamp(gx, 0, std::max(x_grids - 1, 0));
         hotspot.gy = std::clamp(gy, 0, std::max(y_grids - 1, 0));
+        hotspot.severity = std::clamp(usage_ratio, 0.6f, 3.0f);
         hotspot.affect_vertical = is_vertical;
         hotspot.affect_horizontal = !is_vertical;
         hotspots.push_back(hotspot);
@@ -346,120 +373,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     append_hotspots(horizontal, false);
     append_hotspots(vertical, true);
     return hotspots;
-  };
-
-  auto adjust_edge_capacity
-      = [&](int x1, int y1, int x2, int y2, int layer, float ratio) {
-          ratio = std::clamp(ratio, 0.05f, 1.0f);
-          const int current_cap
-              = grouter_->fastroute_->getEdgeCapacity(x1, y1, x2, y2, layer);
-          if (current_cap <= 0) {
-            return;
-          }
-          const int new_cap = std::max(
-              1, static_cast<int>(std::floor(current_cap * ratio)));
-          if (new_cap == current_cap) {
-            return;
-          }
-          const bool is_reduce = new_cap < current_cap;
-          grouter_->fastroute_->addAdjustment(
-              x1, y1, x2, y2, layer, new_cap, is_reduce);
-        };
-
-  auto apply_soft_capacity = [&](const RudyGrid& normalized_rudy) {
-    if (normalized_rudy.empty() || grouter_->grid_ == nullptr) {
-      return;
-    }
-    const int x_grids = grouter_->grid_->getXGrids();
-    const int y_grids = grouter_->grid_->getYGrids();
-    const int usable_x = std::min<int>(x_grids, normalized_rudy.size());
-    const int usable_y
-        = std::min<int>(y_grids, normalized_rudy.front().size());
-    if (usable_x == 0 || usable_y == 0) {
-      return;
-    }
-    const int layer_span = std::max(max_routing_layer - min_routing_layer, 1);
-    const auto logistic_ratio = [](float normalized,
-                                   float slope,
-                                   float midpoint,
-                                   float min_ratio,
-                                   float max_ratio) {
-      normalized = std::clamp(normalized, 0.0f, 1.0f);
-      const float exponent = -slope * (normalized - midpoint);
-      const float logistic = 1.0f / (1.0f + std::exp(exponent));
-      const float blend = min_ratio + (max_ratio - min_ratio) * logistic;
-      return std::clamp(blend, 0.05f, 0.99f);
-    };
-    const auto normalized_at = [&](int x, int y) {
-      if (x < 0 || y < 0 || x >= usable_x || y >= usable_y) {
-        return 0.0f;
-      }
-      return normalized_rudy[x][y];
-    };
-
-    for (int layer = min_routing_layer; layer <= max_routing_layer; ++layer) {
-      const float layer_factor = static_cast<float>(layer - min_routing_layer)
-                                 / static_cast<float>(layer_span);
-      const float min_ratio = 0.50f + 0.15f * layer_factor;
-      const float max_ratio = 0.92f + 0.05f * layer_factor;
-
-      for (int y = 0; y < usable_y; ++y) {
-        for (int x = 0; x < usable_x - 1; ++x) {
-          const float normalized
-              = 0.5f * (normalized_at(x, y) + normalized_at(x + 1, y));
-          const float ratio
-              = logistic_ratio(normalized, 6.0f, 0.45f, min_ratio, max_ratio);
-          adjust_edge_capacity(x, y, x + 1, y, layer, ratio);
-        }
-      }
-      for (int y = 0; y < usable_y - 1; ++y) {
-        for (int x = 0; x < usable_x; ++x) {
-          const float normalized
-              = 0.5f * (normalized_at(x, y) + normalized_at(x, y + 1));
-          const float ratio
-              = logistic_ratio(normalized, 6.0f, 0.45f, min_ratio, max_ratio);
-          adjust_edge_capacity(x, y, x, y + 1, layer, ratio);
-        }
-      }
-    }
-  };
-
-  auto apply_hotspot_penalties = [&](const std::vector<Hotspot>& hotspots,
-                                     int halo,
-                                     float base_ratio) {
-    if (hotspots.empty() || grouter_->grid_ == nullptr) {
-      return;
-    }
-    const int x_grids = grouter_->grid_->getXGrids();
-    const int y_grids = grouter_->grid_->getYGrids();
-    const int layer_span = std::max(max_routing_layer - min_routing_layer, 1);
-    halo = std::max(0, halo);
-
-    for (int layer = min_routing_layer; layer <= max_routing_layer; ++layer) {
-      const float layer_factor
-          = static_cast<float>(layer - min_routing_layer)
-            / static_cast<float>(layer_span);
-      const float layer_ratio
-          = std::clamp(base_ratio + 0.1f * layer_factor, 0.4f, 0.95f);
-
-      for (const Hotspot& hotspot : hotspots) {
-        for (int dx = -halo; dx <= halo; ++dx) {
-          for (int dy = -halo; dy <= halo; ++dy) {
-            const int gx = hotspot.gx + dx;
-            const int gy = hotspot.gy + dy;
-            if (gx < 0 || gy < 0 || gx >= x_grids || gy >= y_grids) {
-              continue;
-            }
-            if (hotspot.affect_horizontal && gx < x_grids - 1) {
-              adjust_edge_capacity(gx, gy, gx + 1, gy, layer, layer_ratio);
-            }
-            if (hotspot.affect_vertical && gy < y_grids - 1) {
-              adjust_edge_capacity(gx, gy, gx, gy + 1, layer, layer_ratio);
-            }
-          }
-        }
-      }
-    }
   };
 
   auto run_scenario = [&](const ScenarioDefinition& scenario,
@@ -496,9 +409,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = run_existing_state("baseline", nets);
   std::vector<Hotspot> hotspots = collect_hotspots();
 
-  Rudy* rudy = grouter_->getRudy();
-  rudy->calculateRudy();
-  RudyGrid normalized_rudy = computeNormalizedRudyGrid(rudy);
+  RudyGrid normalized_rudy;
+  if (Rudy* rudy = grouter_->getRudy()) {
+    rudy->calculateRudy();
+    normalized_rudy = computeNormalizedRudyGrid(rudy);
+  }
 
   std::vector<ScenarioResult> scenario_results;
   scenario_results.push_back(baseline);
@@ -506,21 +421,94 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   ScenarioDefinition baseline_def{"baseline", nullptr, nullptr};
   std::vector<ScenarioDefinition> scenario_defs;
 
+  auto make_soft_config
+      = [&](const std::string& name,
+            float min_base,
+            float max_base,
+            float slope,
+            float midpoint,
+            int halo,
+            float hotspot_ratio,
+            float severity_weight,
+            float perturb_pct,
+            int seed,
+            float critical_pct) {
+          ScenarioDefinition def;
+          def.name = name;
+          def.pre_init = [this, perturb_pct, seed, critical_pct]() {
+            grouter_->setCapacitiesPerturbationPercentage(perturb_pct);
+            grouter_->setPerturbationAmount(perturb_pct > 0.0f ? 1 : 0);
+            grouter_->setSeed(seed);
+            grouter_->fastroute_->setCriticalNetsPercentage(critical_pct);
+          };
+          def.post_init
+              = [this,
+                 &normalized_rudy,
+                 &hotspots,
+                 min_routing_layer,
+                 max_routing_layer,
+                 min_base,
+                 max_base,
+                 slope,
+                 midpoint,
+                 halo,
+                 hotspot_ratio,
+                 severity_weight]() {
+                  applySoftCapacityScaling(grouter_,
+                                           normalized_rudy,
+                                           min_routing_layer,
+                                           max_routing_layer,
+                                           min_base,
+                                           max_base,
+                                           slope,
+                                           midpoint);
+                  applyHotspotPenalties(grouter_,
+                                        hotspots,
+                                        min_routing_layer,
+                                        max_routing_layer,
+                                        halo,
+                                        hotspot_ratio,
+                                        severity_weight);
+                };
+          return def;
+        };
+
   if (!normalized_rudy.empty()) {
-    ScenarioDefinition soft_cap;
-    soft_cap.name = "soft-cap";
-    soft_cap.post_init = [this,
-                          &apply_soft_capacity,
-                          &apply_hotspot_penalties,
-                          &normalized_rudy,
-                          &hotspots,
-                          min_routing_layer,
-                          max_routing_layer]() {
-      apply_soft_capacity(normalized_rudy);
-      apply_hotspot_penalties(
-          hotspots, 1, 0.65f);
-    };
-    scenario_defs.push_back(soft_cap);
+    scenario_defs.push_back(make_soft_config("soft-cap",
+                                             0.52f,
+                                             0.94f,
+                                             5.5f,
+                                             0.42f,
+                                             1,
+                                             0.68f,
+                                             0.35f,
+                                             0.0f,
+                                             snapshot.seed,
+                                             snapshot.critical_percentage));
+
+    scenario_defs.push_back(make_soft_config("guided-softcap",
+                                             0.48f,
+                                             0.90f,
+                                             6.5f,
+                                             0.48f,
+                                             2,
+                                             0.60f,
+                                             0.55f,
+                                             3.5f,
+                                             13,
+                                             12.0f));
+
+    scenario_defs.push_back(make_soft_config("mild-softcap",
+                                             0.58f,
+                                             0.97f,
+                                             4.5f,
+                                             0.38f,
+                                             1,
+                                             0.75f,
+                                             0.20f,
+                                             2.5f,
+                                             5,
+                                             8.0f));
   }
 
   auto make_random_def = [&](int seed, float perturb_pct) {
@@ -528,7 +516,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     def.name = "perturb-seed" + std::to_string(seed);
     def.pre_init = [this, seed, perturb_pct]() {
       grouter_->setCapacitiesPerturbationPercentage(perturb_pct);
-      grouter_->setPerturbationAmount(1);
+      grouter_->setPerturbationAmount(perturb_pct > 0.0f ? 1 : 0);
       grouter_->setSeed(seed);
       grouter_->fastroute_->setCriticalNetsPercentage(5.0f);
     };
