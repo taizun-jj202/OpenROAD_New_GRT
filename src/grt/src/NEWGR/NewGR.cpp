@@ -1092,15 +1092,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (lhs.metrics.overflow != rhs.metrics.overflow) {
       return lhs.metrics.overflow < rhs.metrics.overflow;
     }
+
     const double wl_a = static_cast<double>(lhs.metrics.wirelength_dbu);
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_priority = 0.00020;   // ~0.020% difference
-    const double wl_via_tie = 0.00150;    // ~0.150% difference
+    const double wl_priority = 0.00060;   // ~0.060% difference
+    const double wl_via_tie = 0.00120;    // ~0.120% difference
 
     if (wl_a != wl_b && wl_rel > wl_priority) {
-      // Wirelength dominates until differences are very small.
+      // Wirelength dominates until differences are small.
       return wl_a < wl_b;
     }
 
@@ -1111,9 +1112,29 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     const double util_diff
         = std::abs(lhs.metrics.max_utilization - rhs.metrics.max_utilization);
-    if (wl_rel < 0.0010 && util_diff > 0.010) {
+    if (wl_rel < 0.0015 && util_diff > 0.005) {
       // Allow small wirelength trade-offs when congestion relief is clear.
       return lhs.metrics.max_utilization < rhs.metrics.max_utilization;
+    }
+
+    auto relative_gap = [](double a, double b) {
+      const double denom = std::max({std::abs(a), std::abs(b), 1e-9});
+      return (a - b) / denom;
+    };
+
+    if (wl_rel < 0.0015) {
+      const double stress_rel
+          = relative_gap(lhs.metrics.stress_cost, rhs.metrics.stress_cost);
+      if (std::abs(stress_rel) > 0.05) {
+        return stress_rel < 0.0;
+      }
+
+      const double reserve_rel
+          = relative_gap(lhs.metrics.reserve_score, rhs.metrics.reserve_score);
+      if (std::abs(reserve_rel) > 0.05) {
+        // Prefer solutions that leave a little more slack.
+        return reserve_rel > 0.0;
+      }
     }
 
     if (wl_a != wl_b) {
