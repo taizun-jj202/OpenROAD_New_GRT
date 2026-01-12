@@ -364,6 +364,133 @@ void applyHotspotPenalties(GlobalRouter* grouter,
   }
 }
 
+void applySelectiveRelief(GlobalRouter* grouter,
+                          const RudyGrid& normalized_rudy,
+                          const std::vector<Hotspot>& hotspots,
+                          int min_layer,
+                          int max_layer,
+                          float threshold,
+                          float min_ratio,
+                          float hotspot_push,
+                          int halo)
+{
+  Grid* grid = grouter->grid();
+  if (grid == nullptr || (normalized_rudy.empty() && hotspots.empty())) {
+    return;
+  }
+
+  const int x_grids = grid->getXGrids();
+  const int y_grids = grid->getYGrids();
+  if (x_grids <= 0 || y_grids <= 0) {
+    return;
+  }
+
+  threshold = std::clamp(threshold, 0.0f, 1.0f);
+  min_ratio = std::clamp(min_ratio, 0.70f, 0.99f);
+  hotspot_push = std::clamp(hotspot_push, 0.0f, 1.0f);
+  halo = std::max(0, halo);
+
+  const int x_tiles
+      = normalized_rudy.empty() ? 0 : static_cast<int>(normalized_rudy.size());
+  const int y_tiles = (normalized_rudy.empty() || normalized_rudy.front().empty())
+                          ? 0
+                          : static_cast<int>(normalized_rudy.front().size());
+
+  const auto getNormalized = [&](int x, int y) {
+    if (x < 0 || y < 0 || x >= x_tiles || y >= y_tiles || x_tiles == 0
+        || y_tiles == 0) {
+      return 0.0f;
+    }
+    return normalized_rudy[x][y];
+  };
+
+  std::vector<std::vector<float>> horiz_influence(
+      std::max(x_grids, 1), std::vector<float>(std::max(y_grids, 1), 0.0f));
+  std::vector<std::vector<float>> vert_influence(
+      std::max(x_grids, 1), std::vector<float>(std::max(y_grids, 1), 0.0f));
+
+  if (!hotspots.empty()) {
+    for (const Hotspot& hotspot : hotspots) {
+      for (int dx = -halo; dx <= halo; ++dx) {
+        for (int dy = -halo; dy <= halo; ++dy) {
+          const int gx = hotspot.gx + dx;
+          const int gy = hotspot.gy + dy;
+          if (gx < 0 || gy < 0 || gx >= x_grids || gy >= y_grids) {
+            continue;
+          }
+          const float distance = static_cast<float>(std::abs(dx) + std::abs(dy));
+          const float decay = 1.0f / (1.0f + distance);
+          const float influence = hotspot.severity * decay;
+          if (hotspot.affect_horizontal && gx < x_grids - 1) {
+            horiz_influence[gx][gy]
+                = std::max(horiz_influence[gx][gy], influence);
+          }
+          if (hotspot.affect_vertical && gy < y_grids - 1) {
+            vert_influence[gx][gy]
+                = std::max(vert_influence[gx][gy], influence);
+          }
+        }
+      }
+    }
+  }
+
+  const int layer_span = std::max(max_layer - min_layer, 1);
+  for (int layer = min_layer; layer <= max_layer; ++layer) {
+    const float layer_factor
+        = static_cast<float>(layer - min_layer) / static_cast<float>(layer_span);
+    const float layer_min_ratio
+        = std::clamp(min_ratio - 0.04f * layer_factor, 0.70f, 0.99f);
+
+    for (int y = 0; y < y_grids; ++y) {
+      for (int x = 0; x < x_grids - 1; ++x) {
+        const float normalized
+            = 0.5f * (getNormalized(x, y) + getNormalized(x + 1, y));
+        float ratio = 1.0f;
+        if (normalized > threshold) {
+          const float t = (normalized - threshold)
+                          / std::max(0.001f, 1.0f - threshold);
+          ratio -= t * (1.0f - layer_min_ratio);
+        }
+        ratio = std::clamp(ratio, layer_min_ratio, 1.0f);
+
+        const float influence = horiz_influence[x][y];
+        if (influence > 0.0f && hotspot_push > 0.0f) {
+          float dampen
+              = 1.0f - hotspot_push * (influence - 1.0f) * 0.35f;
+          dampen = std::clamp(dampen, 0.70f, 1.0f);
+          ratio = std::clamp(ratio * dampen, layer_min_ratio * 0.92f, 1.0f);
+        }
+
+        adjustEdgeCapacity(grouter, x, y, x + 1, y, layer, ratio);
+      }
+    }
+
+    for (int y = 0; y < y_grids - 1; ++y) {
+      for (int x = 0; x < x_grids; ++x) {
+        const float normalized
+            = 0.5f * (getNormalized(x, y) + getNormalized(x, y + 1));
+        float ratio = 1.0f;
+        if (normalized > threshold) {
+          const float t = (normalized - threshold)
+                          / std::max(0.001f, 1.0f - threshold);
+          ratio -= t * (1.0f - layer_min_ratio);
+        }
+        ratio = std::clamp(ratio, layer_min_ratio, 1.0f);
+
+        const float influence = vert_influence[x][y];
+        if (influence > 0.0f && hotspot_push > 0.0f) {
+          float dampen
+              = 1.0f - hotspot_push * (influence - 1.0f) * 0.35f;
+          dampen = std::clamp(dampen, 0.70f, 1.0f);
+          ratio = std::clamp(ratio * dampen, layer_min_ratio * 0.92f, 1.0f);
+        }
+
+        adjustEdgeCapacity(grouter, x, y, x, y + 1, layer, ratio);
+      }
+    }
+  }
+}
+
 }  // namespace
 
 NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
@@ -562,6 +689,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = force_routability
         || (has_congestion_data && congestion_severity > 0.30f)
         || hotspots.size() > 4;
+  const bool run_aggressive_soft
+      = run_soft
+        && (force_routability || congestion_severity > 0.82f
+            || hotspots.size() > 6);
 
   logger_->info(GNR,
                 6008,
@@ -656,24 +787,77 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   scenario_defs.push_back(wl_variation);
 
   if (has_congestion_data) {
+    const float selective_threshold = std::clamp(
+        0.32f + 0.22f * (1.0f - congestion_severity), 0.26f, 0.58f);
+    const float selective_min_ratio
+        = std::clamp(0.78f + 0.10f * (1.0f - congestion_severity),
+                     0.78f,
+                     0.90f);
+    const float selective_hotspot_push
+        = std::clamp(0.10f + 0.22f * congestion_severity + 0.04f * hotspot_bias,
+                     0.10f,
+                     0.32f);
+    const int selective_halo = congestion_severity > 0.55f ? 2 : 1;
+    const float selective_perturb_pct = std::clamp(
+        0.08f + 0.55f * congestion_severity, 0.05f, 0.55f);
+    const float selective_critical_pct
+        = std::clamp(6.0f + 4.0f * (congestion_severity + hotspot_bias),
+                     5.5f,
+                     11.5f);
+    const int selective_seed = snapshot.seed + 23;
+
+    ScenarioDefinition selective_relief;
+    selective_relief.name = "focused-soft";
+    selective_relief.pre_init
+        = [this, selective_perturb_pct, selective_seed, selective_critical_pct]() {
+            grouter_->setCapacitiesPerturbationPercentage(
+                selective_perturb_pct);
+            grouter_->setPerturbationAmount(selective_perturb_pct > 0.0f ? 1 : 0);
+            grouter_->setSeed(selective_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(
+                selective_critical_pct);
+          };
+    selective_relief.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           selective_threshold,
+           selective_min_ratio,
+           selective_hotspot_push,
+           selective_halo]() {
+            applySelectiveRelief(grouter_,
+                                 normalized_rudy,
+                                 hotspots,
+                                 min_routing_layer,
+                                 max_routing_layer,
+                                 selective_threshold,
+                                 selective_min_ratio,
+                                 selective_hotspot_push,
+                                 selective_halo);
+          };
+    scenario_defs.push_back(selective_relief);
+
     const float mild = std::clamp(
         0.55f * congestion_severity + 0.35f * hotspot_bias, 0.0f, 1.0f);
     const float min_base
-        = std::clamp(0.82f - 0.07f * mild, 0.72f, 0.86f);
-    const float max_base = std::clamp(
-        0.97f - 0.035f * mild, min_base + 0.025f, 0.985f);
-    const float slope = 2.1f + 0.9f * mild;
+        = std::clamp(0.86f - 0.06f * mild, 0.78f, 0.90f);
+    const float max_base
+        = std::clamp(0.98f - 0.03f * mild, min_base + 0.03f, 0.99f);
+    const float slope = 1.9f + 0.65f * mild;
     const float midpoint
-        = std::clamp(0.50f - 0.03f * mild, 0.44f, 0.50f);
+        = std::clamp(0.52f - 0.03f * mild, 0.46f, 0.53f);
     const int halo = mild > 0.7f ? 2 : 1;
     const float hotspot_ratio
-        = std::clamp(0.93f - 0.12f * mild, 0.78f, 0.95f);
+        = std::clamp(0.96f - 0.10f * mild, 0.82f, 0.98f);
     const float severity_weight
-        = std::clamp(0.32f + 0.35f * mild, 0.32f, 0.75f);
+        = std::clamp(0.25f + 0.28f * mild, 0.25f, 0.65f);
     const float perturb_pct
-        = std::clamp(0.20f + 0.90f * mild, 0.15f, 1.10f);
+        = std::clamp(0.12f + 0.55f * mild, 0.08f, 0.75f);
     const float critical_pct
-        = std::clamp(6.5f + 5.5f * mild, 6.0f, 12.5f);
+        = std::clamp(6.0f + 4.5f * mild, 6.0f, 11.5f);
     const int balanced_seed = snapshot.seed + 17;
     scenario_defs.push_back(make_soft_config("balanced-soft",
                                              min_base,
@@ -688,28 +872,28 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                              critical_pct));
   }
 
-  if (run_soft) {
+  if (run_aggressive_soft) {
     const float tuned = std::clamp(congestion_severity * 0.65f
                                        + hotspot_bias * 0.35f
                                        + (force_routability ? 0.15f : 0.0f),
                                    0.0f,
                                    1.0f);
     const float min_base
-        = std::clamp(0.78f - 0.10f * tuned, 0.70f, 0.86f);
+        = std::clamp(0.80f - 0.09f * tuned, 0.72f, 0.88f);
     const float max_base
-        = std::clamp(0.96f - 0.06f * tuned, min_base + 0.04f, 0.985f);
-    const float slope = 2.6f + 1.4f * tuned;
+        = std::clamp(0.97f - 0.05f * tuned, min_base + 0.035f, 0.99f);
+    const float slope = 2.2f + 1.0f * tuned;
     const float midpoint
-        = std::clamp(0.50f - 0.05f * tuned, 0.40f, 0.50f);
+        = std::clamp(0.50f - 0.04f * tuned, 0.42f, 0.50f);
     const int halo = tuned > 0.65f ? 2 : 1;
     const float hotspot_ratio
-        = std::clamp(0.90f - 0.18f * tuned, 0.70f, 0.95f);
+        = std::clamp(0.92f - 0.14f * tuned, 0.74f, 0.95f);
     const float severity_weight
-        = std::clamp(0.28f + 0.40f * tuned, 0.28f, 0.85f);
+        = std::clamp(0.30f + 0.40f * tuned, 0.30f, 0.85f);
     const float perturb_pct
-        = std::clamp(0.5f + 2.2f * tuned, 0.0f, 3.3f);
+        = std::clamp(0.35f + 1.6f * tuned, 0.20f, 2.40f);
     const float critical_pct
-        = std::clamp(7.0f + 6.0f * tuned, 6.0f, 15.0f);
+        = std::clamp(7.0f + 5.5f * tuned, 6.5f, 14.0f);
     const int soft_seed = snapshot.seed + 11;
     scenario_defs.push_back(make_soft_config("soft-relief",
                                              min_base,
