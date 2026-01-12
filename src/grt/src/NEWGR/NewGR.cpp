@@ -84,25 +84,61 @@ RudyGrid computeNormalizedRudyGrid(Rudy* rudy)
 
   normalized.resize(x_tiles, std::vector<float>(y_tiles, 0.0f));
   float max_value = 0.0f;
+  std::vector<float> values;
+  values.reserve(static_cast<size_t>(x_tiles * y_tiles));
   for (int x = 0; x < x_tiles; ++x) {
     for (int y = 0; y < y_tiles; ++y) {
       const float val = rudy->getTile(x, y).getRudy();
       normalized[x][y] = val;
       max_value = std::max(max_value, val);
+      values.push_back(val);
     }
   }
 
-  if (max_value <= std::numeric_limits<float>::epsilon()) {
+  if (values.empty() || max_value <= std::numeric_limits<float>::epsilon()) {
     return normalized;
   }
 
+  std::vector<float> sorted_values = values;
+  std::sort(sorted_values.begin(), sorted_values.end());
+  const size_t p95_idx = static_cast<size_t>(std::round(
+      0.95 * static_cast<double>(std::max<size_t>(sorted_values.size() - 1, 0))));
+  const float p95 = sorted_values[p95_idx];
+  const float scale
+      = std::max({p95, max_value * 0.6f, std::numeric_limits<float>::epsilon()});
+
   for (int x = 0; x < x_tiles; ++x) {
     for (int y = 0; y < y_tiles; ++y) {
-      normalized[x][y] = std::clamp(normalized[x][y] / max_value, 0.0f, 1.0f);
+      normalized[x][y] = std::clamp(normalized[x][y] / scale, 0.0f, 1.0f);
     }
   }
 
-  return normalized;
+  RudyGrid smoothed = normalized;
+  for (int x = 0; x < x_tiles; ++x) {
+    for (int y = 0; y < y_tiles; ++y) {
+      float accum = 0.0f;
+      float weight_sum = 0.0f;
+      for (int dx = -1; dx <= 1; ++dx) {
+        for (int dy = -1; dy <= 1; ++dy) {
+          const int nx = x + dx;
+          const int ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= x_tiles || ny >= y_tiles) {
+            continue;
+          }
+          const bool is_center = dx == 0 && dy == 0;
+          const bool is_axis = (dx == 0) != (dy == 0);
+          const float weight = is_center ? 4.0f : (is_axis ? 2.0f : 1.0f);
+          accum += normalized[nx][ny] * weight;
+          weight_sum += weight;
+        }
+      }
+      if (weight_sum > std::numeric_limits<float>::epsilon()) {
+        smoothed[x][y] = std::clamp(accum / weight_sum, 0.0f, 1.0f);
+      }
+    }
+  }
+
+  return smoothed;
 }
 
 RudyStats computeRudyStats(const RudyGrid& normalized_rudy)
@@ -619,6 +655,39 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         };
   scenario_defs.push_back(wl_variation);
 
+  if (has_congestion_data) {
+    const float mild = std::clamp(
+        0.55f * congestion_severity + 0.35f * hotspot_bias, 0.0f, 1.0f);
+    const float min_base
+        = std::clamp(0.82f - 0.07f * mild, 0.72f, 0.86f);
+    const float max_base = std::clamp(
+        0.97f - 0.035f * mild, min_base + 0.025f, 0.985f);
+    const float slope = 2.1f + 0.9f * mild;
+    const float midpoint
+        = std::clamp(0.50f - 0.03f * mild, 0.44f, 0.50f);
+    const int halo = mild > 0.7f ? 2 : 1;
+    const float hotspot_ratio
+        = std::clamp(0.93f - 0.12f * mild, 0.78f, 0.95f);
+    const float severity_weight
+        = std::clamp(0.32f + 0.35f * mild, 0.32f, 0.75f);
+    const float perturb_pct
+        = std::clamp(0.20f + 0.90f * mild, 0.15f, 1.10f);
+    const float critical_pct
+        = std::clamp(6.5f + 5.5f * mild, 6.0f, 12.5f);
+    const int balanced_seed = snapshot.seed + 17;
+    scenario_defs.push_back(make_soft_config("balanced-soft",
+                                             min_base,
+                                             max_base,
+                                             slope,
+                                             midpoint,
+                                             halo,
+                                             hotspot_ratio,
+                                             severity_weight,
+                                             perturb_pct,
+                                             balanced_seed,
+                                             critical_pct));
+  }
+
   if (run_soft) {
     const float tuned = std::clamp(congestion_severity * 0.65f
                                        + hotspot_bias * 0.35f
@@ -660,10 +729,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(result));
   }
 
-  auto better_result = [](const ScenarioResult& lhs,
-                          const ScenarioResult& rhs) {
+  auto near_equal_wl = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
+    if (lhs.wirelength_um <= 0.0 || rhs.wirelength_um <= 0.0) {
+      return false;
+    }
+    const double diff = std::abs(lhs.wirelength_um - rhs.wirelength_um);
+    const double rel = diff / std::max(lhs.wirelength_um, rhs.wirelength_um);
+    return rel <= 0.0015;  // within 0.15% wirelength
+  };
+
+  auto better_result = [&](const ScenarioResult& lhs,
+                           const ScenarioResult& rhs) {
     if (lhs.metrics.overflow != rhs.metrics.overflow) {
       return lhs.metrics.overflow < rhs.metrics.overflow;
+    }
+    if (near_equal_wl(lhs.metrics, rhs.metrics)
+        && lhs.metrics.via_count != rhs.metrics.via_count) {
+      return lhs.metrics.via_count < rhs.metrics.via_count;
     }
     if (lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
       return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
