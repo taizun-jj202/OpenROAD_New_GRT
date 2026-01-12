@@ -971,6 +971,88 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
 
+  if (has_congestion_data && light_congestion) {
+    const float polish_threshold
+        = std::clamp(0.58f + 0.12f * (1.0f - congestion_severity),
+                     0.54f,
+                     0.70f);
+    const float polish_min_ratio
+        = std::clamp(0.92f + 0.05f * (1.0f - congestion_severity),
+                     0.90f,
+                     0.97f);
+    const float polish_hotspot_push
+        = std::clamp(0.07f + 0.06f * hotspot_bias, 0.05f, 0.14f);
+    const int polish_halo = hotspots.size() > 4 ? 2 : 1;
+    const float polish_cool_threshold
+        = std::clamp(polish_threshold * 0.75f, 0.42f, 0.58f);
+    const float polish_boost = std::clamp(
+        0.11f + 0.06f * (0.55f - congestion_severity), 0.08f, 0.16f);
+    const float polish_boost_limit = std::clamp(
+        1.10f + 0.04f * (0.55f - congestion_severity), 1.06f, 1.14f);
+    const float polish_layer_falloff
+        = std::clamp(0.10f + 0.10f * hotspot_bias, 0.08f, 0.20f);
+    const float polish_perturb
+        = std::clamp(0.02f + 0.10f * congestion_severity, 0.02f, 0.12f);
+    const float polish_critical = std::clamp(
+        8.0f + 3.5f * (0.60f - congestion_severity), 6.5f, 12.5f);
+    const int polish_seed = snapshot.seed + 233;
+    const float polish_hotspot_ratio = std::clamp(
+        0.99f - 0.05f * congestion_severity, 0.94f, 0.99f);
+    const float polish_hotspot_weight
+        = std::clamp(0.08f + 0.20f * hotspot_bias, 0.08f, 0.18f);
+
+    ScenarioDefinition wl_polish;
+    wl_polish.name = "wl-polish-lite";
+    wl_polish.pre_init
+        = [this, polish_perturb, polish_seed, polish_critical]() {
+            grouter_->setCapacitiesPerturbationPercentage(polish_perturb);
+            grouter_->setPerturbationAmount(polish_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(polish_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(polish_critical);
+          };
+    wl_polish.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           polish_threshold,
+           polish_min_ratio,
+           polish_hotspot_push,
+           polish_halo,
+           polish_cool_threshold,
+           polish_boost,
+           polish_boost_limit,
+           polish_layer_falloff,
+           polish_hotspot_ratio,
+           polish_hotspot_weight]() {
+            applySelectiveRelief(grouter_,
+                                 normalized_rudy,
+                                 hotspots,
+                                 min_routing_layer,
+                                 max_routing_layer,
+                                 polish_threshold,
+                                 polish_min_ratio,
+                                 polish_hotspot_push,
+                                 polish_halo,
+                                 polish_cool_threshold,
+                                 polish_boost,
+                                 polish_boost_limit,
+                                 polish_layer_falloff);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    polish_halo,
+                                    polish_hotspot_ratio,
+                                    polish_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_polish);
+  }
+
   if (has_congestion_data && run_soft && !normalized_rudy.empty()
       && !light_congestion) {
     const float contour_strength
