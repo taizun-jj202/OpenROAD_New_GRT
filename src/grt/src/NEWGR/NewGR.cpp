@@ -722,13 +722,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       static_cast<float>(hotspots.size()) / 12.0f, 0.0f, 0.6f);
   const bool run_soft
       = force_routability
-        || (has_congestion_data && congestion_severity > 0.55f
-            && hotspots.size() > 2)
-        || hotspots.size() > 5;
+        || (has_congestion_data
+            && (congestion_severity > 0.58f || hotspots.size() > 2
+                || rudy_stats.p80 > 0.80f))
+        || hotspots.size() > 4;
   const bool run_aggressive_soft
       = run_soft
         && (force_routability
-            || (congestion_severity > 0.85f && hotspots.size() > 3));
+            || congestion_severity > 0.82f
+            || (congestion_severity > 0.70f && hotspots.size() > 3));
 
   logger_->info(GNR,
                 6008,
@@ -838,6 +840,99 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         };
   wl_greedy.post_init = []() {};
   scenario_defs.push_back(wl_greedy);
+
+  if (has_congestion_data && !normalized_rudy.empty()) {
+    const float contour_strength
+        = std::clamp(congestion_severity * 0.70f + hotspot_bias * 0.40f,
+                     0.0f,
+                     1.0f);
+    const float contour_min_base
+        = std::clamp(0.88f - 0.06f * contour_strength, 0.80f, 0.90f);
+    const float contour_max_base
+        = std::clamp(0.97f - 0.03f * contour_strength,
+                     contour_min_base + 0.02f,
+                     0.985f);
+    const float contour_slope = 2.6f + 1.0f * contour_strength;
+    const float contour_midpoint
+        = std::clamp(0.54f - 0.05f * contour_strength, 0.46f, 0.54f);
+    const float contour_threshold
+        = std::clamp(0.36f + 0.18f * (1.0f - congestion_severity),
+                     0.32f,
+                     0.60f);
+    const float contour_min_ratio
+        = std::clamp(0.84f + 0.08f * (1.0f - congestion_severity),
+                     0.84f,
+                     0.94f);
+    const float contour_push
+        = std::clamp(0.10f + 0.16f * contour_strength, 0.10f, 0.22f);
+    const float contour_hotspot_ratio
+        = std::clamp(0.98f - 0.08f * contour_strength, 0.86f, 0.99f);
+    const float contour_severity_weight
+        = std::clamp(0.12f + 0.22f * contour_strength, 0.12f, 0.38f);
+    const int contour_halo = contour_strength > 0.55f ? 2 : 1;
+    const float contour_perturb
+        = std::clamp(0.06f + 0.50f * contour_strength, 0.04f, 0.55f);
+    const float contour_critical
+        = std::clamp(5.5f + 3.5f * (0.65f - congestion_severity),
+                     4.5f,
+                     10.0f);
+    const int contour_seed = snapshot.seed + 13;
+
+    ScenarioDefinition contour_soft;
+    contour_soft.name = "contour-lite";
+    contour_soft.pre_init
+        = [this, contour_perturb, contour_seed, contour_critical]() {
+            grouter_->setCapacitiesPerturbationPercentage(contour_perturb);
+            grouter_->setPerturbationAmount(contour_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(contour_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(contour_critical);
+          };
+    contour_soft.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           contour_min_base,
+           contour_max_base,
+           contour_slope,
+           contour_midpoint,
+           contour_threshold,
+           contour_min_ratio,
+           contour_push,
+           contour_hotspot_ratio,
+           contour_severity_weight,
+           contour_halo]() {
+            applySoftCapacityScaling(grouter_,
+                                     normalized_rudy,
+                                     min_routing_layer,
+                                     max_routing_layer,
+                                     contour_min_base,
+                                     contour_max_base,
+                                     contour_slope,
+                                     contour_midpoint);
+            applySelectiveRelief(grouter_,
+                                 normalized_rudy,
+                                 hotspots,
+                                 min_routing_layer,
+                                 max_routing_layer,
+                                 contour_threshold,
+                                 contour_min_ratio,
+                                 contour_push,
+                                 contour_halo);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    contour_halo,
+                                    contour_hotspot_ratio,
+                                    contour_severity_weight);
+            }
+          };
+    scenario_defs.push_back(contour_soft);
+  }
 
   if (has_congestion_data && run_soft) {
     const float margin_relief = std::clamp(
@@ -1052,6 +1147,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (lhs.metrics.via_count != rhs.metrics.via_count && wl_rel < wl_via_tie) {
       // With comparable wirelengths, prefer fewer vias.
       return lhs.metrics.via_count < rhs.metrics.via_count;
+    }
+
+    const double util_diff
+        = std::abs(lhs.metrics.max_utilization - rhs.metrics.max_utilization);
+    if (wl_rel < 0.0010 && util_diff > 0.010) {
+      // Allow small wirelength trade-offs when congestion relief is clear.
+      return lhs.metrics.max_utilization < rhs.metrics.max_utilization;
     }
 
     if (wl_a != wl_b) {
