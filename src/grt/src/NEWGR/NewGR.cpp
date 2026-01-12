@@ -776,7 +776,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = force_routability
         || (has_congestion_data
             && (congestion_severity > 0.88f || hotspots.size() > 4));
-  const bool allow_seed_sweep = !force_routability && hotspots.size() <= 4;
+  const bool allow_seed_sweep = !force_routability && hotspots.size() <= 6;
 
   logger_->info(GNR,
                 6008,
@@ -942,6 +942,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (hotspots.size() <= 2) {
       scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s2", 109, 1.1f));
     }
+    scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s3", 157, 0.6f));
+    if (hotspots.size() <= 3) {
+      scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s4", 211, 1.25f));
+    }
   }
 
   if (has_congestion_data && run_soft && !normalized_rudy.empty()) {
@@ -1101,13 +1105,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                 min_routing_layer,
                                 max_routing_layer,
                                 corridor_threshold,
-                                 corridor_min_ratio,
-                                 corridor_hotspot_push,
-                                 corridor_halo,
-                                 corridor_cool_threshold,
-                                 corridor_boost,
-                                 corridor_boost_limit,
-                                 corridor_layer_falloff);
+                                corridor_min_ratio,
+                                corridor_hotspot_push,
+                                corridor_halo,
+                                corridor_cool_threshold,
+                                corridor_boost,
+                                corridor_boost_limit,
+                                corridor_layer_falloff);
           };
     scenario_defs.push_back(corridor);
   }
@@ -1294,8 +1298,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_priority = 0.00035;   // ~0.035% difference
-    const double wl_via_tie = 0.00090;    // ~0.090% difference
+    const double wl_priority = 0.00025;   // ~0.025% difference
+    const double wl_via_tie = 0.00080;    // ~0.080% difference
 
     if (wl_a != wl_b && wl_rel > wl_priority) {
       // Wirelength dominates until differences are small.
