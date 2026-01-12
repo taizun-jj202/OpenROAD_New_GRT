@@ -759,34 +759,55 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   std::vector<ScenarioDefinition> scenario_defs;
 
   const RudyStats rudy_stats = computeRudyStats(normalized_rudy);
-  const float congestion_severity
+  float congestion_severity
       = computeCongestionSeverity(rudy_stats, hotspots);
+  if (baseline.metrics.overflow == 0) {
+    const float relief_from_rudy
+        = std::clamp(0.22f + 0.20f * std::max(0.0f, 0.90f - rudy_stats.p80)
+                         + 0.10f * std::max(0.0f, 0.75f - rudy_stats.mean),
+                     0.0f,
+                     0.55f);
+    const float hotspot_relief
+        = 0.06f * std::max(0, 3 - static_cast<int>(hotspots.size()));
+    congestion_severity
+        = std::clamp(congestion_severity - relief_from_rudy - hotspot_relief,
+                     0.0f,
+                     1.0f);
+  }
   const bool force_routability = baseline.metrics.overflow > 0;
   const bool has_congestion_data
       = (!normalized_rudy.empty() || !hotspots.empty());
   const float hotspot_bias = std::clamp(
       static_cast<float>(hotspots.size()) / 12.0f, 0.0f, 0.6f);
+  const bool light_congestion = !force_routability
+                                && congestion_severity < 0.70f
+                                && hotspots.size() <= 3
+                                && rudy_stats.p80 < 0.92f;
   const bool run_soft
       = force_routability
-        || (has_congestion_data
-            && (congestion_severity > 0.72f || hotspots.size() > 2
-                || rudy_stats.p80 > 0.84f))
+        || (has_congestion_data && !light_congestion
+            && (congestion_severity > 0.70f || hotspots.size() > 3
+                || rudy_stats.p80 > 0.90f))
         || hotspots.size() > 5;
   const bool run_aggressive_soft
       = force_routability
-        || (has_congestion_data
-            && (congestion_severity > 0.88f || hotspots.size() > 4));
-  const bool allow_seed_sweep = !force_routability && hotspots.size() <= 6;
+        || (has_congestion_data && !light_congestion
+            && (congestion_severity > 0.86f || hotspots.size() > 4));
+  const bool allow_seed_sweep = !force_routability && hotspots.size() <= 6
+                                && congestion_severity > 0.38f;
+  const bool allow_light_seed = !force_routability && light_congestion
+                                && congestion_severity > 0.34f;
 
   logger_->info(GNR,
                 6008,
                 "NEWGR congestion severity {:.2f} (RUDY mean {:.2f}, p80 "
-                "{:.2f}, hotspots {}, baseline overflow {})",
+                "{:.2f}, hotspots {}, baseline overflow {}, light {})",
                 congestion_severity,
                 rudy_stats.mean,
                 rudy_stats.p80,
                 hotspots.size(),
-                baseline.metrics.overflow);
+                baseline.metrics.overflow,
+                light_congestion);
 
   auto make_soft_config
       = [&](const std::string& name,
@@ -937,18 +958,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           return def;
         };
 
-  if (allow_seed_sweep) {
+  if (allow_light_seed) {
+    scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s1", 73, 0.85f));
+  } else if (allow_seed_sweep) {
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s1", 73, 0.8f));
-    if (hotspots.size() <= 2) {
-      scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s2", 109, 1.1f));
+    if (hotspots.size() <= 2 || congestion_severity > 0.78f) {
+      scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s2", 109, 1.05f));
     }
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s3", 157, 0.6f));
-    if (hotspots.size() <= 3) {
-      scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s4", 211, 1.25f));
+    if (hotspots.size() <= 3 && congestion_severity > 0.78f) {
+      scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s4", 211, 1.15f));
     }
   }
 
-  if (has_congestion_data && run_soft && !normalized_rudy.empty()) {
+  if (has_congestion_data && run_soft && !normalized_rudy.empty()
+      && !light_congestion) {
     const float contour_strength
         = std::clamp(congestion_severity * 0.70f + hotspot_bias * 0.40f,
                      0.0f,
@@ -1041,7 +1065,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_defs.push_back(contour_soft);
   }
 
-  if (has_congestion_data) {
+  if (has_congestion_data && !light_congestion) {
     const float corridor_threshold
         = std::clamp(0.34f + 0.14f * (1.0f - congestion_severity),
                      0.30f,
@@ -1116,7 +1140,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_defs.push_back(corridor);
   }
 
-  if (has_congestion_data) {
+  if (has_congestion_data && !light_congestion) {
     const float boost_strength
         = std::clamp(0.08f + 0.10f * (0.65f - congestion_severity),
                      0.06f,
@@ -1192,7 +1216,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_defs.push_back(wl_coolboost);
   }
 
-  if (has_congestion_data && run_aggressive_soft) {
+  if (has_congestion_data && run_aggressive_soft && !light_congestion) {
     const float selective_threshold = std::clamp(
         0.32f + 0.22f * (1.0f - congestion_severity), 0.26f, 0.58f);
     const float selective_min_ratio
@@ -1247,7 +1271,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_defs.push_back(selective_relief);
   }
 
-  if (has_congestion_data && run_aggressive_soft) {
+  if (has_congestion_data && run_aggressive_soft && !light_congestion) {
     const float tuned = std::clamp(congestion_severity * 0.65f
                                        + hotspot_bias * 0.35f
                                        + (force_routability ? 0.15f : 0.0f),
@@ -1298,8 +1322,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_priority = 0.00025;   // ~0.025% difference
-    const double wl_via_tie = 0.00080;    // ~0.080% difference
+    const double wl_priority = 0.00035;   // ~0.035% difference
+    const double wl_via_tie = 0.00100;    // ~0.10% difference
 
     if (wl_a != wl_b && wl_rel > wl_priority) {
       // Wirelength dominates until differences are small.
