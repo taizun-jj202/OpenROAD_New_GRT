@@ -687,7 +687,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         const float usage_ratio
             = static_cast<float>(info.congestion.usage)
               / static_cast<float>(capacity);
-        if (usage_ratio < 0.6f) {
+        if (usage_ratio < 0.68f) {
           continue;
         }
         const int gx
@@ -697,7 +697,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         Hotspot hotspot;
         hotspot.gx = std::clamp(gx, 0, std::max(x_grids - 1, 0));
         hotspot.gy = std::clamp(gy, 0, std::max(y_grids - 1, 0));
-        hotspot.severity = std::clamp(usage_ratio, 0.6f, 3.0f);
+        hotspot.severity = std::clamp(usage_ratio, 0.7f, 2.4f);
         hotspot.affect_vertical = is_vertical;
         hotspot.affect_horizontal = !is_vertical;
         hotspots.push_back(hotspot);
@@ -936,6 +936,84 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           }
         };
   scenario_defs.push_back(wl_refine);
+
+  if (baseline.metrics.overflow == 0 && has_congestion_data) {
+    const float direct_threshold = std::clamp(
+        0.60f + 0.12f * (congestion_severity - 0.40f), 0.54f, 0.80f);
+    const float direct_min_ratio = std::clamp(
+        0.94f + 0.06f * (0.55f - congestion_severity), 0.93f, 0.985f);
+    const float direct_hotspot_push
+        = std::clamp(0.05f + 0.08f * hotspot_bias, 0.04f, 0.14f);
+    const int direct_halo = hotspots.size() > 4 ? 2 : 1;
+    const float direct_cool_threshold
+        = std::clamp(direct_threshold * 0.82f, 0.44f, 0.66f);
+    const float direct_boost = std::clamp(
+        0.12f + 0.07f * (0.55f - congestion_severity), 0.10f, 0.20f);
+    const float direct_boost_limit = std::clamp(
+        1.09f + 0.05f * (0.55f - congestion_severity), 1.08f, 1.16f);
+    const float direct_layer_falloff
+        = std::clamp(0.09f + 0.10f * hotspot_bias, 0.08f, 0.18f);
+    const float direct_perturb = std::clamp(
+        0.04f + 0.16f * (0.60f - congestion_severity), 0.02f, 0.16f);
+    const float direct_critical = std::clamp(
+        6.0f + 2.6f * (0.55f - congestion_severity), 5.2f, 8.8f);
+    const int direct_seed = snapshot.seed + 389;
+    const float direct_hotspot_ratio
+        = std::clamp(0.992f - 0.03f * hotspot_bias, 0.96f, 0.995f);
+    const float direct_hotspot_weight
+        = std::clamp(0.10f + 0.08f * hotspot_bias, 0.08f, 0.16f);
+
+    ScenarioDefinition wl_direct;
+    wl_direct.name = "wl-direct";
+    wl_direct.pre_init
+        = [this, direct_perturb, direct_seed, direct_critical]() {
+            grouter_->setCapacitiesPerturbationPercentage(direct_perturb);
+            grouter_->setPerturbationAmount(direct_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(direct_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(direct_critical);
+          };
+    wl_direct.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           direct_threshold,
+           direct_min_ratio,
+           direct_hotspot_push,
+           direct_halo,
+           direct_cool_threshold,
+           direct_boost,
+           direct_boost_limit,
+           direct_layer_falloff,
+           direct_hotspot_ratio,
+           direct_hotspot_weight]() {
+            applySelectiveRelief(grouter_,
+                                 normalized_rudy,
+                                 hotspots,
+                                 min_routing_layer,
+                                 max_routing_layer,
+                                 direct_threshold,
+                                 direct_min_ratio,
+                                 direct_hotspot_push,
+                                 direct_halo,
+                                 direct_cool_threshold,
+                                 direct_boost,
+                                 direct_boost_limit,
+                                 direct_layer_falloff);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    direct_halo,
+                                    direct_hotspot_ratio,
+                                    direct_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_direct);
+  }
 
   auto make_wl_greedy_seed
       = [this, wl_greedy_perturb, wl_greedy_critical, &snapshot](
@@ -1578,12 +1656,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_priority = 0.00140;   // ~0.14% difference
-    const double wl_via_tie = 0.00100;    // ~0.10% difference
+    const double wl_priority = 0.00100;   // ~0.10% difference
+    const double wl_via_tie = 0.00080;    // ~0.08% difference
 
     const double util_gap
         = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
-    if (wl_rel < 0.0035 && std::abs(util_gap) > 0.04) {
+    if (wl_rel < 0.0035 && std::abs(util_gap) > 0.05) {
       return util_gap < 0.0;
     }
 
