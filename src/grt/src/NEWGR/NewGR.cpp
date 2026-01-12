@@ -722,12 +722,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       static_cast<float>(hotspots.size()) / 12.0f, 0.0f, 0.6f);
   const bool run_soft
       = force_routability
-        || (has_congestion_data && congestion_severity > 0.30f)
-        || hotspots.size() > 4;
+        || (has_congestion_data && congestion_severity > 0.55f
+            && hotspots.size() > 2)
+        || hotspots.size() > 5;
   const bool run_aggressive_soft
       = run_soft
-        && (force_routability || congestion_severity > 0.82f
-            || hotspots.size() > 6);
+        && (force_routability
+            || (congestion_severity > 0.85f && hotspots.size() > 3));
 
   logger_->info(GNR,
                 6008,
@@ -821,7 +822,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         };
   scenario_defs.push_back(wl_variation);
 
-  if (has_congestion_data) {
+  if (has_congestion_data && run_soft) {
     const float margin_relief = std::clamp(
         0.55f * congestion_severity + 0.30f * hotspot_bias, 0.0f, 1.0f);
     const float margin_min_base
@@ -1020,7 +1021,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
     const double diff = std::abs(lhs.wirelength_um - rhs.wirelength_um);
     const double rel = diff / std::max(lhs.wirelength_um, rhs.wirelength_um);
-    return rel <= 0.0006;  // within 0.06% wirelength
+    return rel <= 0.00045;  // within 0.045% wirelength
   };
 
   auto better_result = [&](const ScenarioResult& lhs,
