@@ -62,6 +62,14 @@ struct Hotspot
 };
 
 using RudyGrid = std::vector<std::vector<float>>;
+struct RudyStats
+{
+  float mean = 0.0f;
+  float p50 = 0.0f;
+  float p80 = 0.0f;
+  float p90 = 0.0f;
+  float max = 0.0f;
+};
 
 RudyGrid computeNormalizedRudyGrid(Rudy* rudy)
 {
@@ -97,15 +105,46 @@ RudyGrid computeNormalizedRudyGrid(Rudy* rudy)
   return normalized;
 }
 
-float maxNormalizedRudyValue(const RudyGrid& normalized_rudy)
+RudyStats computeRudyStats(const RudyGrid& normalized_rudy)
 {
-  float max_value = 0.0f;
+  RudyStats stats;
+  if (normalized_rudy.empty()) {
+    return stats;
+  }
+
+  std::vector<float> values;
+  values.reserve(normalized_rudy.size() * normalized_rudy.front().size());
   for (const auto& column : normalized_rudy) {
     for (float value : column) {
-      max_value = std::max(max_value, value);
+      stats.max = std::max(stats.max, value);
+      stats.mean += value;
+      values.push_back(value);
     }
   }
-  return std::clamp(max_value, 0.0f, 1.0f);
+
+  if (values.empty()) {
+    return stats;
+  }
+
+  const float inv_size = 1.0f / static_cast<float>(values.size());
+  stats.mean *= inv_size;
+
+  std::sort(values.begin(), values.end());
+  auto percentile = [&](float pct) {
+    if (values.empty()) {
+      return 0.0f;
+    }
+    pct = std::clamp(pct, 0.0f, 1.0f);
+    const size_t idx = std::min(
+        static_cast<size_t>(pct * static_cast<float>(values.size() - 1)),
+        values.size() - 1);
+    return std::clamp(values[idx], 0.0f, 1.0f);
+  };
+
+  stats.p50 = percentile(0.50f);
+  stats.p80 = percentile(0.80f);
+  stats.p90 = percentile(0.90f);
+  return stats;
 }
 
 float summarizeHotspotScore(const std::vector<Hotspot>& hotspots)
@@ -131,12 +170,12 @@ float summarizeHotspotScore(const std::vector<Hotspot>& hotspots)
   return std::clamp(score, 0.0f, 1.5f);
 }
 
-float computeCongestionSeverity(const RudyGrid& normalized_rudy,
+float computeCongestionSeverity(const RudyStats& stats,
                                 const std::vector<Hotspot>& hotspots)
 {
-  const float max_rudy = maxNormalizedRudyValue(normalized_rudy);
   const float hotspot_score = summarizeHotspotScore(hotspots);
-  const float combined = max_rudy + 0.25f * hotspot_score;
+  const float combined = 0.55f * stats.p80 + 0.20f * stats.mean
+                         + 0.15f * stats.p90 + 0.10f * hotspot_score;
   return std::clamp(combined, 0.0f, 1.0f);
 }
 
@@ -475,22 +514,29 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   ScenarioDefinition baseline_def{"baseline", nullptr, nullptr};
   std::vector<ScenarioDefinition> scenario_defs;
 
-  const float max_rudy_value = maxNormalizedRudyValue(normalized_rudy);
+  const RudyStats rudy_stats = computeRudyStats(normalized_rudy);
   const float congestion_severity
-      = computeCongestionSeverity(normalized_rudy, hotspots);
+      = computeCongestionSeverity(rudy_stats, hotspots);
   const bool force_routability = baseline.metrics.overflow > 0;
   const bool has_congestion_data
       = (!normalized_rudy.empty() || !hotspots.empty());
   const bool run_adaptive
-      = (has_congestion_data && congestion_severity > 0.12f)
-        || force_routability;
+      = force_routability
+        || (has_congestion_data && congestion_severity > 0.18f)
+        || hotspots.size() > 3;
+  const bool severe_congestion
+      = force_routability || congestion_severity > 0.55f
+        || hotspots.size() > 6;
+  const float hotspot_bias = std::clamp(
+      static_cast<float>(hotspots.size()) / 12.0f, 0.0f, 0.6f);
 
   logger_->info(GNR,
                 6008,
-                "NEWGR congestion severity {:.2f} (max RUDY {:.2f}, hotspots "
-                "{}, baseline overflow {})",
+                "NEWGR congestion severity {:.2f} (RUDY mean {:.2f}, p80 "
+                "{:.2f}, hotspots {}, baseline overflow {})",
                 congestion_severity,
-                max_rudy_value,
+                rudy_stats.mean,
+                rudy_stats.p80,
                 hotspots.size(),
                 baseline.metrics.overflow);
 
@@ -548,37 +594,75 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         };
 
   if (run_adaptive) {
-    const float boosted_severity = std::clamp(
-        congestion_severity + (force_routability ? 0.20f : 0.0f), 0.0f, 1.0f);
-    const float min_base
-        = std::clamp(0.64f - 0.18f * boosted_severity, 0.44f, 0.70f);
-    const float max_base
-        = std::clamp(0.94f - 0.10f * boosted_severity, 0.78f, 0.98f);
-    const float slope = 4.6f + 2.9f * boosted_severity;
-    const float midpoint = 0.40f + 0.14f * boosted_severity;
-    const int halo = boosted_severity > 0.55f ? 2 : 1;
-    const float hotspot_ratio
-        = std::clamp(0.62f + 0.25f * boosted_severity, 0.55f, 0.88f);
-    const float severity_weight
-        = std::clamp(0.30f + 0.45f * boosted_severity, 0.30f, 0.90f);
-    const float perturb_pct
-        = boosted_severity > 0.15f
-              ? std::clamp(1.2f + 4.2f * boosted_severity, 0.8f, 6.0f)
-              : 0.0f;
-    const float critical_pct
-        = std::clamp(6.0f + 7.0f * boosted_severity, 5.0f, 15.0f);
-    const int adaptive_seed = snapshot.seed + 17;
-    scenario_defs.push_back(make_soft_config("adaptive-softcap",
-                                             min_base,
-                                             max_base,
-                                             slope,
-                                             midpoint,
-                                             halo,
-                                             hotspot_ratio,
-                                             severity_weight,
-                                             perturb_pct,
-                                             adaptive_seed,
-                                             critical_pct));
+    if (severe_congestion) {
+      const float boosted_severity = std::clamp(
+          congestion_severity + 0.35f * hotspot_bias
+              + (force_routability ? 0.25f : 0.0f),
+          0.0f,
+          1.0f);
+      const float min_base
+          = std::clamp(0.66f - 0.26f * boosted_severity, 0.42f, 0.72f);
+      const float max_base
+          = std::clamp(0.93f - 0.16f * boosted_severity, 0.70f, 0.98f);
+      const float slope = 4.4f + 3.3f * boosted_severity;
+      const float midpoint = 0.38f + 0.16f * boosted_severity;
+      const int halo = boosted_severity > 0.70f ? 2 : 1;
+      const float hotspot_ratio
+          = std::clamp(0.64f + 0.28f * boosted_severity, 0.60f, 0.90f);
+      const float severity_weight
+          = std::clamp(0.32f + 0.46f * boosted_severity, 0.32f, 0.92f);
+      const float perturb_pct
+          = boosted_severity > 0.10f
+                ? std::clamp(1.0f + 5.0f * boosted_severity, 0.8f, 6.5f)
+                : 0.0f;
+      const float critical_pct
+          = std::clamp(7.0f + 9.0f * boosted_severity, 6.0f, 18.0f);
+      const int adaptive_seed = snapshot.seed + 17;
+      scenario_defs.push_back(make_soft_config("adaptive-softcap",
+                                               min_base,
+                                               max_base,
+                                               slope,
+                                               midpoint,
+                                               halo,
+                                               hotspot_ratio,
+                                               severity_weight,
+                                               perturb_pct,
+                                               adaptive_seed,
+                                               critical_pct));
+    } else {
+      const float tuned_severity
+          = std::clamp(congestion_severity + 0.35f * hotspot_bias, 0.0f, 1.0f);
+      const float min_base
+          = std::clamp(0.80f - 0.22f * tuned_severity, 0.62f, 0.88f);
+      const float max_base
+          = std::clamp(0.97f - 0.14f * tuned_severity,
+                       min_base + 0.02f,
+                       0.99f);
+      const float slope = 3.5f + 1.7f * tuned_severity;
+      const float midpoint
+          = std::clamp(0.50f - 0.10f * tuned_severity, 0.36f, 0.54f);
+      const int halo = 1;
+      const float hotspot_ratio
+          = std::clamp(0.84f - 0.20f * tuned_severity, 0.60f, 0.90f);
+      const float severity_weight
+          = std::clamp(0.22f + 0.34f * tuned_severity, 0.22f, 0.72f);
+      const float perturb_pct
+          = std::clamp(0.4f + 2.6f * tuned_severity, 0.0f, 3.2f);
+      const float critical_pct
+          = std::clamp(6.0f + 5.5f * tuned_severity, 5.0f, 12.5f);
+      const int lite_seed = snapshot.seed + 9;
+      scenario_defs.push_back(make_soft_config("balanced-softcap",
+                                               min_base,
+                                               max_base,
+                                               slope,
+                                               midpoint,
+                                               halo,
+                                               hotspot_ratio,
+                                               severity_weight,
+                                               perturb_pct,
+                                               lite_seed,
+                                               critical_pct));
+    }
   }
 
   for (const ScenarioDefinition& def : scenario_defs) {
