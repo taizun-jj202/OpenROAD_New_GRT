@@ -1053,6 +1053,101 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_defs.push_back(wl_polish);
   }
 
+  if (baseline.metrics.overflow == 0) {
+    const float stability_threshold
+        = std::clamp(0.52f + 0.10f * hotspot_bias, 0.50f, 0.62f);
+    const float stability_min_ratio
+        = std::clamp(0.93f + 0.04f * (1.0f - congestion_severity),
+                     0.93f,
+                     0.98f);
+    const float stability_hotspot_push
+        = std::clamp(0.12f + 0.08f * hotspot_bias, 0.10f, 0.20f);
+    const int stability_halo = hotspots.size() > 5 ? 2 : 1;
+    const float stability_cool_threshold
+        = std::clamp(stability_threshold * 0.78f, 0.40f, 0.54f);
+    const float stability_boost = std::clamp(
+        0.12f + 0.10f * (0.55f - congestion_severity), 0.10f, 0.18f);
+    const float stability_boost_limit = std::clamp(
+        1.11f + 0.06f * (0.55f - congestion_severity), 1.09f, 1.18f);
+    const float stability_layer_falloff
+        = std::clamp(0.10f + 0.12f * hotspot_bias, 0.10f, 0.22f);
+    const float stability_perturb
+        = std::clamp(0.015f + 0.10f * congestion_severity, 0.01f, 0.14f);
+    const float stability_critical = std::clamp(
+        6.2f + 2.8f * (0.55f - congestion_severity), 5.2f, 9.5f);
+    const int stability_seed = snapshot.seed + 277;
+    const float stability_min_base = 0.90f;
+    const float stability_max_base = 0.985f;
+    const float stability_slope = 2.1f;
+    const float stability_midpoint = 0.52f;
+    const float stability_hotspot_ratio
+        = std::clamp(0.985f - 0.03f * hotspot_bias, 0.96f, 0.99f);
+    const float stability_hotspot_weight
+        = std::clamp(0.10f + 0.12f * hotspot_bias, 0.10f, 0.20f);
+
+    ScenarioDefinition wl_stability;
+    wl_stability.name = "wl-stability";
+    wl_stability.pre_init = [this, stability_perturb, stability_seed, stability_critical]() {
+      grouter_->setCapacitiesPerturbationPercentage(stability_perturb);
+      grouter_->setPerturbationAmount(stability_perturb > 0.0f ? 1 : 0);
+      grouter_->setSeed(stability_seed);
+      grouter_->setAllowCongestion(false);
+      grouter_->fastroute_->setCriticalNetsPercentage(stability_critical);
+    };
+    wl_stability.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           stability_min_base,
+           stability_max_base,
+           stability_slope,
+           stability_midpoint,
+           stability_threshold,
+           stability_min_ratio,
+           stability_hotspot_push,
+           stability_halo,
+           stability_cool_threshold,
+           stability_boost,
+           stability_boost_limit,
+           stability_layer_falloff,
+           stability_hotspot_ratio,
+           stability_hotspot_weight]() {
+            applySoftCapacityScaling(grouter_,
+                                     normalized_rudy,
+                                     min_routing_layer,
+                                     max_routing_layer,
+                                     stability_min_base,
+                                     stability_max_base,
+                                     stability_slope,
+                                     stability_midpoint);
+            applySelectiveRelief(grouter_,
+                                 normalized_rudy,
+                                 hotspots,
+                                 min_routing_layer,
+                                 max_routing_layer,
+                                 stability_threshold,
+                                 stability_min_ratio,
+                                 stability_hotspot_push,
+                                 stability_halo,
+                                 stability_cool_threshold,
+                                 stability_boost,
+                                 stability_boost_limit,
+                                 stability_layer_falloff);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    stability_halo,
+                                    stability_hotspot_ratio,
+                                    stability_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_stability);
+  }
+
   if (has_congestion_data && run_soft && !normalized_rudy.empty()
       && !light_congestion) {
     const float contour_strength
@@ -1404,7 +1499,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_priority = 0.00035;   // ~0.035% difference
+    const double wl_priority = 0.00032;   // ~0.032% difference
     const double wl_via_tie = 0.00100;    // ~0.10% difference
 
     if (wl_a != wl_b && wl_rel > wl_priority) {
@@ -1432,13 +1527,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (wl_rel < 0.0015) {
       const double stress_rel
           = relative_gap(lhs.metrics.stress_cost, rhs.metrics.stress_cost);
-      if (std::abs(stress_rel) > 0.05) {
+      if (std::abs(stress_rel) > 0.03) {
         return stress_rel < 0.0;
       }
 
       const double reserve_rel
           = relative_gap(lhs.metrics.reserve_score, rhs.metrics.reserve_score);
-      if (std::abs(reserve_rel) > 0.05) {
+      if (std::abs(reserve_rel) > 0.03) {
         // Prefer solutions that leave a little more slack.
         return reserve_rel > 0.0;
       }
