@@ -796,7 +796,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const float wl_critical_pct
       = std::clamp(5.5f + 3.5f * (0.6f - congestion_severity), 4.5f, 11.0f);
   const float wl_perturb_pct
-      = congestion_severity > 0.45f ? 0.35f : 0.0f;
+      = congestion_severity > 0.45f ? 0.22f : 0.0f;
   const int wl_seed = snapshot.seed + 5;
   ScenarioDefinition wl_variation;
   wl_variation.name = "wl-variation";
@@ -816,11 +816,28 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                   min_routing_layer,
                                   max_routing_layer,
                                   1,
-                                  0.96f,
-                                  0.18f);
+                                  0.985f,
+                                  0.12f);
           }
         };
   scenario_defs.push_back(wl_variation);
+
+  const float wl_greedy_perturb = congestion_severity > 0.30f ? 0.12f : 0.0f;
+  const float wl_greedy_critical
+      = std::clamp(wl_critical_pct - 0.8f, 3.5f, 10.0f);
+  const int wl_greedy_seed = snapshot.seed + 37;
+  ScenarioDefinition wl_greedy;
+  wl_greedy.name = "wl-greedy";
+  wl_greedy.pre_init
+      = [this, wl_greedy_perturb, wl_greedy_seed, wl_greedy_critical]() {
+          grouter_->setCapacitiesPerturbationPercentage(wl_greedy_perturb);
+          grouter_->setPerturbationAmount(wl_greedy_perturb > 0.0f ? 1 : 0);
+          grouter_->setSeed(wl_greedy_seed);
+          grouter_->setAllowCongestion(false);
+          grouter_->fastroute_->setCriticalNetsPercentage(wl_greedy_critical);
+        };
+  wl_greedy.post_init = []() {};
+  scenario_defs.push_back(wl_greedy);
 
   if (has_congestion_data && run_soft) {
     const float margin_relief = std::clamp(
@@ -1015,53 +1032,37 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(result));
   }
 
-  auto near_equal_wl = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
-    if (lhs.wirelength_um <= 0.0 || rhs.wirelength_um <= 0.0) {
-      return false;
-    }
-    const double diff = std::abs(lhs.wirelength_um - rhs.wirelength_um);
-    const double rel = diff / std::max(lhs.wirelength_um, rhs.wirelength_um);
-    return rel <= 0.00045;  // within 0.045% wirelength
-  };
-
   auto better_result = [&](const ScenarioResult& lhs,
                            const ScenarioResult& rhs) {
-    const bool wl_close = near_equal_wl(lhs.metrics, rhs.metrics);
-    const double wl_diff = std::abs(
-        static_cast<double>(lhs.metrics.wirelength_dbu)
-        - static_cast<double>(rhs.metrics.wirelength_dbu));
-    const double wl_den = std::max<double>(
-        std::max(lhs.metrics.wirelength_dbu, rhs.metrics.wirelength_dbu), 1.0);
-    const double wl_rel = wl_diff / wl_den;
-    const bool wl_tight = wl_rel <= 0.0015;
     if (lhs.metrics.overflow != rhs.metrics.overflow) {
       return lhs.metrics.overflow < rhs.metrics.overflow;
     }
-    if (wl_tight) {
-      const double util_diff
-          = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
-      if (std::abs(util_diff) > 0.02) {
-        return lhs.metrics.max_utilization < rhs.metrics.max_utilization;
-      }
+    const double wl_a = static_cast<double>(lhs.metrics.wirelength_dbu);
+    const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
+    const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
+    const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
+    const double wl_priority = 0.00020;   // ~0.020% difference
+    const double wl_via_tie = 0.00150;    // ~0.150% difference
+
+    if (wl_a != wl_b && wl_rel > wl_priority) {
+      // Wirelength dominates until differences are very small.
+      return wl_a < wl_b;
     }
-    if (!wl_close
-        && lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
-      return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
-    }
-    if (wl_close && lhs.metrics.via_count != rhs.metrics.via_count) {
+
+    if (lhs.metrics.via_count != rhs.metrics.via_count && wl_rel < wl_via_tie) {
+      // With comparable wirelengths, prefer fewer vias.
       return lhs.metrics.via_count < rhs.metrics.via_count;
     }
-    if (lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
-      return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
+
+    if (wl_a != wl_b) {
+      return wl_a < wl_b;
     }
-    if (lhs.metrics.via_count != rhs.metrics.via_count) {
-      return lhs.metrics.via_count < rhs.metrics.via_count;
-    }
+
     if (std::abs(lhs.metrics.max_utilization - rhs.metrics.max_utilization)
         > 1e-4) {
       return lhs.metrics.max_utilization < rhs.metrics.max_utilization;
     }
-    if (std::abs(lhs.metrics.stress_cost - rhs.metrics.stress_cost) > 1e-3) {
+    if (std::abs(lhs.metrics.stress_cost - rhs.metrics.stress_cost) > 1e-4) {
       return lhs.metrics.stress_cost < rhs.metrics.stress_cost;
     }
     return lhs.metrics.score < rhs.metrics.score;
