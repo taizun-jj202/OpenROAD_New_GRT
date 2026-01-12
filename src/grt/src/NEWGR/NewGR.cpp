@@ -919,16 +919,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
     const double diff = std::abs(lhs.wirelength_um - rhs.wirelength_um);
     const double rel = diff / std::max(lhs.wirelength_um, rhs.wirelength_um);
-    return rel <= 0.0015;  // within 0.15% wirelength
+    return rel <= 0.0001;  // within 0.01% wirelength
   };
 
   auto better_result = [&](const ScenarioResult& lhs,
                            const ScenarioResult& rhs) {
+    const bool wl_close = near_equal_wl(lhs.metrics, rhs.metrics);
     if (lhs.metrics.overflow != rhs.metrics.overflow) {
       return lhs.metrics.overflow < rhs.metrics.overflow;
     }
-    if (near_equal_wl(lhs.metrics, rhs.metrics)
-        && lhs.metrics.via_count != rhs.metrics.via_count) {
+    if (!wl_close
+        && lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
+      return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
+    }
+    if (wl_close && lhs.metrics.via_count != rhs.metrics.via_count) {
       return lhs.metrics.via_count < rhs.metrics.via_count;
     }
     if (lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
