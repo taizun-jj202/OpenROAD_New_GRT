@@ -227,7 +227,9 @@ void adjustEdgeCapacity(GlobalRouter* grouter,
                         int layer,
                         float ratio)
 {
-  ratio = std::clamp(ratio, 0.05f, 1.0f);
+  // Allow limited capacity boosts to open low-congestion corridors.
+  const float max_ratio_cap = 1.12f;
+  ratio = std::clamp(ratio, 0.05f, max_ratio_cap);
   FastRouteCore* core = grouter->fastroute();
   if (core == nullptr) {
     return;
@@ -236,8 +238,12 @@ void adjustEdgeCapacity(GlobalRouter* grouter,
   if (current_cap <= 0) {
     return;
   }
-  const int new_cap
+  int new_cap
       = std::max(1, static_cast<int>(std::floor(current_cap * ratio)));
+  if (ratio > 1.01f && new_cap == current_cap) {
+    const int boosted_cap = static_cast<int>(std::ceil(current_cap * max_ratio_cap));
+    new_cap = std::min(current_cap + 1, boosted_cap);
+  }
   if (new_cap == current_cap) {
     return;
   }
@@ -376,7 +382,11 @@ void applySelectiveRelief(GlobalRouter* grouter,
                           float threshold,
                           float min_ratio,
                           float hotspot_push,
-                          int halo)
+                          int halo,
+                          float cool_threshold = 0.0f,
+                          float boost = 0.0f,
+                          float boost_limit = 1.0f,
+                          float layer_boost_falloff = 0.0f)
 {
   Grid* grid = grouter->grid();
   if (grid == nullptr || (normalized_rudy.empty() && hotspots.empty())) {
@@ -465,6 +475,24 @@ void applySelectiveRelief(GlobalRouter* grouter,
           ratio = std::clamp(ratio * dampen, layer_min_ratio * 0.92f, 1.0f);
         }
 
+        if (boost > 0.0f && boost_limit > 1.0f && cool_threshold > 0.0f) {
+          const float cool_score = std::clamp(
+              (cool_threshold - normalized) / std::max(cool_threshold, 1e-3f),
+              0.0f,
+              1.0f);
+          if (cool_score > 0.0f) {
+            float layer_scale
+                = 1.0f - layer_boost_falloff * std::clamp(layer_factor, 0.0f, 1.0f);
+            layer_scale = std::clamp(layer_scale, 0.5f, 1.0f);
+            float influence_guard
+                = 1.0f - std::clamp(influence, 0.0f, 1.0f) * 0.65f;
+            influence_guard = std::clamp(influence_guard, 0.35f, 1.0f);
+            const float candidate
+                = 1.0f + boost * cool_score * layer_scale * influence_guard;
+            ratio = std::max(ratio, std::min(candidate, boost_limit));
+          }
+        }
+
         adjustEdgeCapacity(grouter, x, y, x + 1, y, layer, ratio);
       }
     }
@@ -487,6 +515,24 @@ void applySelectiveRelief(GlobalRouter* grouter,
               = 1.0f - hotspot_push * (influence - 1.0f) * 0.35f;
           dampen = std::clamp(dampen, 0.70f, 1.0f);
           ratio = std::clamp(ratio * dampen, layer_min_ratio * 0.92f, 1.0f);
+        }
+
+        if (boost > 0.0f && boost_limit > 1.0f && cool_threshold > 0.0f) {
+          const float cool_score = std::clamp(
+              (cool_threshold - normalized) / std::max(cool_threshold, 1e-3f),
+              0.0f,
+              1.0f);
+          if (cool_score > 0.0f) {
+            float layer_scale
+                = 1.0f - layer_boost_falloff * std::clamp(layer_factor, 0.0f, 1.0f);
+            layer_scale = std::clamp(layer_scale, 0.5f, 1.0f);
+            float influence_guard
+                = 1.0f - std::clamp(influence, 0.0f, 1.0f) * 0.65f;
+            influence_guard = std::clamp(influence_guard, 0.35f, 1.0f);
+            const float candidate
+                = 1.0f + boost * cool_score * layer_scale * influence_guard;
+            ratio = std::max(ratio, std::min(candidate, boost_limit));
+          }
         }
 
         adjustEdgeCapacity(grouter, x, y, x, y + 1, layer, ratio);
@@ -989,6 +1035,81 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             }
           };
     scenario_defs.push_back(contour_soft);
+  }
+
+  if (has_congestion_data) {
+    const float corridor_threshold
+        = std::clamp(0.34f + 0.14f * (1.0f - congestion_severity),
+                     0.30f,
+                     0.50f);
+    const float corridor_min_ratio
+        = std::clamp(0.88f + 0.05f * (1.0f - congestion_severity),
+                     0.88f,
+                     0.95f);
+    const float corridor_hotspot_push
+        = std::clamp(0.10f + 0.10f * congestion_severity + 0.04f * hotspot_bias,
+                     0.10f,
+                     0.22f);
+    const int corridor_halo = congestion_severity > 0.62f ? 2 : 1;
+    const float corridor_cool_threshold
+        = std::clamp(corridor_threshold * 0.70f, 0.22f, 0.42f);
+    const float corridor_boost
+        = std::clamp(0.07f + 0.05f * (1.0f - congestion_severity),
+                     0.06f,
+                     0.13f);
+    const float corridor_boost_limit
+        = std::clamp(1.07f + 0.03f * (1.0f - congestion_severity),
+                     1.07f,
+                     1.11f);
+    const float corridor_layer_falloff
+        = std::clamp(0.16f + 0.08f * hotspot_bias, 0.12f, 0.30f);
+    const float corridor_perturb
+        = std::clamp(0.05f + 0.28f * congestion_severity, 0.05f, 0.32f);
+    const float corridor_critical
+        = std::clamp(5.0f + 2.5f * (0.55f - congestion_severity),
+                     4.0f,
+                     8.5f);
+    const int corridor_seed = snapshot.seed + 131;
+
+    ScenarioDefinition corridor;
+    corridor.name = "cool-corridors";
+    corridor.pre_init
+        = [this, corridor_perturb, corridor_seed, corridor_critical]() {
+            grouter_->setCapacitiesPerturbationPercentage(corridor_perturb);
+            grouter_->setPerturbationAmount(corridor_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(corridor_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(corridor_critical);
+          };
+    corridor.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           corridor_threshold,
+           corridor_min_ratio,
+           corridor_hotspot_push,
+           corridor_halo,
+           corridor_cool_threshold,
+           corridor_boost,
+           corridor_boost_limit,
+           corridor_layer_falloff]() {
+            applySelectiveRelief(grouter_,
+                                 normalized_rudy,
+                                 hotspots,
+                                 min_routing_layer,
+                                 max_routing_layer,
+                                 corridor_threshold,
+                                 corridor_min_ratio,
+                                 corridor_hotspot_push,
+                                 corridor_halo,
+                                 corridor_cool_threshold,
+                                 corridor_boost,
+                                 corridor_boost_limit,
+                                 corridor_layer_falloff);
+          };
+    scenario_defs.push_back(corridor);
   }
 
   if (has_congestion_data && run_aggressive_soft) {
