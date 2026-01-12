@@ -1053,6 +1053,85 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_defs.push_back(wl_polish);
   }
 
+  if (has_congestion_data && light_congestion && baseline.metrics.overflow == 0) {
+    const float streamline_threshold = std::clamp(
+        0.46f + 0.10f * congestion_severity, 0.44f, 0.62f);
+    const float streamline_min_ratio = std::clamp(
+        0.955f + 0.03f * (1.0f - congestion_severity), 0.94f, 0.985f);
+    const float streamline_hotspot_push
+        = std::clamp(0.06f + 0.05f * hotspot_bias, 0.05f, 0.13f);
+    const int streamline_halo = hotspots.size() > 4 ? 2 : 1;
+    const float streamline_cool_threshold = std::clamp(
+        streamline_threshold * 0.62f, 0.34f, 0.50f);
+    const float streamline_boost = std::clamp(
+        0.12f + 0.05f * (0.55f - congestion_severity), 0.09f, 0.18f);
+    const float streamline_boost_limit = std::clamp(
+        1.10f + 0.06f * (0.55f - congestion_severity), 1.08f, 1.18f);
+    const float streamline_layer_falloff
+        = std::clamp(0.07f + 0.08f * hotspot_bias, 0.06f, 0.16f);
+    const float streamline_perturb
+        = std::clamp(0.01f + 0.06f * congestion_severity, 0.0f, 0.12f);
+    const float streamline_critical = std::clamp(
+        4.2f + 2.4f * (0.60f - congestion_severity), 3.8f, 8.5f);
+    const int streamline_seed = snapshot.seed + 319;
+    const float streamline_hotspot_ratio
+        = std::clamp(0.992f - 0.03f * hotspot_bias, 0.96f, 0.995f);
+    const float streamline_hotspot_weight
+        = std::clamp(0.06f + 0.14f * hotspot_bias, 0.06f, 0.16f);
+
+    ScenarioDefinition wl_streamline;
+    wl_streamline.name = "wl-streamline";
+    wl_streamline.pre_init
+        = [this, streamline_perturb, streamline_seed, streamline_critical]() {
+            grouter_->setCapacitiesPerturbationPercentage(streamline_perturb);
+            grouter_->setPerturbationAmount(streamline_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(streamline_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(
+                streamline_critical);
+          };
+    wl_streamline.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           streamline_threshold,
+           streamline_min_ratio,
+           streamline_hotspot_push,
+           streamline_halo,
+           streamline_cool_threshold,
+           streamline_boost,
+           streamline_boost_limit,
+           streamline_layer_falloff,
+           streamline_hotspot_ratio,
+           streamline_hotspot_weight]() {
+            applySelectiveRelief(grouter_,
+                                 normalized_rudy,
+                                 hotspots,
+                                 min_routing_layer,
+                                 max_routing_layer,
+                                 streamline_threshold,
+                                 streamline_min_ratio,
+                                 streamline_hotspot_push,
+                                 streamline_halo,
+                                 streamline_cool_threshold,
+                                 streamline_boost,
+                                 streamline_boost_limit,
+                                 streamline_layer_falloff);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    streamline_halo,
+                                    streamline_hotspot_ratio,
+                                    streamline_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_streamline);
+  }
+
   if (baseline.metrics.overflow == 0) {
     const float stability_threshold
         = std::clamp(0.52f + 0.10f * hotspot_bias, 0.50f, 0.62f);
@@ -1499,8 +1578,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_priority = 0.00032;   // ~0.032% difference
+    const double wl_priority = 0.00140;   // ~0.14% difference
     const double wl_via_tie = 0.00100;    // ~0.10% difference
+
+    const double util_gap
+        = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
+    if (wl_rel < 0.0035 && std::abs(util_gap) > 0.04) {
+      return util_gap < 0.0;
+    }
 
     if (wl_a != wl_b && wl_rel > wl_priority) {
       // Wirelength dominates until differences are small.
@@ -1527,13 +1612,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (wl_rel < 0.0015) {
       const double stress_rel
           = relative_gap(lhs.metrics.stress_cost, rhs.metrics.stress_cost);
-      if (std::abs(stress_rel) > 0.03) {
+      if (std::abs(stress_rel) > 0.025) {
         return stress_rel < 0.0;
       }
 
       const double reserve_rel
           = relative_gap(lhs.metrics.reserve_score, rhs.metrics.reserve_score);
-      if (std::abs(reserve_rel) > 0.03) {
+      if (std::abs(reserve_rel) > 0.025) {
         // Prefer solutions that leave a little more slack.
         return reserve_rel > 0.0;
       }
