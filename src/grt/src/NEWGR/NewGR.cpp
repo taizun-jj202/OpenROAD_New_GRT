@@ -723,14 +723,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const bool run_soft
       = force_routability
         || (has_congestion_data
-            && (congestion_severity > 0.58f || hotspots.size() > 2
-                || rudy_stats.p80 > 0.80f))
-        || hotspots.size() > 4;
+            && (congestion_severity > 0.72f || hotspots.size() > 2
+                || rudy_stats.p80 > 0.84f))
+        || hotspots.size() > 5;
   const bool run_aggressive_soft
-      = run_soft
-        && (force_routability
-            || congestion_severity > 0.82f
-            || (congestion_severity > 0.70f && hotspots.size() > 3));
+      = force_routability
+        || (has_congestion_data
+            && (congestion_severity > 0.88f || hotspots.size() > 4));
+  const bool allow_seed_sweep = !force_routability && hotspots.size() <= 4;
 
   logger_->info(GNR,
                 6008,
@@ -841,7 +841,64 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   wl_greedy.post_init = []() {};
   scenario_defs.push_back(wl_greedy);
 
-  if (has_congestion_data && !normalized_rudy.empty()) {
+  const float wl_refine_perturb = wl_greedy_perturb * 0.6f;
+  const float wl_refine_critical
+      = std::clamp(wl_greedy_critical - 0.6f, 3.0f, 10.0f);
+  const int wl_refine_seed = snapshot.seed + 71;
+  ScenarioDefinition wl_refine;
+  wl_refine.name = "wl-refine";
+  wl_refine.pre_init
+      = [this, wl_refine_perturb, wl_refine_seed, wl_refine_critical]() {
+          const float perturb = std::clamp(wl_refine_perturb, 0.0f, 0.40f);
+          grouter_->setCapacitiesPerturbationPercentage(perturb);
+          grouter_->setPerturbationAmount(perturb > 0.0f ? 1 : 0);
+          grouter_->setSeed(wl_refine_seed);
+          grouter_->setAllowCongestion(false);
+          grouter_->fastroute_->setCriticalNetsPercentage(wl_refine_critical);
+        };
+  wl_refine.post_init
+      = [this, &hotspots, min_routing_layer, max_routing_layer]() {
+          if (!hotspots.empty()) {
+            applyHotspotPenalties(grouter_,
+                                  hotspots,
+                                  min_routing_layer,
+                                  max_routing_layer,
+                                  1,
+                                  0.992f,
+                                  0.10f);
+          }
+        };
+  scenario_defs.push_back(wl_refine);
+
+  auto make_wl_greedy_seed
+      = [this, wl_greedy_perturb, wl_greedy_critical, &snapshot](
+            const std::string& name, int seed_offset, float perturb_scale) {
+          ScenarioDefinition def;
+          def.name = name;
+          const float perturb
+              = std::clamp(wl_greedy_perturb * perturb_scale, 0.0f, 0.60f);
+          const int seed = snapshot.seed + seed_offset;
+          def.pre_init
+              = [this, perturb, seed, wl_greedy_critical]() {
+                  grouter_->setCapacitiesPerturbationPercentage(perturb);
+                  grouter_->setPerturbationAmount(perturb > 0.0f ? 1 : 0);
+                  grouter_->setSeed(seed);
+                  grouter_->setAllowCongestion(false);
+                  grouter_->fastroute_->setCriticalNetsPercentage(
+                      wl_greedy_critical);
+                };
+          def.post_init = []() {};
+          return def;
+        };
+
+  if (allow_seed_sweep) {
+    scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s1", 73, 0.8f));
+    if (hotspots.size() <= 2) {
+      scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s2", 109, 1.1f));
+    }
+  }
+
+  if (has_congestion_data && run_soft && !normalized_rudy.empty()) {
     const float contour_strength
         = std::clamp(congestion_severity * 0.70f + hotspot_bias * 0.40f,
                      0.0f,
@@ -934,73 +991,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_defs.push_back(contour_soft);
   }
 
-  if (has_congestion_data && run_soft) {
-    const float margin_relief = std::clamp(
-        0.55f * congestion_severity + 0.30f * hotspot_bias, 0.0f, 1.0f);
-    const float margin_min_base
-        = std::clamp(0.90f - 0.04f * margin_relief, 0.86f, 0.92f);
-    const float margin_max_base
-        = std::clamp(0.985f - 0.02f * margin_relief,
-                     margin_min_base + 0.02f,
-                     0.995f);
-    const float margin_slope = 1.20f + 0.50f * margin_relief;
-    const float margin_midpoint
-        = std::clamp(0.55f - 0.04f * margin_relief, 0.48f, 0.57f);
-    const int margin_halo = margin_relief > 0.65f ? 2 : 1;
-    const float margin_hotspot_ratio
-        = std::clamp(0.97f - 0.08f * margin_relief, 0.86f, 0.98f);
-    const float margin_severity
-        = std::clamp(0.18f + 0.25f * margin_relief, 0.18f, 0.55f);
-    const float margin_perturb_pct
-        = std::clamp(0.05f + 0.35f * margin_relief, 0.02f, 0.42f);
-    const float margin_critical_pct
-        = std::clamp(6.0f + 3.0f * (0.7f - congestion_severity),
-                     5.5f,
-                     9.5f);
-    const int margin_seed = snapshot.seed + 29;
-
-    ScenarioDefinition margin_soft;
-    margin_soft.name = "margin-lite";
-    margin_soft.pre_init = [this, margin_perturb_pct, margin_seed, margin_critical_pct]() {
-      grouter_->setCapacitiesPerturbationPercentage(margin_perturb_pct);
-      grouter_->setPerturbationAmount(margin_perturb_pct > 0.0f ? 1 : 0);
-      grouter_->setSeed(margin_seed);
-      grouter_->setAllowCongestion(false);
-      grouter_->fastroute_->setCriticalNetsPercentage(margin_critical_pct);
-    };
-    margin_soft.post_init
-        = [this,
-           &normalized_rudy,
-           &hotspots,
-           min_routing_layer,
-           max_routing_layer,
-           margin_min_base,
-           margin_max_base,
-           margin_slope,
-           margin_midpoint,
-           margin_halo,
-           margin_hotspot_ratio,
-           margin_severity]() {
-            applySoftCapacityScaling(grouter_,
-                                     normalized_rudy,
-                                     min_routing_layer,
-                                     max_routing_layer,
-                                     margin_min_base,
-                                     margin_max_base,
-                                     margin_slope,
-                                     margin_midpoint);
-            if (!hotspots.empty()) {
-              applyHotspotPenalties(grouter_,
-                                    hotspots,
-                                    min_routing_layer,
-                                    max_routing_layer,
-                                    margin_halo,
-                                    margin_hotspot_ratio,
-                                    margin_severity);
-            }
-          };
-    scenario_defs.push_back(margin_soft);
-
+  if (has_congestion_data && run_aggressive_soft) {
     const float selective_threshold = std::clamp(
         0.32f + 0.22f * (1.0f - congestion_severity), 0.26f, 0.58f);
     const float selective_min_ratio
@@ -1053,40 +1044,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  selective_halo);
           };
     scenario_defs.push_back(selective_relief);
-
-    const float mild = std::clamp(
-        0.55f * congestion_severity + 0.35f * hotspot_bias, 0.0f, 1.0f);
-    const float min_base
-        = std::clamp(0.86f - 0.06f * mild, 0.78f, 0.90f);
-    const float max_base
-        = std::clamp(0.98f - 0.03f * mild, min_base + 0.03f, 0.99f);
-    const float slope = 1.9f + 0.65f * mild;
-    const float midpoint
-        = std::clamp(0.52f - 0.03f * mild, 0.46f, 0.53f);
-    const int halo = mild > 0.7f ? 2 : 1;
-    const float hotspot_ratio
-        = std::clamp(0.96f - 0.10f * mild, 0.82f, 0.98f);
-    const float severity_weight
-        = std::clamp(0.25f + 0.28f * mild, 0.25f, 0.65f);
-    const float perturb_pct
-        = std::clamp(0.12f + 0.55f * mild, 0.08f, 0.75f);
-    const float critical_pct
-        = std::clamp(6.0f + 4.5f * mild, 6.0f, 11.5f);
-    const int balanced_seed = snapshot.seed + 17;
-    scenario_defs.push_back(make_soft_config("balanced-soft",
-                                             min_base,
-                                             max_base,
-                                             slope,
-                                             midpoint,
-                                             halo,
-                                             hotspot_ratio,
-                                             severity_weight,
-                                             perturb_pct,
-                                             balanced_seed,
-                                             critical_pct));
   }
 
-  if (run_aggressive_soft) {
+  if (has_congestion_data && run_aggressive_soft) {
     const float tuned = std::clamp(congestion_severity * 0.65f
                                        + hotspot_bias * 0.35f
                                        + (force_routability ? 0.15f : 0.0f),
