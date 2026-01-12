@@ -25,6 +25,10 @@ struct RouteMetrics
   long wirelength_dbu = 0;
   long via_count = 0;
   long overflow = 0;
+  double max_utilization = 0.0;
+  double avg_utilization = 0.0;
+  double stress_cost = 0.0;
+  double reserve_score = 0.0;
   double wirelength_um = 0.0;
   double score = 0.0;
 };
@@ -508,6 +512,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   auto compute_metrics = [&](const NetRouteMap& routes) -> RouteMetrics {
     RouteMetrics metrics;
+    const int tile_size
+        = grouter_ != nullptr && grouter_->grid_ != nullptr
+              ? std::max(grouter_->grid_->getTileSize(), 1)
+              : 1;
+
     for (const auto& [db_net, segments] : routes) {
       static_cast<void>(db_net);
       for (const GSegment& segment : segments) {
@@ -522,7 +531,33 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
 
     if (grouter_ != nullptr && grouter_->fastroute_ != nullptr) {
-      metrics.overflow = grouter_->fastroute_->totalOverflow();
+      FastRouteCore* core = grouter_->fastroute_;
+      metrics.overflow = core->totalOverflow();
+
+      const auto& usage = core->getTotalUsagePerLayer();
+      const auto& capacity = core->getTotalCapacityPerLayer();
+      const size_t layer_count = std::min(usage.size(), capacity.size());
+      double stress = 0.0;
+      double reserve = 0.0;
+      for (size_t i = 0; i < layer_count; ++i) {
+        const double cap = static_cast<double>(capacity[i]);
+        if (cap <= std::numeric_limits<double>::epsilon()) {
+          continue;
+        }
+        const double util = static_cast<double>(usage[i]) / cap;
+        metrics.max_utilization = std::max(metrics.max_utilization, util);
+        metrics.avg_utilization += util;
+        const double overload = std::max(0.0, util - 0.86);
+        stress += overload * overload;
+        reserve += std::max(0.0, 1.0 - util);
+      }
+
+      if (layer_count > 0) {
+        metrics.avg_utilization
+            /= std::max<double>(static_cast<double>(layer_count), 1.0);
+        metrics.stress_cost = stress * static_cast<double>(tile_size);
+        metrics.reserve_score = reserve;
+      }
     }
 
     if (metrics.wirelength_dbu > 0 && grouter_->db_ != nullptr
@@ -533,10 +568,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 grouter_->db_->getTech()->getDbUnitsPerMicron());
     }
 
-    const int tile_size
-        = grouter_ != nullptr && grouter_->grid_ != nullptr
-              ? std::max(grouter_->grid_->getTileSize(), 1)
-              : 1;
     const double via_weight = static_cast<double>(tile_size) * 3.0;
     const double overflow_weight = static_cast<double>(tile_size) * 12.0;
     metrics.score = static_cast<double>(metrics.wirelength_dbu)
@@ -575,11 +606,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     RouteMetrics metrics = compute_metrics(routes);
     logger_->info(GNR,
                   6005,
-                  "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}",
+                  "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}, "
+                  "max util {:.2f}",
                   name,
                   metrics.wirelength_um,
                   metrics.via_count,
-                  metrics.overflow);
+                  metrics.overflow,
+                  metrics.max_utilization);
     return ScenarioResult{name, metrics, std::move(routes)};
   };
 
@@ -651,11 +684,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     RouteMetrics metrics = compute_metrics(routes);
     logger_->info(GNR,
                   6006,
-                  "NEWGR scenario {}: wirelength {:.0f} um, vias {}, overflow {}",
+                  "NEWGR scenario {}: wirelength {:.0f} um, vias {}, overflow {}, "
+                  "max util {:.2f}",
                   scenario.name,
                   metrics.wirelength_um,
                   metrics.via_count,
-                  metrics.overflow);
+                  metrics.overflow,
+                  metrics.max_utilization);
     return ScenarioResult{scenario.name, metrics, std::move(routes)};
   };
 
@@ -787,6 +822,72 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   scenario_defs.push_back(wl_variation);
 
   if (has_congestion_data) {
+    const float margin_relief = std::clamp(
+        0.55f * congestion_severity + 0.30f * hotspot_bias, 0.0f, 1.0f);
+    const float margin_min_base
+        = std::clamp(0.90f - 0.04f * margin_relief, 0.86f, 0.92f);
+    const float margin_max_base
+        = std::clamp(0.985f - 0.02f * margin_relief,
+                     margin_min_base + 0.02f,
+                     0.995f);
+    const float margin_slope = 1.20f + 0.50f * margin_relief;
+    const float margin_midpoint
+        = std::clamp(0.55f - 0.04f * margin_relief, 0.48f, 0.57f);
+    const int margin_halo = margin_relief > 0.65f ? 2 : 1;
+    const float margin_hotspot_ratio
+        = std::clamp(0.97f - 0.08f * margin_relief, 0.86f, 0.98f);
+    const float margin_severity
+        = std::clamp(0.18f + 0.25f * margin_relief, 0.18f, 0.55f);
+    const float margin_perturb_pct
+        = std::clamp(0.05f + 0.35f * margin_relief, 0.02f, 0.42f);
+    const float margin_critical_pct
+        = std::clamp(6.0f + 3.0f * (0.7f - congestion_severity),
+                     5.5f,
+                     9.5f);
+    const int margin_seed = snapshot.seed + 29;
+
+    ScenarioDefinition margin_soft;
+    margin_soft.name = "margin-lite";
+    margin_soft.pre_init = [this, margin_perturb_pct, margin_seed, margin_critical_pct]() {
+      grouter_->setCapacitiesPerturbationPercentage(margin_perturb_pct);
+      grouter_->setPerturbationAmount(margin_perturb_pct > 0.0f ? 1 : 0);
+      grouter_->setSeed(margin_seed);
+      grouter_->setAllowCongestion(false);
+      grouter_->fastroute_->setCriticalNetsPercentage(margin_critical_pct);
+    };
+    margin_soft.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           margin_min_base,
+           margin_max_base,
+           margin_slope,
+           margin_midpoint,
+           margin_halo,
+           margin_hotspot_ratio,
+           margin_severity]() {
+            applySoftCapacityScaling(grouter_,
+                                     normalized_rudy,
+                                     min_routing_layer,
+                                     max_routing_layer,
+                                     margin_min_base,
+                                     margin_max_base,
+                                     margin_slope,
+                                     margin_midpoint);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    margin_halo,
+                                    margin_hotspot_ratio,
+                                    margin_severity);
+            }
+          };
+    scenario_defs.push_back(margin_soft);
+
     const float selective_threshold = std::clamp(
         0.32f + 0.22f * (1.0f - congestion_severity), 0.26f, 0.58f);
     const float selective_min_ratio
@@ -919,14 +1020,28 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
     const double diff = std::abs(lhs.wirelength_um - rhs.wirelength_um);
     const double rel = diff / std::max(lhs.wirelength_um, rhs.wirelength_um);
-    return rel <= 0.0001;  // within 0.01% wirelength
+    return rel <= 0.0006;  // within 0.06% wirelength
   };
 
   auto better_result = [&](const ScenarioResult& lhs,
                            const ScenarioResult& rhs) {
     const bool wl_close = near_equal_wl(lhs.metrics, rhs.metrics);
+    const double wl_diff = std::abs(
+        static_cast<double>(lhs.metrics.wirelength_dbu)
+        - static_cast<double>(rhs.metrics.wirelength_dbu));
+    const double wl_den = std::max<double>(
+        std::max(lhs.metrics.wirelength_dbu, rhs.metrics.wirelength_dbu), 1.0);
+    const double wl_rel = wl_diff / wl_den;
+    const bool wl_tight = wl_rel <= 0.0015;
     if (lhs.metrics.overflow != rhs.metrics.overflow) {
       return lhs.metrics.overflow < rhs.metrics.overflow;
+    }
+    if (wl_tight) {
+      const double util_diff
+          = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
+      if (std::abs(util_diff) > 0.02) {
+        return lhs.metrics.max_utilization < rhs.metrics.max_utilization;
+      }
     }
     if (!wl_close
         && lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
@@ -940,6 +1055,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
     if (lhs.metrics.via_count != rhs.metrics.via_count) {
       return lhs.metrics.via_count < rhs.metrics.via_count;
+    }
+    if (std::abs(lhs.metrics.max_utilization - rhs.metrics.max_utilization)
+        > 1e-4) {
+      return lhs.metrics.max_utilization < rhs.metrics.max_utilization;
+    }
+    if (std::abs(lhs.metrics.stress_cost - rhs.metrics.stress_cost) > 1e-3) {
+      return lhs.metrics.stress_cost < rhs.metrics.stress_cost;
     }
     return lhs.metrics.score < rhs.metrics.score;
   };
@@ -968,11 +1090,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   logger_->info(GNR,
                 6007,
                 "NEWGR best scenario '{}': wirelength {:.0f} um, vias {}, "
-                "overflow {}",
+                "overflow {}, max util {:.2f}",
                 final_result.name,
                 final_result.metrics.wirelength_um,
                 final_result.metrics.via_count,
-                final_result.metrics.overflow);
+                final_result.metrics.overflow,
+                final_result.metrics.max_utilization);
 
   return std::move(final_result.routes);
 }
