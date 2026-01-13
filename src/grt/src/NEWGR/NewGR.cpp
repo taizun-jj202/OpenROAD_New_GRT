@@ -48,7 +48,6 @@ struct RouterSnapshot
   float critical_percentage = 0.0f;
   bool allow_congestion = false;
   int seed = 0;
-  float via_cost_scale = 1.0f;
 };
 
 struct ScenarioDefinition
@@ -1012,7 +1011,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = grouter_->fastroute_->getCriticalNetsPercentage();
     snapshot.allow_congestion = grouter_->allow_congestion_;
     snapshot.seed = grouter_->seed_;
-    snapshot.via_cost_scale = 1.0f;
     return snapshot;
   };
 
@@ -1376,6 +1374,102 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           }
         };
   scenario_defs.push_back(wl_refine);
+
+  const float lean_strength
+      = std::clamp(0.35f + 0.40f * congestion_severity
+                       + 0.20f * hotspot_bias,
+                   0.30f,
+                   0.80f);
+  const float lean_perturb
+      = std::clamp(0.025f + 0.12f * congestion_severity, 0.02f, 0.16f);
+  const float lean_critical = std::clamp(
+      wl_greedy_critical - 0.3f + 0.4f * hotspot_bias, 3.2f, 10.5f);
+  const int lean_seed = snapshot.seed + 311;
+  const float lean_min_base = std::clamp(
+      0.92f + 0.03f * (1.0f - congestion_severity), 0.91f, 0.96f);
+  const float lean_max_base = std::clamp(
+      0.985f + 0.01f * (0.65f - congestion_severity),
+      lean_min_base + 0.01f,
+      0.99f);
+  const float lean_slope = 1.6f + 0.9f * lean_strength;
+  const float lean_midpoint
+      = std::clamp(0.50f - 0.02f * lean_strength, 0.45f, 0.52f);
+  const int lean_top_k = std::max(
+      1, std::min(2, max_routing_layer - min_routing_layer + 1));
+  const float lean_top_threshold = std::clamp(
+      0.60f + 0.06f * (congestion_severity - 0.50f), 0.56f, 0.72f);
+  const float lean_top_base = std::clamp(
+      0.05f + 0.04f * (0.60f - congestion_severity), 0.04f, 0.11f);
+  const float lean_top_max = std::clamp(
+      1.11f + 0.04f * (0.55f - congestion_severity), 1.08f, 1.18f);
+  const float lean_top_guard
+      = std::clamp(0.72f - 0.14f * hotspot_bias, 0.62f, 0.82f);
+  const int lean_top_halo = hotspots.size() > 2 ? 2 : 1;
+  const float lean_hotspot_ratio
+      = std::clamp(0.988f - 0.04f * hotspot_bias, 0.95f, 0.992f);
+  const float lean_hotspot_weight
+      = std::clamp(0.08f + 0.10f * hotspot_bias, 0.06f, 0.16f);
+
+  ScenarioDefinition wl_lean;
+  wl_lean.name = "wl-lean";
+  wl_lean.pre_init
+      = [this, lean_perturb, lean_seed, lean_critical]() {
+          grouter_->setCapacitiesPerturbationPercentage(lean_perturb);
+          grouter_->setPerturbationAmount(lean_perturb > 0.0f ? 1 : 0);
+          grouter_->setSeed(lean_seed);
+          grouter_->setAllowCongestion(false);
+          grouter_->fastroute_->setCriticalNetsPercentage(lean_critical);
+        };
+  wl_lean.post_init
+      = [this,
+         &normalized_rudy,
+         &hotspots,
+         min_routing_layer,
+         max_routing_layer,
+         lean_min_base,
+         lean_max_base,
+         lean_slope,
+         lean_midpoint,
+         lean_top_k,
+         lean_top_threshold,
+         lean_top_base,
+         lean_top_max,
+         lean_top_guard,
+         lean_top_halo,
+         lean_hotspot_ratio,
+         lean_hotspot_weight]() {
+          if (!normalized_rudy.empty()) {
+            applySoftCapacityScaling(grouter_,
+                                     normalized_rudy,
+                                     min_routing_layer,
+                                     max_routing_layer,
+                                     lean_min_base,
+                                     lean_max_base,
+                                     lean_slope,
+                                     lean_midpoint);
+            applyTopLayerBias(grouter_,
+                              normalized_rudy,
+                              hotspots,
+                              min_routing_layer,
+                              max_routing_layer,
+                              lean_top_k,
+                              lean_top_threshold,
+                              lean_top_base,
+                              lean_top_max,
+                              lean_top_guard,
+                              lean_top_halo);
+          }
+          if (!hotspots.empty()) {
+            applyHotspotPenalties(grouter_,
+                                  hotspots,
+                                  min_routing_layer,
+                                  max_routing_layer,
+                                  lean_top_halo,
+                                  lean_hotspot_ratio,
+                                  lean_hotspot_weight);
+          }
+        };
+  scenario_defs.push_back(wl_lean);
 
   if (baseline.metrics.overflow == 0 && has_congestion_data
       && baseline.metrics.max_utilization < 0.72f) {
