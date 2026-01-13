@@ -1290,7 +1290,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     wl_greedy_perturb *= taper;
   }
   if (!force_routability && light_congestion && wl_greedy_perturb > 0.0f) {
-    wl_greedy_perturb *= 0.85f;
+    wl_greedy_perturb *= 0.70f;
   }
   float wl_greedy_critical
       = std::clamp(wl_critical_pct - 0.8f, 3.5f, 10.0f);
@@ -1533,9 +1533,77 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                     openlane_halo,
                                     openlane_hotspot_ratio,
                                     openlane_hotspot_weight);
-            }
+           }
           };
     scenario_defs.push_back(wl_openlane);
+
+    const float prime_perturb
+        = std::clamp(wl_greedy_perturb * 0.35f, 0.0f, 0.08f);
+    const float prime_critical
+        = std::clamp(wl_greedy_critical - 0.3f, 3.2f, 8.5f);
+    const int prime_seed = snapshot.seed + 457;
+    const int prime_top_k = std::max(
+        1, std::min(2, max_routing_layer - min_routing_layer + 1));
+    const float prime_top_threshold
+        = std::clamp(0.60f + 0.06f * congestion_severity, 0.58f, 0.74f);
+    const float prime_top_base = std::clamp(
+        0.05f + 0.04f * (0.55f - congestion_severity), 0.04f, 0.10f);
+    const float prime_top_max = std::clamp(
+        1.08f + 0.05f * (0.55f - congestion_severity), 1.06f, 1.16f);
+    const float prime_top_guard
+        = std::clamp(0.78f - 0.10f * hotspot_bias, 0.70f, 0.84f);
+    const int prime_top_halo = hotspots.size() > 2 ? 2 : 1;
+    const float prime_hotspot_ratio
+        = std::clamp(0.994f - 0.03f * hotspot_bias, 0.97f, 0.995f);
+    const float prime_hotspot_weight
+        = std::clamp(0.05f + 0.08f * hotspot_bias, 0.04f, 0.12f);
+
+    ScenarioDefinition wl_prime;
+    wl_prime.name = "wl-direct-prime";
+    wl_prime.pre_init
+        = [this, prime_perturb, prime_seed, prime_critical]() {
+            grouter_->setCapacitiesPerturbationPercentage(prime_perturb);
+            grouter_->setPerturbationAmount(prime_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(prime_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(prime_critical);
+          };
+    wl_prime.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           prime_top_k,
+           prime_top_threshold,
+           prime_top_base,
+           prime_top_max,
+           prime_top_guard,
+           prime_top_halo,
+           prime_hotspot_ratio,
+           prime_hotspot_weight]() {
+            applyTopLayerBias(grouter_,
+                              normalized_rudy,
+                              hotspots,
+                              min_routing_layer,
+                              max_routing_layer,
+                              prime_top_k,
+                              prime_top_threshold,
+                              prime_top_base,
+                              prime_top_max,
+                              prime_top_guard,
+                              prime_top_halo);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    prime_top_halo,
+                                    prime_hotspot_ratio,
+                                    prime_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_prime);
 
     const float compact_perturb
         = std::clamp(0.015f + 0.12f * congestion_severity, 0.0f, 0.16f);
@@ -1772,6 +1840,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-l2", 137, 1.05f));
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s2", 109, 0.70f));
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s3", 177, 1.20f));
+    scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-zero", 251, 0.0f));
   } else if (allow_seed_sweep) {
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s1", 73, 0.8f));
     if (hotspots.size() <= 2 || congestion_severity > 0.78f) {
