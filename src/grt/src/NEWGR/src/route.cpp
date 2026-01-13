@@ -208,6 +208,7 @@ void FastRouteCore::newrouteL(const int netID,
 {
   FrNet* net = nets_[netID];
   const int8_t edgeCost = net->getEdgeCost();
+  const double via_penalty = viaPenalty();
 
   const int num_edges = sttrees_[netID].num_edges();
   auto& treeedges = sttrees_[netID].edges;
@@ -260,19 +261,19 @@ void FastRouteCore::newrouteL(const int netID,
           if (treenodes[n1].status == 0 || treenodes[n1].status == 3) {
             costL1 = costL2 = 0;
           } else if (treenodes[n1].status == 2) {
-            costL1 = via_cost_;
+            costL1 = via_penalty;
             costL2 = 0;
           } else if (treenodes[n1].status == 1) {
             costL1 = 0;
-            costL2 = via_cost_;
+            costL2 = via_penalty;
           } else if (verbose_) {
             logger_->warn(
                 GNR, 179, "Wrong node status {}.", treenodes[n1].status);
           }
           if (treenodes[n2].status == 2) {
-            costL2 += via_cost_;
+            costL2 += via_penalty;
           } else if (treenodes[n2].status == 1) {
-            costL1 += via_cost_;
+            costL1 += via_penalty;
           }
         } else {
           costL1 = costL2 = 0;
@@ -352,6 +353,7 @@ void FastRouteCore::newrouteZ_edge(const int netID, const int edgeID)
 {
   FrNet* net = nets_[netID];
   const int8_t edgeCost = net->getEdgeCost();
+  const double via_penalty = viaPenalty();
 
   // only route the non-degraded edges (len>0)
   if (sttrees_[netID].edges[edgeID].len <= 0) {
@@ -472,6 +474,7 @@ void FastRouteCore::newrouteZ(const int netID, const int threshold)
 {
   FrNet* net = nets_[netID];
   const int8_t edgeCost = net->getEdgeCost();
+  const double via_penalty = viaPenalty();
 
   const int num_terminals = sttrees_[netID].num_terminals;
   const int num_edges = sttrees_[netID].num_edges();
@@ -535,12 +538,12 @@ void FastRouteCore::newrouteZ(const int netID, const int threshold)
             cost_hvh_test_[i] = 0;
           }
           for (int i = 0; i < segHeight; i++) {
-            cost_vhv_[i] = via_cost_;
+            cost_vhv_[i] = via_penalty;
           }
         } else {
           for (int i = 0; i < segWidth; i++) {
-            cost_hvh_[i] = via_cost_;
-            cost_hvh_test_[i] = via_cost_;
+            cost_hvh_[i] = via_penalty;
+            cost_hvh_test_[i] = via_penalty;
           }
           for (int i = 0; i < segHeight; i++) {
             cost_vhv_[i] = 0;
@@ -549,13 +552,13 @@ void FastRouteCore::newrouteZ(const int netID, const int threshold)
 
         if (status2 == 2) {
           for (int i = 0; i < segHeight; i++) {
-            cost_vhv_[i] += via_cost_;
+            cost_vhv_[i] += via_penalty;
           }
 
         } else if (status2 == 1) {
           for (int i = 0; i < segWidth; i++) {
-            cost_hvh_[i] += via_cost_;
-            cost_hvh_test_[i] += via_cost_;
+            cost_hvh_[i] += via_penalty;
+            cost_hvh_test_[i] += via_penalty;
           }
         }
 
@@ -761,6 +764,7 @@ void FastRouteCore::spiralRoute(const int netID, const int edgeID)
 
   FrNet* net = nets_[netID];
   const int8_t edgeCost = net->getEdgeCost();
+  const double via_penalty = viaPenalty();
 
   TreeEdge* treeedge = &(treeedges[edgeID]);
   if (treeedge->len <= 0)  // only route the non-degraded edges (len>0)
@@ -829,18 +833,18 @@ void FastRouteCore::spiralRoute(const int netID, const int edgeID)
     if (treenodes[n1].status == 0 || treenodes[n1].status == 3) {
       costL1 = costL2 = 0;
     } else if (treenodes[n1].status == 2) {
-      costL1 = via_cost_;
+      costL1 = via_penalty;
       costL2 = 0;
     } else if (treenodes[n1].status == 1) {
       costL1 = 0;
-      costL2 = via_cost_;
+      costL2 = via_penalty;
     } else if (verbose_) {
       logger_->warn(GNR, 181, "Wrong node status {}.", treenodes[n1].status);
     }
     if (treenodes[n2].status == 2) {
-      costL2 += via_cost_;
+      costL2 += via_penalty;
     } else if (treenodes[n2].status == 1) {
-      costL1 += via_cost_;
+      costL1 += via_penalty;
     }
 
     for (int j = ymin; j < ymax; j++) {
@@ -1074,6 +1078,7 @@ void FastRouteCore::routeMonotonic(const int netID,
   const int16_t y2 = treenodes[n2].y;
 
   FrNet* net = nets_[netID];
+  const double via_penalty = viaPenalty();
 
   // ripup the original routing
   if (!newRipupCheck(treeedge, x1, y1, x2, y2, threshold, 0, netID, edgeID)) {
@@ -1172,16 +1177,16 @@ void FastRouteCore::routeMonotonic(const int netID,
         LH2 = false;
       }
 
-      if (tmp1 + tmp3 + via_cost_ < tmp) {
+      if (tmp1 + tmp3 + via_penalty < tmp) {
         LH1 = false;
         LH2 = false;
-        tmp = tmp1 + tmp3 + via_cost_;
+        tmp = tmp1 + tmp3 + via_penalty;
       }
 
-      if (tmp2 + tmp4 + via_cost_ < tmp) {
+      if (tmp2 + tmp4 + via_penalty < tmp) {
         LH1 = true;
         LH2 = true;
-        tmp = tmp2 + tmp4 + via_cost_;
+        tmp = tmp2 + tmp4 + via_penalty;
       }
 
       if (tmp < best) {

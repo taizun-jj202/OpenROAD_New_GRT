@@ -48,6 +48,7 @@ struct RouterSnapshot
   float critical_percentage = 0.0f;
   bool allow_congestion = false;
   int seed = 0;
+  float via_cost_scale = 1.0f;
 };
 
 struct ScenarioDefinition
@@ -1011,6 +1012,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = grouter_->fastroute_->getCriticalNetsPercentage();
     snapshot.allow_congestion = grouter_->allow_congestion_;
     snapshot.seed = grouter_->seed_;
+    snapshot.via_cost_scale = 1.0f;
     return snapshot;
   };
 
@@ -1191,6 +1193,26 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 baseline.metrics.overflow,
                 light_congestion);
 
+  float wl_via_scale = 1.0f;
+  if (!force_routability) {
+    float base_via_scale = 0.72f + 0.18f * congestion_severity
+                           - 0.10f * hotspot_bias;
+    if (relaxed_utilization) {
+      base_via_scale -= 0.04f;
+    }
+    if (light_congestion) {
+      base_via_scale -= 0.05f;
+    }
+    wl_via_scale = std::clamp(base_via_scale, 0.58f, 1.0f);
+  } else {
+    const float base_via_scale
+        = 1.0f + 0.10f * congestion_severity + 0.06f * hotspot_bias;
+    wl_via_scale = std::clamp(base_via_scale, 1.0f, 1.18f);
+  }
+  const auto apply_wl_via_scale = [wl_via_scale]() {
+    static_cast<void>(wl_via_scale);
+  };
+
   auto make_soft_config
       = [&](const std::string& name,
             float min_base,
@@ -1258,12 +1280,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   ScenarioDefinition wl_variation;
   wl_variation.name = "wl-variation";
   wl_variation.pre_init
-      = [this, wl_perturb_pct, wl_seed, wl_critical_pct]() {
+      = [this,
+         wl_perturb_pct,
+         wl_seed,
+         wl_critical_pct,
+         apply_wl_via_scale]() {
           grouter_->setCapacitiesPerturbationPercentage(wl_perturb_pct);
           grouter_->setPerturbationAmount(wl_perturb_pct > 0.0f ? 1 : 0);
           grouter_->setSeed(wl_seed);
           grouter_->setAllowCongestion(false);
           grouter_->fastroute_->setCriticalNetsPercentage(wl_critical_pct);
+          apply_wl_via_scale();
         };
   wl_variation.post_init
       = [this, &hotspots, min_routing_layer, max_routing_layer]() {
@@ -1290,7 +1317,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     wl_greedy_perturb *= taper;
   }
   if (!force_routability && light_congestion && wl_greedy_perturb > 0.0f) {
-    wl_greedy_perturb *= 0.70f;
+    wl_greedy_perturb *= 0.85f;
   }
   float wl_greedy_critical
       = std::clamp(wl_critical_pct - 0.8f, 3.5f, 10.0f);
@@ -1301,12 +1328,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   ScenarioDefinition wl_greedy;
   wl_greedy.name = "wl-greedy";
   wl_greedy.pre_init
-      = [this, wl_greedy_perturb, wl_greedy_seed, wl_greedy_critical]() {
+      = [this,
+         wl_greedy_perturb,
+         wl_greedy_seed,
+         wl_greedy_critical,
+         apply_wl_via_scale]() {
           grouter_->setCapacitiesPerturbationPercentage(wl_greedy_perturb);
           grouter_->setPerturbationAmount(wl_greedy_perturb > 0.0f ? 1 : 0);
           grouter_->setSeed(wl_greedy_seed);
           grouter_->setAllowCongestion(false);
           grouter_->fastroute_->setCriticalNetsPercentage(wl_greedy_critical);
+          apply_wl_via_scale();
         };
   wl_greedy.post_init = []() {};
   scenario_defs.push_back(wl_greedy);
@@ -1318,13 +1350,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   ScenarioDefinition wl_refine;
   wl_refine.name = "wl-refine";
   wl_refine.pre_init
-      = [this, wl_refine_perturb, wl_refine_seed, wl_refine_critical]() {
+      = [this,
+         wl_refine_perturb,
+         wl_refine_seed,
+         wl_refine_critical,
+         apply_wl_via_scale]() {
           const float perturb = std::clamp(wl_refine_perturb, 0.0f, 0.40f);
           grouter_->setCapacitiesPerturbationPercentage(perturb);
           grouter_->setPerturbationAmount(perturb > 0.0f ? 1 : 0);
           grouter_->setSeed(wl_refine_seed);
           grouter_->setAllowCongestion(false);
           grouter_->fastroute_->setCriticalNetsPercentage(wl_refine_critical);
+          apply_wl_via_scale();
         };
   wl_refine.post_init
       = [this, &hotspots, min_routing_layer, max_routing_layer]() {
@@ -1377,13 +1414,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition wl_directlite;
     wl_directlite.name = "wl-direct-lite";
     wl_directlite.pre_init
-        = [this, directlite_perturb, directlite_seed, directlite_critical]() {
+        = [this,
+           directlite_perturb,
+           directlite_seed,
+           directlite_critical,
+           apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(directlite_perturb);
             grouter_->setPerturbationAmount(directlite_perturb > 0.0f ? 1 : 0);
             grouter_->setSeed(directlite_seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(
                 directlite_critical);
+            apply_wl_via_scale();
           };
     wl_directlite.post_init
         = [this,
@@ -1476,12 +1518,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition wl_openlane;
     wl_openlane.name = "wl-openlane";
     wl_openlane.pre_init
-        = [this, openlane_perturb, openlane_seed, openlane_critical]() {
+        = [this,
+           openlane_perturb,
+           openlane_seed,
+           openlane_critical,
+           apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(openlane_perturb);
             grouter_->setPerturbationAmount(openlane_perturb > 0.0f ? 1 : 0);
             grouter_->setSeed(openlane_seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(openlane_critical);
+            apply_wl_via_scale();
           };
     wl_openlane.post_init
         = [this,
@@ -1561,12 +1608,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition wl_prime;
     wl_prime.name = "wl-direct-prime";
     wl_prime.pre_init
-        = [this, prime_perturb, prime_seed, prime_critical]() {
+        = [this,
+           prime_perturb,
+           prime_seed,
+           prime_critical,
+           apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(prime_perturb);
             grouter_->setPerturbationAmount(prime_perturb > 0.0f ? 1 : 0);
             grouter_->setSeed(prime_seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(prime_critical);
+            apply_wl_via_scale();
           };
     wl_prime.post_init
         = [this,
@@ -1651,12 +1703,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition wl_compact;
     wl_compact.name = "wl-compact";
     wl_compact.pre_init
-        = [this, compact_perturb, compact_seed, compact_critical]() {
+        = [this,
+           compact_perturb,
+           compact_seed,
+           compact_critical,
+           apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(compact_perturb);
             grouter_->setPerturbationAmount(compact_perturb > 0.0f ? 1 : 0);
             grouter_->setSeed(compact_seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(compact_critical);
+            apply_wl_via_scale();
           };
     wl_compact.post_init
         = [this,
@@ -1765,12 +1822,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition wl_direct;
     wl_direct.name = "wl-direct";
     wl_direct.pre_init
-        = [this, direct_perturb, direct_seed, direct_critical]() {
+        = [this,
+           direct_perturb,
+           direct_seed,
+           direct_critical,
+           apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(direct_perturb);
             grouter_->setPerturbationAmount(direct_perturb > 0.0f ? 1 : 0);
             grouter_->setSeed(direct_seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(direct_critical);
+            apply_wl_via_scale();
           };
     wl_direct.post_init
         = [this,
@@ -1815,7 +1877,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   auto make_wl_greedy_seed
-      = [this, wl_greedy_perturb, wl_greedy_critical, &snapshot](
+      = [this,
+         wl_greedy_perturb,
+         wl_greedy_critical,
+         &snapshot,
+         apply_wl_via_scale](
             const std::string& name, int seed_offset, float perturb_scale) {
           ScenarioDefinition def;
           def.name = name;
@@ -1823,13 +1889,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               = std::clamp(wl_greedy_perturb * perturb_scale, 0.0f, 0.60f);
           const int seed = snapshot.seed + seed_offset;
           def.pre_init
-              = [this, perturb, seed, wl_greedy_critical]() {
+              = [this, perturb, seed, wl_greedy_critical, apply_wl_via_scale]() {
                   grouter_->setCapacitiesPerturbationPercentage(perturb);
                   grouter_->setPerturbationAmount(perturb > 0.0f ? 1 : 0);
                   grouter_->setSeed(seed);
                   grouter_->setAllowCongestion(false);
                   grouter_->fastroute_->setCriticalNetsPercentage(
                       wl_greedy_critical);
+                  apply_wl_via_scale();
                 };
           def.post_init = []() {};
           return def;
@@ -1885,12 +1952,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition wl_polish;
     wl_polish.name = "wl-polish-lite";
     wl_polish.pre_init
-        = [this, polish_perturb, polish_seed, polish_critical]() {
+        = [this,
+           polish_perturb,
+           polish_seed,
+           polish_critical,
+           apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(polish_perturb);
             grouter_->setPerturbationAmount(polish_perturb > 0.0f ? 1 : 0);
             grouter_->setSeed(polish_seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(polish_critical);
+            apply_wl_via_scale();
           };
     wl_polish.post_init
         = [this,
@@ -1963,13 +2035,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition wl_streamline;
     wl_streamline.name = "wl-streamline";
     wl_streamline.pre_init
-        = [this, streamline_perturb, streamline_seed, streamline_critical]() {
+        = [this,
+           streamline_perturb,
+           streamline_seed,
+           streamline_critical,
+           apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(streamline_perturb);
             grouter_->setPerturbationAmount(streamline_perturb > 0.0f ? 1 : 0);
             grouter_->setSeed(streamline_seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(
                 streamline_critical);
+            apply_wl_via_scale();
           };
     wl_streamline.post_init
         = [this,
@@ -2039,12 +2116,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition wl_toplane;
     wl_toplane.name = "wl-toplane";
     wl_toplane.pre_init
-        = [this, top_perturb, top_seed, top_critical]() {
+        = [this,
+           top_perturb,
+           top_seed,
+           top_critical,
+           apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(top_perturb);
             grouter_->setPerturbationAmount(top_perturb > 0.0f ? 1 : 0);
             grouter_->setSeed(top_seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(top_critical);
+            apply_wl_via_scale();
           };
     wl_toplane.post_init
         = [this,
@@ -2109,12 +2191,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition wl_coolcorr;
     wl_coolcorr.name = "wl-coolcorr";
     wl_coolcorr.pre_init
-        = [this, cool_perturb, cool_seed, cool_critical]() {
+        = [this,
+           cool_perturb,
+           cool_seed,
+           cool_critical,
+           apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(cool_perturb);
             grouter_->setPerturbationAmount(cool_perturb > 0.0f ? 1 : 0);
             grouter_->setSeed(cool_seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(cool_critical);
+            apply_wl_via_scale();
           };
     wl_coolcorr.post_init
         = [this,
@@ -2203,12 +2290,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition wl_smooth;
     wl_smooth.name = "wl-smooth";
     wl_smooth.pre_init
-        = [this, smooth_perturb, smooth_seed, smooth_critical]() {
+        = [this,
+           smooth_perturb,
+           smooth_seed,
+           smooth_critical,
+           apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(smooth_perturb);
             grouter_->setPerturbationAmount(smooth_perturb > 0.0f ? 1 : 0);
             grouter_->setSeed(smooth_seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(smooth_critical);
+            apply_wl_via_scale();
           };
     wl_smooth.post_init
         = [this,
@@ -2298,13 +2390,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     ScenarioDefinition wl_stability;
     wl_stability.name = "wl-stability";
-    wl_stability.pre_init = [this, stability_perturb, stability_seed, stability_critical]() {
-      grouter_->setCapacitiesPerturbationPercentage(stability_perturb);
-      grouter_->setPerturbationAmount(stability_perturb > 0.0f ? 1 : 0);
-      grouter_->setSeed(stability_seed);
-      grouter_->setAllowCongestion(false);
-      grouter_->fastroute_->setCriticalNetsPercentage(stability_critical);
-    };
+    wl_stability.pre_init
+        = [this,
+           stability_perturb,
+           stability_seed,
+           stability_critical,
+           apply_wl_via_scale]() {
+            grouter_->setCapacitiesPerturbationPercentage(stability_perturb);
+            grouter_->setPerturbationAmount(stability_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(stability_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(stability_critical);
+            apply_wl_via_scale();
+          };
     wl_stability.post_init
         = [this,
            &normalized_rudy,
@@ -2566,12 +2664,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition wl_coolboost;
     wl_coolboost.name = "wl-coolboost";
     wl_coolboost.pre_init
-        = [this, perturb_pct, seed, critical_pct]() {
+        = [this, perturb_pct, seed, critical_pct, apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(perturb_pct);
             grouter_->setPerturbationAmount(perturb_pct > 0.0f ? 1 : 0);
             grouter_->setSeed(seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(critical_pct);
+            apply_wl_via_scale();
           };
     wl_coolboost.post_init
         = [this,

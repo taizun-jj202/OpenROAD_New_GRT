@@ -671,7 +671,7 @@ float FastRouteCore::getMazeRouteCost3D(const int net_id,
 
   if (is_via) {
     // Via transition cost
-    base_cost = via_cost_;
+    base_cost = static_cast<float>(viaPenalty());
     const int via_resistance = getViaResistance(from_layer, to_layer);
 
     return base_cost + via_resistance;

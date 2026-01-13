@@ -104,6 +104,8 @@ class FastRouteCore
   void setLowerLeft(int x, int y);
   void setTileSize(int size);
   void setResistanceAware(bool resistance_aware);
+  void setViaCostScale(float scale);
+  float getViaCostScale() const { return via_cost_scale_; }
   void addLayerDirection(int layer_idx, const odb::dbTechLayerDir& direction);
   FrNet* addNet(odb::dbNet* db_net,
                 bool is_clock,
@@ -283,6 +285,8 @@ class FastRouteCore
   void updateSlacks(float percentage = 0.7);
   void preProcessTechLayers();
   odb::dbTechLayer* getTechLayer(int layer, bool is_via);
+  int scaledViaCost(int base) const;
+  double viaPenalty() const;
 
   // maze functions
   // Maze-routing in different orders
@@ -632,6 +636,7 @@ class FastRouteCore
   bool verbose_;
   float critical_nets_percentage_;
   int via_cost_;
+  float via_cost_scale_;
   int layer_assign_iter_snapshot_{0};
   int layer_assign_total_iters_snapshot_{1};
   int mazeedge_threshold_;
