@@ -1346,6 +1346,29 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   if (relaxed_utilization) {
     wl_greedy_critical = std::clamp(wl_greedy_critical + 0.6f, 3.8f, 11.0f);
   }
+  const int wl_greedy_top_k = std::max(
+      1, std::min(2, max_routing_layer - min_routing_layer + 1));
+  const float wl_greedy_top_threshold = std::clamp(
+      0.56f + 0.05f * (congestion_severity - 0.50f), 0.54f, 0.72f);
+  const float wl_greedy_top_base = std::clamp(
+      0.07f + 0.05f * (0.65f - congestion_severity), 0.05f, 0.12f);
+  const float wl_greedy_top_max = std::clamp(
+      1.12f + 0.06f * (0.55f - congestion_severity), 1.08f, 1.20f);
+  const float wl_greedy_top_guard
+      = std::clamp(0.76f - 0.16f * hotspot_bias, 0.64f, 0.84f);
+  const int wl_greedy_top_halo = hotspots.size() > 1 ? 2 : 1;
+  const float wl_greedy_cool_threshold = std::clamp(
+      wl_greedy_top_threshold * 0.82f, 0.40f, 0.62f);
+  const float wl_greedy_cool_base = std::clamp(
+      0.06f + 0.04f * (0.60f - congestion_severity), 0.05f, 0.10f);
+  const float wl_greedy_cool_max = std::clamp(
+      1.10f + 0.05f * (0.55f - congestion_severity), 1.08f, 1.18f);
+  const float wl_greedy_cool_decay = std::clamp(
+      0.05f + 0.06f * hotspot_bias, 0.04f, 0.12f);
+  const float wl_greedy_hotspot_ratio
+      = std::clamp(0.995f - 0.04f * hotspot_bias, 0.97f, 0.995f);
+  const float wl_greedy_hotspot_weight
+      = std::clamp(0.06f + 0.12f * hotspot_bias, 0.06f, 0.14f);
   const int wl_greedy_seed = snapshot.seed + 37;
   ScenarioDefinition wl_greedy;
   wl_greedy.name = "wl-greedy";
@@ -1362,7 +1385,58 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           grouter_->fastroute_->setCriticalNetsPercentage(wl_greedy_critical);
           apply_wl_via_scale();
         };
-  wl_greedy.post_init = []() {};
+  wl_greedy.post_init
+      = [this,
+         &normalized_rudy,
+         &hotspots,
+         min_routing_layer,
+         max_routing_layer,
+         wl_greedy_top_k,
+         wl_greedy_top_threshold,
+         wl_greedy_top_base,
+         wl_greedy_top_max,
+         wl_greedy_top_guard,
+         wl_greedy_top_halo,
+         wl_greedy_cool_threshold,
+         wl_greedy_cool_base,
+         wl_greedy_cool_max,
+         wl_greedy_cool_decay,
+         wl_greedy_hotspot_ratio,
+         wl_greedy_hotspot_weight]() {
+          if (!normalized_rudy.empty()) {
+            applyTopLayerBias(grouter_,
+                              normalized_rudy,
+                              hotspots,
+                              min_routing_layer,
+                              max_routing_layer,
+                              wl_greedy_top_k,
+                              wl_greedy_top_threshold,
+                              wl_greedy_top_base,
+                              wl_greedy_top_max,
+                              wl_greedy_top_guard,
+                              wl_greedy_top_halo);
+            applyCoolCapacityBoost(grouter_,
+                                   normalized_rudy,
+                                   hotspots,
+                                   min_routing_layer,
+                                   max_routing_layer,
+                                   wl_greedy_cool_threshold,
+                                   wl_greedy_cool_base,
+                                   wl_greedy_cool_max,
+                                   wl_greedy_cool_decay,
+                                   wl_greedy_top_halo,
+                                   wl_greedy_top_guard);
+          }
+          if (!hotspots.empty()) {
+            applyHotspotPenalties(grouter_,
+                                  hotspots,
+                                  min_routing_layer,
+                                  max_routing_layer,
+                                  wl_greedy_top_halo,
+                                  wl_greedy_hotspot_ratio,
+                                  wl_greedy_hotspot_weight);
+          }
+        };
   scenario_defs.push_back(wl_greedy);
 
   const float wl_refine_perturb = wl_greedy_perturb * 0.6f;
