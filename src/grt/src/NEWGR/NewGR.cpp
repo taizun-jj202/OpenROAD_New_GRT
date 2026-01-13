@@ -1246,8 +1246,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   const float wl_critical_pct
       = std::clamp(5.5f + 3.5f * (0.6f - congestion_severity), 4.5f, 11.0f);
-  const float wl_perturb_pct
+  float wl_perturb_pct
       = congestion_severity > 0.45f ? 0.22f : 0.0f;
+  if (!force_routability && wl_perturb_pct > 0.0f
+      && congestion_severity < 0.70f) {
+    const float taper = std::clamp(
+        0.75f + 0.25f * (congestion_severity / 0.70f), 0.70f, 0.98f);
+    wl_perturb_pct *= taper;
+  }
   const int wl_seed = snapshot.seed + 5;
   ScenarioDefinition wl_variation;
   wl_variation.name = "wl-variation";
@@ -1276,6 +1282,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   float wl_greedy_perturb = congestion_severity > 0.30f ? 0.12f : 0.0f;
   if (relaxed_utilization && wl_greedy_perturb > 0.0f) {
     wl_greedy_perturb *= 0.55f;
+  }
+  if (!force_routability && wl_greedy_perturb > 0.0f
+      && congestion_severity < 0.70f) {
+    const float taper = std::clamp(
+        0.58f + 0.42f * (congestion_severity / 0.70f), 0.58f, 1.0f);
+    wl_greedy_perturb *= taper;
   }
   float wl_greedy_critical
       = std::clamp(wl_critical_pct - 0.8f, 3.5f, 10.0f);
@@ -2624,8 +2636,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_primary = 0.00045;    // ~0.045% difference
-    const double wl_tie = 0.00020;        // ~0.02% difference
+    const double wl_primary = 0.00055;    // ~0.055% difference
+    const double wl_tie = 0.00025;        // ~0.025% difference
 
     const double util_gap
         = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
@@ -2645,13 +2657,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       return wl_a < wl_b;
     }
 
-    if (wl_rel < 0.0030 && std::abs(util_gap) > 0.04) {
+    if (wl_rel < 0.0025 && std::abs(util_gap) > 0.025) {
       return util_gap < 0.0;
     }
 
     if (wl_rel > wl_tie) {
       if (lhs.metrics.via_count != rhs.metrics.via_count
-          && std::abs(util_gap) < 0.02) {
+          && std::abs(util_gap) < 0.03) {
         if (wl_a <= wl_b && lhs.metrics.via_count < rhs.metrics.via_count) {
           return true;
         }
