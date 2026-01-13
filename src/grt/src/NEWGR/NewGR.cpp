@@ -1186,6 +1186,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                 && congestion_severity > 0.38f;
   const bool allow_light_seed = !force_routability && light_congestion
                                 && congestion_severity > 0.34f;
+  const bool ultra_light = light_congestion
+                           && baseline.metrics.overflow == 0
+                           && hotspots.size() <= 2
+                           && rudy_stats.p80 < 0.90f
+                           && baseline.metrics.max_utilization < 0.70f;
 
   logger_->info(GNR,
                 6008,
@@ -1491,6 +1496,115 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           }
         };
   scenario_defs.push_back(wl_greedy);
+
+  if (ultra_light) {
+    const float feather_perturb
+        = std::clamp(wl_greedy_perturb * 0.65f, 0.0f, 0.08f);
+    const float feather_critical
+        = std::clamp(wl_greedy_critical - 0.5f, 3.2f, 8.5f);
+    const int feather_seed = snapshot.seed + 977;
+    const float feather_via_scale
+        = std::clamp(wl_via_scale * 0.88f, 0.36f, 0.92f);
+    const int feather_top_k = std::max(
+        1, std::min(2, max_routing_layer - min_routing_layer + 1));
+    const float feather_top_threshold
+        = std::clamp(0.54f + 0.04f * (congestion_severity - 0.40f),
+                     0.50f,
+                     0.66f);
+    const float feather_top_base = std::clamp(
+        0.05f + 0.03f * (0.60f - congestion_severity), 0.04f, 0.09f);
+    const float feather_top_max = std::clamp(
+        1.10f + 0.04f * (0.55f - congestion_severity), 1.06f, 1.16f);
+    const float feather_top_guard
+        = std::clamp(0.82f - 0.10f * hotspot_bias, 0.70f, 0.90f);
+    const int feather_top_halo = 1;
+    const float feather_cool_threshold
+        = std::clamp(feather_top_threshold * 0.78f, 0.46f, 0.64f);
+    const float feather_cool_base = std::clamp(
+        0.05f + 0.03f * (0.60f - congestion_severity), 0.04f, 0.09f);
+    const float feather_cool_max = std::clamp(
+        1.08f + 0.04f * (0.55f - congestion_severity), 1.06f, 1.14f);
+    const float feather_cool_decay
+        = std::clamp(0.04f + 0.05f * hotspot_bias, 0.03f, 0.10f);
+    const float feather_hotspot_guard
+        = std::clamp(0.82f - 0.10f * hotspot_bias, 0.72f, 0.90f);
+    const float feather_hotspot_ratio
+        = std::clamp(0.996f - 0.02f * hotspot_bias, 0.98f, 0.998f);
+    const float feather_hotspot_weight
+        = std::clamp(0.04f + 0.06f * hotspot_bias, 0.04f, 0.08f);
+
+    ScenarioDefinition wl_feather;
+    wl_feather.name = "wl-feather";
+    wl_feather.pre_init
+        = [this,
+           feather_perturb,
+           feather_seed,
+           feather_critical,
+           feather_via_scale]() {
+            grouter_->setCapacitiesPerturbationPercentage(feather_perturb);
+            grouter_->setPerturbationAmount(feather_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(feather_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(feather_critical);
+            if (grouter_->fastroute_ != nullptr) {
+              grouter_->fastroute_->setViaCostScale(feather_via_scale);
+            }
+          };
+    wl_feather.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           feather_top_k,
+           feather_top_threshold,
+           feather_top_base,
+           feather_top_max,
+           feather_top_guard,
+           feather_top_halo,
+           feather_cool_threshold,
+           feather_cool_base,
+           feather_cool_max,
+           feather_cool_decay,
+           feather_hotspot_guard,
+           feather_hotspot_ratio,
+           feather_hotspot_weight]() {
+            if (!normalized_rudy.empty()) {
+              applyTopLayerBias(grouter_,
+                                normalized_rudy,
+                                hotspots,
+                                min_routing_layer,
+                                max_routing_layer,
+                                feather_top_k,
+                                feather_top_threshold,
+                                feather_top_base,
+                                feather_top_max,
+                                feather_top_guard,
+                                feather_top_halo);
+              applyCoolCapacityBoost(grouter_,
+                                     normalized_rudy,
+                                     hotspots,
+                                     min_routing_layer,
+                                     max_routing_layer,
+                                     feather_cool_threshold,
+                                     feather_cool_base,
+                                     feather_cool_max,
+                                     feather_cool_decay,
+                                     feather_top_halo,
+                                     feather_hotspot_guard);
+            }
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    feather_top_halo,
+                                    feather_hotspot_ratio,
+                                    feather_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_feather);
+  }
 
   const float wl_refine_perturb = wl_greedy_perturb * 0.6f;
   const float wl_refine_critical
@@ -3738,6 +3852,28 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                        scenario_defs.end(),
                        [&](const ScenarioDefinition& def) {
                          return skip_names.find(def.name) != skip_names.end();
+                       }),
+        scenario_defs.end());
+  }
+
+  if (ultra_light) {
+    static const std::unordered_set<std::string> ultra_skip{
+        "via-trim",
+        "wl-compact",
+        "wl-squeeze",
+        "wl-smooth",
+        "wl-stability",
+        "wl-coolcorr",
+        "wl-coolboost",
+        "contour-lite",
+        "cool-corridors",
+        "focused-soft",
+        "soft-relief"};
+    scenario_defs.erase(
+        std::remove_if(scenario_defs.begin(),
+                       scenario_defs.end(),
+                       [&](const ScenarioDefinition& def) {
+                         return ultra_skip.find(def.name) != ultra_skip.end();
                        }),
         scenario_defs.end());
   }
