@@ -2506,6 +2506,120 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   if (baseline.metrics.overflow == 0 && has_congestion_data) {
+    const float squeeze_perturb = std::clamp(
+        0.02f + 0.12f * (0.55f - congestion_severity), 0.0f, 0.14f);
+    const float squeeze_critical = std::clamp(
+        wl_critical_pct + 0.8f * (0.60f - congestion_severity), 4.0f, 11.0f);
+    const int squeeze_seed = snapshot.seed + 709;
+    const float squeeze_via_scale = std::clamp(
+        wl_via_scale * (0.82f + 0.10f * (0.65f - congestion_severity)),
+        0.52f,
+        0.98f);
+    const float squeeze_cool_threshold = std::clamp(
+        0.55f + 0.08f * (0.65f - congestion_severity), 0.50f, 0.70f);
+    const float squeeze_base_boost
+        = std::clamp(0.08f + 0.05f * (0.60f - congestion_severity),
+                     0.06f,
+                     0.14f);
+    const float squeeze_max_boost
+        = std::clamp(1.15f + 0.06f * (0.55f - congestion_severity),
+                     1.10f,
+                     1.24f);
+    const float squeeze_layer_decay
+        = std::clamp(0.05f + 0.06f * hotspot_bias, 0.04f, 0.14f);
+    const int squeeze_halo = hotspots.size() > 2 ? 2 : 1;
+    const float squeeze_hotspot_guard
+        = std::clamp(0.70f - 0.14f * hotspot_bias, 0.60f, 0.78f);
+    const int squeeze_top_k = std::max(
+        2, std::min(3, max_routing_layer - min_routing_layer + 1));
+    const float squeeze_top_threshold
+        = std::clamp(0.60f + 0.10f * congestion_severity, 0.58f, 0.78f);
+    const float squeeze_top_base = std::clamp(
+        0.09f + 0.05f * (0.58f - congestion_severity), 0.08f, 0.16f);
+    const float squeeze_top_max = std::clamp(
+        1.16f + 0.06f * (0.55f - congestion_severity), 1.12f, 1.28f);
+    const float squeeze_top_guard
+        = std::clamp(0.74f - 0.18f * hotspot_bias, 0.62f, 0.84f);
+    const int squeeze_top_halo = hotspots.size() > 1 ? 2 : 1;
+    const float squeeze_hotspot_ratio
+        = std::clamp(0.994f - 0.03f * hotspot_bias, 0.97f, 0.995f);
+    const float squeeze_hotspot_weight
+        = std::clamp(0.06f + 0.10f * hotspot_bias, 0.05f, 0.14f);
+
+    ScenarioDefinition wl_squeeze;
+    wl_squeeze.name = "wl-squeeze";
+    wl_squeeze.pre_init
+        = [this,
+           squeeze_perturb,
+           squeeze_seed,
+           squeeze_critical,
+           squeeze_via_scale]() {
+            const float perturb = std::clamp(squeeze_perturb, 0.0f, 0.20f);
+            grouter_->setCapacitiesPerturbationPercentage(perturb);
+            grouter_->setPerturbationAmount(perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(squeeze_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(squeeze_critical);
+            if (grouter_->fastroute_ != nullptr) {
+              grouter_->fastroute_->setViaCostScale(squeeze_via_scale);
+            }
+          };
+    wl_squeeze.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           squeeze_cool_threshold,
+           squeeze_base_boost,
+           squeeze_max_boost,
+           squeeze_layer_decay,
+           squeeze_halo,
+           squeeze_hotspot_guard,
+           squeeze_top_k,
+           squeeze_top_threshold,
+           squeeze_top_base,
+           squeeze_top_max,
+           squeeze_top_guard,
+           squeeze_top_halo,
+           squeeze_hotspot_ratio,
+           squeeze_hotspot_weight]() {
+            applyCoolCapacityBoost(grouter_,
+                                   normalized_rudy,
+                                   hotspots,
+                                   min_routing_layer,
+                                   max_routing_layer,
+                                   squeeze_cool_threshold,
+                                   squeeze_base_boost,
+                                   squeeze_max_boost,
+                                   squeeze_layer_decay,
+                                   squeeze_halo,
+                                   squeeze_hotspot_guard);
+            applyTopLayerBias(grouter_,
+                              normalized_rudy,
+                              hotspots,
+                              min_routing_layer,
+                              max_routing_layer,
+                              squeeze_top_k,
+                              squeeze_top_threshold,
+                              squeeze_top_base,
+                              squeeze_top_max,
+                              squeeze_top_guard,
+                              squeeze_top_halo);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    squeeze_halo,
+                                    squeeze_hotspot_ratio,
+                                    squeeze_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_squeeze);
+  }
+
+  if (baseline.metrics.overflow == 0 && has_congestion_data) {
     const float cool_threshold = std::clamp(
         0.42f + 0.10f * (0.65f - congestion_severity), 0.32f, 0.52f);
     const float cool_base_boost = std::clamp(
@@ -3150,16 +3264,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   if (light_congestion && baseline.metrics.overflow == 0) {
     static const std::unordered_set<std::string> skip_names{
-        "wl-compact",
-        "wl-direct",
-        "wl-smooth",
-        "wl-stability",
         "contour-lite",
         "cool-corridors",
         "wl-coolboost",
         "focused-soft",
-        "wl-coolcorr",
-        "wl-lean"};
+        "wl-coolcorr"};
     scenario_defs.erase(
         std::remove_if(scenario_defs.begin(),
                        scenario_defs.end(),
@@ -3189,9 +3298,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     const double util_gap
         = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
+    const int via_delta = lhs.metrics.via_count - rhs.metrics.via_count;
+    const double reserve_gap
+        = lhs.metrics.reserve_score - rhs.metrics.reserve_score;
 
     // Prefer shorter wirelength while allowing a modest utilization cushion.
     if (wl_a != wl_b && wl_rel > wl_primary) {
+      if (wl_rel < 0.0022 && std::abs(util_gap) < 0.04
+          && std::abs(via_delta) > 40) {
+        return via_delta < 0;
+      }
       if (wl_a < wl_b
           && lhs.metrics.max_utilization
                  <= rhs.metrics.max_utilization + 0.08) {
@@ -3207,6 +3323,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     if (wl_rel < 0.0025 && std::abs(util_gap) > 0.025) {
       return util_gap < 0.0;
+    }
+
+    if (wl_rel < 0.0022 && std::abs(reserve_gap) > 0.05
+        && std::abs(util_gap) < 0.05) {
+      return reserve_gap > 0.0;
     }
 
     if (wl_rel > wl_tie) {
