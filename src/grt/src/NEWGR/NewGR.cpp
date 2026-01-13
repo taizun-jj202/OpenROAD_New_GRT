@@ -1999,21 +1999,35 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 final_result.metrics.overflow,
                 final_result.metrics.max_utilization);
 
-  PatchSummary patch_summary = applyHotspotPatches(
-      final_result.routes, hotspots, grouter_->grid(), min_routing_layer, max_routing_layer);
-  if (patch_summary.segments_added > 0) {
-    RouteMetrics patched_metrics = compute_metrics(final_result.routes);
-    logger_->info(
-        GNR,
-        6010,
-        "NEWGR applied {} hotspot patches on {} nets. "
-        "Patched wirelength {:.0f} um, vias {}, overflow {}, max util {:.2f}",
-        patch_summary.segments_added,
-        patch_summary.nets_touched,
-        patched_metrics.wirelength_um,
-        patched_metrics.via_count,
-        patched_metrics.overflow,
-        patched_metrics.max_utilization);
+  const bool dense_hotspots = hotspots.size() > 4;
+  const bool heavy_congestion = congestion_severity > 0.70f;
+  const bool near_overflow = final_result.metrics.max_utilization > 0.85;
+  const bool overflowing = final_result.metrics.overflow > 0;
+  const bool should_patch
+      = overflowing || near_overflow
+        || (dense_hotspots && congestion_severity > 0.55f) || heavy_congestion;
+
+  if (should_patch) {
+    PatchSummary patch_summary
+        = applyHotspotPatches(final_result.routes,
+                              hotspots,
+                              grouter_->grid(),
+                              min_routing_layer,
+                              max_routing_layer);
+    if (patch_summary.segments_added > 0) {
+      RouteMetrics patched_metrics = compute_metrics(final_result.routes);
+      logger_->info(
+          GNR,
+          6010,
+          "NEWGR applied {} hotspot patches on {} nets. "
+          "Patched wirelength {:.0f} um, vias {}, overflow {}, max util {:.2f}",
+          patch_summary.segments_added,
+          patch_summary.nets_touched,
+          patched_metrics.wirelength_um,
+          patched_metrics.via_count,
+          patched_metrics.overflow,
+          patched_metrics.max_utilization);
+    }
   }
 
   return std::move(final_result.routes);
