@@ -1220,6 +1220,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   };
 
+  const float via_trim_scale_base
+      = std::max(wl_via_scale * 1.05f,
+                 0.98f + 0.30f * std::max(0.0f, 0.70f - congestion_severity)
+                     - 0.10f * hotspot_bias);
+  const float via_trim_scale = std::clamp(
+      via_trim_scale_base,
+      force_routability ? 0.95f : 1.02f,
+      force_routability ? 1.32f : 1.28f);
+  const auto apply_via_trim_scale = [this, via_trim_scale]() {
+    if (grouter_->fastroute_ != nullptr) {
+      grouter_->fastroute_->setViaCostScale(via_trim_scale);
+    }
+  };
+
   auto make_soft_config
       = [&](const std::string& name,
             float min_base,
@@ -2130,6 +2144,116 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             }
           };
     scenario_defs.push_back(wl_compact);
+  }
+
+  if (baseline.metrics.overflow == 0 && has_congestion_data
+      && baseline.metrics.max_utilization < 0.82f) {
+    const float via_trim_perturb = std::clamp(
+        0.01f + 0.10f * congestion_severity + 0.05f * hotspot_bias,
+        0.0f,
+        0.20f);
+    const float via_trim_critical = std::clamp(
+        5.4f + 2.2f * (0.60f - congestion_severity), 4.0f, 10.5f);
+    const int via_trim_seed = snapshot.seed + 823;
+    const float via_trim_min_base = std::clamp(
+        0.965f - 0.01f * hotspot_bias, 0.95f, 0.975f);
+    const float via_trim_max_base = std::clamp(
+        0.995f - 0.01f * congestion_severity,
+        via_trim_min_base + 0.01f,
+        0.997f);
+    const float via_trim_slope = 1.3f + 0.5f * congestion_severity;
+    const float via_trim_midpoint = 0.48f;
+    const float via_trim_threshold = std::clamp(
+        0.60f + 0.06f * congestion_severity, 0.58f, 0.72f);
+    const float via_trim_min_ratio = std::clamp(
+        0.97f - 0.015f * hotspot_bias, 0.95f, 0.985f);
+    const float via_trim_hotspot_push
+        = std::clamp(0.06f + 0.08f * hotspot_bias, 0.05f, 0.16f);
+    const int via_trim_halo = hotspots.size() > 3 ? 2 : 1;
+    const float via_trim_cool_threshold
+        = std::clamp(via_trim_threshold * 0.70f, 0.44f, 0.60f);
+    const float via_trim_boost = std::clamp(
+        0.09f + 0.05f * (0.60f - congestion_severity), 0.06f, 0.16f);
+    const float via_trim_boost_limit = std::clamp(
+        1.10f + 0.05f * (0.55f - congestion_severity), 1.08f, 1.18f);
+    const float via_trim_layer_falloff
+        = std::clamp(0.10f + 0.10f * hotspot_bias, 0.08f, 0.22f);
+    const float via_trim_hotspot_ratio
+        = std::clamp(0.993f - 0.04f * hotspot_bias, 0.96f, 0.995f);
+    const float via_trim_hotspot_weight
+        = std::clamp(0.08f + 0.10f * hotspot_bias, 0.06f, 0.16f);
+
+    ScenarioDefinition via_trim;
+    via_trim.name = "via-trim";
+    via_trim.pre_init
+        = [this,
+           via_trim_perturb,
+           via_trim_seed,
+           via_trim_critical,
+           apply_via_trim_scale]() {
+            grouter_->setCapacitiesPerturbationPercentage(via_trim_perturb);
+            grouter_->setPerturbationAmount(via_trim_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(via_trim_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(via_trim_critical);
+            apply_via_trim_scale();
+          };
+    via_trim.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           via_trim_min_base,
+           via_trim_max_base,
+           via_trim_slope,
+           via_trim_midpoint,
+           via_trim_threshold,
+           via_trim_min_ratio,
+           via_trim_hotspot_push,
+           via_trim_halo,
+           via_trim_cool_threshold,
+           via_trim_boost,
+           via_trim_boost_limit,
+           via_trim_layer_falloff,
+           via_trim_hotspot_ratio,
+           via_trim_hotspot_weight]() {
+            if (!normalized_rudy.empty()) {
+              applySoftCapacityScaling(grouter_,
+                                       normalized_rudy,
+                                       min_routing_layer,
+                                       max_routing_layer,
+                                       via_trim_min_base,
+                                       via_trim_max_base,
+                                       via_trim_slope,
+                                       via_trim_midpoint);
+            }
+
+            applySelectiveRelief(grouter_,
+                                 normalized_rudy,
+                                 hotspots,
+                                 min_routing_layer,
+                                 max_routing_layer,
+                                 via_trim_threshold,
+                                 via_trim_min_ratio,
+                                 via_trim_hotspot_push,
+                                 via_trim_halo,
+                                 via_trim_cool_threshold,
+                                 via_trim_boost,
+                                 via_trim_boost_limit,
+                                 via_trim_layer_falloff);
+
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    via_trim_halo,
+                                    via_trim_hotspot_ratio,
+                                    via_trim_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(via_trim);
   }
 
   if (baseline.metrics.overflow == 0 && has_congestion_data) {
@@ -3301,6 +3425,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double reserve_gap
         = lhs.metrics.reserve_score - rhs.metrics.reserve_score;
     const double util_guard = 0.08;
+    const double via_gap = static_cast<double>(lhs.metrics.via_count)
+                           - static_cast<double>(rhs.metrics.via_count);
+    const double via_rel
+        = std::abs(via_gap)
+          / std::max<double>(
+              std::min(lhs.metrics.via_count, rhs.metrics.via_count), 1.0);
 
     // Prefer shorter wirelength while allowing a modest utilization cushion.
     if (wl_a != wl_b && wl_rel > wl_primary) {
@@ -3324,6 +3454,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (wl_rel < 0.0022 && std::abs(reserve_gap) > 0.05
         && std::abs(util_gap) < 0.05) {
       return reserve_gap > 0.0;
+    }
+
+    if (wl_rel < 0.0018) {
+      const bool wl_close = wl_rel < 0.0010;
+      const bool via_meaningful
+          = via_rel > 0.0025 || std::abs(via_gap) > 80.0;
+      const bool util_safe
+          = lhs.metrics.max_utilization
+            <= rhs.metrics.max_utilization + 0.02;
+      if (via_meaningful && (wl_close || util_safe)) {
+        return via_gap < 0.0;
+      }
     }
 
     if (wl_rel > wl_tie) {
