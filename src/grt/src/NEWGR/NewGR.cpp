@@ -1826,6 +1826,113 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           };
     scenario_defs.push_back(wl_openlane);
 
+    const float shortcut_via_scale = std::clamp(
+        wl_via_scale * (0.60f + 0.12f * (0.70f - congestion_severity)),
+        0.36f,
+        0.82f);
+    const float shortcut_perturb = std::clamp(
+        0.008f + 0.10f * (0.65f - congestion_severity), 0.0f, 0.10f);
+    const float shortcut_critical = std::clamp(
+        4.2f + 2.0f * (0.60f - congestion_severity), 3.6f, 8.2f);
+    const int shortcut_seed = snapshot.seed + 911;
+    const int shortcut_top_k = std::max(
+        1, std::min(2, max_routing_layer - min_routing_layer + 1));
+    const float shortcut_top_threshold
+        = std::clamp(0.60f + 0.06f * congestion_severity, 0.58f, 0.72f);
+    const float shortcut_top_base = std::clamp(
+        0.09f + 0.05f * (0.60f - congestion_severity), 0.08f, 0.14f);
+    const float shortcut_top_max = std::clamp(
+        1.16f + 0.05f * (0.55f - congestion_severity), 1.12f, 1.26f);
+    const float shortcut_top_guard
+        = std::clamp(0.74f - 0.12f * hotspot_bias, 0.64f, 0.82f);
+    const int shortcut_top_halo = hotspots.size() > 2 ? 2 : 1;
+    const float shortcut_cool_threshold
+        = std::clamp(0.62f + 0.06f * (0.60f - congestion_severity),
+                     0.58f,
+                     0.70f);
+    const float shortcut_base_boost = std::clamp(
+        0.10f + 0.05f * (0.55f - congestion_severity), 0.08f, 0.16f);
+    const float shortcut_max_boost = std::clamp(
+        1.18f + 0.06f * (0.55f - congestion_severity), 1.12f, 1.26f);
+    const float shortcut_layer_decay
+        = std::clamp(0.05f + 0.05f * hotspot_bias, 0.04f, 0.12f);
+    const float shortcut_hotspot_guard
+        = std::clamp(0.72f - 0.12f * hotspot_bias, 0.62f, 0.82f);
+    const float shortcut_hotspot_ratio
+        = std::clamp(0.992f - 0.04f * hotspot_bias, 0.96f, 0.995f);
+    const float shortcut_hotspot_weight
+        = std::clamp(0.06f + 0.08f * hotspot_bias, 0.05f, 0.14f);
+
+    ScenarioDefinition wl_shortcut;
+    wl_shortcut.name = "wl-shortcut";
+    wl_shortcut.pre_init
+        = [this,
+           shortcut_perturb,
+           shortcut_seed,
+           shortcut_critical,
+           shortcut_via_scale]() {
+            grouter_->setCapacitiesPerturbationPercentage(shortcut_perturb);
+            grouter_->setPerturbationAmount(shortcut_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(shortcut_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(shortcut_critical);
+            if (grouter_->fastroute_ != nullptr) {
+              grouter_->fastroute_->setViaCostScale(shortcut_via_scale);
+            }
+          };
+    wl_shortcut.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           shortcut_cool_threshold,
+           shortcut_base_boost,
+           shortcut_max_boost,
+           shortcut_layer_decay,
+           shortcut_hotspot_guard,
+           shortcut_top_k,
+           shortcut_top_threshold,
+           shortcut_top_base,
+           shortcut_top_max,
+           shortcut_top_guard,
+           shortcut_top_halo,
+           shortcut_hotspot_ratio,
+           shortcut_hotspot_weight]() {
+            applyCoolCapacityBoost(grouter_,
+                                   normalized_rudy,
+                                   hotspots,
+                                   min_routing_layer,
+                                   max_routing_layer,
+                                   shortcut_cool_threshold,
+                                   shortcut_base_boost,
+                                   shortcut_max_boost,
+                                   shortcut_layer_decay,
+                                   shortcut_top_halo,
+                                   shortcut_hotspot_guard);
+            applyTopLayerBias(grouter_,
+                              normalized_rudy,
+                              hotspots,
+                              min_routing_layer,
+                              max_routing_layer,
+                              shortcut_top_k,
+                              shortcut_top_threshold,
+                              shortcut_top_base,
+                              shortcut_top_max,
+                              shortcut_top_guard,
+                              shortcut_top_halo);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    shortcut_top_halo,
+                                    shortcut_hotspot_ratio,
+                                    shortcut_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_shortcut);
+
     const float skim_strength
         = std::clamp(0.65f - congestion_severity, 0.0f, 0.35f);
     const float skim_perturb = std::clamp(
