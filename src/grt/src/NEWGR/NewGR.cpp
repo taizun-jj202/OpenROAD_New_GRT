@@ -3298,24 +3298,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     const double util_gap
         = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
-    const int via_delta = lhs.metrics.via_count - rhs.metrics.via_count;
     const double reserve_gap
         = lhs.metrics.reserve_score - rhs.metrics.reserve_score;
+    const double util_guard = 0.08;
 
     // Prefer shorter wirelength while allowing a modest utilization cushion.
     if (wl_a != wl_b && wl_rel > wl_primary) {
-      if (wl_rel < 0.0022 && std::abs(util_gap) < 0.04
-          && std::abs(via_delta) > 40) {
-        return via_delta < 0;
-      }
       if (wl_a < wl_b
           && lhs.metrics.max_utilization
-                 <= rhs.metrics.max_utilization + 0.08) {
+                 <= rhs.metrics.max_utilization + util_guard) {
         return true;
       }
       if (wl_b < wl_a
           && rhs.metrics.max_utilization
-                 <= lhs.metrics.max_utilization + 0.08) {
+                 <= lhs.metrics.max_utilization + util_guard) {
         return false;
       }
       return wl_a < wl_b;
@@ -3331,15 +3327,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
 
     if (wl_rel > wl_tie) {
-      if (lhs.metrics.via_count != rhs.metrics.via_count
-          && std::abs(util_gap) < 0.03) {
-        if (wl_a <= wl_b && lhs.metrics.via_count < rhs.metrics.via_count) {
-          return true;
-        }
-        if (wl_b <= wl_a && rhs.metrics.via_count < lhs.metrics.via_count) {
-          return false;
-        }
-      }
       return wl_a < wl_b;
     }
 
