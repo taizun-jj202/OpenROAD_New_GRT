@@ -3855,6 +3855,67 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   auto best_iter = std::min_element(
       scenario_results.begin(), scenario_results.end(), better_result);
+
+  const size_t best_index
+      = static_cast<size_t>(best_iter - scenario_results.begin());
+  size_t wl_pref_index = best_index;
+  const long target_overflow = scenario_results[best_index].metrics.overflow;
+  const double wl_gain_threshold = 0.00018;
+  const double util_soft_guard = 0.10;
+
+  for (size_t i = 0; i < scenario_results.size(); ++i) {
+    const ScenarioResult& candidate = scenario_results[i];
+    ScenarioResult& current = scenario_results[wl_pref_index];
+    if (candidate.metrics.overflow != target_overflow) {
+      continue;
+    }
+    if (candidate.metrics.max_utilization
+        > current.metrics.max_utilization + util_soft_guard) {
+      continue;
+    }
+    if (candidate.metrics.max_utilization > 1.08) {
+      continue;
+    }
+
+    const double wl_diff = static_cast<double>(current.metrics.wirelength_dbu)
+                           - static_cast<double>(candidate.metrics.wirelength_dbu);
+    const double wl_rel = wl_diff
+                          / std::max<double>(
+                              static_cast<double>(current.metrics.wirelength_dbu),
+                              1.0);
+    if (wl_diff <= 0.0 || wl_rel <= wl_gain_threshold) {
+      continue;
+    }
+
+    const long via_gap
+        = candidate.metrics.via_count - current.metrics.via_count;
+    if (via_gap > 800) {
+      continue;
+    }
+
+    wl_pref_index = i;
+  }
+
+  if (wl_pref_index != best_index) {
+    ScenarioResult& chosen = scenario_results[wl_pref_index];
+    const ScenarioResult& original_best = scenario_results[best_index];
+    best_iter = scenario_results.begin()
+                + static_cast<std::vector<ScenarioResult>::difference_type>(
+                    wl_pref_index);
+    logger_->info(GNR,
+                  6009,
+                  "NEWGR wirelength preference picked scenario {} over {} "
+                  "(WL {:.0f} -> {:.0f} um, vias {} -> {}, max util {:.2f} -> {:.2f})",
+                  chosen.name,
+                  original_best.name,
+                  original_best.metrics.wirelength_um,
+                  chosen.metrics.wirelength_um,
+                  original_best.metrics.via_count,
+                  chosen.metrics.via_count,
+                  original_best.metrics.max_utilization,
+                  chosen.metrics.max_utilization);
+  }
+
   ScenarioResult final_result = *best_iter;
 
   const ScenarioDefinition* replay_def = nullptr;
