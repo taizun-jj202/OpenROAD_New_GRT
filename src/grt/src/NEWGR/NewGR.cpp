@@ -1208,7 +1208,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (light_congestion) {
       base_via_scale -= 0.06f;
     }
-    wl_via_scale = std::clamp(base_via_scale, 0.48f, 0.96f);
+    wl_via_scale = std::clamp(base_via_scale, 0.42f, 0.96f);
   } else {
     const float base_via_scale
         = 1.0f + 0.12f * congestion_severity + 0.08f * hotspot_bias;
@@ -1436,10 +1436,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                      wl_greedy_top_guard);
             } else {
               const float gentle_guard
-                  = 1.0f - (1.0f - wl_greedy_top_guard) * 0.55f;
-              const float gentle_top_base = wl_greedy_top_base * 0.55f;
+                  = 1.0f - (1.0f - wl_greedy_top_guard) * 0.70f;
+              const float gentle_top_base = wl_greedy_top_base * 0.75f;
               const float gentle_top_max
-                  = 1.0f + (wl_greedy_top_max - 1.0f) * 0.65f;
+                  = 1.0f + (wl_greedy_top_max - 1.0f) * 0.85f;
               applyTopLayerBias(grouter_,
                                 normalized_rudy,
                                 hotspots,
@@ -1453,11 +1453,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                 wl_greedy_top_halo);
 
               const float gentle_cool_guard
-                  = 1.0f - (1.0f - wl_greedy_top_guard) * 0.60f;
-              const float gentle_cool_base = wl_greedy_cool_base * 0.60f;
+                  = 1.0f - (1.0f - wl_greedy_top_guard) * 0.70f;
+              const float gentle_cool_base = wl_greedy_cool_base * 0.78f;
               const float gentle_cool_max
-                  = 1.0f + (wl_greedy_cool_max - 1.0f) * 0.70f;
-              const float gentle_cool_decay = wl_greedy_cool_decay * 0.50f;
+                  = 1.0f + (wl_greedy_cool_max - 1.0f) * 0.86f;
+              const float gentle_cool_decay = wl_greedy_cool_decay * 0.65f;
               applyCoolCapacityBoost(grouter_,
                                      normalized_rudy,
                                      hotspots,
