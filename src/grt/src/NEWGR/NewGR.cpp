@@ -1200,19 +1200,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   float wl_via_scale = 1.0f;
   if (!force_routability) {
-    float base_via_scale = 0.72f + 0.18f * congestion_severity
-                           - 0.10f * hotspot_bias;
+    float base_via_scale = 0.60f + 0.25f * congestion_severity
+                           - 0.12f * hotspot_bias;
     if (relaxed_utilization) {
-      base_via_scale -= 0.04f;
-    }
-    if (light_congestion) {
       base_via_scale -= 0.05f;
     }
-    wl_via_scale = std::clamp(base_via_scale, 0.58f, 1.0f);
+    if (light_congestion) {
+      base_via_scale -= 0.06f;
+    }
+    wl_via_scale = std::clamp(base_via_scale, 0.48f, 0.96f);
   } else {
     const float base_via_scale
-        = 1.0f + 0.10f * congestion_severity + 0.06f * hotspot_bias;
-    wl_via_scale = std::clamp(base_via_scale, 1.0f, 1.18f);
+        = 1.0f + 0.12f * congestion_severity + 0.08f * hotspot_bias;
+    wl_via_scale = std::clamp(base_via_scale, 1.0f, 1.20f);
   }
   const auto apply_wl_via_scale = [this, wl_via_scale]() {
     if (grouter_->fastroute_ != nullptr) {
@@ -3073,8 +3073,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_primary = 0.00055;    // ~0.055% difference
-    const double wl_tie = 0.00025;        // ~0.025% difference
+    const double wl_primary = 0.00035;    // ~0.035% difference
+    const double wl_tie = 0.00015;        // ~0.015% difference
 
     const double util_gap
         = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
@@ -3083,12 +3083,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (wl_a != wl_b && wl_rel > wl_primary) {
       if (wl_a < wl_b
           && lhs.metrics.max_utilization
-                 <= rhs.metrics.max_utilization + 0.06) {
+                 <= rhs.metrics.max_utilization + 0.08) {
         return true;
       }
       if (wl_b < wl_a
           && rhs.metrics.max_utilization
-                 <= lhs.metrics.max_utilization + 0.06) {
+                 <= lhs.metrics.max_utilization + 0.08) {
         return false;
       }
       return wl_a < wl_b;
