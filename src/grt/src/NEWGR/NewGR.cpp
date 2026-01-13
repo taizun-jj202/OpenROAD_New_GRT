@@ -715,7 +715,7 @@ PatchSummary applyHotspotPatches(NetRouteMap& routes,
   }
   prioritized.resize(std::max<size_t>(hotspot_limit, std::min(max_hotspots, prioritized.size())));
 
-  const int per_net_budget = 4;
+  const int per_net_budget = 3;
 
   for (auto& [db_net, segments] : routes) {
     std::unordered_set<GSegment, GSegmentHash> seen(segments.begin(),
@@ -863,7 +863,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 grouter_->db_->getTech()->getDbUnitsPerMicron());
     }
 
-    const double via_weight = static_cast<double>(tile_size) * 3.0;
+    // Lean harder on wirelength for scenario ranking; still guard overflow.
+    const double via_weight = static_cast<double>(tile_size) * 2.0;
     const double overflow_weight = static_cast<double>(tile_size) * 12.0;
     metrics.score = static_cast<double>(metrics.wirelength_dbu)
                     + via_weight * static_cast<double>(metrics.via_count)
@@ -2085,8 +2086,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_priority = 0.00120;   // ~0.12% difference
-    const double wl_via_tie = 0.00050;    // ~0.05% difference
+    const double wl_priority = 0.00080;   // ~0.08% difference
+    const double wl_via_tie = 0.00035;    // ~0.035% difference
 
     const double util_gap
         = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
@@ -2178,11 +2179,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   const bool dense_hotspots = hotspots.size() > 4;
   const bool heavy_congestion = congestion_severity > 0.70f;
-  const bool near_overflow = final_result.metrics.max_utilization > 0.85;
+  const bool near_overflow = final_result.metrics.max_utilization > 0.88;
   const bool overflowing = final_result.metrics.overflow > 0;
   const bool should_patch
-      = overflowing || near_overflow
-        || (dense_hotspots && congestion_severity > 0.55f) || heavy_congestion;
+      = overflowing
+        || (near_overflow && congestion_severity > 0.60f)
+        || (dense_hotspots && congestion_severity > 0.60f) || heavy_congestion;
 
   if (should_patch) {
     PatchSummary patch_summary
