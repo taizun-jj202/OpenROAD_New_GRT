@@ -1407,41 +1407,87 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
          force_routability]() {
           // Skip aggressive biasing when congestion is already light to avoid
           // unnecessary detours that hurt wirelength.
-          const bool gentle_mode = !force_routability && light_congestion
+         const bool gentle_mode = !force_routability && light_congestion
                                    && hotspots.size() <= 2;
 
-          if (!gentle_mode && !normalized_rudy.empty()) {
-            applyTopLayerBias(grouter_,
-                              normalized_rudy,
-                              hotspots,
-                              min_routing_layer,
-                              max_routing_layer,
-                              wl_greedy_top_k,
-                              wl_greedy_top_threshold,
-                              wl_greedy_top_base,
-                              wl_greedy_top_max,
-                              wl_greedy_top_guard,
-                              wl_greedy_top_halo);
-            applyCoolCapacityBoost(grouter_,
-                                   normalized_rudy,
-                                   hotspots,
-                                   min_routing_layer,
-                                   max_routing_layer,
-                                   wl_greedy_cool_threshold,
-                                   wl_greedy_cool_base,
-                                   wl_greedy_cool_max,
-                                   wl_greedy_cool_decay,
-                                   wl_greedy_top_halo,
-                                   wl_greedy_top_guard);
+          if (!normalized_rudy.empty()) {
+            if (!gentle_mode) {
+              applyTopLayerBias(grouter_,
+                                normalized_rudy,
+                                hotspots,
+                                min_routing_layer,
+                                max_routing_layer,
+                                wl_greedy_top_k,
+                                wl_greedy_top_threshold,
+                                wl_greedy_top_base,
+                                wl_greedy_top_max,
+                                wl_greedy_top_guard,
+                                wl_greedy_top_halo);
+              applyCoolCapacityBoost(grouter_,
+                                     normalized_rudy,
+                                     hotspots,
+                                     min_routing_layer,
+                                     max_routing_layer,
+                                     wl_greedy_cool_threshold,
+                                     wl_greedy_cool_base,
+                                     wl_greedy_cool_max,
+                                     wl_greedy_cool_decay,
+                                     wl_greedy_top_halo,
+                                     wl_greedy_top_guard);
+            } else {
+              const float gentle_guard
+                  = 1.0f - (1.0f - wl_greedy_top_guard) * 0.55f;
+              const float gentle_top_base = wl_greedy_top_base * 0.55f;
+              const float gentle_top_max
+                  = 1.0f + (wl_greedy_top_max - 1.0f) * 0.65f;
+              applyTopLayerBias(grouter_,
+                                normalized_rudy,
+                                hotspots,
+                                min_routing_layer,
+                                max_routing_layer,
+                                wl_greedy_top_k,
+                                wl_greedy_top_threshold,
+                                gentle_top_base,
+                                gentle_top_max,
+                                gentle_guard,
+                                wl_greedy_top_halo);
+
+              const float gentle_cool_guard
+                  = 1.0f - (1.0f - wl_greedy_top_guard) * 0.60f;
+              const float gentle_cool_base = wl_greedy_cool_base * 0.60f;
+              const float gentle_cool_max
+                  = 1.0f + (wl_greedy_cool_max - 1.0f) * 0.70f;
+              const float gentle_cool_decay = wl_greedy_cool_decay * 0.50f;
+              applyCoolCapacityBoost(grouter_,
+                                     normalized_rudy,
+                                     hotspots,
+                                     min_routing_layer,
+                                     max_routing_layer,
+                                     wl_greedy_cool_threshold,
+                                     gentle_cool_base,
+                                     gentle_cool_max,
+                                     gentle_cool_decay,
+                                     wl_greedy_top_halo,
+                                     gentle_cool_guard);
+            }
           }
           if (!hotspots.empty()) {
+            const float hotspot_ratio = gentle_mode
+                                            ? std::clamp(
+                                                wl_greedy_hotspot_ratio + 0.006f,
+                                                0.0f,
+                                                0.999f)
+                                            : wl_greedy_hotspot_ratio;
+            const float hotspot_weight = gentle_mode
+                                             ? wl_greedy_hotspot_weight * 0.65f
+                                             : wl_greedy_hotspot_weight;
             applyHotspotPenalties(grouter_,
                                   hotspots,
                                   min_routing_layer,
                                   max_routing_layer,
                                   wl_greedy_top_halo,
-                                  wl_greedy_hotspot_ratio,
-                                  wl_greedy_hotspot_weight);
+                                  hotspot_ratio,
+                                  hotspot_weight);
           }
         };
   scenario_defs.push_back(wl_greedy);
