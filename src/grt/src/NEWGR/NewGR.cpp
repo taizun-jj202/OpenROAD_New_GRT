@@ -1160,6 +1160,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = (!normalized_rudy.empty() || !hotspots.empty());
   const float hotspot_bias = std::clamp(
       static_cast<float>(hotspots.size()) / 12.0f, 0.0f, 0.6f);
+  const bool relaxed_utilization = baseline.metrics.max_utilization < 0.70f;
   const bool light_congestion = !force_routability
                                 && congestion_severity < 0.70f
                                 && hotspots.size() <= 3
@@ -1272,9 +1273,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         };
   scenario_defs.push_back(wl_variation);
 
-  const float wl_greedy_perturb = congestion_severity > 0.30f ? 0.12f : 0.0f;
-  const float wl_greedy_critical
+  float wl_greedy_perturb = congestion_severity > 0.30f ? 0.12f : 0.0f;
+  if (relaxed_utilization && wl_greedy_perturb > 0.0f) {
+    wl_greedy_perturb *= 0.55f;
+  }
+  float wl_greedy_critical
       = std::clamp(wl_critical_pct - 0.8f, 3.5f, 10.0f);
+  if (relaxed_utilization) {
+    wl_greedy_critical = std::clamp(wl_greedy_critical + 0.6f, 3.8f, 11.0f);
+  }
   const int wl_greedy_seed = snapshot.seed + 37;
   ScenarioDefinition wl_greedy;
   wl_greedy.name = "wl-greedy";
@@ -1317,6 +1324,106 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           }
         };
   scenario_defs.push_back(wl_refine);
+
+  if (baseline.metrics.overflow == 0 && has_congestion_data
+      && baseline.metrics.max_utilization < 0.72f) {
+    const float directlite_perturb = std::clamp(
+        0.01f + 0.08f * congestion_severity, 0.01f, 0.10f);
+    const float directlite_critical = std::clamp(
+        6.5f + 3.0f * (0.60f - congestion_severity), 5.0f, 10.5f);
+    const int directlite_seed = snapshot.seed + 287;
+    const float directlite_cool_threshold
+        = std::clamp(0.60f - 0.10f * hotspot_bias, 0.48f, 0.64f);
+    const float directlite_base_boost = std::clamp(
+        0.09f + 0.04f * (0.65f - congestion_severity), 0.06f, 0.12f);
+    const float directlite_max_boost = std::clamp(
+        1.10f + 0.04f * (0.55f - congestion_severity), 1.08f, 1.16f);
+    const float directlite_layer_decay
+        = std::clamp(0.06f + 0.08f * hotspot_bias, 0.05f, 0.18f);
+    const int directlite_halo = hotspots.size() > 3 ? 2 : 1;
+    const float directlite_hotspot_guard
+        = std::clamp(0.70f - 0.10f * hotspot_bias, 0.60f, 0.74f);
+    const int directlite_top_k = std::max(
+        1, std::min(2, max_routing_layer - min_routing_layer + 1));
+    const float directlite_top_threshold
+        = std::clamp(0.62f + 0.08f * congestion_severity, 0.60f, 0.78f);
+    const float directlite_top_base = std::clamp(
+        0.08f + 0.04f * (0.60f - congestion_severity), 0.06f, 0.12f);
+    const float directlite_top_max = std::clamp(
+        1.12f + 0.05f * (0.55f - congestion_severity), 1.10f, 1.20f);
+    const float directlite_top_guard
+        = std::clamp(0.70f - 0.16f * hotspot_bias, 0.60f, 0.80f);
+    const int directlite_top_halo = hotspots.size() > 2 ? 2 : 1;
+    const float directlite_hotspot_ratio
+        = std::clamp(0.992f - 0.05f * hotspot_bias, 0.95f, 0.995f);
+    const float directlite_hotspot_weight
+        = std::clamp(0.08f + 0.10f * hotspot_bias, 0.06f, 0.14f);
+
+    ScenarioDefinition wl_directlite;
+    wl_directlite.name = "wl-direct-lite";
+    wl_directlite.pre_init
+        = [this, directlite_perturb, directlite_seed, directlite_critical]() {
+            grouter_->setCapacitiesPerturbationPercentage(directlite_perturb);
+            grouter_->setPerturbationAmount(directlite_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(directlite_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(
+                directlite_critical);
+          };
+    wl_directlite.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           directlite_cool_threshold,
+           directlite_base_boost,
+           directlite_max_boost,
+           directlite_layer_decay,
+           directlite_halo,
+           directlite_hotspot_guard,
+           directlite_top_k,
+           directlite_top_threshold,
+           directlite_top_base,
+           directlite_top_max,
+           directlite_top_guard,
+           directlite_top_halo,
+           directlite_hotspot_ratio,
+           directlite_hotspot_weight]() {
+            applyCoolCapacityBoost(grouter_,
+                                   normalized_rudy,
+                                   hotspots,
+                                   min_routing_layer,
+                                   max_routing_layer,
+                                   directlite_cool_threshold,
+                                   directlite_base_boost,
+                                   directlite_max_boost,
+                                   directlite_layer_decay,
+                                   directlite_halo,
+                                   directlite_hotspot_guard);
+            applyTopLayerBias(grouter_,
+                              normalized_rudy,
+                              hotspots,
+                              min_routing_layer,
+                              max_routing_layer,
+                              directlite_top_k,
+                              directlite_top_threshold,
+                              directlite_top_base,
+                              directlite_top_max,
+                              directlite_top_guard,
+                              directlite_top_halo);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    directlite_halo,
+                                    directlite_hotspot_ratio,
+                                    directlite_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_directlite);
+  }
 
   if (baseline.metrics.overflow == 0 && has_congestion_data && light_congestion) {
     const float compact_perturb
