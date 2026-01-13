@@ -1211,6 +1211,116 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_defs.push_back(wl_streamline);
   }
 
+  if (baseline.metrics.overflow == 0 && has_congestion_data) {
+    const float smooth_strength
+        = std::clamp(0.32f + 0.48f * congestion_severity
+                         + 0.20f * hotspot_bias,
+                     0.30f,
+                     0.85f);
+    const float smooth_min_base
+        = std::clamp(0.90f + 0.03f * (1.0f - congestion_severity),
+                     0.90f,
+                     0.95f);
+    const float smooth_max_base
+        = std::clamp(0.975f + 0.01f * (1.0f - congestion_severity),
+                     smooth_min_base + 0.02f,
+                     0.99f);
+    const float smooth_slope = 2.0f + 1.4f * smooth_strength;
+    const float smooth_midpoint
+        = std::clamp(0.50f - 0.03f * smooth_strength, 0.44f, 0.52f);
+    const float smooth_threshold
+        = std::clamp(0.50f + 0.12f * congestion_severity, 0.48f, 0.64f);
+    const float smooth_min_ratio
+        = std::clamp(0.93f + 0.05f * (1.0f - congestion_severity),
+                     0.92f,
+                     0.985f);
+    const float smooth_hotspot_push
+        = std::clamp(0.07f + 0.06f * hotspot_bias, 0.06f, 0.16f);
+    const int smooth_halo = hotspots.size() > 6 ? 2 : 1;
+    const float smooth_cool_threshold
+        = std::clamp(smooth_threshold * 0.70f, 0.36f, 0.52f);
+    const float smooth_boost = std::clamp(
+        0.10f + 0.08f * (0.55f - congestion_severity), 0.08f, 0.18f);
+    const float smooth_boost_limit = std::clamp(
+        1.09f + 0.06f * (0.55f - congestion_severity), 1.08f, 1.17f);
+    const float smooth_layer_falloff
+        = std::clamp(0.09f + 0.12f * hotspot_bias, 0.08f, 0.22f);
+    const float smooth_perturb
+        = std::clamp(0.02f + 0.12f * congestion_severity,
+                     0.015f,
+                     0.14f);
+    const float smooth_critical = std::clamp(
+        6.0f + 3.0f * (0.55f - congestion_severity), 5.5f, 10.5f);
+    const int smooth_seed = snapshot.seed + 143;
+    const float smooth_hotspot_ratio
+        = std::clamp(0.99f - 0.05f * smooth_strength, 0.93f, 0.99f);
+    const float smooth_hotspot_weight
+        = std::clamp(0.10f + 0.18f * hotspot_bias, 0.08f, 0.22f);
+
+    ScenarioDefinition wl_smooth;
+    wl_smooth.name = "wl-smooth";
+    wl_smooth.pre_init
+        = [this, smooth_perturb, smooth_seed, smooth_critical]() {
+            grouter_->setCapacitiesPerturbationPercentage(smooth_perturb);
+            grouter_->setPerturbationAmount(smooth_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(smooth_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(smooth_critical);
+          };
+    wl_smooth.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           smooth_min_base,
+           smooth_max_base,
+           smooth_slope,
+           smooth_midpoint,
+           smooth_threshold,
+           smooth_min_ratio,
+           smooth_hotspot_push,
+           smooth_halo,
+           smooth_cool_threshold,
+           smooth_boost,
+           smooth_boost_limit,
+           smooth_layer_falloff,
+           smooth_hotspot_ratio,
+           smooth_hotspot_weight]() {
+            applySoftCapacityScaling(grouter_,
+                                     normalized_rudy,
+                                     min_routing_layer,
+                                     max_routing_layer,
+                                     smooth_min_base,
+                                     smooth_max_base,
+                                     smooth_slope,
+                                     smooth_midpoint);
+            applySelectiveRelief(grouter_,
+                                 normalized_rudy,
+                                 hotspots,
+                                 min_routing_layer,
+                                 max_routing_layer,
+                                 smooth_threshold,
+                                 smooth_min_ratio,
+                                 smooth_hotspot_push,
+                                 smooth_halo,
+                                 smooth_cool_threshold,
+                                 smooth_boost,
+                                 smooth_boost_limit,
+                                 smooth_layer_falloff);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    smooth_halo,
+                                    smooth_hotspot_ratio,
+                                    smooth_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_smooth);
+  }
+
   if (baseline.metrics.overflow == 0) {
     const float stability_threshold
         = std::clamp(0.52f + 0.10f * hotspot_bias, 0.50f, 0.62f);
@@ -1657,12 +1767,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_priority = 0.00035;   // ~0.035% difference
-    const double wl_via_tie = 0.00020;    // ~0.020% difference
+    const double wl_priority = 0.00120;   // ~0.12% difference
+    const double wl_via_tie = 0.00050;    // ~0.05% difference
 
     const double util_gap
         = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
-    if (wl_rel < 0.0035 && std::abs(util_gap) > 0.05) {
+    if (wl_rel < 0.0030 && std::abs(util_gap) > 0.03) {
       return util_gap < 0.0;
     }
 
@@ -1678,7 +1788,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     const double util_diff
         = std::abs(lhs.metrics.max_utilization - rhs.metrics.max_utilization);
-    if (wl_rel < 0.0015 && util_diff > 0.005) {
+    if (wl_rel < 0.0025 && util_diff > 0.005) {
       // Allow small wirelength trade-offs when congestion relief is clear.
       return lhs.metrics.max_utilization < rhs.metrics.max_utilization;
     }
@@ -1688,7 +1798,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       return (a - b) / denom;
     };
 
-    if (wl_rel < 0.0015) {
+    if (wl_rel < 0.0025) {
       const double stress_rel
           = relative_gap(lhs.metrics.stress_cost, rhs.metrics.stress_cost);
       if (std::abs(stress_rel) > 0.025) {
