@@ -1426,6 +1426,102 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   if (baseline.metrics.overflow == 0 && has_congestion_data && light_congestion) {
+    const float openlane_perturb
+        = std::clamp(0.01f + 0.10f * congestion_severity, 0.01f, 0.14f);
+    const float openlane_critical = std::clamp(
+        5.5f + 2.0f * (0.58f - congestion_severity), 4.5f, 9.5f);
+    const int openlane_seed = snapshot.seed + 641;
+    const float openlane_cool_threshold
+        = std::clamp(0.55f + 0.08f * congestion_severity, 0.50f, 0.68f);
+    const float openlane_base_boost = std::clamp(
+        0.05f + 0.05f * (0.60f - congestion_severity), 0.04f, 0.11f);
+    const float openlane_max_boost = std::clamp(
+        1.08f + 0.05f * (0.55f - congestion_severity), 1.06f, 1.16f);
+    const float openlane_layer_decay
+        = std::clamp(0.04f + 0.06f * hotspot_bias, 0.04f, 0.12f);
+    const int openlane_halo = hotspots.size() > 3 ? 2 : 1;
+    const float openlane_hotspot_guard = std::clamp(
+        0.68f - 0.12f * hotspot_bias, 0.60f, 0.76f);
+    const int openlane_top_k = std::max(
+        1, std::min(2, max_routing_layer - min_routing_layer + 1));
+    const float openlane_top_threshold
+        = std::clamp(0.58f + 0.06f * congestion_severity, 0.56f, 0.72f);
+    const float openlane_top_base = std::clamp(
+        0.05f + 0.05f * (0.58f - congestion_severity), 0.04f, 0.11f);
+    const float openlane_top_max = std::clamp(
+        1.10f + 0.05f * (0.55f - congestion_severity), 1.08f, 1.18f);
+    const float openlane_top_guard
+        = std::clamp(0.70f - 0.14f * hotspot_bias, 0.60f, 0.78f);
+    const int openlane_top_halo = hotspots.size() > 2 ? 2 : 1;
+    const float openlane_hotspot_ratio
+        = std::clamp(0.992f - 0.03f * hotspot_bias, 0.96f, 0.995f);
+    const float openlane_hotspot_weight
+        = std::clamp(0.06f + 0.10f * hotspot_bias, 0.05f, 0.14f);
+
+    ScenarioDefinition wl_openlane;
+    wl_openlane.name = "wl-openlane";
+    wl_openlane.pre_init
+        = [this, openlane_perturb, openlane_seed, openlane_critical]() {
+            grouter_->setCapacitiesPerturbationPercentage(openlane_perturb);
+            grouter_->setPerturbationAmount(openlane_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(openlane_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(openlane_critical);
+          };
+    wl_openlane.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           openlane_cool_threshold,
+           openlane_base_boost,
+           openlane_max_boost,
+           openlane_layer_decay,
+           openlane_halo,
+           openlane_hotspot_guard,
+           openlane_top_k,
+           openlane_top_threshold,
+           openlane_top_base,
+           openlane_top_max,
+           openlane_top_guard,
+           openlane_top_halo,
+           openlane_hotspot_ratio,
+           openlane_hotspot_weight]() {
+            applyCoolCapacityBoost(grouter_,
+                                   normalized_rudy,
+                                   hotspots,
+                                   min_routing_layer,
+                                   max_routing_layer,
+                                   openlane_cool_threshold,
+                                   openlane_base_boost,
+                                   openlane_max_boost,
+                                   openlane_layer_decay,
+                                   openlane_halo,
+                                   openlane_hotspot_guard);
+            applyTopLayerBias(grouter_,
+                              normalized_rudy,
+                              hotspots,
+                              min_routing_layer,
+                              max_routing_layer,
+                              openlane_top_k,
+                              openlane_top_threshold,
+                              openlane_top_base,
+                              openlane_top_max,
+                              openlane_top_guard,
+                              openlane_top_halo);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    openlane_halo,
+                                    openlane_hotspot_ratio,
+                                    openlane_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_openlane);
+
     const float compact_perturb
         = std::clamp(0.015f + 0.12f * congestion_severity, 0.0f, 0.16f);
     const float compact_critical = std::clamp(
@@ -1658,6 +1754,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   if (allow_light_seed) {
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s1", 73, 0.85f));
+    scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-l2", 137, 1.05f));
   } else if (allow_seed_sweep) {
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s1", 73, 0.8f));
     if (hotspots.size() <= 2 || congestion_severity > 0.78f) {
