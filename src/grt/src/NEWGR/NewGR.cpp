@@ -548,6 +548,113 @@ void applySelectiveRelief(GlobalRouter* grouter,
   }
 }
 
+void applyCoolCapacityBoost(GlobalRouter* grouter,
+                            const RudyGrid& normalized_rudy,
+                            const std::vector<Hotspot>& hotspots,
+                            int min_layer,
+                            int max_layer,
+                            float cool_threshold,
+                            float base_boost,
+                            float max_boost,
+                            float layer_decay,
+                            int halo,
+                            float hotspot_guard = 0.6f)
+{
+  Grid* grid = grouter->grid();
+  if (grid == nullptr || normalized_rudy.empty()) {
+    return;
+  }
+
+  const int x_grids = grid->getXGrids();
+  const int y_grids = grid->getYGrids();
+  if (x_grids <= 0 || y_grids <= 0) {
+    return;
+  }
+
+  const int x_tiles = static_cast<int>(normalized_rudy.size());
+  const int y_tiles
+      = (normalized_rudy.empty() || normalized_rudy.front().empty())
+            ? 0
+            : static_cast<int>(normalized_rudy.front().size());
+
+  const auto getNormalized = [&](int x, int y) {
+    if (x < 0 || y < 0 || x >= x_tiles || y >= y_tiles || x_tiles == 0
+        || y_tiles == 0) {
+      return 0.0f;
+    }
+    return normalized_rudy[x][y];
+  };
+
+  std::vector<std::vector<float>> boost_mask(
+      std::max(x_grids, 1), std::vector<float>(std::max(y_grids, 1), 1.0f));
+  halo = std::max(0, halo);
+  hotspot_guard = std::clamp(hotspot_guard, 0.3f, 1.0f);
+  if (!hotspots.empty() && halo > 0) {
+    for (const Hotspot& hotspot : hotspots) {
+      for (int dx = -halo; dx <= halo; ++dx) {
+        for (int dy = -halo; dy <= halo; ++dy) {
+          const int gx = hotspot.gx + dx;
+          const int gy = hotspot.gy + dy;
+          if (gx < 0 || gy < 0 || gx >= x_grids || gy >= y_grids) {
+            continue;
+          }
+          const float distance = static_cast<float>(std::abs(dx) + std::abs(dy));
+          const float decay = 1.0f / (1.0f + distance);
+          const float guard = 1.0f - (1.0f - hotspot_guard) * decay;
+          boost_mask[gx][gy] = std::min(boost_mask[gx][gy], guard);
+        }
+      }
+    }
+  }
+
+  cool_threshold = std::clamp(cool_threshold, 0.05f, 1.0f);
+  base_boost = std::clamp(base_boost, 0.0f, 1.0f);
+  max_boost = std::clamp(max_boost, 1.0f, 1.30f);
+  layer_decay = std::clamp(layer_decay, 0.0f, 0.8f);
+
+  const int layer_span = std::max(max_layer - min_layer, 1);
+  for (int layer = min_layer; layer <= max_layer; ++layer) {
+    const float layer_factor
+        = static_cast<float>(layer - min_layer) / static_cast<float>(layer_span);
+    float layer_scale = 1.0f - layer_decay * layer_factor;
+    layer_scale = std::clamp(layer_scale, 0.55f, 1.0f);
+
+    for (int y = 0; y < y_grids; ++y) {
+      for (int x = 0; x < x_grids - 1; ++x) {
+        const float normalized
+            = 0.5f * (getNormalized(x, y) + getNormalized(x + 1, y));
+        if (normalized >= cool_threshold) {
+          continue;
+        }
+        const float cool_score = (cool_threshold - normalized)
+                                 / std::max(cool_threshold, 1e-3f);
+        const float max_ratio = 1.0f + (max_boost - 1.0f) * layer_scale;
+        float ratio = 1.0f + base_boost * cool_score * layer_scale;
+        ratio = std::clamp(ratio, 1.0f, max_ratio);
+        ratio = 1.0f + (ratio - 1.0f) * boost_mask[x][y];
+        adjustEdgeCapacity(grouter, x, y, x + 1, y, layer, ratio);
+      }
+    }
+
+    for (int y = 0; y < y_grids - 1; ++y) {
+      for (int x = 0; x < x_grids; ++x) {
+        const float normalized
+            = 0.5f * (getNormalized(x, y) + getNormalized(x, y + 1));
+        if (normalized >= cool_threshold) {
+          continue;
+        }
+        const float cool_score = (cool_threshold - normalized)
+                                 / std::max(cool_threshold, 1e-3f);
+        const float max_ratio = 1.0f + (max_boost - 1.0f) * layer_scale;
+        float ratio = 1.0f + base_boost * cool_score * layer_scale;
+        ratio = std::clamp(ratio, 1.0f, max_ratio);
+        ratio = 1.0f + (ratio - 1.0f) * boost_mask[x][y];
+        adjustEdgeCapacity(grouter, x, y, x, y + 1, layer, ratio);
+      }
+    }
+  }
+}
+
 bool segmentCoversHotspot(const GSegment& segment,
                           const Hotspot& hotspot,
                           int tile_size,
@@ -1350,6 +1457,76 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             }
           };
     scenario_defs.push_back(wl_streamline);
+  }
+
+  if (baseline.metrics.overflow == 0 && has_congestion_data) {
+    const float cool_threshold = std::clamp(
+        0.42f + 0.10f * (0.65f - congestion_severity), 0.32f, 0.52f);
+    const float cool_base_boost = std::clamp(
+        0.05f + 0.12f * (0.70f - congestion_severity), 0.03f, 0.16f);
+    const float cool_max_boost = std::clamp(
+        1.07f + 0.10f * (0.60f - congestion_severity), 1.06f, 1.18f);
+    const float cool_layer_decay
+        = std::clamp(0.05f + 0.08f * hotspot_bias, 0.03f, 0.16f);
+    const int cool_halo = hotspots.size() > 2 ? 2 : 1;
+    const float cool_hotspot_guard = std::clamp(
+        0.66f - 0.10f * hotspot_bias, 0.55f, 0.70f);
+    const float cool_perturb = std::clamp(
+        0.02f + 0.14f * congestion_severity, 0.015f, 0.24f);
+    const float cool_critical = std::clamp(
+        4.6f + 2.6f * (0.60f - congestion_severity), 3.8f, 9.0f);
+    const int cool_seed = snapshot.seed + 59;
+    const float cool_hotspot_ratio
+        = std::clamp(0.995f - 0.05f * hotspot_bias, 0.96f, 0.995f);
+    const float cool_hotspot_weight
+        = std::clamp(0.06f + 0.12f * hotspot_bias, 0.05f, 0.16f);
+
+    ScenarioDefinition wl_coolcorr;
+    wl_coolcorr.name = "wl-coolcorr";
+    wl_coolcorr.pre_init
+        = [this, cool_perturb, cool_seed, cool_critical]() {
+            grouter_->setCapacitiesPerturbationPercentage(cool_perturb);
+            grouter_->setPerturbationAmount(cool_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(cool_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(cool_critical);
+          };
+    wl_coolcorr.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           cool_threshold,
+           cool_base_boost,
+           cool_max_boost,
+           cool_layer_decay,
+           cool_halo,
+           cool_hotspot_guard,
+           cool_hotspot_ratio,
+           cool_hotspot_weight]() {
+            applyCoolCapacityBoost(grouter_,
+                                   normalized_rudy,
+                                   hotspots,
+                                   min_routing_layer,
+                                   max_routing_layer,
+                                   cool_threshold,
+                                   cool_base_boost,
+                                   cool_max_boost,
+                                   cool_layer_decay,
+                                   cool_halo,
+                                   cool_hotspot_guard);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    cool_halo,
+                                    cool_hotspot_ratio,
+                                    cool_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_coolcorr);
   }
 
   if (baseline.metrics.overflow == 0 && has_congestion_data) {
