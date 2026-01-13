@@ -704,18 +704,22 @@ PatchSummary applyHotspotPatches(NetRouteMap& routes,
             [](const Hotspot& a, const Hotspot& b) {
               return a.severity > b.severity;
             });
-  const float severity_floor = 0.95f;
-  const size_t max_hotspots = 32;
+  const float severity_floor = 1.05f;
+  const size_t max_hotspots = 20;
+  const size_t capped = std::min(max_hotspots, prioritized.size());
 
   size_t hotspot_limit = 0;
-  while (hotspot_limit < prioritized.size()
-         && (hotspot_limit < max_hotspots
-             && prioritized[hotspot_limit].severity >= severity_floor)) {
+  while (hotspot_limit < capped
+         && prioritized[hotspot_limit].severity >= severity_floor) {
     hotspot_limit++;
   }
-  prioritized.resize(std::max<size_t>(hotspot_limit, std::min(max_hotspots, prioritized.size())));
+  if (hotspot_limit > 0) {
+    prioritized.resize(hotspot_limit);
+  } else {
+    prioritized.resize(std::min<size_t>(8, capped));
+  }
 
-  const int per_net_budget = 3;
+  const int per_net_budget = 2;
 
   for (auto& [db_net, segments] : routes) {
     std::unordered_set<GSegment, GSegmentHash> seen(segments.begin(),
@@ -726,6 +730,10 @@ PatchSummary applyHotspotPatches(NetRouteMap& routes,
     for (const Hotspot& hotspot : prioritized) {
       if (patches_used >= per_net_budget) {
         break;
+      }
+
+      if (hotspot.severity < 1.02f) {
+        continue;
       }
 
       int target_layer = -1;
@@ -864,7 +872,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
 
     // Lean harder on wirelength for scenario ranking; still guard overflow.
-    const double via_weight = static_cast<double>(tile_size) * 2.0;
+    const double via_weight = static_cast<double>(tile_size) * 1.2;
     const double overflow_weight = static_cast<double>(tile_size) * 12.0;
     metrics.score = static_cast<double>(metrics.wirelength_dbu)
                     + via_weight * static_cast<double>(metrics.via_count)
@@ -2086,30 +2094,50 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_priority = 0.00080;   // ~0.08% difference
-    const double wl_via_tie = 0.00035;    // ~0.035% difference
+    const double wl_primary = 0.00045;    // ~0.045% difference
+    const double wl_tie = 0.00020;        // ~0.02% difference
 
     const double util_gap
         = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
-    if (wl_rel < 0.0030 && std::abs(util_gap) > 0.03) {
-      return util_gap < 0.0;
-    }
 
-    if (wl_a != wl_b && wl_rel > wl_priority) {
-      // Wirelength dominates until differences are small.
+    // Prefer shorter wirelength while allowing a modest utilization cushion.
+    if (wl_a != wl_b && wl_rel > wl_primary) {
+      if (wl_a < wl_b
+          && lhs.metrics.max_utilization
+                 <= rhs.metrics.max_utilization + 0.06) {
+        return true;
+      }
+      if (wl_b < wl_a
+          && rhs.metrics.max_utilization
+                 <= lhs.metrics.max_utilization + 0.06) {
+        return false;
+      }
       return wl_a < wl_b;
     }
 
-    if (lhs.metrics.via_count != rhs.metrics.via_count && wl_rel < wl_via_tie) {
-      // With comparable wirelengths, prefer fewer vias.
+    if (wl_rel < 0.0030 && std::abs(util_gap) > 0.04) {
+      return util_gap < 0.0;
+    }
+
+    if (wl_rel > wl_tie) {
+      if (lhs.metrics.via_count != rhs.metrics.via_count
+          && std::abs(util_gap) < 0.02) {
+        if (wl_a <= wl_b && lhs.metrics.via_count < rhs.metrics.via_count) {
+          return true;
+        }
+        if (wl_b <= wl_a && rhs.metrics.via_count < lhs.metrics.via_count) {
+          return false;
+        }
+      }
+      return wl_a < wl_b;
+    }
+
+    if (lhs.metrics.via_count != rhs.metrics.via_count) {
       return lhs.metrics.via_count < rhs.metrics.via_count;
     }
 
-    const double util_diff
-        = std::abs(lhs.metrics.max_utilization - rhs.metrics.max_utilization);
-    if (wl_rel < 0.0025 && util_diff > 0.005) {
-      // Allow small wirelength trade-offs when congestion relief is clear.
-      return lhs.metrics.max_utilization < rhs.metrics.max_utilization;
+    if (std::abs(util_gap) > 1e-4) {
+      return util_gap < 0.0;
     }
 
     auto relative_gap = [](double a, double b) {
@@ -2127,7 +2155,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const double reserve_rel
           = relative_gap(lhs.metrics.reserve_score, rhs.metrics.reserve_score);
       if (std::abs(reserve_rel) > 0.025) {
-        // Prefer solutions that leave a little more slack.
         return reserve_rel > 0.0;
       }
     }
@@ -2178,13 +2205,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 final_result.metrics.max_utilization);
 
   const bool dense_hotspots = hotspots.size() > 4;
-  const bool heavy_congestion = congestion_severity > 0.70f;
-  const bool near_overflow = final_result.metrics.max_utilization > 0.88;
+  const bool heavy_congestion = congestion_severity > 0.75f;
+  const bool near_overflow = final_result.metrics.max_utilization > 0.92;
   const bool overflowing = final_result.metrics.overflow > 0;
+  const bool severe_hotspots
+      = congestion_severity > 0.68f && hotspots.size() > 2;
   const bool should_patch
-      = overflowing
-        || (near_overflow && congestion_severity > 0.60f)
-        || (dense_hotspots && congestion_severity > 0.60f) || heavy_congestion;
+      = overflowing || near_overflow
+        || (heavy_congestion && dense_hotspots)
+        || (severe_hotspots && final_result.metrics.max_utilization > 0.88);
 
   if (should_patch) {
     PatchSummary patch_summary
