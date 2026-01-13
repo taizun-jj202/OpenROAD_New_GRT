@@ -1289,6 +1289,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         0.58f + 0.42f * (congestion_severity / 0.70f), 0.58f, 1.0f);
     wl_greedy_perturb *= taper;
   }
+  if (!force_routability && light_congestion && wl_greedy_perturb > 0.0f) {
+    wl_greedy_perturb *= 0.85f;
+  }
   float wl_greedy_critical
       = std::clamp(wl_critical_pct - 0.8f, 3.5f, 10.0f);
   if (relaxed_utilization) {
@@ -1767,6 +1770,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   if (allow_light_seed) {
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s1", 73, 0.85f));
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-l2", 137, 1.05f));
+    scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s2", 109, 0.70f));
+    scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s3", 177, 1.20f));
   } else if (allow_seed_sweep) {
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s1", 73, 0.8f));
     if (hotspots.size() <= 2 || congestion_severity > 0.78f) {
