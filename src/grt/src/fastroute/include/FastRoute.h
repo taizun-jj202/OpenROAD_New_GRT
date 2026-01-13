@@ -224,6 +224,10 @@ class FastRouteCore
   void setCongestionReportIterStep(int congestion_report_iter_step);
   void setCongestionReportFile(const char* congestion_file_name);
   void setGridMax(int x_max, int y_max);
+  void setViaCostScale(float scale);
+  float getViaCostScale() const { return via_cost_scale_; }
+  int scaledViaCost(int base) const;
+  double viaPenalty() const;
   void getCongestionNets(std::set<odb::dbNet*>& congestion_nets);
   void computeCongestionInformation();
   std::vector<int> getOriginalResources();
@@ -632,6 +636,7 @@ class FastRouteCore
   bool verbose_;
   float critical_nets_percentage_;
   int via_cost_;
+  float via_cost_scale_;
   int mazeedge_threshold_;
   float v_capacity_lb_;
   float h_capacity_lb_;

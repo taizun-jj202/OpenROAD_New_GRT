@@ -46,6 +46,7 @@ struct RouterSnapshot
   float caps_percentage = 0.0f;
   int perturbation_amount = 0;
   float critical_percentage = 0.0f;
+  float via_cost_scale = 1.0f;
   bool allow_congestion = false;
   int seed = 0;
 };
@@ -1010,6 +1011,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (grouter_->fastroute_ != nullptr) {
       snapshot.critical_percentage
           = grouter_->fastroute_->getCriticalNetsPercentage();
+      snapshot.via_cost_scale = grouter_->fastroute_->getViaCostScale();
     }
     snapshot.allow_congestion = grouter_->allow_congestion_;
     snapshot.seed = grouter_->seed_;
@@ -1024,6 +1026,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (grouter_->fastroute_ != nullptr) {
       grouter_->fastroute_->setCriticalNetsPercentage(
           snapshot.critical_percentage);
+      grouter_->fastroute_->setViaCostScale(snapshot.via_cost_scale);
     }
   };
 
@@ -1211,8 +1214,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = 1.0f + 0.10f * congestion_severity + 0.06f * hotspot_bias;
     wl_via_scale = std::clamp(base_via_scale, 1.0f, 1.18f);
   }
-  const auto apply_wl_via_scale = [wl_via_scale]() {
-    static_cast<void>(wl_via_scale);
+  const auto apply_wl_via_scale = [this, wl_via_scale]() {
+    if (grouter_->fastroute_ != nullptr) {
+      grouter_->fastroute_->setViaCostScale(wl_via_scale);
+    }
   };
 
   auto make_soft_config
@@ -1229,12 +1234,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             float critical_pct) {
           ScenarioDefinition def;
           def.name = name;
-          def.pre_init = [this, perturb_pct, seed, critical_pct]() {
+          def.pre_init = [this, perturb_pct, seed, critical_pct, apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(perturb_pct);
             grouter_->setPerturbationAmount(perturb_pct > 0.0f ? 1 : 0);
             grouter_->setSeed(seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(critical_pct);
+            apply_wl_via_scale();
           };
           def.post_init
               = [this,
@@ -1417,12 +1423,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   ScenarioDefinition wl_lean;
   wl_lean.name = "wl-lean";
   wl_lean.pre_init
-      = [this, lean_perturb, lean_seed, lean_critical]() {
+      = [this, lean_perturb, lean_seed, lean_critical, apply_wl_via_scale]() {
           grouter_->setCapacitiesPerturbationPercentage(lean_perturb);
           grouter_->setPerturbationAmount(lean_perturb > 0.0f ? 1 : 0);
           grouter_->setSeed(lean_seed);
           grouter_->setAllowCongestion(false);
           grouter_->fastroute_->setCriticalNetsPercentage(lean_critical);
+          apply_wl_via_scale();
         };
   wl_lean.post_init
       = [this,
@@ -2719,12 +2726,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition contour_soft;
     contour_soft.name = "contour-lite";
     contour_soft.pre_init
-        = [this, contour_perturb, contour_seed, contour_critical]() {
+        = [this,
+           contour_perturb,
+           contour_seed,
+           contour_critical,
+           apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(contour_perturb);
             grouter_->setPerturbationAmount(contour_perturb > 0.0f ? 1 : 0);
             grouter_->setSeed(contour_seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(contour_critical);
+            apply_wl_via_scale();
           };
     contour_soft.post_init
         = [this,
@@ -2809,12 +2821,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition corridor;
     corridor.name = "cool-corridors";
     corridor.pre_init
-        = [this, corridor_perturb, corridor_seed, corridor_critical]() {
+        = [this,
+           corridor_perturb,
+           corridor_seed,
+           corridor_critical,
+           apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(corridor_perturb);
             grouter_->setPerturbationAmount(corridor_perturb > 0.0f ? 1 : 0);
             grouter_->setSeed(corridor_seed);
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(corridor_critical);
+            apply_wl_via_scale();
           };
     corridor.post_init
         = [this,
@@ -2947,7 +2964,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     ScenarioDefinition selective_relief;
     selective_relief.name = "focused-soft";
     selective_relief.pre_init
-        = [this, selective_perturb_pct, selective_seed, selective_critical_pct]() {
+        = [this,
+           selective_perturb_pct,
+           selective_seed,
+           selective_critical_pct,
+           apply_wl_via_scale]() {
             grouter_->setCapacitiesPerturbationPercentage(
                 selective_perturb_pct);
             grouter_->setPerturbationAmount(selective_perturb_pct > 0.0f ? 1 : 0);
@@ -2955,6 +2976,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             grouter_->setAllowCongestion(false);
             grouter_->fastroute_->setCriticalNetsPercentage(
                 selective_critical_pct);
+            apply_wl_via_scale();
           };
     selective_relief.post_init
         = [this,

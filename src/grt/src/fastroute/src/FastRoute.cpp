@@ -56,6 +56,7 @@ FastRouteCore::FastRouteCore(odb::dbDatabase* db,
       verbose_(false),
       critical_nets_percentage_(10),
       via_cost_(0),
+      via_cost_scale_(1.0f),
       mazeedge_threshold_(0),
       v_capacity_lb_(0),
       h_capacity_lb_(0),
@@ -83,6 +84,7 @@ void FastRouteCore::clear()
   h_capacity_ = 0;
   total_overflow_ = 0;
   has_2D_overflow_ = false;
+  via_cost_scale_ = 1.0f;
 
   graph2d_.clear();
   seglist_.clear();
@@ -1207,7 +1209,7 @@ NetRouteMap FastRouteCore::run()
   const int soft_ndr_overflow_th = 10000;
 
   // call FLUTE to generate RSMT and break the nets into segments (2-pin nets)
-  via_cost_ = 0;
+  via_cost_ = scaledViaCost(0);
   gen_brk_RSMT(false, false, false, false, noADJ);
   if (logger_->debugCheck(GRT, "grtSteps", 1)) {
     logger_->report("After RSMT");
@@ -1640,7 +1642,7 @@ NetRouteMap FastRouteCore::run()
   }
 
   costheight_ = 3;
-  via_cost_ = 1;
+  via_cost_ = std::max(1, scaledViaCost(1));
 
   if (past_cong == 0) {
     mazeRouteMSMDOrder3D(enlarge_, 0, long_edge_len);
@@ -1820,6 +1822,24 @@ void FastRouteCore::setResistanceAware(bool resistance_aware)
 {
   enable_resistance_aware_ = resistance_aware;
   estimate_parasitics_ = true;
+}
+
+void FastRouteCore::setViaCostScale(float scale)
+{
+  via_cost_scale_ = std::clamp(scale, 0.0f, 4.0f);
+}
+
+int FastRouteCore::scaledViaCost(int base) const
+{
+  const float scaled = static_cast<float>(base) * via_cost_scale_;
+  const int rounded = static_cast<int>(std::round(scaled));
+  return std::max(0, rounded);
+}
+
+double FastRouteCore::viaPenalty() const
+{
+  return static_cast<double>(via_cost_)
+         * static_cast<double>(via_cost_scale_);
 }
 
 void FastRouteCore::setCongestionReportFile(const char* congestion_file_name)
