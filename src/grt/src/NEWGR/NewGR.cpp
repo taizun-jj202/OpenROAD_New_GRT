@@ -1402,8 +1402,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
          wl_greedy_cool_max,
          wl_greedy_cool_decay,
          wl_greedy_hotspot_ratio,
-         wl_greedy_hotspot_weight]() {
-          if (!normalized_rudy.empty()) {
+         wl_greedy_hotspot_weight,
+         light_congestion,
+         force_routability]() {
+          // Skip aggressive biasing when congestion is already light to avoid
+          // unnecessary detours that hurt wirelength.
+          const bool gentle_mode = !force_routability && light_congestion
+                                   && hotspots.size() <= 2;
+
+          if (!gentle_mode && !normalized_rudy.empty()) {
             applyTopLayerBias(grouter_,
                               normalized_rudy,
                               hotspots,
