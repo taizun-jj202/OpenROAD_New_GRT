@@ -1253,7 +1253,23 @@ NetRouteMap FastRouteCore::run()
 
   convertToMazeroute();
 
+  const int grid_span = std::max(x_grid_, y_grid_);
+  const bool mild_congestion = maxOverflow <= 200 && total_overflow_ <= 12000;
+  const int relax_cap = mild_congestion
+                            ? std::max(6, grid_span / 25)
+                            : std::max(6, x_grid_ / 2);
+
   int enlarge_ = 10;
+  if (mild_congestion) {
+    int tuned_enlarge = 10;
+    if (maxOverflow <= 50) {
+      tuned_enlarge = 6;
+    } else if (maxOverflow <= 120) {
+      tuned_enlarge = 8;
+    }
+    const int relax_floor = std::max(5, grid_span / 50);
+    enlarge_ = std::clamp(tuned_enlarge, relax_floor, relax_cap);
+  }
   int newTH = 10;
   bool stopDEC = false;
   int upType = 1;
@@ -1367,7 +1383,8 @@ NetRouteMap FastRouteCore::run()
       }
     }
 
-    enlarge_ = std::min(enlarge_, x_grid_ / 2);
+    const int enlarge_limit = mild_congestion ? relax_cap : x_grid_ / 2;
+    enlarge_ = std::min(enlarge_, enlarge_limit);
     costheight_ += cost_step;
     mazeedge_threshold_ = THRESH_M;
 
@@ -1649,8 +1666,10 @@ NetRouteMap FastRouteCore::run()
   via_cost_ = 1;
 
   if (past_cong == 0) {
-    mazeRouteMSMDOrder3D(enlarge_, 0, long_edge_len);
-    mazeRouteMSMDOrder3D(enlarge_, 0, short_edge_len);
+    const int maze_enlarge = mild_congestion ? std::min(enlarge_, relax_cap)
+                                             : enlarge_;
+    mazeRouteMSMDOrder3D(maze_enlarge, 0, long_edge_len);
+    mazeRouteMSMDOrder3D(maze_enlarge, 0, short_edge_len);
   }
 
   // Disable estimate parasitics for grt incremental steps with resistance-aware
