@@ -6,6 +6,7 @@
 #include <limits>
 #include <numeric>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -73,6 +74,12 @@ struct RudyStats
   float p80 = 0.0f;
   float p90 = 0.0f;
   float max = 0.0f;
+};
+
+struct PatchSummary
+{
+  int nets_touched = 0;
+  int segments_added = 0;
 };
 
 RudyGrid computeNormalizedRudyGrid(Rudy* rudy)
@@ -539,6 +546,140 @@ void applySelectiveRelief(GlobalRouter* grouter,
       }
     }
   }
+}
+
+bool segmentCoversHotspot(const GSegment& segment,
+                          const Hotspot& hotspot,
+                          int tile_size,
+                          int x_min,
+                          int y_min)
+{
+  if (tile_size <= 0) {
+    return false;
+  }
+
+  const int min_x = std::min(segment.init_x, segment.final_x);
+  const int max_x = std::max(segment.init_x, segment.final_x);
+  const int min_y = std::min(segment.init_y, segment.final_y);
+  const int max_y = std::max(segment.init_y, segment.final_y);
+
+  const int gx0 = (min_x - x_min) / tile_size;
+  const int gx1 = (max_x - x_min) / tile_size;
+  const int gy0 = (min_y - y_min) / tile_size;
+  const int gy1 = (max_y - y_min) / tile_size;
+
+  return hotspot.gx >= gx0 && hotspot.gx <= gx1 && hotspot.gy >= gy0
+         && hotspot.gy <= gy1;
+}
+
+PatchSummary applyHotspotPatches(NetRouteMap& routes,
+                                 const std::vector<Hotspot>& hotspots,
+                                 Grid* grid,
+                                 int min_layer,
+                                 int max_layer)
+{
+  PatchSummary summary;
+  if (hotspots.empty() || grid == nullptr) {
+    return summary;
+  }
+
+  const int tile_size = grid->getTileSize();
+  if (tile_size <= 0) {
+    return summary;
+  }
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+
+  // Focus on the worst congestion cells first.
+  std::vector<Hotspot> prioritized = hotspots;
+  std::sort(prioritized.begin(),
+            prioritized.end(),
+            [](const Hotspot& a, const Hotspot& b) {
+              return a.severity > b.severity;
+            });
+  const float severity_floor = 0.95f;
+  const size_t max_hotspots = 32;
+
+  size_t hotspot_limit = 0;
+  while (hotspot_limit < prioritized.size()
+         && (hotspot_limit < max_hotspots
+             && prioritized[hotspot_limit].severity >= severity_floor)) {
+    hotspot_limit++;
+  }
+  prioritized.resize(std::max<size_t>(hotspot_limit, std::min(max_hotspots, prioritized.size())));
+
+  const int per_net_budget = 4;
+
+  for (auto& [db_net, segments] : routes) {
+    std::unordered_set<GSegment, GSegmentHash> seen(segments.begin(),
+                                                    segments.end());
+    int patches_used = 0;
+    bool net_marked = false;
+
+    for (const Hotspot& hotspot : prioritized) {
+      if (patches_used >= per_net_budget) {
+        break;
+      }
+
+      int target_layer = -1;
+      for (const GSegment& segment : segments) {
+        if (segmentCoversHotspot(
+                segment, hotspot, tile_size, x_min, y_min)) {
+          target_layer = segment.init_layer;
+          if (segment.init_layer != segment.final_layer) {
+            target_layer = std::min(segment.init_layer, segment.final_layer);
+          }
+          break;
+        }
+      }
+
+      if (target_layer < 0) {
+        continue;
+      }
+
+      target_layer = std::clamp(target_layer, min_layer, max_layer);
+      const int alt_layer
+          = (target_layer < max_layer)
+                ? target_layer + 1
+                : (target_layer > min_layer ? target_layer - 1 : target_layer);
+
+      const int x0 = x_min + hotspot.gx * tile_size;
+      const int x1 = x_min + (hotspot.gx + 1) * tile_size;
+      const int y0 = y_min + hotspot.gy * tile_size;
+      const int y1 = y_min + (hotspot.gy + 1) * tile_size;
+
+      bool added_patch_segments = false;
+      auto add_segment = [&](int ix,
+                             int iy,
+                             int il,
+                             int fx,
+                             int fy,
+                             int fl) {
+        GSegment seg(ix, iy, il, fx, fy, fl);
+        if (seen.insert(seg).second) {
+          segments.push_back(seg);
+          summary.segments_added++;
+          added_patch_segments = true;
+          if (!net_marked) {
+            summary.nets_touched++;
+            net_marked = true;
+          }
+        }
+      };
+
+      add_segment(x0, y0, target_layer, x1, y0, target_layer);
+      add_segment(x0, y0, target_layer, x0, y1, target_layer);
+      if (alt_layer != target_layer) {
+        add_segment(x0, y0, target_layer, x0, y0, alt_layer);
+        add_segment(x0, y0, alt_layer, x1, y0, alt_layer);
+      }
+      if (added_patch_segments) {
+        patches_used++;
+      }
+    }
+  }
+
+  return summary;
 }
 
 }  // namespace
@@ -1857,6 +1998,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 final_result.metrics.via_count,
                 final_result.metrics.overflow,
                 final_result.metrics.max_utilization);
+
+  PatchSummary patch_summary = applyHotspotPatches(
+      final_result.routes, hotspots, grouter_->grid(), min_routing_layer, max_routing_layer);
+  if (patch_summary.segments_added > 0) {
+    RouteMetrics patched_metrics = compute_metrics(final_result.routes);
+    logger_->info(
+        GNR,
+        6010,
+        "NEWGR applied {} hotspot patches on {} nets. "
+        "Patched wirelength {:.0f} um, vias {}, overflow {}, max util {:.2f}",
+        patch_summary.segments_added,
+        patch_summary.nets_touched,
+        patched_metrics.wirelength_um,
+        patched_metrics.via_count,
+        patched_metrics.overflow,
+        patched_metrics.max_utilization);
+  }
 
   return std::move(final_result.routes);
 }
