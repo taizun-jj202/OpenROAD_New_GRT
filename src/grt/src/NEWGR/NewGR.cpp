@@ -1812,6 +1812,117 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           };
     scenario_defs.push_back(wl_openlane);
 
+    const float skim_strength
+        = std::clamp(0.65f - congestion_severity, 0.0f, 0.35f);
+    const float skim_perturb = std::clamp(
+        0.015f + 0.08f * congestion_severity - 0.02f * hotspot_bias,
+        0.0f,
+        0.10f);
+    const float skim_critical = std::clamp(
+        4.5f + 2.0f * (0.60f - congestion_severity), 3.8f, 9.0f);
+    const int skim_seed = snapshot.seed + 569;
+    const float skim_via_scale = std::clamp(
+        wl_via_scale * (0.78f + 0.14f * (0.65f - congestion_severity)),
+        0.42f,
+        0.86f);
+    const float skim_cool_threshold = std::clamp(
+        0.56f + 0.10f * (0.60f - congestion_severity), 0.48f, 0.70f);
+    const float skim_base_boost
+        = std::clamp(0.09f + 0.05f * skim_strength, 0.07f, 0.15f);
+    const float skim_max_boost
+        = std::clamp(1.14f + 0.08f * skim_strength, 1.12f, 1.30f);
+    const float skim_layer_decay
+        = std::clamp(0.04f + 0.08f * hotspot_bias, 0.04f, 0.14f);
+    const int skim_halo = hotspots.size() > 2 ? 2 : 1;
+    const float skim_hotspot_guard
+        = std::clamp(0.70f - 0.12f * hotspot_bias, 0.60f, 0.82f);
+    const int skim_top_k = std::max(
+        1, std::min(2, max_routing_layer - min_routing_layer + 1));
+    const float skim_top_threshold
+        = std::clamp(0.52f + 0.08f * congestion_severity, 0.50f, 0.68f);
+    const float skim_top_base
+        = std::clamp(0.08f + 0.05f * skim_strength, 0.06f, 0.15f);
+    const float skim_top_max
+        = std::clamp(1.15f + 0.09f * skim_strength, 1.12f, 1.30f);
+    const float skim_top_guard
+        = std::clamp(0.74f - 0.12f * hotspot_bias, 0.64f, 0.84f);
+    const int skim_top_halo = hotspots.size() > 1 ? 2 : 1;
+    const float skim_hotspot_ratio
+        = std::clamp(0.994f - 0.04f * hotspot_bias, 0.96f, 0.996f);
+    const float skim_hotspot_weight
+        = std::clamp(0.06f + 0.10f * hotspot_bias, 0.05f, 0.14f);
+
+    ScenarioDefinition wl_skim;
+    wl_skim.name = "wl-skim";
+    wl_skim.pre_init
+        = [this,
+           skim_perturb,
+           skim_seed,
+           skim_critical,
+           skim_via_scale]() {
+            grouter_->setCapacitiesPerturbationPercentage(skim_perturb);
+            grouter_->setPerturbationAmount(skim_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(skim_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(skim_critical);
+            if (grouter_->fastroute_ != nullptr) {
+              grouter_->fastroute_->setViaCostScale(skim_via_scale);
+            }
+          };
+    wl_skim.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           skim_cool_threshold,
+           skim_base_boost,
+           skim_max_boost,
+           skim_layer_decay,
+           skim_halo,
+           skim_hotspot_guard,
+           skim_top_k,
+           skim_top_threshold,
+           skim_top_base,
+           skim_top_max,
+           skim_top_guard,
+           skim_top_halo,
+           skim_hotspot_ratio,
+           skim_hotspot_weight]() {
+            applyCoolCapacityBoost(grouter_,
+                                   normalized_rudy,
+                                   hotspots,
+                                   min_routing_layer,
+                                   max_routing_layer,
+                                   skim_cool_threshold,
+                                   skim_base_boost,
+                                   skim_max_boost,
+                                   skim_layer_decay,
+                                   skim_halo,
+                                   skim_hotspot_guard);
+            applyTopLayerBias(grouter_,
+                              normalized_rudy,
+                              hotspots,
+                              min_routing_layer,
+                              max_routing_layer,
+                              skim_top_k,
+                              skim_top_threshold,
+                              skim_top_base,
+                              skim_top_max,
+                              skim_top_guard,
+                              skim_top_halo);
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    skim_halo,
+                                    skim_hotspot_ratio,
+                                    skim_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_skim);
+
     const float prime_perturb
         = std::clamp(wl_greedy_perturb * 0.35f, 0.0f, 0.08f);
     const float prime_critical
