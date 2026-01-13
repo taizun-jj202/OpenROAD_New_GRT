@@ -578,6 +578,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     if (grouter_ != nullptr && grouter_->fastroute_ != nullptr) {
       FastRouteCore* core = grouter_->fastroute_;
+      core->computeCongestionInformation();
       metrics.overflow = core->totalOverflow();
 
       const auto& usage = core->getTotalUsagePerLayer();
@@ -1656,8 +1657,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_priority = 0.00100;   // ~0.10% difference
-    const double wl_via_tie = 0.00080;    // ~0.08% difference
+    const double wl_priority = 0.00035;   // ~0.035% difference
+    const double wl_via_tie = 0.00020;    // ~0.020% difference
 
     const double util_gap
         = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
