@@ -2602,7 +2602,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   if (baseline.metrics.overflow == 0 && has_congestion_data
       && baseline.metrics.max_utilization < 0.82f) {
-    const float via_trim_perturb = std::clamp(
+    float via_trim_perturb = std::clamp(
         0.01f + 0.10f * congestion_severity + 0.05f * hotspot_bias,
         0.0f,
         0.20f);
@@ -2621,14 +2621,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         0.60f + 0.06f * congestion_severity, 0.58f, 0.72f);
     const float via_trim_min_ratio = std::clamp(
         0.97f - 0.015f * hotspot_bias, 0.95f, 0.985f);
-    const float via_trim_hotspot_push
+    float via_trim_hotspot_push
         = std::clamp(0.06f + 0.08f * hotspot_bias, 0.05f, 0.16f);
     const int via_trim_halo = hotspots.size() > 3 ? 2 : 1;
     const float via_trim_cool_threshold
         = std::clamp(via_trim_threshold * 0.70f, 0.44f, 0.60f);
-    const float via_trim_boost = std::clamp(
+    float via_trim_boost = std::clamp(
         0.09f + 0.05f * (0.60f - congestion_severity), 0.06f, 0.16f);
-    const float via_trim_boost_limit = std::clamp(
+    float via_trim_boost_limit = std::clamp(
         1.10f + 0.05f * (0.55f - congestion_severity), 1.08f, 1.18f);
     const float via_trim_layer_falloff
         = std::clamp(0.10f + 0.10f * hotspot_bias, 0.08f, 0.22f);
@@ -2636,6 +2636,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = std::clamp(0.993f - 0.04f * hotspot_bias, 0.96f, 0.995f);
     const float via_trim_hotspot_weight
         = std::clamp(0.08f + 0.10f * hotspot_bias, 0.06f, 0.16f);
+
+    if (ultra_light) {
+      via_trim_perturb = std::clamp(via_trim_perturb * 0.55f, 0.0f, 0.20f);
+      via_trim_hotspot_push
+          = std::clamp(via_trim_hotspot_push * 0.75f, 0.04f, 0.16f);
+      via_trim_boost = std::clamp(via_trim_boost * 0.82f, 0.05f, 0.16f);
+      via_trim_boost_limit
+          = std::clamp(via_trim_boost_limit * 0.96f, 1.05f, 1.18f);
+    }
 
     ScenarioDefinition via_trim;
     via_trim.name = "via-trim";
@@ -3858,7 +3867,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   if (ultra_light) {
     static const std::unordered_set<std::string> ultra_skip{
-        "via-trim",
         "wl-compact",
         "wl-squeeze",
         "wl-smooth",
@@ -3893,14 +3901,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_primary = 0.00035;    // ~0.035% difference
-    const double wl_tie = 0.00015;        // ~0.015% difference
+    const double wl_primary = 0.00045;    // ~0.045% difference
+    const double wl_tie = 0.00025;        // ~0.025% difference
 
     const double util_gap
         = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
     const double reserve_gap
         = lhs.metrics.reserve_score - rhs.metrics.reserve_score;
-    const double util_guard = 0.08;
+    const double util_guard = 0.06;
     const double via_gap = static_cast<double>(lhs.metrics.via_count)
                            - static_cast<double>(rhs.metrics.via_count);
     const double via_rel
@@ -3923,22 +3931,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       return wl_a < wl_b;
     }
 
-    if (wl_rel < 0.0025 && std::abs(util_gap) > 0.025) {
+    if (wl_rel < 0.0030 && std::abs(util_gap) > 0.020) {
       return util_gap < 0.0;
     }
 
-    if (wl_rel < 0.0022 && std::abs(reserve_gap) > 0.05
+    if (wl_rel < 0.0026 && std::abs(reserve_gap) > 0.05
         && std::abs(util_gap) < 0.05) {
       return reserve_gap > 0.0;
     }
 
-    if (wl_rel < 0.0018) {
-      const bool wl_close = wl_rel < 0.0010;
+    if (wl_rel < 0.0028) {
+      const bool wl_close = wl_rel < 0.0014;
       const bool via_meaningful
-          = via_rel > 0.0025 || std::abs(via_gap) > 80.0;
+          = via_rel > 0.0018 || std::abs(via_gap) > 60.0;
       const bool util_safe
           = lhs.metrics.max_utilization
-            <= rhs.metrics.max_utilization + 0.02;
+            <= rhs.metrics.max_utilization + 0.018;
       if (via_meaningful && (wl_close || util_safe)) {
         return via_gap < 0.0;
       }
@@ -3961,7 +3969,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       return (a - b) / denom;
     };
 
-    if (wl_rel < 0.0025) {
+    if (wl_rel < 0.0030) {
       const double stress_rel
           = relative_gap(lhs.metrics.stress_cost, rhs.metrics.stress_cost);
       if (std::abs(stress_rel) > 0.025) {
