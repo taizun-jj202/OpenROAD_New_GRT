@@ -1318,6 +1318,138 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         };
   scenario_defs.push_back(wl_refine);
 
+  if (baseline.metrics.overflow == 0 && has_congestion_data && light_congestion) {
+    const float compact_perturb
+        = std::clamp(0.015f + 0.12f * congestion_severity, 0.0f, 0.16f);
+    const float compact_critical = std::clamp(
+        5.0f + 2.5f * (0.60f - congestion_severity), 4.2f, 9.0f);
+    const int compact_seed = snapshot.seed + 503;
+    const float compact_min_base = 0.94f;
+    const float compact_max_base = 0.985f;
+    const float compact_slope
+        = 1.6f + 0.7f * std::clamp(congestion_severity, 0.0f, 1.0f);
+    const float compact_midpoint = 0.48f;
+    const float compact_threshold = std::clamp(
+        0.64f + 0.08f * congestion_severity, 0.60f, 0.74f);
+    const float compact_min_ratio
+        = std::clamp(0.96f + 0.03f * (0.60f - congestion_severity),
+                     0.95f,
+                     0.985f);
+    const float compact_hotspot_push
+        = std::clamp(0.05f + 0.05f * hotspot_bias, 0.04f, 0.12f);
+    const int compact_halo = hotspots.size() > 3 ? 2 : 1;
+    const float compact_cool_threshold
+        = std::clamp(compact_threshold * 0.72f, 0.42f, 0.56f);
+    const float compact_boost = std::clamp(
+        0.08f + 0.05f * (0.55f - congestion_severity), 0.06f, 0.14f);
+    const float compact_boost_limit = std::clamp(
+        1.07f + 0.05f * (0.55f - congestion_severity), 1.05f, 1.14f);
+    const float compact_layer_falloff
+        = std::clamp(0.08f + 0.08f * hotspot_bias, 0.07f, 0.16f);
+    const int compact_top_k = std::max(
+        1, std::min(2, max_routing_layer - min_routing_layer + 1));
+    const float compact_top_threshold
+        = std::clamp(0.58f + 0.10f * congestion_severity, 0.56f, 0.74f);
+    const float compact_top_base = std::clamp(
+        0.06f + 0.05f * (0.55f - congestion_severity), 0.04f, 0.12f);
+    const float compact_top_max = std::clamp(
+        1.09f + 0.05f * (0.55f - congestion_severity), 1.06f, 1.16f);
+    const float compact_top_guard
+        = std::clamp(0.70f - 0.20f * hotspot_bias, 0.60f, 0.74f);
+    const int compact_top_halo = hotspots.size() > 2 ? 2 : 1;
+    const float compact_hotspot_ratio
+        = std::clamp(0.992f - 0.03f * hotspot_bias, 0.96f, 0.995f);
+    const float compact_hotspot_weight
+        = std::clamp(0.08f + 0.08f * hotspot_bias, 0.06f, 0.14f);
+
+    ScenarioDefinition wl_compact;
+    wl_compact.name = "wl-compact";
+    wl_compact.pre_init
+        = [this, compact_perturb, compact_seed, compact_critical]() {
+            grouter_->setCapacitiesPerturbationPercentage(compact_perturb);
+            grouter_->setPerturbationAmount(compact_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(compact_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(compact_critical);
+          };
+    wl_compact.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           compact_min_base,
+           compact_max_base,
+           compact_slope,
+           compact_midpoint,
+           compact_threshold,
+           compact_min_ratio,
+           compact_hotspot_push,
+           compact_halo,
+           compact_cool_threshold,
+           compact_boost,
+           compact_boost_limit,
+           compact_layer_falloff,
+           compact_top_k,
+           compact_top_threshold,
+           compact_top_base,
+           compact_top_max,
+           compact_top_guard,
+           compact_top_halo,
+           compact_hotspot_ratio,
+           compact_hotspot_weight]() {
+            if (!normalized_rudy.empty()) {
+              applySoftCapacityScaling(grouter_,
+                                       normalized_rudy,
+                                       min_routing_layer,
+                                       max_routing_layer,
+                                       compact_min_base,
+                                       compact_max_base,
+                                       compact_slope,
+                                       compact_midpoint);
+            }
+
+            applySelectiveRelief(grouter_,
+                                 normalized_rudy,
+                                 hotspots,
+                                 min_routing_layer,
+                                 max_routing_layer,
+                                 compact_threshold,
+                                 compact_min_ratio,
+                                 compact_hotspot_push,
+                                 compact_halo,
+                                 compact_cool_threshold,
+                                 compact_boost,
+                                 compact_boost_limit,
+                                 compact_layer_falloff);
+
+            if (!normalized_rudy.empty()) {
+              applyTopLayerBias(grouter_,
+                                normalized_rudy,
+                                hotspots,
+                                min_routing_layer,
+                                max_routing_layer,
+                                compact_top_k,
+                                compact_top_threshold,
+                                compact_top_base,
+                                compact_top_max,
+                                compact_top_guard,
+                                compact_top_halo);
+            }
+
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    compact_halo,
+                                    compact_hotspot_ratio,
+                                    compact_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(wl_compact);
+  }
+
   if (baseline.metrics.overflow == 0 && has_congestion_data) {
     const float direct_threshold = std::clamp(
         0.60f + 0.12f * (congestion_severity - 0.40f), 0.54f, 0.80f);
