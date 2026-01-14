@@ -1216,7 +1216,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     wl_via_scale = std::clamp(base_via_scale, 0.58f, 1.0f);
     if (baseline.metrics.overflow == 0 && light_congestion
         && hotspot_bias < 0.22f) {
-      wl_via_scale = std::clamp(wl_via_scale - 0.10f, 0.50f, 0.96f);
+      const float util_relief = std::clamp(
+          static_cast<float>((0.66f - baseline.metrics.max_utilization) * 0.6f),
+          0.0f,
+          0.12f);
+      wl_via_scale
+          = std::clamp(wl_via_scale - 0.10f - util_relief, 0.48f, 0.96f);
     }
   } else {
     const float base_via_scale
@@ -3021,7 +3026,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_defs.push_back(wl_toplane);
   }
 
-  if (baseline.metrics.overflow == 0 && has_congestion_data) {
+  if (baseline.metrics.overflow == 0 && has_congestion_data
+      && (congestion_severity > 0.58f || hotspot_bias > 0.20f
+          || baseline.metrics.max_utilization > 0.68f)) {
     const float squeeze_perturb = std::clamp(
         0.02f + 0.12f * (0.55f - congestion_severity), 0.0f, 0.14f);
     const float squeeze_critical = std::clamp(
@@ -3780,6 +3787,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   if (light_congestion && baseline.metrics.overflow == 0) {
     static const std::unordered_set<std::string> skip_names{
+        "wl-compact",
+        "wl-direct",
+        "wl-smooth",
+        "wl-stability",
+        "wl-lean",
+        "wl-squeeze",
+        "wl-feather",
         "contour-lite",
         "cool-corridors",
         "wl-coolboost",
@@ -3797,9 +3811,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   if (ultra_light) {
     static const std::unordered_set<std::string> ultra_skip{
         "wl-compact",
+        "wl-direct",
         "wl-squeeze",
         "wl-smooth",
         "wl-stability",
+        "wl-lean",
+        "wl-feather",
         "wl-coolcorr",
         "wl-coolboost",
         "contour-lite",
