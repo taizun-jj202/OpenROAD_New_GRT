@@ -1240,6 +1240,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       grouter_->fastroute_->setViaCostScale(wl_via_scale);
     }
   };
+  const float wl_pure_via_scale
+      = clean_wl_focus
+            ? std::clamp(wl_via_scale * 0.72f, 0.32f, wl_via_scale)
+            : wl_via_scale;
+  const auto apply_wl_pure_via_scale = [this, wl_pure_via_scale]() {
+    if (grouter_->fastroute_ != nullptr) {
+      grouter_->fastroute_->setViaCostScale(wl_pure_via_scale);
+    }
+  };
 
   const float via_trim_scale_base
       = std::max(wl_via_scale * 1.05f,
@@ -3004,6 +3013,31 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s2", 109, 0.70f));
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s3", 177, 1.20f));
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-zero", 251, 0.0f));
+    if (clean_wl_focus) {
+      const float wl_pure_perturb
+          = std::clamp(wl_greedy_perturb * 0.45f, 0.0f, 0.06f);
+      const float wl_pure_critical
+          = std::clamp(wl_greedy_critical - 0.8f, 3.2f, 9.0f);
+      const int wl_pure_seed = snapshot.seed + 503;
+
+      ScenarioDefinition wl_pure;
+      wl_pure.name = "wl-pure";
+      wl_pure.pre_init
+          = [this,
+             wl_pure_perturb,
+             wl_pure_seed,
+             wl_pure_critical,
+             apply_wl_pure_via_scale]() {
+            grouter_->setCapacitiesPerturbationPercentage(wl_pure_perturb);
+            grouter_->setPerturbationAmount(wl_pure_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(wl_pure_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(wl_pure_critical);
+            apply_wl_pure_via_scale();
+          };
+      wl_pure.post_init = []() {};
+      scenario_defs.push_back(wl_pure);
+    }
   } else if (allow_seed_sweep) {
     scenario_defs.push_back(make_wl_greedy_seed("wl-greedy-s1", 73, 0.8f));
     if (hotspots.size() <= 2 || congestion_severity > 0.78f) {
@@ -4195,7 +4229,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const double util_soft_guard = clean_wl_focus ? 0.12 : 0.10;
   const long via_preference_limit
       = baseline.metrics.overflow == 0
-            ? (clean_wl_focus ? (light_congestion ? 3000 : 2000)
+            ? (clean_wl_focus ? (light_congestion ? 3600 : 2400)
                               : (light_congestion ? 2200 : 1400))
             : 900;
 
