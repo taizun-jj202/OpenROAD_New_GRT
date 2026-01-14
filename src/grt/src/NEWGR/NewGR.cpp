@@ -1213,7 +1213,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (light_congestion) {
       base_via_scale -= 0.06f;
     }
-    wl_via_scale = std::clamp(base_via_scale, 0.54f, 1.0f);
+    wl_via_scale = std::clamp(base_via_scale, 0.52f, 1.0f);
     if (baseline.metrics.overflow == 0 && light_congestion
         && hotspot_bias < 0.22f) {
       const float util_relief = std::clamp(
@@ -1221,7 +1221,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           0.0f,
           0.12f);
       wl_via_scale
-          = std::clamp(wl_via_scale - 0.12f - util_relief, 0.42f, 0.96f);
+          = std::clamp(wl_via_scale - 0.12f - util_relief, 0.40f, 0.96f);
     }
   } else {
     const float base_via_scale
@@ -2109,6 +2109,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     // Skip the extra light-congestion variants when the baseline is already clean
     // to reduce runtime without sacrificing wirelength focus.
     if (!skip_extended_light) {
+      const bool prefer_shortcut
+          = hotspot_bias < 0.18f && congestion_severity < 0.66f
+            && hotspots.size() <= 2
+            && baseline.metrics.max_utilization < 0.70f;
+      const bool prefer_skim
+          = !prefer_shortcut
+            && (congestion_severity > 0.58f || hotspot_bias > 0.22f
+                || hotspots.size() > 2
+                || baseline.metrics.max_utilization > 0.68f);
+      const bool run_openlane = !prefer_shortcut && !prefer_skim;
     const float openlane_perturb
         = std::clamp(0.01f + 0.10f * congestion_severity, 0.01f, 0.14f);
     const float openlane_critical = std::clamp(
@@ -2208,12 +2218,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                     openlane_hotspot_weight);
            }
           };
-    scenario_defs.push_back(wl_openlane);
+    if (run_openlane) {
+      scenario_defs.push_back(wl_openlane);
+    }
 
     const float shortcut_via_scale = std::clamp(
-        wl_via_scale * (0.60f + 0.12f * (0.70f - congestion_severity)),
-        0.36f,
-        0.82f);
+        wl_via_scale * (0.58f + 0.16f * (0.70f - congestion_severity)),
+        0.32f,
+        0.80f);
     const float shortcut_perturb = std::clamp(
         0.008f + 0.10f * (0.65f - congestion_severity), 0.0f, 0.10f);
     const float shortcut_critical = std::clamp(
@@ -2315,7 +2327,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                     shortcut_hotspot_weight);
             }
           };
-    scenario_defs.push_back(wl_shortcut);
+    if (prefer_shortcut) {
+      scenario_defs.push_back(wl_shortcut);
+    }
 
     const float skim_strength
         = std::clamp(0.65f - congestion_severity, 0.0f, 0.35f);
@@ -2327,9 +2341,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         4.5f + 2.0f * (0.60f - congestion_severity), 3.8f, 9.0f);
     const int skim_seed = snapshot.seed + 569;
     const float skim_via_scale = std::clamp(
-        wl_via_scale * (0.78f + 0.14f * (0.65f - congestion_severity)),
-        0.42f,
-        0.86f);
+        wl_via_scale * (0.76f + 0.16f * (0.65f - congestion_severity)),
+        0.40f,
+        0.88f);
     const float skim_cool_threshold = std::clamp(
         0.56f + 0.10f * (0.60f - congestion_severity), 0.48f, 0.70f);
     const float skim_base_boost
@@ -2426,7 +2440,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                     skim_hotspot_weight);
            }
           };
-    scenario_defs.push_back(wl_skim);
+    if (prefer_skim) {
+      scenario_defs.push_back(wl_skim);
+    }
 
     const float direct_top_perturb
         = std::clamp(0.01f + 0.06f * congestion_severity, 0.0f, 0.10f);
