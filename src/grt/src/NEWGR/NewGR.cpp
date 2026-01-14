@@ -1204,6 +1204,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 light_congestion);
 
   float wl_via_scale = 1.0f;
+  const bool clean_wl_focus
+      = !force_routability && baseline.metrics.overflow == 0
+        && light_congestion && hotspot_bias < 0.24f
+        && baseline.metrics.max_utilization < 0.70f;
   if (!force_routability) {
     float base_via_scale = 0.60f + 0.25f * congestion_severity
                            - 0.12f * hotspot_bias;
@@ -1213,7 +1217,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (light_congestion) {
       base_via_scale -= 0.06f;
     }
-    wl_via_scale = std::clamp(base_via_scale, 0.52f, 1.0f);
+    wl_via_scale = std::clamp(
+        base_via_scale, clean_wl_focus ? 0.50f : 0.52f, 1.0f);
     if (baseline.metrics.overflow == 0 && light_congestion
         && hotspot_bias < 0.22f) {
       const float util_relief = std::clamp(
@@ -1221,7 +1226,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           0.0f,
           0.12f);
       wl_via_scale
-          = std::clamp(wl_via_scale - 0.12f - util_relief, 0.40f, 0.96f);
+          = std::clamp(wl_via_scale - 0.12f - util_relief,
+                       clean_wl_focus ? 0.36f : 0.40f,
+                       0.96f);
     }
   } else {
     const float base_via_scale
@@ -2106,9 +2113,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const bool skip_extended_light
         = hotspot_bias < 0.18f && hotspots.size() <= 1
           && baseline.metrics.max_utilization < 0.68f;
+    const bool skip_clean_light
+        = clean_wl_focus && rudy_stats.p80 < 0.90f;
+    const bool skip_light_variants = skip_extended_light || skip_clean_light || ultra_light;
     // Skip the extra light-congestion variants when the baseline is already clean
     // to reduce runtime without sacrificing wirelength focus.
-    if (!skip_extended_light) {
+    if (!skip_light_variants) {
       const bool prefer_shortcut
           = hotspot_bias < 0.18f && congestion_severity < 0.66f
             && hotspots.size() <= 2
