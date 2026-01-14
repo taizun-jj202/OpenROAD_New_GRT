@@ -1213,7 +1213,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (light_congestion) {
       base_via_scale -= 0.06f;
     }
-    wl_via_scale = std::clamp(base_via_scale, 0.42f, 0.96f);
+    wl_via_scale = std::clamp(base_via_scale, 0.58f, 1.0f);
   } else {
     const float base_via_scale
         = 1.0f + 0.12f * congestion_severity + 0.08f * hotspot_bias;
@@ -1413,86 +1413,57 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           // Skip aggressive biasing when congestion is already light to avoid
           // unnecessary detours that hurt wirelength.
          const bool gentle_mode = !force_routability && light_congestion
-                                   && hotspots.size() <= 2;
+                                  && hotspots.size() <= 2;
+
+          if (gentle_mode) {
+            if (!hotspots.empty()) {
+              const float hotspot_ratio = std::clamp(
+                  wl_greedy_hotspot_ratio + 0.006f, 0.0f, 0.999f);
+              const float hotspot_weight
+                  = wl_greedy_hotspot_weight * 0.65f;
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    wl_greedy_top_halo,
+                                    hotspot_ratio,
+                                    hotspot_weight);
+            }
+            return;
+          }
 
           if (!normalized_rudy.empty()) {
-            if (!gentle_mode) {
-              applyTopLayerBias(grouter_,
-                                normalized_rudy,
-                                hotspots,
-                                min_routing_layer,
-                                max_routing_layer,
-                                wl_greedy_top_k,
-                                wl_greedy_top_threshold,
-                                wl_greedy_top_base,
-                                wl_greedy_top_max,
-                                wl_greedy_top_guard,
-                                wl_greedy_top_halo);
-              applyCoolCapacityBoost(grouter_,
-                                     normalized_rudy,
-                                     hotspots,
-                                     min_routing_layer,
-                                     max_routing_layer,
-                                     wl_greedy_cool_threshold,
-                                     wl_greedy_cool_base,
-                                     wl_greedy_cool_max,
-                                     wl_greedy_cool_decay,
-                                     wl_greedy_top_halo,
-                                     wl_greedy_top_guard);
-            } else {
-              const float gentle_guard
-                  = 1.0f - (1.0f - wl_greedy_top_guard) * 0.70f;
-              const float gentle_top_base = wl_greedy_top_base * 0.75f;
-              const float gentle_top_max
-                  = 1.0f + (wl_greedy_top_max - 1.0f) * 0.85f;
-              applyTopLayerBias(grouter_,
-                                normalized_rudy,
-                                hotspots,
-                                min_routing_layer,
-                                max_routing_layer,
-                                wl_greedy_top_k,
-                                wl_greedy_top_threshold,
-                                gentle_top_base,
-                                gentle_top_max,
-                                gentle_guard,
-                                wl_greedy_top_halo);
-
-              const float gentle_cool_guard
-                  = 1.0f - (1.0f - wl_greedy_top_guard) * 0.70f;
-              const float gentle_cool_base = wl_greedy_cool_base * 0.78f;
-              const float gentle_cool_max
-                  = 1.0f + (wl_greedy_cool_max - 1.0f) * 0.86f;
-              const float gentle_cool_decay = wl_greedy_cool_decay * 0.65f;
-              applyCoolCapacityBoost(grouter_,
-                                     normalized_rudy,
-                                     hotspots,
-                                     min_routing_layer,
-                                     max_routing_layer,
-                                     wl_greedy_cool_threshold,
-                                     gentle_cool_base,
-                                     gentle_cool_max,
-                                     gentle_cool_decay,
-                                     wl_greedy_top_halo,
-                                     gentle_cool_guard);
-            }
+            applyTopLayerBias(grouter_,
+                              normalized_rudy,
+                              hotspots,
+                              min_routing_layer,
+                              max_routing_layer,
+                              wl_greedy_top_k,
+                              wl_greedy_top_threshold,
+                              wl_greedy_top_base,
+                              wl_greedy_top_max,
+                              wl_greedy_top_guard,
+                              wl_greedy_top_halo);
+            applyCoolCapacityBoost(grouter_,
+                                   normalized_rudy,
+                                   hotspots,
+                                   min_routing_layer,
+                                   max_routing_layer,
+                                   wl_greedy_cool_threshold,
+                                   wl_greedy_cool_base,
+                                   wl_greedy_cool_max,
+                                   wl_greedy_cool_decay,
+                                   wl_greedy_top_halo,
+                                   wl_greedy_top_guard);
           }
           if (!hotspots.empty()) {
-            const float hotspot_ratio = gentle_mode
-                                            ? std::clamp(
-                                                wl_greedy_hotspot_ratio + 0.006f,
-                                                0.0f,
-                                                0.999f)
-                                            : wl_greedy_hotspot_ratio;
-            const float hotspot_weight = gentle_mode
-                                             ? wl_greedy_hotspot_weight * 0.65f
-                                             : wl_greedy_hotspot_weight;
             applyHotspotPenalties(grouter_,
                                   hotspots,
                                   min_routing_layer,
                                   max_routing_layer,
                                   wl_greedy_top_halo,
-                                  hotspot_ratio,
-                                  hotspot_weight);
+                                  wl_greedy_hotspot_ratio,
+                                  wl_greedy_hotspot_weight);
           }
         };
   scenario_defs.push_back(wl_greedy);
@@ -3901,14 +3872,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_primary = 0.00045;    // ~0.045% difference
-    const double wl_tie = 0.00025;        // ~0.025% difference
+    const double wl_primary = 0.00035;    // ~0.035% difference
+    const double wl_tie = 0.00015;        // ~0.015% difference
 
     const double util_gap
         = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
     const double reserve_gap
         = lhs.metrics.reserve_score - rhs.metrics.reserve_score;
-    const double util_guard = 0.06;
+    const double util_guard = 0.08;
     const double via_gap = static_cast<double>(lhs.metrics.via_count)
                            - static_cast<double>(rhs.metrics.via_count);
     const double via_rel
@@ -3931,22 +3902,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       return wl_a < wl_b;
     }
 
-    if (wl_rel < 0.0030 && std::abs(util_gap) > 0.020) {
+    if (wl_rel < 0.0025 && std::abs(util_gap) > 0.025) {
       return util_gap < 0.0;
     }
 
-    if (wl_rel < 0.0026 && std::abs(reserve_gap) > 0.05
+    if (wl_rel < 0.0022 && std::abs(reserve_gap) > 0.05
         && std::abs(util_gap) < 0.05) {
       return reserve_gap > 0.0;
     }
 
-    if (wl_rel < 0.0028) {
-      const bool wl_close = wl_rel < 0.0014;
+    if (wl_rel < 0.0018) {
+      const bool wl_close = wl_rel < 0.0010;
       const bool via_meaningful
-          = via_rel > 0.0018 || std::abs(via_gap) > 60.0;
+          = via_rel > 0.0025 || std::abs(via_gap) > 80.0;
       const bool util_safe
           = lhs.metrics.max_utilization
-            <= rhs.metrics.max_utilization + 0.018;
+            <= rhs.metrics.max_utilization + 0.02;
       if (via_meaningful && (wl_close || util_safe)) {
         return via_gap < 0.0;
       }
@@ -3969,7 +3940,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       return (a - b) / denom;
     };
 
-    if (wl_rel < 0.0030) {
+    if (wl_rel < 0.0025) {
       const double stress_rel
           = relative_gap(lhs.metrics.stress_cost, rhs.metrics.stress_cost);
       if (std::abs(stress_rel) > 0.025) {
