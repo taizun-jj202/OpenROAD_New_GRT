@@ -1633,7 +1633,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
          lean_top_guard,
          lean_top_halo,
          lean_hotspot_ratio,
-          lean_hotspot_weight]() {
+         lean_hotspot_weight]() {
           if (!normalized_rudy.empty()) {
             applySoftCapacityScaling(grouter_,
                                      normalized_rudy,
@@ -1666,6 +1666,120 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           }
         };
   scenario_defs.push_back(wl_lean);
+
+  if (baseline.metrics.overflow == 0 && has_congestion_data
+      && light_congestion && !ultra_light) {
+    const float leanlite_perturb = std::clamp(
+        wl_greedy_perturb * 0.55f + 0.01f * (0.50f - congestion_severity),
+        0.0f,
+        0.10f);
+    const float leanlite_critical = std::clamp(
+        wl_greedy_critical - 0.45f + 0.35f * hotspot_bias, 3.0f, 9.0f);
+    const int leanlite_seed = snapshot.seed + 613;
+    const float leanlite_util_relief
+        = std::clamp(static_cast<float>((0.64f - baseline.metrics.max_utilization)
+                                        * 0.5f),
+                     0.0f,
+                     0.08f);
+    const float leanlite_via_scale = std::clamp(
+        wl_via_scale * (0.88f - leanlite_util_relief), 0.44f, 0.96f);
+    const float leanlite_min_base
+        = std::clamp(0.94f + 0.02f * (0.60f - congestion_severity),
+                     0.92f,
+                     0.97f);
+    const float leanlite_max_base = std::clamp(
+        0.988f + 0.01f * (0.52f - congestion_severity),
+        leanlite_min_base + 0.008f,
+        0.995f);
+    const float leanlite_slope = 1.20f + 0.50f * congestion_severity;
+    const float leanlite_midpoint
+        = std::clamp(0.49f - 0.01f * (0.68f - congestion_severity),
+                     0.47f,
+                     0.50f);
+    const int leanlite_top_k = std::max(
+        1, std::min(2, max_routing_layer - min_routing_layer + 1));
+    const float leanlite_top_threshold = std::clamp(
+        0.56f + 0.05f * (congestion_severity - 0.45f), 0.52f, 0.64f);
+    const float leanlite_top_base = std::clamp(
+        0.05f + 0.03f * (0.58f - congestion_severity), 0.04f, 0.09f);
+    const float leanlite_top_max = std::clamp(
+        1.09f + 0.03f * (0.55f - congestion_severity), 1.05f, 1.15f);
+    const float leanlite_top_guard
+        = std::clamp(0.82f - 0.12f * hotspot_bias, 0.70f, 0.90f);
+    const int leanlite_top_halo = hotspots.size() > 2 ? 2 : 1;
+    const float leanlite_hotspot_ratio
+        = std::clamp(0.994f - 0.03f * hotspot_bias, 0.97f, 0.996f);
+    const float leanlite_hotspot_weight
+        = std::clamp(0.05f + 0.08f * hotspot_bias, 0.04f, 0.12f);
+
+    ScenarioDefinition wl_leanlite;
+    wl_leanlite.name = "wl-lean-lite";
+    wl_leanlite.pre_init
+        = [this,
+           leanlite_perturb,
+           leanlite_seed,
+           leanlite_critical,
+           leanlite_via_scale]() {
+            grouter_->setCapacitiesPerturbationPercentage(leanlite_perturb);
+            grouter_->setPerturbationAmount(leanlite_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(leanlite_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(leanlite_critical);
+            if (grouter_->fastroute_ != nullptr) {
+              grouter_->fastroute_->setViaCostScale(leanlite_via_scale);
+            }
+          };
+    wl_leanlite.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           leanlite_min_base,
+           leanlite_max_base,
+           leanlite_slope,
+           leanlite_midpoint,
+           leanlite_top_k,
+           leanlite_top_threshold,
+           leanlite_top_base,
+           leanlite_top_max,
+           leanlite_top_guard,
+           leanlite_top_halo,
+           leanlite_hotspot_ratio,
+           leanlite_hotspot_weight]() {
+          if (!normalized_rudy.empty()) {
+            applySoftCapacityScaling(grouter_,
+                                     normalized_rudy,
+                                     min_routing_layer,
+                                     max_routing_layer,
+                                     leanlite_min_base,
+                                     leanlite_max_base,
+                                     leanlite_slope,
+                                     leanlite_midpoint);
+            applyTopLayerBias(grouter_,
+                              normalized_rudy,
+                              hotspots,
+                              min_routing_layer,
+                              max_routing_layer,
+                              leanlite_top_k,
+                              leanlite_top_threshold,
+                              leanlite_top_base,
+                              leanlite_top_max,
+                              leanlite_top_guard,
+                              leanlite_top_halo);
+          }
+          if (!hotspots.empty()) {
+            applyHotspotPenalties(grouter_,
+                                  hotspots,
+                                  min_routing_layer,
+                                  max_routing_layer,
+                                  leanlite_top_halo,
+                                  leanlite_hotspot_ratio,
+                                  leanlite_hotspot_weight);
+          }
+        };
+    scenario_defs.push_back(wl_leanlite);
+  }
 
   const float balance_perturb
       = std::clamp(0.01f + 0.06f * congestion_severity
