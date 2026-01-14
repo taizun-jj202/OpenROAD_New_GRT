@@ -1356,6 +1356,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const float wl_greedy_hotspot_weight
       = std::clamp(0.06f + 0.12f * hotspot_bias, 0.06f, 0.14f);
   const int wl_greedy_hotspot_halo = hotspots.size() > 1 ? 2 : 1;
+  const bool wl_greedy_skip_hotspot_penalties
+      = hotspots.empty()
+        || (!force_routability && baseline.metrics.overflow == 0
+            && light_congestion && hotspot_bias < 0.20f
+            && hotspots.size() <= 2 && congestion_severity < 0.62f);
   const bool wl_greedy_hotspot_guarded
       = force_routability || baseline.metrics.overflow > 0
         || congestion_severity > 0.70f || hotspot_bias > 0.22f
@@ -1384,9 +1389,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
          wl_greedy_hotspot_ratio,
          wl_greedy_hotspot_weight,
          wl_greedy_hotspot_halo,
+         wl_greedy_skip_hotspot_penalties,
          wl_greedy_hotspot_guarded,
          light_congestion]() {
-          if (hotspots.empty()) {
+          if (wl_greedy_skip_hotspot_penalties) {
             return;
           }
 
