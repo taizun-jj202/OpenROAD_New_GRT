@@ -1221,7 +1221,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           0.0f,
           0.12f);
       wl_via_scale
-          = std::clamp(wl_via_scale - 0.10f - util_relief, 0.48f, 0.96f);
+          = std::clamp(wl_via_scale - 0.10f - util_relief, 0.46f, 0.96f);
     }
   } else {
     const float base_via_scale
@@ -1534,6 +1534,95 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             }
           };
     scenario_defs.push_back(wl_feather);
+  }
+
+  if (baseline.metrics.overflow == 0 && light_congestion) {
+    const float via_focus_scale = std::clamp(
+        wl_via_scale * (relaxed_utilization ? 0.70f : 0.78f), 0.38f, 0.86f);
+    const float via_focus_perturb = std::clamp(
+        wl_greedy_perturb * 0.70f + 0.01f, 0.0f, 0.12f);
+    const float via_focus_critical = std::clamp(
+        wl_greedy_critical - 0.3f + 0.5f * hotspot_bias, 3.0f, 9.5f);
+    const int via_focus_seed = snapshot.seed + 563;
+    const int via_focus_top_k = std::max(
+        1, std::min(2, max_routing_layer - min_routing_layer + 1));
+    const float via_focus_top_threshold
+        = std::clamp(0.55f + 0.06f * (congestion_severity - 0.35f),
+                     0.52f,
+                     0.70f);
+    const float via_focus_top_base = std::clamp(
+        0.06f + 0.03f * (0.60f - congestion_severity), 0.05f, 0.11f);
+    const float via_focus_top_max = std::clamp(
+        1.12f + 0.04f * (0.55f - congestion_severity), 1.08f, 1.18f);
+    const float via_focus_top_guard
+        = std::clamp(0.78f - 0.12f * hotspot_bias, 0.66f, 0.86f);
+    const int via_focus_top_halo = hotspots.size() > 2 ? 2 : 1;
+    const float via_focus_hotspot_ratio
+        = std::clamp(0.995f - 0.03f * hotspot_bias, 0.97f, 0.995f);
+    const float via_focus_hotspot_weight
+        = std::clamp(0.05f + 0.10f * hotspot_bias, 0.04f, 0.12f);
+    const bool via_focus_skip_hotspot
+        = hotspots.empty()
+          || (hotspot_bias < 0.18f && baseline.metrics.max_utilization < 0.68f
+              && hotspots.size() <= 2);
+
+    ScenarioDefinition via_focus;
+    via_focus.name = "wl-viafocus";
+    via_focus.pre_init
+        = [this,
+           via_focus_perturb,
+           via_focus_seed,
+           via_focus_critical,
+           via_focus_scale]() {
+            grouter_->setCapacitiesPerturbationPercentage(via_focus_perturb);
+            grouter_->setPerturbationAmount(via_focus_perturb > 0.0f ? 1 : 0);
+            grouter_->setSeed(via_focus_seed);
+            grouter_->setAllowCongestion(false);
+            grouter_->fastroute_->setCriticalNetsPercentage(
+                via_focus_critical);
+            if (grouter_->fastroute_ != nullptr) {
+              grouter_->fastroute_->setViaCostScale(via_focus_scale);
+            }
+          };
+    via_focus.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           via_focus_top_k,
+           via_focus_top_threshold,
+           via_focus_top_base,
+           via_focus_top_max,
+           via_focus_top_guard,
+           via_focus_top_halo,
+           via_focus_hotspot_ratio,
+           via_focus_hotspot_weight,
+           via_focus_skip_hotspot]() {
+            if (!normalized_rudy.empty()) {
+              applyTopLayerBias(grouter_,
+                                normalized_rudy,
+                                hotspots,
+                                min_routing_layer,
+                                max_routing_layer,
+                                via_focus_top_k,
+                                via_focus_top_threshold,
+                                via_focus_top_base,
+                                via_focus_top_max,
+                                via_focus_top_guard,
+                                via_focus_top_halo);
+            }
+            if (!via_focus_skip_hotspot && !hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    via_focus_top_halo,
+                                    via_focus_hotspot_ratio,
+                                    via_focus_hotspot_weight);
+            }
+          };
+    scenario_defs.push_back(via_focus);
   }
 
   const float wl_refine_perturb = wl_greedy_perturb * 0.6f;
@@ -4064,10 +4153,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = static_cast<size_t>(best_iter - scenario_results.begin());
   size_t wl_pref_index = best_index;
   const long target_overflow = scenario_results[best_index].metrics.overflow;
-  const double wl_gain_threshold = 0.00012;
+  const double wl_gain_threshold = 0.00008;
   const double util_soft_guard = 0.10;
   const long via_preference_limit
-      = baseline.metrics.overflow == 0 && light_congestion ? 1400 : 800;
+      = baseline.metrics.overflow == 0
+            ? (light_congestion ? 2200 : 1400)
+            : 900;
 
   for (size_t i = 0; i < scenario_results.size(); ++i) {
     const ScenarioResult& candidate = scenario_results[i];
