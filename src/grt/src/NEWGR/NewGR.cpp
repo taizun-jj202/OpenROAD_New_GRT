@@ -1249,6 +1249,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       grouter_->fastroute_->setViaCostScale(wl_pure_via_scale);
     }
   };
+  const auto apply_wl_focus_via_scale = [apply_wl_via_scale,
+                                         apply_wl_pure_via_scale,
+                                         clean_wl_focus]() {
+    if (clean_wl_focus) {
+      apply_wl_pure_via_scale();
+    } else {
+      apply_wl_via_scale();
+    }
+  };
 
   const float via_trim_scale_base
       = std::max(wl_via_scale * 1.05f,
@@ -1336,13 +1345,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
          wl_perturb_pct,
          wl_seed,
          wl_critical_pct,
-         apply_wl_via_scale]() {
+         apply_wl_focus_via_scale]() {
           grouter_->setCapacitiesPerturbationPercentage(wl_perturb_pct);
           grouter_->setPerturbationAmount(wl_perturb_pct > 0.0f ? 1 : 0);
           grouter_->setSeed(wl_seed);
           grouter_->setAllowCongestion(false);
           grouter_->fastroute_->setCriticalNetsPercentage(wl_critical_pct);
-          apply_wl_via_scale();
+          apply_wl_focus_via_scale();
         };
   wl_variation.post_init
       = [this, &hotspots, min_routing_layer, max_routing_layer]() {
@@ -1398,13 +1407,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
          wl_greedy_perturb,
          wl_greedy_seed,
          wl_greedy_critical,
-         apply_wl_via_scale]() {
+         apply_wl_focus_via_scale]() {
           grouter_->setCapacitiesPerturbationPercentage(wl_greedy_perturb);
           grouter_->setPerturbationAmount(wl_greedy_perturb > 0.0f ? 1 : 0);
           grouter_->setSeed(wl_greedy_seed);
           grouter_->setAllowCongestion(false);
           grouter_->fastroute_->setCriticalNetsPercentage(wl_greedy_critical);
-          apply_wl_via_scale();
+          apply_wl_focus_via_scale();
         };
   wl_greedy.post_init
       = [this,
@@ -1652,14 +1661,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
          wl_refine_perturb,
          wl_refine_seed,
          wl_refine_critical,
-         apply_wl_via_scale]() {
+         apply_wl_focus_via_scale]() {
           const float perturb = std::clamp(wl_refine_perturb, 0.0f, 0.40f);
           grouter_->setCapacitiesPerturbationPercentage(perturb);
           grouter_->setPerturbationAmount(perturb > 0.0f ? 1 : 0);
           grouter_->setSeed(wl_refine_seed);
           grouter_->setAllowCongestion(false);
           grouter_->fastroute_->setCriticalNetsPercentage(wl_refine_critical);
-          apply_wl_via_scale();
+          apply_wl_focus_via_scale();
         };
   wl_refine.post_init
       = [this, &hotspots, min_routing_layer, max_routing_layer]() {
@@ -1940,13 +1949,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
          balance_perturb,
          balance_seed,
          balance_critical,
-         apply_wl_via_scale]() {
+         apply_wl_focus_via_scale]() {
           grouter_->setCapacitiesPerturbationPercentage(balance_perturb);
           grouter_->setPerturbationAmount(balance_perturb > 0.0f ? 1 : 0);
           grouter_->setSeed(balance_seed);
           grouter_->setAllowCongestion(false);
           grouter_->fastroute_->setCriticalNetsPercentage(balance_critical);
-          apply_wl_via_scale();
+          apply_wl_focus_via_scale();
         };
   wl_balance.post_init
       = [this,
@@ -2986,7 +2995,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
          wl_greedy_perturb,
          wl_greedy_critical,
          &snapshot,
-         apply_wl_via_scale](
+         apply_wl_focus_via_scale](
             const std::string& name, int seed_offset, float perturb_scale) {
           ScenarioDefinition def;
           def.name = name;
@@ -2994,14 +3003,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               = std::clamp(wl_greedy_perturb * perturb_scale, 0.0f, 0.60f);
           const int seed = snapshot.seed + seed_offset;
           def.pre_init
-              = [this, perturb, seed, wl_greedy_critical, apply_wl_via_scale]() {
+              = [this,
+                 perturb,
+                 seed,
+                 wl_greedy_critical,
+                 apply_wl_focus_via_scale]() {
                   grouter_->setCapacitiesPerturbationPercentage(perturb);
                   grouter_->setPerturbationAmount(perturb > 0.0f ? 1 : 0);
                   grouter_->setSeed(seed);
                   grouter_->setAllowCongestion(false);
                   grouter_->fastroute_->setCriticalNetsPercentage(
                       wl_greedy_critical);
-                  apply_wl_via_scale();
+                  apply_wl_focus_via_scale();
                 };
           def.post_init = []() {};
           return def;
@@ -4225,11 +4238,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = static_cast<size_t>(best_iter - scenario_results.begin());
   size_t wl_pref_index = best_index;
   const long target_overflow = scenario_results[best_index].metrics.overflow;
-  const double wl_gain_threshold = 0.00008;
+  const double wl_gain_threshold = clean_wl_focus ? 0.00006 : 0.00008;
   const double util_soft_guard = clean_wl_focus ? 0.12 : 0.10;
   const long via_preference_limit
       = baseline.metrics.overflow == 0
-            ? (clean_wl_focus ? (light_congestion ? 3600 : 2400)
+            ? (clean_wl_focus ? (light_congestion ? 4800 : 3200)
                               : (light_congestion ? 2200 : 1400))
             : 900;
 
