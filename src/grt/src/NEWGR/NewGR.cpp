@@ -1213,7 +1213,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (light_congestion) {
       base_via_scale -= 0.06f;
     }
-    wl_via_scale = std::clamp(base_via_scale, 0.58f, 1.0f);
+    wl_via_scale = std::clamp(base_via_scale, 0.54f, 1.0f);
     if (baseline.metrics.overflow == 0 && light_congestion
         && hotspot_bias < 0.22f) {
       const float util_relief = std::clamp(
@@ -1221,7 +1221,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           0.0f,
           0.12f);
       wl_via_scale
-          = std::clamp(wl_via_scale - 0.10f - util_relief, 0.46f, 0.96f);
+          = std::clamp(wl_via_scale - 0.12f - util_relief, 0.42f, 0.96f);
     }
   } else {
     const float base_via_scale
@@ -2103,6 +2103,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   if (baseline.metrics.overflow == 0 && has_congestion_data && light_congestion) {
+    const bool skip_extended_light
+        = hotspot_bias < 0.18f && hotspots.size() <= 1
+          && baseline.metrics.max_utilization < 0.68f;
+    // Skip the extra light-congestion variants when the baseline is already clean
+    // to reduce runtime without sacrificing wirelength focus.
+    if (!skip_extended_light) {
     const float openlane_perturb
         = std::clamp(0.01f + 0.10f * congestion_severity, 0.01f, 0.14f);
     const float openlane_critical = std::clamp(
@@ -2735,6 +2741,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             }
           };
     scenario_defs.push_back(wl_compact);
+    }
   }
 
   if (baseline.metrics.overflow == 0 && has_congestion_data
