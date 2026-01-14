@@ -4082,15 +4082,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double wl_a = static_cast<double>(lhs.metrics.wirelength_dbu);
     const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
     const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
+    const bool wl_first = clean_wl_focus && light_congestion
+                          && lhs.metrics.overflow == 0
+                          && rhs.metrics.overflow == 0;
     const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_primary = 0.00035;    // ~0.035% difference
-    const double wl_tie = 0.00015;        // ~0.015% difference
+    const double wl_primary
+        = wl_first ? 0.00030 : 0.00035;    // ~0.030% / 0.035%
+    const double wl_tie
+        = wl_first ? 0.00012 : 0.00015;    // ~0.012% / 0.015%
 
     const double util_gap
         = lhs.metrics.max_utilization - rhs.metrics.max_utilization;
     const double reserve_gap
         = lhs.metrics.reserve_score - rhs.metrics.reserve_score;
-    const double util_guard = 0.08;
+    const double util_guard = wl_first ? 0.10 : 0.08;
     const double via_gap = static_cast<double>(lhs.metrics.via_count)
                            - static_cast<double>(rhs.metrics.via_count);
     const double via_rel
@@ -4122,7 +4127,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       return reserve_gap > 0.0;
     }
 
-    if (wl_rel < 0.0018) {
+    if (!wl_first && wl_rel < 0.0018) {
       const bool wl_close = wl_rel < 0.0010;
       const bool via_meaningful
           = via_rel > 0.0025 || std::abs(via_gap) > 80.0;
@@ -4138,7 +4143,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       return wl_a < wl_b;
     }
 
-    if (lhs.metrics.via_count != rhs.metrics.via_count) {
+    if (!wl_first && lhs.metrics.via_count != rhs.metrics.via_count) {
       return lhs.metrics.via_count < rhs.metrics.via_count;
     }
 
@@ -4187,10 +4192,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   size_t wl_pref_index = best_index;
   const long target_overflow = scenario_results[best_index].metrics.overflow;
   const double wl_gain_threshold = 0.00008;
-  const double util_soft_guard = 0.10;
+  const double util_soft_guard = clean_wl_focus ? 0.12 : 0.10;
   const long via_preference_limit
       = baseline.metrics.overflow == 0
-            ? (light_congestion ? 2200 : 1400)
+            ? (clean_wl_focus ? (light_congestion ? 3000 : 2000)
+                              : (light_congestion ? 2200 : 1400))
             : 900;
 
   for (size_t i = 0; i < scenario_results.size(); ++i) {
