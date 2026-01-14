@@ -1214,6 +1214,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       base_via_scale -= 0.06f;
     }
     wl_via_scale = std::clamp(base_via_scale, 0.58f, 1.0f);
+    if (baseline.metrics.overflow == 0 && light_congestion
+        && hotspot_bias < 0.22f) {
+      wl_via_scale = std::clamp(wl_via_scale - 0.10f, 0.50f, 0.96f);
+    }
   } else {
     const float base_via_scale
         = 1.0f + 0.12f * congestion_severity + 0.08f * hotspot_bias;
@@ -1701,6 +1705,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = std::clamp(0.994f - 0.04f * hotspot_bias, 0.96f, 0.995f);
   const float balance_hotspot_weight
       = std::clamp(0.06f + 0.10f * hotspot_bias, 0.05f, 0.14f);
+  const bool balance_skip_hotspots
+      = baseline.metrics.overflow == 0 && light_congestion
+        && hotspot_bias < 0.24f;
 
   ScenarioDefinition wl_balance;
   wl_balance.name = "wl-balance";
@@ -1738,7 +1745,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
          balance_top_guard,
          balance_top_halo,
          balance_hotspot_ratio,
-         balance_hotspot_weight]() {
+         balance_hotspot_weight,
+         balance_skip_hotspots]() {
           if (!normalized_rudy.empty()) {
             applySoftCapacityScaling(grouter_,
                                      normalized_rudy,
@@ -1769,7 +1777,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                             balance_top_max,
                             balance_top_guard,
                             balance_top_halo);
-          if (!hotspots.empty()) {
+          if (!hotspots.empty() && !balance_skip_hotspots) {
             applyHotspotPenalties(grouter_,
                                   hotspots,
                                   min_routing_layer,
@@ -3925,8 +3933,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = static_cast<size_t>(best_iter - scenario_results.begin());
   size_t wl_pref_index = best_index;
   const long target_overflow = scenario_results[best_index].metrics.overflow;
-  const double wl_gain_threshold = 0.00018;
+  const double wl_gain_threshold = 0.00012;
   const double util_soft_guard = 0.10;
+  const long via_preference_limit
+      = baseline.metrics.overflow == 0 && light_congestion ? 1400 : 800;
 
   for (size_t i = 0; i < scenario_results.size(); ++i) {
     const ScenarioResult& candidate = scenario_results[i];
@@ -3954,7 +3964,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     const long via_gap
         = candidate.metrics.via_count - current.metrics.via_count;
-    if (via_gap > 800) {
+    if (via_gap > via_preference_limit) {
       continue;
     }
 
