@@ -4131,25 +4131,70 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   if (fast_baseline) {
-    static const std::unordered_set<std::string> fast_keep{
-        "wl-greedy",
-        "wl-variation"};
-    scenario_defs.erase(
-        std::remove_if(scenario_defs.begin(),
-                       scenario_defs.end(),
-                       [&](const ScenarioDefinition& def) {
-                         return fast_keep.find(def.name) == fast_keep.end();
-                       }),
-        scenario_defs.end());
+    ScenarioDefinition greedy_def;
+    ScenarioDefinition variation_def;
+    bool have_greedy = false;
+    bool have_variation = false;
+    for (const ScenarioDefinition& def : scenario_defs) {
+      if (def.name == "wl-greedy") {
+        greedy_def = def;
+        have_greedy = true;
+      } else if (def.name == "wl-variation") {
+        variation_def = def;
+        have_variation = true;
+      }
+    }
+
+    scenario_defs.clear();
+    if (have_greedy) {
+      scenario_defs.push_back(greedy_def);
+    }
+    if (have_variation) {
+      scenario_defs.push_back(variation_def);
+    }
     logger_->info(GNR,
                   6012,
                   "NEWGR fast path: limiting scenario sweep to {} candidates.",
                   scenario_defs.size());
   }
 
-  for (const ScenarioDefinition& def : scenario_defs) {
+  const bool prefer_single_greedy
+      = fast_baseline && baseline.metrics.overflow == 0;
+  const double fast_wl_improvement = 0.0004;
+  const long fast_via_guard
+      = std::max<long>(static_cast<long>(baseline.metrics.via_count * 0.02),
+                       1200);
+
+  for (size_t i = 0; i < scenario_defs.size(); ++i) {
+    const ScenarioDefinition& def = scenario_defs[i];
     ScenarioResult result = run_scenario(def, snapshot);
     scenario_results.push_back(std::move(result));
+
+    if (prefer_single_greedy && def.name == "wl-greedy") {
+      const ScenarioResult& greedy_result = scenario_results.back();
+      const double wl_gain
+          = (static_cast<double>(baseline.metrics.wirelength_dbu)
+             - static_cast<double>(greedy_result.metrics.wirelength_dbu))
+            / std::max<double>(baseline.metrics.wirelength_dbu, 1.0);
+      const long via_delta
+          = greedy_result.metrics.via_count - baseline.metrics.via_count;
+      const bool util_guard
+          = greedy_result.metrics.max_utilization
+            <= baseline.metrics.max_utilization + 0.03;
+      if (greedy_result.metrics.overflow <= baseline.metrics.overflow
+          && wl_gain > fast_wl_improvement && via_delta <= fast_via_guard
+          && util_guard) {
+        logger_->info(GNR,
+                      6013,
+                      "NEWGR fast path: wl-greedy improved baseline enough "
+                      "(WL {:.0f} um, vias {}, max util {:.2f}); "
+                      "skipping remaining scenarios.",
+                      greedy_result.metrics.wirelength_um,
+                      greedy_result.metrics.via_count,
+                      greedy_result.metrics.max_utilization);
+        break;
+      }
+    }
   }
 
   auto better_result = [&](const ScenarioResult& lhs,
