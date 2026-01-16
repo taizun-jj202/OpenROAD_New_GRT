@@ -1203,6 +1203,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 baseline.metrics.overflow,
                 light_congestion);
 
+  const bool fast_baseline
+      = !force_routability && baseline.metrics.overflow == 0 && light_congestion
+        && baseline.metrics.max_utilization < 0.70f
+        && congestion_severity < 0.70f && hotspots.size() <= 3;
+  if (fast_baseline) {
+    logger_->info(
+        GNR,
+        6011,
+        "NEWGR fast path enabled to reduce runtime (max util {:.2f}, "
+        "congestion {:.2f}, hotspots {}).",
+        baseline.metrics.max_utilization,
+        congestion_severity,
+        hotspots.size());
+  }
+
   float wl_via_scale = 1.0f;
   const bool clean_wl_focus
       = !force_routability && baseline.metrics.overflow == 0
@@ -4113,6 +4128,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                          return ultra_skip.find(def.name) != ultra_skip.end();
                        }),
         scenario_defs.end());
+  }
+
+  if (fast_baseline) {
+    static const std::unordered_set<std::string> fast_keep{
+        "wl-greedy",
+        "wl-variation"};
+    scenario_defs.erase(
+        std::remove_if(scenario_defs.begin(),
+                       scenario_defs.end(),
+                       [&](const ScenarioDefinition& def) {
+                         return fast_keep.find(def.name) == fast_keep.end();
+                       }),
+        scenario_defs.end());
+    logger_->info(GNR,
+                  6012,
+                  "NEWGR fast path: limiting scenario sweep to {} candidates.",
+                  scenario_defs.size());
   }
 
   for (const ScenarioDefinition& def : scenario_defs) {
