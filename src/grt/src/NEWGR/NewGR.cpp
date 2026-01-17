@@ -1230,6 +1230,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         grouter_->setCongestionIterations(trimmed_iters);
       }
     }
+
+    const bool sproute_ultrafast = sproute_speed_lane
+                                   && preroute_severity < 0.82f
+                                   && rudy_stats.p80 < 0.90f
+                                   && nets_per_tile > 0.0
+                                   && nets_per_tile < 2.0;
+    if (sproute_ultrafast && trimmed_iters > 6) {
+      const int ultrafast_iters = std::max(trimmed_iters - 1, 5);
+      logger_->info(
+          GNR,
+          6027,
+          "NEWGR SPRoute-style ultrafast cap: reducing overflow iterations "
+          "from {} to {} (severity {:.2f}, p80 {:.2f}, nets/tile {:.2f}).",
+          trimmed_iters,
+          ultrafast_iters,
+          preroute_severity,
+          rudy_stats.p80,
+          nets_per_tile);
+      trimmed_iters = ultrafast_iters;
+      grouter_->setCongestionIterations(trimmed_iters);
+    }
   }
 
   auto run_existing_state = [&](const std::string& name,
@@ -1704,7 +1725,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const bool mellow_fastlane = congestion_severity < 0.62f
                                  && hotspots.size() <= 2
                                  && rudy_stats.p80 < 0.92f;
-    const int hard_cap = mellow_fastlane ? 4 : 6;
+    const int hard_cap = mellow_fastlane ? 4 : 5;
     if (scenario_congestion_iterations > hard_cap) {
       logger_->info(GNR,
                     6023,
@@ -4921,27 +4942,38 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   chosen.metrics.max_utilization);
   }
 
+  auto find_definition = [&](const std::string& name)
+      -> const ScenarioDefinition* {
+    if (name == "baseline") {
+      return &baseline_def;
+    }
+    for (const ScenarioDefinition& def : scenario_defs) {
+      if (def.name == name) {
+        return &def;
+      }
+    }
+    return nullptr;
+  };
+
   const std::string best_name = best_iter->name;
   ScenarioResult final_result = std::move(*best_iter);
+  const ScenarioDefinition* best_def = find_definition(best_name);
 
   // Reuse the already-evaluated scenario result to avoid an extra full routing
   // pass. Only rerun if the cached routes are missing for some reason.
   if (final_result.routes.empty()
-      && best_name != scenario_results.back().name) {
-    const ScenarioDefinition* replay_def = nullptr;
-    if (best_name == "baseline") {
-      replay_def = &baseline_def;
-    } else {
-      for (const ScenarioDefinition& def : scenario_defs) {
-        if (def.name == best_name) {
-          replay_def = &def;
-          break;
-        }
-      }
-    }
-    if (replay_def != nullptr) {
+      && best_name != scenario_results.back().name && best_def != nullptr) {
+    final_result
+        = run_scenario(*best_def, snapshot, scenario_congestion_iterations);
+  }
+
+  if (best_def != nullptr && grouter_->fastroute_ != nullptr) {
+    const int current_overflow = grouter_->fastroute_->totalOverflow();
+    if (final_result.metrics.overflow < current_overflow) {
+      const int replay_iters = std::max(
+          scenario_congestion_iterations, base_congestion_iterations);
       final_result
-          = run_scenario(*replay_def, snapshot, scenario_congestion_iterations);
+          = run_scenario(*best_def, snapshot, replay_iters);
     }
   }
 
