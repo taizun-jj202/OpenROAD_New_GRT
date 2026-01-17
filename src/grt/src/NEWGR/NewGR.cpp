@@ -49,6 +49,7 @@ struct RouterSnapshot
   float via_cost_scale = 1.0f;
   bool allow_congestion = false;
   int seed = 0;
+  int congestion_iterations = 0;
 };
 
 struct ScenarioDefinition
@@ -1008,6 +1009,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     RouterSnapshot snapshot;
     snapshot.caps_percentage = grouter_->caps_perturbation_percentage_;
     snapshot.perturbation_amount = grouter_->perturbation_amount_;
+    snapshot.congestion_iterations = grouter_->congestion_iterations_;
     if (grouter_->fastroute_ != nullptr) {
       snapshot.critical_percentage
           = grouter_->fastroute_->getCriticalNetsPercentage();
@@ -1022,6 +1024,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->setCapacitiesPerturbationPercentage(snapshot.caps_percentage);
     grouter_->setPerturbationAmount(snapshot.perturbation_amount);
     grouter_->setAllowCongestion(snapshot.allow_congestion);
+    grouter_->setCongestionIterations(snapshot.congestion_iterations);
     grouter_->setSeed(snapshot.seed);
     if (grouter_->fastroute_ != nullptr) {
       grouter_->fastroute_->setCriticalNetsPercentage(
@@ -1100,8 +1103,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   };
 
   auto run_scenario = [&](const ScenarioDefinition& scenario,
-                          const RouterSnapshot& snapshot) {
+                          const RouterSnapshot& snapshot,
+                          int tuned_congestion_iterations) {
     restore_snapshot(snapshot);
+    const int desired_iterations
+        = scenario.name == "baseline" ? snapshot.congestion_iterations
+                                      : tuned_congestion_iterations;
+    if (desired_iterations > 0
+        && desired_iterations != grouter_->congestion_iterations_) {
+      grouter_->setCongestionIterations(desired_iterations);
+    }
     if (scenario.pre_init) {
       scenario.pre_init();
     }
@@ -1218,6 +1229,47 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         baseline.metrics.max_utilization,
         congestion_severity,
         hotspots.size());
+  }
+
+  const int base_congestion_iterations = snapshot.congestion_iterations;
+  int scenario_congestion_iterations = base_congestion_iterations;
+  if (!force_routability) {
+    if (fast_baseline && light_congestion && hotspots.size() <= 3
+        && baseline.metrics.max_utilization < 0.68f) {
+      const bool mellow = congestion_severity < 0.62f && hotspots.size() <= 2;
+      const double scale = mellow ? 0.36 : 0.52;
+      const int min_iters = mellow ? 12 : 16;
+      scenario_congestion_iterations = std::clamp(
+          static_cast<int>(std::round(
+              static_cast<double>(base_congestion_iterations) * scale)),
+          min_iters,
+          base_congestion_iterations);
+    } else if (light_congestion && baseline.metrics.overflow == 0) {
+      scenario_congestion_iterations = std::clamp(
+          static_cast<int>(std::round(
+              static_cast<double>(base_congestion_iterations) * 0.62)),
+          18,
+          base_congestion_iterations);
+    } else if (congestion_severity < 0.82f
+               && baseline.metrics.overflow == 0) {
+      scenario_congestion_iterations = std::clamp(
+          static_cast<int>(std::round(
+              static_cast<double>(base_congestion_iterations) * 0.75)),
+          22,
+          base_congestion_iterations);
+    }
+  }
+  if (scenario_congestion_iterations < base_congestion_iterations) {
+    logger_->info(
+        GNR,
+        6016,
+        "NEWGR runtime tuning: using {} overflow iterations instead of {} "
+        "for scenario sweep (severity {:.2f}, hotspots {}, max util {:.2f})",
+        scenario_congestion_iterations,
+        base_congestion_iterations,
+        congestion_severity,
+        hotspots.size(),
+        baseline.metrics.max_utilization);
   }
 
   float wl_via_scale = 1.0f;
@@ -4206,7 +4258,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   for (size_t i = 0; i < scenario_defs.size(); ++i) {
     const ScenarioDefinition& def = scenario_defs[i];
-    ScenarioResult result = run_scenario(def, snapshot);
+    ScenarioResult result
+        = run_scenario(def, snapshot, scenario_congestion_iterations);
     scenario_results.push_back(std::move(result));
 
     if (prefer_single_greedy && def.name == "wl-greedy") {
@@ -4430,7 +4483,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
     if (replay_def != nullptr) {
-      final_result = run_scenario(*replay_def, snapshot);
+      final_result
+          = run_scenario(*replay_def, snapshot, scenario_congestion_iterations);
     }
   }
 
