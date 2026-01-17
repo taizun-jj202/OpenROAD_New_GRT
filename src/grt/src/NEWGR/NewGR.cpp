@@ -4158,6 +4158,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   scenario_defs.size());
   }
 
+  const bool sproute_fastlane = fast_baseline && ultra_light
+                                && hotspots.empty()
+                                && baseline.metrics.max_utilization < 0.64f
+                                && congestion_severity < 0.52f
+                                && rudy_stats.p80 < 0.86f;
+  if (sproute_fastlane) {
+    logger_->info(GNR,
+                  6014,
+                  "NEWGR SP-like fast lane: using baseline routing only "
+                  "(max util {:.2f}, congestion {:.2f}, hotspots {}).",
+                  baseline.metrics.max_utilization,
+                  congestion_severity,
+                  hotspots.size());
+    scenario_defs.clear();
+  }
+
   const bool prefer_single_greedy
       = fast_baseline && baseline.metrics.overflow == 0;
   const double fast_wl_improvement = 0.0004;
