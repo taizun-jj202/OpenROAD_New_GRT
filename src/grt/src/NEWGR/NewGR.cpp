@@ -1599,6 +1599,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return std::move(best_ptr->routes);
   }
 
+  const bool sproute_skip_sweep = baseline.metrics.overflow == 0
+                                  && baseline.metrics.wirelength_um
+                                         <= runtime_wl_budget
+                                  && baseline.metrics.via_count
+                                         <= runtime_via_budget
+                                  && congestion_severity < 0.80f
+                                  && rudy_stats.p80 < 0.95f
+                                  && baseline.metrics.max_utilization < 0.76f;
+  if (sproute_skip_sweep) {
+    logger_->info(GNR,
+                  6030,
+                  "NEWGR SPRoute-style fast lane: baseline already meets "
+                  "quality targets (WL {:.0f} um, vias {}, max util {:.2f}, "
+                  "congestion {:.2f}); skipping scenario sweep.",
+                  baseline.metrics.wirelength_um,
+                  baseline.metrics.via_count,
+                  baseline.metrics.max_utilization,
+                  congestion_severity);
+    return std::move(baseline.routes);
+  }
+
   const int base_congestion_iterations = snapshot.congestion_iterations;
   int scenario_congestion_iterations = base_congestion_iterations;
   auto clamp_scenario_iters = [&](int target, int min_iters) {
