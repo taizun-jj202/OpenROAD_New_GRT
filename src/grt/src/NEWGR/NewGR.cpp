@@ -1393,17 +1393,151 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         && baseline.metrics.wirelength_um <= runtime_wl_budget * 0.98
         && baseline.metrics.via_count <= runtime_via_budget * 0.80;
   if (runtime_quality_lane) {
+    const int express_iters
+        = std::clamp(trimmed_iters > 0 ? trimmed_iters / 2 : 0, 3, 6);
+    const float express_perturb = std::clamp(
+        0.015f + 0.10f * congestion_severity, 0.0f, 0.12f);
+    const float express_critical = std::clamp(
+        5.5f + 2.0f * (0.60f - congestion_severity), 4.5f, 9.0f);
+    const int express_seed = snapshot.seed + 407;
+    const float express_via_scale = std::clamp(
+        0.54f + 0.22f * congestion_severity - 0.10f * hotspot_bias,
+        0.40f,
+        0.82f);
+    const int express_top_k = std::max(
+        1, std::min(2, max_routing_layer - min_routing_layer + 1));
+    const float express_top_threshold = std::clamp(
+        0.56f + 0.04f * (congestion_severity - 0.40f), 0.52f, 0.70f);
+    const float express_top_base = std::clamp(
+        0.06f + 0.03f * (0.65f - congestion_severity), 0.04f, 0.10f);
+    const float express_top_max = std::clamp(
+        1.10f + 0.04f * (0.55f - congestion_severity), 1.06f, 1.18f);
+    const float express_top_guard
+        = std::clamp(0.80f - 0.12f * hotspot_bias, 0.68f, 0.88f);
+    const int express_top_halo = hotspots.size() > 1 ? 2 : 1;
+    const float express_cool_threshold
+        = std::clamp(express_top_threshold * 0.70f, 0.44f, 0.60f);
+    const float express_cool_base = std::clamp(
+        0.06f + 0.04f * (0.60f - congestion_severity), 0.04f, 0.10f);
+    const float express_cool_max = std::clamp(
+        1.10f + 0.04f * (0.55f - congestion_severity), 1.06f, 1.16f);
+    const float express_cool_decay
+        = std::clamp(0.04f + 0.06f * hotspot_bias, 0.03f, 0.12f);
+    const float express_hotspot_ratio
+        = std::clamp(0.994f - 0.03f * hotspot_bias, 0.97f, 0.996f);
+    const float express_hotspot_weight
+        = std::clamp(0.05f + 0.08f * hotspot_bias, 0.04f, 0.12f);
+
+    ScenarioDefinition express_def;
+    express_def.name = "runtime-express";
+    express_def.pre_init = [this,
+                            express_perturb,
+                            express_seed,
+                            express_critical,
+                            express_via_scale]() {
+      grouter_->setCapacitiesPerturbationPercentage(express_perturb);
+      grouter_->setPerturbationAmount(express_perturb > 0.0f ? 1 : 0);
+      grouter_->setSeed(express_seed);
+      grouter_->setAllowCongestion(false);
+      grouter_->fastroute_->setCriticalNetsPercentage(express_critical);
+      if (grouter_->fastroute_ != nullptr) {
+        grouter_->fastroute_->setViaCostScale(express_via_scale);
+      }
+    };
+    express_def.post_init
+        = [this,
+           &normalized_rudy,
+           &hotspots,
+           min_routing_layer,
+           max_routing_layer,
+           express_top_k,
+           express_top_threshold,
+           express_top_base,
+           express_top_max,
+           express_top_guard,
+           express_top_halo,
+           express_cool_threshold,
+           express_cool_base,
+           express_cool_max,
+           express_cool_decay,
+           express_hotspot_ratio,
+           express_hotspot_weight]() {
+            if (!normalized_rudy.empty()) {
+              applyTopLayerBias(grouter_,
+                                normalized_rudy,
+                                hotspots,
+                                min_routing_layer,
+                                max_routing_layer,
+                                express_top_k,
+                                express_top_threshold,
+                                express_top_base,
+                                express_top_max,
+                                express_top_guard,
+                                express_top_halo);
+              applyCoolCapacityBoost(grouter_,
+                                     normalized_rudy,
+                                     hotspots,
+                                     min_routing_layer,
+                                     max_routing_layer,
+                                     express_cool_threshold,
+                                     express_cool_base,
+                                     express_cool_max,
+                                     express_cool_decay,
+                                     express_top_halo,
+                                     express_top_guard);
+            }
+            if (!hotspots.empty()) {
+              applyHotspotPenalties(grouter_,
+                                    hotspots,
+                                    min_routing_layer,
+                                    max_routing_layer,
+                                    express_top_halo,
+                                    express_hotspot_ratio,
+                                    express_hotspot_weight);
+            }
+          };
+
+    ScenarioResult express_result
+        = run_scenario(express_def, snapshot, express_iters);
+    ScenarioResult* best_ptr = &baseline;
+    auto prefer_quick = [](const ScenarioResult& a, const ScenarioResult& b) {
+      if (a.metrics.overflow != b.metrics.overflow) {
+        return a.metrics.overflow < b.metrics.overflow;
+      }
+      if (a.metrics.wirelength_dbu != b.metrics.wirelength_dbu) {
+        return a.metrics.wirelength_dbu < b.metrics.wirelength_dbu;
+      }
+      if (a.metrics.via_count != b.metrics.via_count) {
+        return a.metrics.via_count < b.metrics.via_count;
+      }
+      return a.metrics.max_utilization < b.metrics.max_utilization;
+    };
+    if (prefer_quick(express_result, baseline)) {
+      best_ptr = &express_result;
+    }
+
     logger_->info(GNR,
                   6021,
                   "NEWGR runtime lane: baseline meets quality guard (WL {:.0f} "
                   "um -> proj {:.0f} um, vias {} -> proj {}, max util {:.2f}); "
-                  "skipping scenario sweep.",
+                  "running express scenario {} with {} iterations.",
                   baseline.metrics.wirelength_um,
                   runtime_projected_wl,
                   baseline.metrics.via_count,
                   runtime_projected_vias,
-                  baseline.metrics.max_utilization);
-    return std::move(baseline.routes);
+                  baseline.metrics.max_utilization,
+                  express_def.name,
+                  express_iters);
+    logger_->info(GNR,
+                  6024,
+                  "NEWGR runtime lane picked {} (WL {:.0f} um, vias {}, "
+                  "overflow {}, max util {:.2f}).",
+                  best_ptr->name,
+                  best_ptr->metrics.wirelength_um,
+                  best_ptr->metrics.via_count,
+                  best_ptr->metrics.overflow,
+                  best_ptr->metrics.max_utilization);
+    return std::move(best_ptr->routes);
   }
 
   const int base_congestion_iterations = snapshot.congestion_iterations;
@@ -1476,7 +1610,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const bool mellow_fastlane = congestion_severity < 0.62f
                                  && hotspots.size() <= 2
                                  && rudy_stats.p80 < 0.92f;
-    const int hard_cap = mellow_fastlane ? 5 : 6;
+    const int hard_cap = mellow_fastlane ? 4 : 6;
     if (scenario_congestion_iterations > hard_cap) {
       logger_->info(GNR,
                     6023,
