@@ -1200,6 +1200,36 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         grouter_->setCongestionIterations(trimmed_iters);
       }
     }
+
+    const bool sproute_speed_lane = !normalized_rudy.empty()
+                                    && preroute_severity < 0.82f
+                                    && rudy_stats.p80 < 0.92f
+                                    && nets_per_tile > 0.0
+                                    && nets_per_tile < 2.2;
+    if (sproute_speed_lane && trimmed_iters > 0) {
+      const double cap_scale = preroute_severity < 0.72f ? 0.55 : 0.62;
+      const int min_cap = preroute_severity < 0.72f ? 6 : 7;
+      const int lower_cap = std::min(min_cap, trimmed_iters);
+      const int speed_iters = std::clamp(
+          static_cast<int>(std::round(
+              static_cast<double>(trimmed_iters) * cap_scale)),
+          lower_cap,
+          trimmed_iters);
+      if (speed_iters < trimmed_iters) {
+        logger_->info(
+            GNR,
+            6026,
+            "NEWGR SPRoute-style cap: reducing overflow iterations from {} to "
+            "{} (severity {:.2f}, p80 {:.2f}, nets/tile {:.2f}).",
+            trimmed_iters,
+            speed_iters,
+            preroute_severity,
+            rudy_stats.p80,
+            nets_per_tile);
+        trimmed_iters = speed_iters;
+        grouter_->setCongestionIterations(trimmed_iters);
+      }
+    }
   }
 
   auto run_existing_state = [&](const std::string& name,
@@ -1571,30 +1601,37 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   const int base_congestion_iterations = snapshot.congestion_iterations;
   int scenario_congestion_iterations = base_congestion_iterations;
+  auto clamp_scenario_iters = [&](int target, int min_iters) {
+    if (base_congestion_iterations < min_iters) {
+      const int lower_bound = std::min(
+          base_congestion_iterations,
+          std::max(4, base_congestion_iterations / 2));
+      return std::clamp(
+          target, lower_bound, base_congestion_iterations);
+    }
+    return std::clamp(target, min_iters, base_congestion_iterations);
+  };
   if (!force_routability) {
     if (fast_baseline && light_congestion && hotspots.size() <= 3
         && baseline.metrics.max_utilization < 0.68f) {
       const bool mellow = congestion_severity < 0.62f && hotspots.size() <= 2;
       const double scale = mellow ? 0.30 : 0.46;
       const int min_iters = mellow ? 10 : 14;
-      scenario_congestion_iterations = std::clamp(
-          static_cast<int>(std::round(
-              static_cast<double>(base_congestion_iterations) * scale)),
-          min_iters,
-          base_congestion_iterations);
+      const int candidate = static_cast<int>(std::round(
+          static_cast<double>(base_congestion_iterations) * scale));
+      scenario_congestion_iterations
+          = clamp_scenario_iters(candidate, min_iters);
     } else if (light_congestion && baseline.metrics.overflow == 0) {
-      scenario_congestion_iterations = std::clamp(
-          static_cast<int>(std::round(
-              static_cast<double>(base_congestion_iterations) * 0.62)),
-          18,
-          base_congestion_iterations);
+      const int candidate = static_cast<int>(std::round(
+          static_cast<double>(base_congestion_iterations) * 0.62));
+      scenario_congestion_iterations
+          = clamp_scenario_iters(candidate, 18);
     } else if (congestion_severity < 0.82f
                && baseline.metrics.overflow == 0) {
-      scenario_congestion_iterations = std::clamp(
-          static_cast<int>(std::round(
-              static_cast<double>(base_congestion_iterations) * 0.75)),
-          22,
-          base_congestion_iterations);
+      const int candidate = static_cast<int>(std::round(
+          static_cast<double>(base_congestion_iterations) * 0.75));
+      scenario_congestion_iterations
+          = clamp_scenario_iters(candidate, 22);
     }
   }
   if (scenario_congestion_iterations < base_congestion_iterations) {
@@ -1616,10 +1653,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const bool super_light = congestion_severity < 0.62f;
     const double trim_scale = super_light ? 0.46 : 0.54;
     const int min_trim = super_light ? 8 : 9;
+    const int lower_trim
+        = std::min(min_trim, scenario_congestion_iterations);
     const int trimmed_iters = std::clamp(
         static_cast<int>(std::round(
             static_cast<double>(scenario_congestion_iterations) * trim_scale)),
-        min_trim,
+        lower_trim,
         scenario_congestion_iterations);
     if (trimmed_iters < scenario_congestion_iterations) {
       logger_->info(GNR,
@@ -4604,7 +4643,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                 && rudy_stats.p80 < 0.90f
                                 && hotspots.size() <= 2
                                 && baseline.metrics.wirelength_um <= runtime_fastlane_wl_guard
-                                && baseline.metrics.via_count <= runtime_fastlane_via_guard;
+                                && baseline.metrics.via_count <= runtime_fastlane_via_guard
+                                && runtime_projected_wl
+                                       <= runtime_wl_budget - 2000.0
+                                && runtime_projected_vias
+                                       <= runtime_via_budget - 1800;
   if (runtime_fastlane && !scenario_defs.empty()) {
     logger_->info(
         GNR,
