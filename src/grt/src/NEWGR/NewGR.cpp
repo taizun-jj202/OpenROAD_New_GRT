@@ -1033,6 +1033,105 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   };
 
+  RudyGrid normalized_rudy;
+  RudyStats rudy_stats;
+  float preroute_severity = 1.0f;
+  if (Rudy* rudy = grouter_->getRudy()) {
+    rudy->calculateRudy();
+    normalized_rudy = computeNormalizedRudyGrid(rudy);
+    rudy_stats = computeRudyStats(normalized_rudy);
+    preroute_severity = computeCongestionSeverity(rudy_stats, {});
+  }
+
+  const int original_congestion_iters = grouter_->congestion_iterations_;
+  int trimmed_iters = original_congestion_iters;
+  if (original_congestion_iters > 0) {
+    if (!normalized_rudy.empty()) {
+      if (preroute_severity < 0.78f && rudy_stats.p80 < 0.94f) {
+        const double scale = preroute_severity < 0.58f ? 0.50 : 0.62;
+        const int min_iters = preroute_severity < 0.58f ? 16 : 20;
+        trimmed_iters = std::clamp(
+            static_cast<int>(std::round(
+                static_cast<double>(original_congestion_iters) * scale)),
+            min_iters,
+            original_congestion_iters);
+      }
+      if (trimmed_iters < original_congestion_iters) {
+        logger_->info(GNR,
+                      6017,
+                      "NEWGR runtime tuner: pre-route RUDY severity {:.2f} "
+                      "(p80 {:.2f}, mean {:.2f}) trimming overflow iterations "
+                      "from {} to {}.",
+                      preroute_severity,
+                      rudy_stats.p80,
+                      rudy_stats.mean,
+                      original_congestion_iters,
+                      trimmed_iters);
+      }
+    } else if (grouter_->grid_ != nullptr && !nets.empty()) {
+      const int grid_tiles
+          = grouter_->grid_->getXGrids() * grouter_->grid_->getYGrids();
+      if (grid_tiles > 0) {
+        const double nets_per_tile
+            = static_cast<double>(nets.size())
+              / static_cast<double>(grid_tiles);
+        double scale = 1.0;
+        int min_iters = original_congestion_iters;
+        if (nets_per_tile < 1.6) {
+          scale = 0.50;
+          min_iters = 18;
+        } else if (nets_per_tile < 3.2) {
+          scale = 0.60;
+          min_iters = 20;
+        }
+        if (scale < 1.0) {
+          trimmed_iters = std::clamp(
+              static_cast<int>(std::round(
+                  static_cast<double>(original_congestion_iters) * scale)),
+              min_iters,
+              original_congestion_iters);
+          if (trimmed_iters < original_congestion_iters) {
+            logger_->info(GNR,
+                          6019,
+                          "NEWGR runtime tuner: light net density {:.2f} "
+                          "nets/tile trimming overflow iterations from {} to "
+                          "{}.",
+                          nets_per_tile,
+                          original_congestion_iters,
+                          trimmed_iters);
+          }
+        }
+      }
+    }
+    if (trimmed_iters == original_congestion_iters
+        && original_congestion_iters > 36 && !nets.empty()) {
+      const double fallback_scale
+          = nets.size() > 45000 ? 0.70
+                                 : (nets.size() > 20000 ? 0.56 : 0.46);
+      const int fallback_min
+          = nets.size() > 45000 ? 24 : (nets.size() > 20000 ? 20 : 18);
+      const int fallback_iters = std::clamp(
+          static_cast<int>(std::round(
+              static_cast<double>(original_congestion_iters) * fallback_scale)),
+          fallback_min,
+          original_congestion_iters);
+      if (fallback_iters < trimmed_iters) {
+        trimmed_iters = fallback_iters;
+        logger_->info(
+            GNR,
+            6020,
+            "NEWGR runtime tuner: default light pass ({} nets) trimming "
+            "overflow iterations from {} to {}.",
+            nets.size(),
+            original_congestion_iters,
+            trimmed_iters);
+      }
+    }
+  }
+  if (trimmed_iters < original_congestion_iters) {
+    grouter_->setCongestionIterations(trimmed_iters);
+  }
+
   auto run_existing_state = [&](const std::string& name,
                                 std::vector<Net*>& state_nets) {
     NetRouteMap routes;
@@ -1147,10 +1246,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = run_existing_state("baseline", nets);
   std::vector<Hotspot> hotspots = collect_hotspots(false);
 
-  RudyGrid normalized_rudy;
-  if (Rudy* rudy = grouter_->getRudy()) {
-    rudy->calculateRudy();
-    normalized_rudy = computeNormalizedRudyGrid(rudy);
+  if (normalized_rudy.empty()) {
+    if (Rudy* rudy = grouter_->getRudy()) {
+      rudy->calculateRudy();
+      normalized_rudy = computeNormalizedRudyGrid(rudy);
+      rudy_stats = computeRudyStats(normalized_rudy);
+    }
+  } else if (rudy_stats.max <= 0.0f && !normalized_rudy.empty()) {
+    rudy_stats = computeRudyStats(normalized_rudy);
   }
 
   std::vector<ScenarioResult> scenario_results;
@@ -1159,7 +1262,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   ScenarioDefinition baseline_def{"baseline", nullptr, nullptr};
   std::vector<ScenarioDefinition> scenario_defs;
 
-  const RudyStats rudy_stats = computeRudyStats(normalized_rudy);
   float congestion_severity
       = computeCongestionSeverity(rudy_stats, hotspots);
   if (baseline.metrics.overflow == 0) {
@@ -1237,8 +1339,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (fast_baseline && light_congestion && hotspots.size() <= 3
         && baseline.metrics.max_utilization < 0.68f) {
       const bool mellow = congestion_severity < 0.62f && hotspots.size() <= 2;
-      const double scale = mellow ? 0.36 : 0.52;
-      const int min_iters = mellow ? 12 : 16;
+      const double scale = mellow ? 0.30 : 0.46;
+      const int min_iters = mellow ? 10 : 14;
       scenario_congestion_iterations = std::clamp(
           static_cast<int>(std::round(
               static_cast<double>(base_congestion_iterations) * scale)),
@@ -1270,6 +1372,30 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         congestion_severity,
         hotspots.size(),
         baseline.metrics.max_utilization);
+  }
+
+  if (fast_baseline && baseline.metrics.overflow == 0
+      && hotspots.size() <= 2 && scenario_congestion_iterations > 0
+      && congestion_severity < 0.70f && rudy_stats.p80 < 0.92f) {
+    const bool super_light = congestion_severity < 0.62f;
+    const double trim_scale = super_light ? 0.46 : 0.54;
+    const int min_trim = super_light ? 8 : 9;
+    const int trimmed_iters = std::clamp(
+        static_cast<int>(std::round(
+            static_cast<double>(scenario_congestion_iterations) * trim_scale)),
+        min_trim,
+        scenario_congestion_iterations);
+    if (trimmed_iters < scenario_congestion_iterations) {
+      logger_->info(GNR,
+                    6018,
+                    "NEWGR runtime tuner: trimming scenario iterations to {} "
+                    "(was {}, severity {:.2f}, hotspots {}).",
+                    trimmed_iters,
+                    scenario_congestion_iterations,
+                    congestion_severity,
+                    hotspots.size());
+      scenario_congestion_iterations = trimmed_iters;
+    }
   }
 
   float wl_via_scale = 1.0f;
