@@ -1257,9 +1257,17 @@ NetRouteMap FastRouteCore::run()
 
   const int grid_span = std::max(x_grid_, y_grid_);
   const bool mild_congestion = maxOverflow <= 200 && total_overflow_ <= 12000;
+  const bool overflow_clean = maxOverflow == 0 && total_overflow_ == 0;
   const int relax_cap = mild_congestion
                             ? std::max(6, grid_span / 25)
                             : std::max(6, x_grid_ / 2);
+
+  int lv_rounds = LVIter;
+  if (overflow_clean) {
+    lv_rounds = 1;
+  } else if (mild_congestion && total_overflow_ < 4000) {
+    lv_rounds = 2;
+  }
 
   int enlarge_ = 10;
   if (mild_congestion) {
@@ -1285,7 +1293,7 @@ NetRouteMap FastRouteCore::run()
     CSTEP1 = 30;
   }
 
-  for (int i = 0; i < LVIter; i++) {
+  for (int i = 0; i < lv_rounds; i++) {
     logistic_coef = 2.0 / (1 + log(maxOverflow));
     debugPrint(logger_,
                GNR,
@@ -1670,7 +1678,9 @@ NetRouteMap FastRouteCore::run()
   if (past_cong == 0) {
     const int maze_enlarge = mild_congestion ? std::min(enlarge_, relax_cap)
                                              : enlarge_;
-    mazeRouteMSMDOrder3D(maze_enlarge, 0, long_edge_len);
+    if (!overflow_clean) {
+      mazeRouteMSMDOrder3D(maze_enlarge, 0, long_edge_len);
+    }
     mazeRouteMSMDOrder3D(maze_enlarge, 0, short_edge_len);
   }
 
