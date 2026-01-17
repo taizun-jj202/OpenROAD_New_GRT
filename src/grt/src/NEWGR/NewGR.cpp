@@ -1599,22 +1599,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return std::move(best_ptr->routes);
   }
 
-  const bool sproute_skip_sweep = baseline.metrics.overflow == 0
-                                  && baseline.metrics.wirelength_um
-                                         <= runtime_wl_budget
-                                  && baseline.metrics.via_count
-                                         <= runtime_via_budget
-                                  && congestion_severity < 0.80f
-                                  && rudy_stats.p80 < 0.95f
-                                  && baseline.metrics.max_utilization < 0.76f;
+  const bool sproute_skip_sweep
+      = baseline.metrics.overflow == 0
+        && baseline.metrics.wirelength_um <= runtime_wl_budget
+        && baseline.metrics.via_count <= runtime_via_budget
+        && runtime_projected_wl <= runtime_wl_budget
+        && runtime_projected_vias <= runtime_via_budget
+        && congestion_severity < 0.80f && rudy_stats.p80 < 0.95f
+        && baseline.metrics.max_utilization < 0.76f;
   if (sproute_skip_sweep) {
     logger_->info(GNR,
                   6030,
                   "NEWGR SPRoute-style fast lane: baseline already meets "
-                  "quality targets (WL {:.0f} um, vias {}, max util {:.2f}, "
+                  "quality targets (WL {:.0f} um -> proj {:.0f} / budget {:.0f}, "
+                  "vias {} -> proj {} / budget {}, max util {:.2f}, "
                   "congestion {:.2f}); skipping scenario sweep.",
                   baseline.metrics.wirelength_um,
+                  runtime_projected_wl,
+                  runtime_wl_budget,
                   baseline.metrics.via_count,
+                  runtime_projected_vias,
+                  runtime_via_budget,
                   baseline.metrics.max_utilization,
                   congestion_severity);
     return std::move(baseline.routes);
@@ -4916,15 +4921,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   chosen.metrics.max_utilization);
   }
 
-  ScenarioResult final_result = *best_iter;
+  const std::string best_name = best_iter->name;
+  ScenarioResult final_result = std::move(*best_iter);
 
-  const ScenarioDefinition* replay_def = nullptr;
-  if (best_iter->name != scenario_results.back().name) {
-    if (best_iter->name == "baseline") {
+  // Reuse the already-evaluated scenario result to avoid an extra full routing
+  // pass. Only rerun if the cached routes are missing for some reason.
+  if (final_result.routes.empty()
+      && best_name != scenario_results.back().name) {
+    const ScenarioDefinition* replay_def = nullptr;
+    if (best_name == "baseline") {
       replay_def = &baseline_def;
     } else {
       for (const ScenarioDefinition& def : scenario_defs) {
-        if (def.name == best_iter->name) {
+        if (def.name == best_name) {
           replay_def = &def;
           break;
         }
