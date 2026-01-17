@@ -1658,12 +1658,29 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         runtime_wl_budget,
         runtime_via_budget);
   }
+  const bool runtime_skip_baseline
+      = baseline.metrics.overflow == 0 && baseline_within_budget
+        && baseline.metrics.max_utilization < 0.68f
+        && congestion_severity < 0.68f && rudy_stats.p80 < 0.92f
+        && hotspots.size() <= 3;
+  if (runtime_skip_baseline) {
+    logger_->info(
+        GNR,
+        6040,
+        "NEWGR runtime fast-skip: baseline already within guard (WL {:.0f} um, "
+        "vias {}, max util {:.2f}, severity {:.2f}); skipping runtime lane and "
+        "using a light greedy sweep only.",
+        baseline.metrics.wirelength_um,
+        baseline.metrics.via_count,
+        baseline.metrics.max_utilization,
+        congestion_severity);
+  }
   const bool runtime_quality_lane
       = fast_baseline && baseline.metrics.overflow == 0 && light_congestion
         && baseline_within_budget
         && baseline.metrics.max_utilization < 0.72f
         && congestion_severity < 0.76f && hotspots.size() <= 3;
-  if (runtime_quality_lane) {
+  if (runtime_quality_lane && !runtime_skip_baseline) {
     const int express_raw
         = trimmed_iters > 0 ? (trimmed_iters / 2) + 1 : 0;
     const int express_iters
@@ -4876,7 +4893,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (have_greedy) {
       scenario_defs.push_back(greedy_def);
     }
-    if (have_variation) {
+    if (have_variation && !runtime_skip_baseline) {
       scenario_defs.push_back(variation_def);
     }
     logger_->info(GNR,
