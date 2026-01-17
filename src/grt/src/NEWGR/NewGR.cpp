@@ -1171,6 +1171,35 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         grouter_->setCongestionIterations(trimmed_iters);
       }
     }
+
+    const bool sproute_like_light = !normalized_rudy.empty()
+                                    && preroute_severity < 0.72f
+                                    && rudy_stats.p80 < 0.92f
+                                    && rudy_stats.mean < 0.85f;
+    const bool slim_density = nets_per_tile > 0.0 && nets_per_tile < 2.2;
+    if ((sproute_like_light || slim_density) && trimmed_iters > 6) {
+      const double drop_scale = sproute_like_light ? 0.60 : 0.68;
+      const int min_iters = sproute_like_light ? 8 : 10;
+      const int sproute_iters = std::clamp(
+          static_cast<int>(
+              std::round(static_cast<double>(trimmed_iters) * drop_scale)),
+          min_iters,
+          trimmed_iters);
+      if (sproute_iters < trimmed_iters) {
+        logger_->info(
+            GNR,
+            6025,
+            "NEWGR SP-inspired trim: reducing overflow iterations from {} to {} "
+            "(severity {:.2f}, p80 {:.2f}, nets/tile {:.2f}).",
+            trimmed_iters,
+            sproute_iters,
+            preroute_severity,
+            rudy_stats.p80,
+            nets_per_tile);
+        trimmed_iters = sproute_iters;
+        grouter_->setCongestionIterations(trimmed_iters);
+      }
+    }
   }
 
   auto run_existing_state = [&](const std::string& name,
@@ -4565,8 +4594,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   scenario_defs.size());
   }
 
-  const double runtime_fastlane_wl_guard = 758000.0;
-  const int runtime_fastlane_via_guard = 92000;
+  const double runtime_fastlane_wl_guard
+      = std::min(runtime_wl_budget * 0.97, runtime_wl_budget - 8000.0);
+  const long runtime_fastlane_via_guard
+      = std::max<long>(static_cast<long>(runtime_via_budget * 0.74), 1L);
   const bool runtime_fastlane = baseline.metrics.overflow == 0
                                 && baseline.metrics.max_utilization < 0.66f
                                 && congestion_severity < 0.62f
