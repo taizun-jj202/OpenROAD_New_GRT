@@ -1131,6 +1131,47 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   if (trimmed_iters < original_congestion_iters) {
     grouter_->setCongestionIterations(trimmed_iters);
   }
+  trimmed_iters = grouter_->congestion_iterations_;
+
+  if (trimmed_iters > 0) {
+    double nets_per_tile = 0.0;
+    if (grouter_->grid_ != nullptr) {
+      const int grid_tiles
+          = grouter_->grid_->getXGrids() * grouter_->grid_->getYGrids();
+      if (grid_tiles > 0) {
+        nets_per_tile
+            = static_cast<double>(nets.size()) / static_cast<double>(grid_tiles);
+      }
+    }
+
+    const bool calm_rudy = !normalized_rudy.empty()
+                           && preroute_severity < 0.66f
+                           && rudy_stats.p80 < 0.90f;
+    const bool sparse_design = nets_per_tile > 0.0 && nets_per_tile < 2.6;
+    if (calm_rudy || sparse_design) {
+      const double scale = calm_rudy ? 0.62 : 0.70;
+      const int min_iters = calm_rudy ? 12 : 14;
+      const int aggressive_iters = std::clamp(
+          static_cast<int>(std::round(
+              static_cast<double>(trimmed_iters) * scale)),
+          min_iters,
+          trimmed_iters);
+      if (aggressive_iters < trimmed_iters) {
+        logger_->info(GNR,
+                      6022,
+                      "NEWGR runtime tuner: calm pre-route estimate (severity "
+                      "{:.2f}, p80 {:.2f}, nets/tile {:.2f}) trimming overflow "
+                      "iterations from {} to {}.",
+                      preroute_severity,
+                      rudy_stats.p80,
+                      nets_per_tile,
+                      trimmed_iters,
+                      aggressive_iters);
+        trimmed_iters = aggressive_iters;
+        grouter_->setCongestionIterations(trimmed_iters);
+      }
+    }
+  }
 
   auto run_existing_state = [&](const std::string& name,
                                 std::vector<Net*>& state_nets) {
@@ -1427,6 +1468,26 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                     congestion_severity,
                     hotspots.size());
       scenario_congestion_iterations = trimmed_iters;
+    }
+  }
+
+  if (fast_baseline && baseline.metrics.overflow == 0
+      && scenario_congestion_iterations > 0) {
+    const bool mellow_fastlane = congestion_severity < 0.62f
+                                 && hotspots.size() <= 2
+                                 && rudy_stats.p80 < 0.92f;
+    const int hard_cap = mellow_fastlane ? 5 : 6;
+    if (scenario_congestion_iterations > hard_cap) {
+      logger_->info(GNR,
+                    6023,
+                    "NEWGR fast path: capping scenario overflow iterations to "
+                    "{} (was {}, severity {:.2f}, hotspots {}, max util {:.2f}).",
+                    hard_cap,
+                    scenario_congestion_iterations,
+                    congestion_severity,
+                    hotspots.size(),
+                    baseline.metrics.max_utilization);
+      scenario_congestion_iterations = hard_cap;
     }
   }
 
