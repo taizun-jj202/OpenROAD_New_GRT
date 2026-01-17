@@ -1133,17 +1133,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
   trimmed_iters = grouter_->congestion_iterations_;
 
-  if (trimmed_iters > 0) {
-    double nets_per_tile = 0.0;
-    if (grouter_->grid_ != nullptr) {
-      const int grid_tiles
-          = grouter_->grid_->getXGrids() * grouter_->grid_->getYGrids();
-      if (grid_tiles > 0) {
-        nets_per_tile
-            = static_cast<double>(nets.size()) / static_cast<double>(grid_tiles);
-      }
+  double nets_per_tile = 0.0;
+  if (grouter_->grid_ != nullptr) {
+    const int grid_tiles
+        = grouter_->grid_->getXGrids() * grouter_->grid_->getYGrids();
+    if (grid_tiles > 0) {
+      nets_per_tile
+          = static_cast<double>(nets.size()) / static_cast<double>(grid_tiles);
     }
+  }
 
+  if (trimmed_iters > 0) {
     const bool calm_rudy = !normalized_rudy.empty()
                            && preroute_severity < 0.66f
                            && rudy_stats.p80 < 0.90f;
@@ -1251,6 +1251,40 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       trimmed_iters = ultrafast_iters;
       grouter_->setCongestionIterations(trimmed_iters);
     }
+  }
+
+  const bool predictive_fastlane = !normalized_rudy.empty()
+                                   && preroute_severity < 0.74f
+                                   && rudy_stats.p80 < 0.92f
+                                   && nets_per_tile > 0.0
+                                   && nets_per_tile < 2.4
+                                   && trimmed_iters <= original_congestion_iters
+                                   && grouter_->fastroute_ != nullptr;
+  if (predictive_fastlane) {
+    float warm_perturb
+        = std::clamp(0.04f + 0.06f * preroute_severity, 0.02f, 0.10f);
+    float warm_critical = std::clamp(
+        5.0f + 2.0f * (0.60f - preroute_severity), 4.2f, 7.5f);
+    float warm_via_scale = std::clamp(
+        0.58f + 0.20f * (0.70f - preroute_severity), 0.46f, 0.82f);
+    if (nets_per_tile < 1.8) {
+      warm_perturb *= 0.85f;
+      warm_via_scale = std::max(warm_via_scale - 0.06f, 0.46f);
+    }
+    grouter_->setCapacitiesPerturbationPercentage(warm_perturb);
+    grouter_->setPerturbationAmount(warm_perturb > 0.0f ? 1 : 0);
+    grouter_->setAllowCongestion(false);
+    grouter_->fastroute_->setCriticalNetsPercentage(warm_critical);
+    grouter_->fastroute_->setViaCostScale(warm_via_scale);
+    logger_->info(GNR,
+                  6032,
+                  "NEWGR fast-lite warm start: perturb {:.3f}, via scale {:.2f}, "
+                  "critical {:.1f}% (severity {:.2f}, nets/tile {:.2f}).",
+                  warm_perturb,
+                  warm_via_scale,
+                  warm_critical,
+                  preroute_severity,
+                  nets_per_tile);
   }
 
   auto run_existing_state = [&](const std::string& name,
@@ -4681,7 +4715,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   const double runtime_fastlane_wl_guard
-      = std::min(runtime_wl_budget * 0.97, runtime_wl_budget - 8000.0);
+      = std::min(runtime_wl_budget * 0.975, runtime_wl_budget - 6000.0);
   const long runtime_fastlane_via_guard
       = std::max<long>(static_cast<long>(runtime_via_budget * 0.74), 1L);
   const bool runtime_fastlane = baseline.metrics.overflow == 0
