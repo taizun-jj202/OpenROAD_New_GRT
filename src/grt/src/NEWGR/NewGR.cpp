@@ -1607,24 +1607,44 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   const double runtime_wl_budget = 778065.0;
   const long runtime_via_budget = 122783;
-  const double runtime_wl_margin = std::max(
-      22000.0, baseline.metrics.wirelength_um * 0.028);
+  const double wl_headroom
+      = runtime_wl_budget - baseline.metrics.wirelength_um;
+  const long via_headroom = runtime_via_budget - baseline.metrics.via_count;
+  const double runtime_wl_margin
+      = wl_headroom <= 0.0
+            ? 0.0
+            : std::min(
+                  wl_headroom,
+                  std::max(800.0,
+                           baseline.metrics.wirelength_um * 0.0035));
   const double runtime_projected_wl
       = baseline.metrics.wirelength_um + runtime_wl_margin;
-  const long runtime_via_margin = std::max<long>(
-      32000, static_cast<long>(baseline.metrics.via_count * 0.35));
+  const long runtime_via_margin
+      = via_headroom <= 0
+            ? 0
+            : std::min<long>(via_headroom,
+                             std::max<long>(
+                                 1200,
+                                 static_cast<long>(
+                                     baseline.metrics.via_count * 0.018)));
   const long runtime_projected_vias
       = baseline.metrics.via_count + runtime_via_margin;
+  const bool baseline_within_budget = runtime_projected_wl <= runtime_wl_budget
+                                      && runtime_projected_vias <= runtime_via_budget;
   const double predicted_fast_wl
       = baseline.metrics.wirelength_um
-        + std::max(15000.0, baseline.metrics.wirelength_um * 0.026);
+        + std::min(std::max(600.0, baseline.metrics.wirelength_um * 0.0025),
+                   std::max(0.0, wl_headroom));
   const long predicted_fast_vias
       = baseline.metrics.via_count
-        + std::max<long>(30000,
-                         static_cast<long>(baseline.metrics.via_count * 0.32));
+        + std::min<long>(
+            std::max<long>(900,
+                           static_cast<long>(baseline.metrics.via_count * 0.015)),
+            std::max<long>(0, via_headroom));
   const bool predictive_clean_lane = fast_baseline
                                      && baseline.metrics.overflow == 0
                                      && baseline.metrics.max_utilization < 0.72f
+                                     && baseline_within_budget
                                      && predicted_fast_wl <= runtime_wl_budget
                                      && predicted_fast_vias <= runtime_via_budget;
   if (predictive_clean_lane) {
@@ -1632,24 +1652,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         GNR,
         6034,
         "NEWGR predictive fast lane: baseline projection {:.0f} um / {} vias "
-        "within budget {:.0f} um / {} vias; skipping scenario sweep.",
+        "within budget {:.0f} um / {} vias; running trimmed fast sweep.",
         predicted_fast_wl,
         predicted_fast_vias,
         runtime_wl_budget,
         runtime_via_budget);
-    return std::move(baseline.routes);
   }
   const bool runtime_quality_lane
-      = baseline.metrics.overflow == 0 && light_congestion
-        && baseline.metrics.max_utilization < 0.70f
-        && congestion_severity < 0.70f && hotspots.size() <= 3
-        && runtime_projected_wl <= runtime_wl_budget
-        && runtime_projected_vias <= runtime_via_budget
-        && baseline.metrics.wirelength_um <= runtime_wl_budget * 0.98
-        && baseline.metrics.via_count <= runtime_via_budget * 0.80;
+      = fast_baseline && baseline.metrics.overflow == 0 && light_congestion
+        && baseline_within_budget
+        && baseline.metrics.max_utilization < 0.72f
+        && congestion_severity < 0.76f && hotspots.size() <= 3;
   if (runtime_quality_lane) {
+    const int express_raw
+        = trimmed_iters > 0 ? (trimmed_iters / 2) + 1 : 0;
     const int express_iters
-        = std::clamp(trimmed_iters > 0 ? trimmed_iters / 2 : 0, 3, 6);
+        = std::clamp(express_raw,
+                     predictive_clean_lane ? 3 : 2,
+                     predictive_clean_lane ? 5 : 4);
     const float express_perturb = std::clamp(
         0.015f + 0.10f * congestion_severity, 0.0f, 0.12f);
     const float express_critical = std::clamp(
@@ -1792,24 +1812,35 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   best_ptr->metrics.via_count,
                   best_ptr->metrics.overflow,
                   best_ptr->metrics.max_utilization);
-    return std::move(best_ptr->routes);
+    ScenarioResult chosen = *best_ptr;
+    if (chosen.name == "baseline") {
+      ScenarioResult refreshed_baseline
+          = run_scenario(
+              baseline_def, snapshot, snapshot.congestion_iterations);
+      chosen = std::move(refreshed_baseline);
+    }
+    baseline = chosen;
+    if (!scenario_results.empty()) {
+      scenario_results[0] = baseline;
+    }
+    snapshot = capture_snapshot();
   }
 
   const bool sproute_skip_sweep
-      = baseline.metrics.overflow == 0
-        && baseline.metrics.wirelength_um <= runtime_wl_budget
-        && baseline.metrics.via_count <= runtime_via_budget
-        && runtime_projected_wl <= runtime_wl_budget
-        && runtime_projected_vias <= runtime_via_budget
-        && congestion_severity < 0.80f && rudy_stats.p80 < 0.95f
-        && baseline.metrics.max_utilization < 0.76f;
+      = baseline.metrics.overflow == 0 && baseline_within_budget
+        && light_congestion
+        && baseline.metrics.wirelength_um <= runtime_wl_budget * 0.97
+        && baseline.metrics.via_count <= runtime_via_budget * 0.70
+        && congestion_severity < 0.70f && rudy_stats.p80 < 0.90f
+        && baseline.metrics.max_utilization < 0.66f;
   if (sproute_skip_sweep) {
     logger_->info(GNR,
                   6030,
                   "NEWGR SPRoute-style fast lane: baseline already meets "
-                  "quality targets (WL {:.0f} um -> proj {:.0f} / budget {:.0f}, "
-                  "vias {} -> proj {} / budget {}, max util {:.2f}, "
-                  "congestion {:.2f}); skipping scenario sweep.",
+                  "tight quality targets (WL {:.0f} um -> proj {:.0f} / budget "
+                  "{:.0f}, vias {} -> proj {} / budget {}, max util {:.2f}, "
+                  "congestion {:.2f}); keeping scenario sweep enabled with "
+                  "fast limits.",
                   baseline.metrics.wirelength_um,
                   runtime_projected_wl,
                   runtime_wl_budget,
@@ -1818,7 +1849,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   runtime_via_budget,
                   baseline.metrics.max_utilization,
                   congestion_severity);
-    return std::move(baseline.routes);
   }
 
   const int base_congestion_iterations = snapshot.congestion_iterations;
@@ -4855,21 +4885,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   scenario_defs.size());
   }
 
-  const double runtime_fastlane_wl_guard
-      = std::min(runtime_wl_budget * 0.975, runtime_wl_budget - 6000.0);
+  const double runtime_fastlane_wl_guard = runtime_wl_budget * 0.97;
   const long runtime_fastlane_via_guard
-      = std::max<long>(static_cast<long>(runtime_via_budget * 0.74), 1L);
-  const bool runtime_fastlane = baseline.metrics.overflow == 0
+      = static_cast<long>(std::floor(static_cast<double>(runtime_via_budget)
+                                     * 0.70));
+  const bool runtime_fastlane = baseline_within_budget
+                                && baseline.metrics.overflow == 0
                                 && baseline.metrics.max_utilization < 0.66f
                                 && congestion_severity < 0.62f
                                 && rudy_stats.p80 < 0.90f
                                 && hotspots.size() <= 2
                                 && baseline.metrics.wirelength_um <= runtime_fastlane_wl_guard
-                                && baseline.metrics.via_count <= runtime_fastlane_via_guard
-                                && runtime_projected_wl
-                                       <= runtime_wl_budget - 2000.0
-                                && runtime_projected_vias
-                                       <= runtime_via_budget - 1800;
+                                && baseline.metrics.via_count <= runtime_fastlane_via_guard;
   if (runtime_fastlane && !scenario_defs.empty()) {
     logger_->info(
         GNR,
@@ -4883,6 +4910,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   const bool sproute_fastlane = fast_baseline && ultra_light
+                                && baseline_within_budget
                                 && hotspots.empty()
                                 && baseline.metrics.max_utilization < 0.64f
                                 && congestion_severity < 0.52f
@@ -4922,6 +4950,31 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const bool util_guard
           = greedy_result.metrics.max_utilization
             <= baseline.metrics.max_utilization + 0.03;
+      const bool baseline_budget_clean
+          = baseline.metrics.overflow == 0 && baseline_within_budget;
+      const bool greedy_budget_clean
+          = greedy_result.metrics.overflow <= baseline.metrics.overflow
+            && greedy_result.metrics.wirelength_um <= runtime_wl_budget
+            && greedy_result.metrics.via_count <= runtime_via_budget;
+      const double greedy_wl_guard
+          = std::max(400.0, runtime_wl_budget * 0.0008);
+      const bool greedy_safe
+          = baseline_budget_clean && greedy_budget_clean
+            && greedy_result.metrics.wirelength_um
+                   <= baseline.metrics.wirelength_um + greedy_wl_guard
+            && via_delta <= fast_via_guard && util_guard;
+      if (greedy_safe) {
+        logger_->info(
+            GNR,
+            6035,
+            "NEWGR budget fast path: wl-greedy within runtime guard "
+            "(WL {:.0f} um, vias {}, util {:.2f}); skipping remaining "
+            "scenarios.",
+            greedy_result.metrics.wirelength_um,
+            greedy_result.metrics.via_count,
+            greedy_result.metrics.max_utilization);
+        break;
+      }
       if (greedy_result.metrics.overflow <= baseline.metrics.overflow
           && wl_gain > fast_wl_improvement && via_delta <= fast_via_guard
           && util_guard) {
