@@ -1050,13 +1050,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return ScenarioResult{name, metrics, std::move(routes)};
   };
 
-  auto collect_hotspots = [&]() -> std::vector<Hotspot> {
+  auto collect_hotspots = [&](bool recompute) -> std::vector<Hotspot> {
     std::vector<Hotspot> hotspots;
     if (grouter_->fastroute_ == nullptr || grouter_->grid_ == nullptr) {
       return hotspots;
     }
 
-    grouter_->fastroute_->computeCongestionInformation();
+    if (recompute) {
+      grouter_->fastroute_->computeCongestionInformation();
+    }
 
     std::vector<CongestionInformation> vertical;
     std::vector<CongestionInformation> horizontal;
@@ -1132,7 +1134,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   ScenarioResult baseline
       = run_existing_state("baseline", nets);
-  std::vector<Hotspot> hotspots = collect_hotspots();
+  std::vector<Hotspot> hotspots = collect_hotspots(false);
 
   RudyGrid normalized_rudy;
   if (Rudy* rudy = grouter_->getRudy()) {
@@ -4156,6 +4158,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   6012,
                   "NEWGR fast path: limiting scenario sweep to {} candidates.",
                   scenario_defs.size());
+  }
+
+  const double runtime_fastlane_wl_guard = 758000.0;
+  const int runtime_fastlane_via_guard = 92000;
+  const bool runtime_fastlane = baseline.metrics.overflow == 0
+                                && baseline.metrics.max_utilization < 0.66f
+                                && congestion_severity < 0.62f
+                                && rudy_stats.p80 < 0.90f
+                                && hotspots.size() <= 2
+                                && baseline.metrics.wirelength_um <= runtime_fastlane_wl_guard
+                                && baseline.metrics.via_count <= runtime_fastlane_via_guard;
+  if (runtime_fastlane && !scenario_defs.empty()) {
+    logger_->info(
+        GNR,
+        6015,
+        "NEWGR runtime lane: baseline within tightened budget (WL {:.0f} um, "
+        "vias {}, max util {:.2f}); skipping scenario sweep.",
+        baseline.metrics.wirelength_um,
+        baseline.metrics.via_count,
+        baseline.metrics.max_utilization);
+    scenario_defs.clear();
   }
 
   const bool sproute_fastlane = fast_baseline && ultra_light
