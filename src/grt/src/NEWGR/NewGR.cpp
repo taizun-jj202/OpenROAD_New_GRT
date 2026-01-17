@@ -196,6 +196,62 @@ RudyStats computeRudyStats(const RudyGrid& normalized_rudy)
   return stats;
 }
 
+std::vector<Hotspot> collectRudyHotspots(const RudyGrid& normalized_rudy,
+                                         float threshold,
+                                         int max_hotspots)
+{
+  std::vector<Hotspot> hotspots;
+  if (normalized_rudy.empty() || max_hotspots <= 0) {
+    return hotspots;
+  }
+
+  threshold = std::clamp(threshold, 0.0f, 1.0f);
+  max_hotspots = std::max(max_hotspots, 0);
+
+  struct Candidate
+  {
+    int gx;
+    int gy;
+    float score;
+  };
+
+  std::vector<Candidate> candidates;
+  for (int x = 0; x < static_cast<int>(normalized_rudy.size()); ++x) {
+    for (int y = 0; y < static_cast<int>(normalized_rudy[x].size()); ++y) {
+      const float value = normalized_rudy[x][y];
+      if (value < threshold) {
+        continue;
+      }
+      candidates.push_back({x, y, value});
+    }
+  }
+
+  if (candidates.empty()) {
+    return hotspots;
+  }
+
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const Candidate& a, const Candidate& b) {
+              return a.score > b.score;
+            });
+  candidates.resize(std::min(static_cast<size_t>(max_hotspots),
+                             candidates.size()));
+
+  for (const Candidate& candidate : candidates) {
+    Hotspot hotspot;
+    hotspot.gx = candidate.gx;
+    hotspot.gy = candidate.gy;
+    hotspot.severity = std::clamp(
+        1.0f + (candidate.score - threshold) * 0.90f, 1.0f, 2.2f);
+    hotspot.affect_horizontal = true;
+    hotspot.affect_vertical = true;
+    hotspots.push_back(hotspot);
+  }
+
+  return hotspots;
+}
+
 float summarizeHotspotScore(const std::vector<Hotspot>& hotspots)
 {
   if (hotspots.empty()) {
@@ -1287,6 +1343,67 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   nets_per_tile);
   }
 
+  std::vector<Hotspot> predicted_hotspots;
+  if (!normalized_rudy.empty()) {
+    const float predicted_threshold = std::clamp(
+        0.76f + 0.12f * (preroute_severity - 0.50f), 0.70f, 0.90f);
+    const int predicted_cap = preroute_severity < 0.60f ? 18 : 14;
+    predicted_hotspots
+        = collectRudyHotspots(normalized_rudy, predicted_threshold, predicted_cap);
+  }
+
+  const bool guided_fastlane = !normalized_rudy.empty()
+                               && preroute_severity < 0.78f
+                               && nets_per_tile > 0.0
+                               && nets_per_tile < 2.8
+                               && grouter_->fastroute_ != nullptr
+                               && grouter_->grid_ != nullptr;
+  if (guided_fastlane) {
+    float preset_perturb
+        = std::clamp(0.03f + 0.05f * preroute_severity, 0.0f, 0.09f);
+    float preset_via_scale
+        = std::clamp(0.50f + 0.18f * preroute_severity, 0.46f, 0.82f);
+    float preset_critical = std::clamp(
+        5.2f + 2.4f * (0.60f - preroute_severity), 4.2f, 8.5f);
+    if (nets_per_tile < 1.6) {
+      preset_perturb *= 0.85f;
+      preset_via_scale = std::max(preset_via_scale - 0.04f, 0.46f);
+    }
+    grouter_->setCapacitiesPerturbationPercentage(preset_perturb);
+    grouter_->setPerturbationAmount(preset_perturb > 0.0f ? 1 : 0);
+    grouter_->setAllowCongestion(false);
+    grouter_->fastroute_->setCriticalNetsPercentage(preset_critical);
+    grouter_->fastroute_->setViaCostScale(preset_via_scale);
+    applySoftCapacityScaling(grouter_,
+                             normalized_rudy,
+                             min_routing_layer,
+                             max_routing_layer,
+                             0.56f,
+                             0.90f,
+                             5.2f,
+                             0.48f);
+    if (!predicted_hotspots.empty()) {
+      applyHotspotPenalties(grouter_,
+                            predicted_hotspots,
+                            min_routing_layer,
+                            max_routing_layer,
+                            1,
+                            0.992f,
+                            0.08f);
+    }
+    logger_->info(GNR,
+                  6033,
+                  "NEWGR predictive guide preset: perturb {:.3f}, via scale {:.2f}, "
+                  "critical {:.1f}% (severity {:.2f}, nets/tile {:.2f}, "
+                  "predicted hotspots {}).",
+                  preset_perturb,
+                  preset_via_scale,
+                  preset_critical,
+                  preroute_severity,
+                  nets_per_tile,
+                  predicted_hotspots.size());
+  }
+
   auto run_existing_state = [&](const std::string& name,
                                 std::vector<Net*>& state_nets) {
     NetRouteMap routes;
@@ -1498,6 +1615,30 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       32000, static_cast<long>(baseline.metrics.via_count * 0.35));
   const long runtime_projected_vias
       = baseline.metrics.via_count + runtime_via_margin;
+  const double predicted_fast_wl
+      = baseline.metrics.wirelength_um
+        + std::max(15000.0, baseline.metrics.wirelength_um * 0.026);
+  const long predicted_fast_vias
+      = baseline.metrics.via_count
+        + std::max<long>(30000,
+                         static_cast<long>(baseline.metrics.via_count * 0.32));
+  const bool predictive_clean_lane = fast_baseline
+                                     && baseline.metrics.overflow == 0
+                                     && baseline.metrics.max_utilization < 0.72f
+                                     && predicted_fast_wl <= runtime_wl_budget
+                                     && predicted_fast_vias <= runtime_via_budget;
+  if (predictive_clean_lane) {
+    logger_->info(
+        GNR,
+        6034,
+        "NEWGR predictive fast lane: baseline projection {:.0f} um / {} vias "
+        "within budget {:.0f} um / {} vias; skipping scenario sweep.",
+        predicted_fast_wl,
+        predicted_fast_vias,
+        runtime_wl_budget,
+        runtime_via_budget);
+    return std::move(baseline.routes);
+  }
   const bool runtime_quality_lane
       = baseline.metrics.overflow == 0 && light_congestion
         && baseline.metrics.max_utilization < 0.70f
