@@ -993,6 +993,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return {};
   }
 
+  constexpr double kRuntimeWirelengthBudget = 778065.0;
+  constexpr long kRuntimeViaBudget = 122783;
+
   auto compute_metrics = [&](const NetRouteMap& routes) -> RouteMetrics {
     RouteMetrics metrics;
     const int tile_size
@@ -1307,6 +1310,77 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       trimmed_iters = ultrafast_iters;
       grouter_->setCongestionIterations(trimmed_iters);
     }
+
+    const bool runtime_ultra_cap = preroute_severity < 0.72f
+                                   && nets_per_tile > 0.0
+                                   && nets_per_tile < 2.8;
+    if (runtime_ultra_cap && trimmed_iters > 0) {
+      const int hard_cap = preroute_severity < 0.60f ? 5 : 6;
+      const int min_cap = preroute_severity < 0.60f ? 3 : 4;
+      const int capped_iters
+          = std::clamp(trimmed_iters, min_cap, hard_cap);
+      if (capped_iters < trimmed_iters) {
+        logger_->info(GNR,
+                      6048,
+                      "NEWGR runtime hard cap: reducing overflow iterations from "
+                      "{} to {} (severity {:.2f}, nets/tile {:.2f}).",
+                      trimmed_iters,
+                      capped_iters,
+                      preroute_severity,
+                      nets_per_tile);
+        trimmed_iters = capped_iters;
+        grouter_->setCongestionIterations(trimmed_iters);
+      }
+    }
+
+    const bool mellow_runtime = preroute_severity < 0.70f
+                                && rudy_stats.p80 < 0.90f
+                                && nets_per_tile > 0.0
+                                && nets_per_tile < 2.0
+                                && trimmed_iters > 4;
+    if (mellow_runtime) {
+      const int mellow_cap = preroute_severity < 0.68f ? 3 : 4;
+      const int mellow_min = preroute_severity < 0.68f ? 2 : 3;
+      const int capped_iters
+          = std::clamp(trimmed_iters, mellow_min, mellow_cap);
+      if (capped_iters < trimmed_iters) {
+        logger_->info(GNR,
+                      6050,
+                      "NEWGR mellow cap: reducing overflow iterations from {} to "
+                      "{} (severity {:.2f}, p80 {:.2f}, nets/tile {:.2f}).",
+                      trimmed_iters,
+                      capped_iters,
+                      preroute_severity,
+                      rudy_stats.p80,
+                      nets_per_tile);
+        trimmed_iters = capped_iters;
+        grouter_->setCongestionIterations(trimmed_iters);
+      }
+    }
+
+    const bool turbo_runtime = preroute_severity < 0.70f
+                               && rudy_stats.p80 < 0.90f
+                               && nets_per_tile > 0.0
+                               && nets_per_tile < 2.6 && trimmed_iters > 0;
+    if (turbo_runtime) {
+      const int turbo_cap = preroute_severity < 0.62f ? 3 : 4;
+      const int turbo_floor = preroute_severity < 0.62f ? 2 : 3;
+      const int turbo_iters
+          = std::clamp(trimmed_iters, turbo_floor, turbo_cap);
+      if (turbo_iters < trimmed_iters) {
+        logger_->info(GNR,
+                      6060,
+                      "NEWGR turbo cap: reducing overflow iterations from {} to "
+                      "{} (severity {:.2f}, p80 {:.2f}, nets/tile {:.2f}).",
+                      trimmed_iters,
+                      turbo_iters,
+                      preroute_severity,
+                      rudy_stats.p80,
+                      nets_per_tile);
+        trimmed_iters = turbo_iters;
+        grouter_->setCongestionIterations(trimmed_iters);
+      }
+    }
   }
 
   const bool predictive_fastlane = !normalized_rudy.empty()
@@ -1514,6 +1588,109 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   RouterSnapshot snapshot = capture_snapshot();
 
+  auto within_budget = [&](const RouteMetrics& metrics) {
+    const double wl_value = metrics.wirelength_um > 0.0
+                                ? metrics.wirelength_um
+                                : static_cast<double>(metrics.wirelength_dbu);
+    return metrics.overflow == 0 && wl_value <= kRuntimeWirelengthBudget
+           && metrics.via_count <= kRuntimeViaBudget;
+  };
+
+  bool runtime_skim_rejected = false;
+  const bool ultra_fast_skim = preroute_severity < 0.70f
+                               && rudy_stats.p80 < 0.90f
+                               && nets_per_tile > 0.0
+                               && nets_per_tile < 2.2;
+  const bool try_runtime_skim = preroute_severity < 0.76f
+                                && nets_per_tile > 0.0 && nets_per_tile < 3.4
+                                && trimmed_iters > 0;
+  if (try_runtime_skim) {
+    const int skim_cap = ultra_fast_skim ? 2 : 3;
+    const int skim_iters = std::clamp(trimmed_iters, 1, skim_cap);
+    const float skim_via_scale = std::clamp(
+        snapshot.via_cost_scale * 0.90f, 0.55f, snapshot.via_cost_scale);
+    const float skim_critical = std::clamp(
+        5.5f + 2.5f * (0.60f - preroute_severity), 4.5f, 9.5f);
+    const int skim_seed = snapshot.seed + 211;
+
+    ScenarioDefinition skim_def;
+    skim_def.name = "runtime-skim";
+    skim_def.pre_init
+        = [this, skim_iters, skim_seed]() {
+            grouter_->setCapacitiesPerturbationPercentage(0.0f);
+            grouter_->setPerturbationAmount(0);
+            grouter_->setCongestionIterations(skim_iters);
+            grouter_->setAllowCongestion(false);
+            grouter_->setSeed(skim_seed);
+          };
+    skim_def.post_init = [this, skim_critical, skim_via_scale]() {
+      if (grouter_->fastroute_ != nullptr) {
+        grouter_->fastroute_->setCriticalNetsPercentage(skim_critical);
+        grouter_->fastroute_->setViaCostScale(skim_via_scale);
+      }
+    };
+
+    ScenarioResult skim_result
+        = run_scenario(skim_def, snapshot, skim_iters);
+    const double skim_wl = skim_result.metrics.wirelength_um > 0.0
+                               ? skim_result.metrics.wirelength_um
+                               : static_cast<double>(skim_result.metrics.wirelength_dbu);
+    const bool skim_guard
+        = within_budget(skim_result.metrics)
+          && skim_result.metrics.max_utilization
+                 < (ultra_fast_skim ? 0.93f : 0.94f);
+    if (skim_guard) {
+      logger_->info(GNR,
+                    6046,
+                    "NEWGR runtime skim accepted (iters {}, WL {:.0f} um, vias {}, "
+                    "max util {:.2f}).",
+                    skim_iters,
+                    skim_wl,
+                    skim_result.metrics.via_count,
+                    skim_result.metrics.max_utilization);
+      return std::move(skim_result.routes);
+    }
+
+    logger_->info(GNR,
+                  6047,
+                  "NEWGR runtime skim rejected (iters {}, WL {:.0f} um, vias {}, "
+                  "overflow {}, max util {:.2f}); restoring standard flow.",
+                  skim_iters,
+                  skim_wl,
+                  skim_result.metrics.via_count,
+                  skim_result.metrics.overflow,
+                  skim_result.metrics.max_utilization);
+    runtime_skim_rejected = true;
+    restore_snapshot(snapshot);
+  }
+
+  if (runtime_skim_rejected) {
+    nets = grouter_->initFastRoute(min_routing_layer, max_routing_layer);
+  }
+
+  if (trimmed_iters > 0 && preroute_severity < 0.82f
+      && rudy_stats.p80 < 0.90f && nets_per_tile > 0.0
+      && nets_per_tile < 2.4) {
+    const bool mellow_runtime = preroute_severity < 0.74f
+                                && rudy_stats.p80 < 0.88f
+                                && nets_per_tile < 2.0;
+    const int hard_cap = mellow_runtime ? 2 : 3;
+    const int min_cap = mellow_runtime ? 2 : 3;
+    const int capped_iters = std::clamp(trimmed_iters, min_cap, hard_cap);
+    if (capped_iters < trimmed_iters) {
+      trimmed_iters = capped_iters;
+      grouter_->setCongestionIterations(trimmed_iters);
+      logger_->info(GNR,
+                    6058,
+                    "NEWGR runtime cap: limiting overflow iterations to {} "
+                    "(severity {:.2f}, p80 {:.2f}, nets/tile {:.2f}).",
+                    trimmed_iters,
+                    preroute_severity,
+                    rudy_stats.p80,
+                    nets_per_tile);
+    }
+  }
+
   ScenarioResult baseline
       = run_existing_state("baseline", nets);
   std::vector<Hotspot> hotspots = collect_hotspots(false);
@@ -1533,6 +1710,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   ScenarioDefinition baseline_def{"baseline", nullptr, nullptr};
   std::vector<ScenarioDefinition> scenario_defs;
+  bool skip_scenario_sweep = false;
 
   float congestion_severity
       = computeCongestionSeverity(rudy_stats, hotspots);
@@ -1594,7 +1772,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = !force_routability && baseline.metrics.overflow == 0 && light_congestion
         && baseline.metrics.max_utilization < 0.70f
         && congestion_severity < 0.70f && hotspots.size() <= 3;
-  if (fast_baseline) {
+  if (fast_baseline && !skip_scenario_sweep) {
     logger_->info(
         GNR,
         6011,
@@ -1605,8 +1783,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         hotspots.size());
   }
 
-  const double runtime_wl_budget = 778065.0;
-  const long runtime_via_budget = 122783;
+  const double runtime_wl_budget = kRuntimeWirelengthBudget;
+  const long runtime_via_budget = kRuntimeViaBudget;
   const double wl_headroom
       = runtime_wl_budget - baseline.metrics.wirelength_um;
   const long via_headroom = runtime_via_budget - baseline.metrics.via_count;
@@ -1943,11 +2121,29 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   if (fast_baseline && baseline.metrics.overflow == 0
+      && scenario_congestion_iterations > 0
+      && congestion_severity < 0.60f && hotspots.size() <= 1
+      && rudy_stats.p80 < 0.90f) {
+    const int mellow_cap = std::max(2, std::min(3, scenario_congestion_iterations));
+    if (scenario_congestion_iterations > mellow_cap) {
+      logger_->info(GNR,
+                    6051,
+                    "NEWGR mellow fast lane: capping scenario iterations to {} "
+                    "(was {}, severity {:.2f}, hotspots {}).",
+                    mellow_cap,
+                    scenario_congestion_iterations,
+                    congestion_severity,
+                    hotspots.size());
+      scenario_congestion_iterations = mellow_cap;
+    }
+  }
+
+  if (fast_baseline && baseline.metrics.overflow == 0
       && scenario_congestion_iterations > 0) {
     const bool mellow_fastlane = congestion_severity < 0.62f
                                  && hotspots.size() <= 2
                                  && rudy_stats.p80 < 0.92f;
-    const int hard_cap = mellow_fastlane ? 4 : 5;
+    const int hard_cap = mellow_fastlane ? 5 : 6;
     if (scenario_congestion_iterations > hard_cap) {
       logger_->info(GNR,
                     6023,
@@ -4874,7 +5070,45 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         scenario_defs.end());
   }
 
-  if (fast_baseline) {
+  const bool runtime_skip_safe = runtime_skip_baseline
+                                 && baseline.metrics.overflow == 0
+                                 && baseline_within_budget
+                                 && wl_headroom > 80000.0
+                                 && via_headroom > 15000
+                                 && !scenario_defs.empty()
+                                 && baseline.metrics.max_utilization < 0.70f
+                                 && congestion_severity < 0.70f;
+  if (runtime_skip_safe) {
+    logger_->info(
+        GNR,
+        6052,
+        "NEWGR runtime fast-skip: baseline meets budgeted guard (WL {:.0f} um, "
+        "vias {}, max util {:.2f}); skipping scenario sweep.",
+        baseline.metrics.wirelength_um,
+        baseline.metrics.via_count,
+        baseline.metrics.max_utilization);
+    scenario_defs.clear();
+    skip_scenario_sweep = true;
+  }
+
+  const bool turbo_baseline_win = !skip_scenario_sweep
+                                  && baseline.metrics.overflow == 0
+                                  && baseline_within_budget
+                                  && trimmed_iters <= 4
+                                  && baseline.metrics.max_utilization < 0.78f
+                                  && congestion_severity < 0.74f;
+  if (turbo_baseline_win) {
+    logger_->info(
+        GNR,
+        6061,
+        "NEWGR turbo lane: baseline within budget using {} overflow "
+        "iterations; skipping scenario sweep.",
+        trimmed_iters);
+    scenario_defs.clear();
+    skip_scenario_sweep = true;
+  }
+
+  if (fast_baseline && !skip_scenario_sweep) {
     ScenarioDefinition greedy_def;
     ScenarioDefinition variation_def;
     bool have_greedy = false;
@@ -4889,12 +5123,26 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
 
+    const bool runtime_greedy_only = runtime_skip_baseline
+                                     || (baseline_within_budget
+                                         && trimmed_iters <= 6
+                                         && congestion_severity < 0.74f
+                                         && nets_per_tile > 0.0
+                                         && nets_per_tile < 3.0);
     scenario_defs.clear();
     if (have_greedy) {
       scenario_defs.push_back(greedy_def);
     }
-    if (have_variation && !runtime_skip_baseline) {
+    if (have_variation && !runtime_greedy_only) {
       scenario_defs.push_back(variation_def);
+    }
+    if (runtime_greedy_only && have_variation) {
+      logger_->info(GNR,
+                    6049,
+                    "NEWGR runtime greedy lane: skipping wl-variation to keep "
+                    "sweep minimal (severity {:.2f}, nets/tile {:.2f}).",
+                    congestion_severity,
+                    nets_per_tile);
     }
     logger_->info(GNR,
                   6012,
@@ -4924,6 +5172,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         baseline.metrics.via_count,
         baseline.metrics.max_utilization);
     scenario_defs.clear();
+    skip_scenario_sweep = true;
   }
 
   const bool sproute_fastlane = fast_baseline && ultra_light
@@ -4941,6 +5190,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   congestion_severity,
                   hotspots.size());
     scenario_defs.clear();
+    skip_scenario_sweep = true;
   }
 
   const bool prefer_single_greedy

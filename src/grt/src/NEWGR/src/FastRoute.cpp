@@ -1169,6 +1169,15 @@ NetRouteMap FastRouteCore::run()
   graph2d_.clearUsed();
   preProcessTechLayers();
 
+  const double grid_tiles
+      = static_cast<double>(x_grid_) * static_cast<double>(y_grid_);
+  const double nets_per_tile = grid_tiles > 0.0
+                                   ? static_cast<double>(netCount())
+                                         / std::max(grid_tiles, 1.0)
+                                   : 0.0;
+  const bool speed_candidate = overflow_iterations_ <= 6
+                               && nets_per_tile > 0.0 && nets_per_tile < 2.6;
+
   int tUsage;
   int cost_step;
   int maxOverflow = 0;
@@ -1239,14 +1248,28 @@ NetRouteMap FastRouteCore::run()
     logger_->report("After newRouteLAll");
   }
 
-  // Rip-up and reroute using spiral route
-  spiralRouteAll();
-  if (logger_->debugCheck(GNR, "grtSteps", 1)) {
-    logger_->report("After spiralRouteAll");
+  const bool skip_spiral = speed_candidate && maxOverflow <= 200
+                           && total_overflow_ <= 12000;
+  if (!skip_spiral) {
+    // Rip-up and reroute using spiral route
+    spiralRouteAll();
+    if (logger_->debugCheck(GNR, "grtSteps", 1)) {
+      logger_->report("After spiralRouteAll");
+    }
+    // Rip-up a tree edge according to its ripup type and Z-route it
+    newrouteZAll(10);
+  } else {
+    const int fast_z_rounds = std::max(4, overflow_iterations_ + 1);
+    newrouteZAll(fast_z_rounds);
+    if (logger_->debugCheck(GNR, "grtSteps", 1)) {
+      logger_->report(
+          "Skipping spiral route for speed (nets/tile {:.2f}, iters {}, max "
+          "overflow {}).",
+          nets_per_tile,
+          overflow_iterations_,
+          maxOverflow);
+    }
   }
-
-  // Rip-up a tree edge according to its ripup type and Z-route it
-  newrouteZAll(10);
   int past_cong = getOverflow2D(&maxOverflow);
 
   if (logger_->debugCheck(GNR, "grtSteps", 1)) {
@@ -1258,6 +1281,7 @@ NetRouteMap FastRouteCore::run()
   const int grid_span = std::max(x_grid_, y_grid_);
   const bool mild_congestion = maxOverflow <= 200 && total_overflow_ <= 12000;
   const bool overflow_clean = maxOverflow == 0 && total_overflow_ == 0;
+  const bool speed_mode = speed_candidate && mild_congestion;
   const int relax_cap = mild_congestion
                             ? std::max(6, grid_span / 25)
                             : std::max(6, x_grid_ / 2);
@@ -1267,6 +1291,9 @@ NetRouteMap FastRouteCore::run()
     lv_rounds = 1;
   } else if (mild_congestion && total_overflow_ < 4000) {
     lv_rounds = 2;
+  }
+  if (speed_mode && lv_rounds > 1) {
+    lv_rounds = 1;
   }
 
   int enlarge_ = 10;
@@ -1279,6 +1306,9 @@ NetRouteMap FastRouteCore::run()
     }
     const int relax_floor = std::max(5, grid_span / 50);
     enlarge_ = std::clamp(tuned_enlarge, relax_floor, relax_cap);
+  }
+  if (speed_mode && mild_congestion) {
+    enlarge_ = std::max(5, std::min(enlarge_, relax_cap / 2));
   }
   int newTH = 10;
   bool stopDEC = false;
@@ -1342,7 +1372,7 @@ NetRouteMap FastRouteCore::run()
 
   SaveLastRouteLen();
 
-  const int max_overflow_increases = 25;
+  const int max_overflow_increases = speed_candidate ? 12 : 25;
 
   float slack_th = std::numeric_limits<float>::lowest();
 
