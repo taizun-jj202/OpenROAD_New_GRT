@@ -276,9 +276,7 @@ int pickSprouteThreadCount(size_t net_count)
   } else if (net_count < 8000) {
     threads = std::min(threads, 8u);
   } else {
-    // Galois teardown (stat reporting) can be unstable at high thread counts
-    // in some builds; cap the default to a conservative value.
-    threads = std::min(threads, 8u);
+    threads = std::min(threads, 16u);
   }
 
   if (const char* env = std::getenv("NEWGR_SPROUTE_THREADS");
