@@ -1794,7 +1794,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         && baseline_wl <= (kRuntimeWirelengthBudget + 650.0)
         && baseline.metrics.via_count <= (kRuntimeViaBudget + 220)
         && baseline.metrics.max_utilization < 0.93f;
-  if (baseline_good_enough) {
+  const bool baseline_ultra_fast_accept
+      = baseline_good_enough && preroute_severity < 0.70f && nets_per_tile > 0.0
+        && nets_per_tile < 1.15
+        && (normalized_rudy.empty() || rudy_stats.p80 < 0.86f);
+  if (baseline_ultra_fast_accept) {
     logger_->info(
         GNR,
         6070,
