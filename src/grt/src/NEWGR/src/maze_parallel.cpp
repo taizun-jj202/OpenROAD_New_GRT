@@ -303,7 +303,7 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
   }
 
   int threads = std::min(max_threads, omp_get_num_procs());
-  threads = std::min(threads, 16);
+  threads = std::min(threads, 32);
   threads = std::max(2, threads);
 
   const int net_count = static_cast<int>(net_ids_.size());
@@ -329,20 +329,20 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
   }
 
   if (ordering && static_cast<int>(tree_order_cong_.size()) == net_count) {
-    std::stable_sort(
-        work_indices.begin(),
-        work_indices.end(),
-        [&](int lhs, int rhs) {
-          const OrderTree& a = tree_order_cong_[lhs];
-          const OrderTree& b = tree_order_cong_[rhs];
-          if (a.xmin != b.xmin) {
-            return a.xmin < b.xmin;
-          }
-          if (a.length != b.length) {
-            return a.length > b.length;
-          }
-          return a.treeIndex < b.treeIndex;
-        });
+    std::sort(work_indices.begin(), work_indices.end(), [&](int lhs, int rhs) {
+      const OrderTree& a = tree_order_cong_[lhs];
+      const OrderTree& b = tree_order_cong_[rhs];
+      if (a.xmin != b.xmin) {
+        return a.xmin < b.xmin;
+      }
+      if (a.length != b.length) {
+        return a.length > b.length;
+      }
+      if (a.treeIndex != b.treeIndex) {
+        return a.treeIndex < b.treeIndex;
+      }
+      return lhs < rhs;
+    });
   }
 
   std::vector<int> batch_offsets(static_cast<size_t>(nbatch + 1), 0);
@@ -889,80 +889,90 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
   batch_h_touched.reserve(16384);
   batch_v_touched.reserve(16384);
 
-  for (int batch = 0; batch < nbatch; ++batch) {
-    for (auto& ctx : thread_updates) {
-      ctx.clearBatch();
-    }
-    batch_h_touched.clear();
-    batch_v_touched.clear();
-    const int begin = batch_offsets[static_cast<size_t>(batch)];
-    const int end = batch_offsets[static_cast<size_t>(batch + 1)];
+  int begin = 0;
+  int end = 0;
+  for (auto& ctx : thread_updates) {
+    ctx.clearBatch();
+  }
 
 #pragma omp parallel num_threads(threads)
-    {
-      const int tid = omp_get_thread_num();
-      UsageUpdateCallbacks cb;
-      cb.ctx = &thread_updates[static_cast<size_t>(tid)];
-      cb.updateH = recordUsageH;
-      cb.updateV = recordUsageV;
+  {
+    const int tid = omp_get_thread_num();
+    UsageUpdateCallbacks cb;
+    cb.ctx = &thread_updates[static_cast<size_t>(tid)];
+    cb.updateH = recordUsageH;
+    cb.updateV = recordUsageV;
+
+    for (int batch = 0; batch < nbatch; ++batch) {
+#pragma omp single
+      {
+        begin = batch_offsets[static_cast<size_t>(batch)];
+        end = batch_offsets[static_cast<size_t>(batch + 1)];
+        batch_h_touched.clear();
+        batch_v_touched.clear();
+      }
+      thread_updates[static_cast<size_t>(tid)].clearBatch();
 
 #pragma omp for schedule(static)
       for (int pos = begin; pos < end; ++pos) {
         route_one(schedule[static_cast<size_t>(pos)], &cb);
       }
-    }
 
-    for (auto& ctx : thread_updates) {
-      for (int index : ctx.h_touched) {
-        const int32_t delta = ctx.h_delta[static_cast<size_t>(index)];
-        ctx.h_delta[static_cast<size_t>(index)] = 0;
-        if (delta != 0) {
-          accumulateDelta(batch_h_delta, batch_h_touched, index, delta);
-        }
-      }
-      for (int index : ctx.v_touched) {
-        const int32_t delta = ctx.v_delta[static_cast<size_t>(index)];
-        ctx.v_delta[static_cast<size_t>(index)] = 0;
-        if (delta != 0) {
-          accumulateDelta(batch_v_delta, batch_v_touched, index, delta);
-        }
-      }
-      ctx.h_touched.clear();
-      ctx.v_touched.clear();
+#pragma omp single
+      {
+        for (auto& ctx : thread_updates) {
+          for (int index : ctx.h_touched) {
+            const int32_t delta = ctx.h_delta[static_cast<size_t>(index)];
+            ctx.h_delta[static_cast<size_t>(index)] = 0;
+            if (delta != 0) {
+              accumulateDelta(batch_h_delta, batch_h_touched, index, delta);
+            }
+          }
+          for (int index : ctx.v_touched) {
+            const int32_t delta = ctx.v_delta[static_cast<size_t>(index)];
+            ctx.v_delta[static_cast<size_t>(index)] = 0;
+            if (delta != 0) {
+              accumulateDelta(batch_v_delta, batch_v_touched, index, delta);
+            }
+          }
+          ctx.h_touched.clear();
+          ctx.v_touched.clear();
 
-      for (const UsageUpdate& upd : ctx.ndr_updates) {
-        if (upd.vertical) {
-          graph2d_.updateUsageV(upd.x, upd.y, upd.net, upd.delta);
-        } else {
-          graph2d_.updateUsageH(upd.x, upd.y, upd.net, upd.delta);
+          for (const UsageUpdate& upd : ctx.ndr_updates) {
+            if (upd.vertical) {
+              graph2d_.updateUsageV(upd.x, upd.y, upd.net, upd.delta);
+            } else {
+              graph2d_.updateUsageH(upd.x, upd.y, upd.net, upd.delta);
+            }
+          }
+          ctx.ndr_updates.clear();
         }
-      }
-      ctx.ndr_updates.clear();
-    }
 
-    if (y_grid_ > 0) {
-      for (int index : batch_h_touched) {
-        const int32_t delta = batch_h_delta[static_cast<size_t>(index)];
-        batch_h_delta[static_cast<size_t>(index)] = 0;
-        if (delta == 0) {
-          continue;
+        if (y_grid_ > 0) {
+          for (int index : batch_h_touched) {
+            const int32_t delta = batch_h_delta[static_cast<size_t>(index)];
+            batch_h_delta[static_cast<size_t>(index)] = 0;
+            if (delta == 0) {
+              continue;
+            }
+            const int x = index / y_grid_;
+            const int y = index - x * y_grid_;
+            graph2d_.addUsageH(x, y, static_cast<int>(delta));
+          }
         }
-        const int x = index / y_grid_;
-        const int y = index - x * y_grid_;
-        graph2d_.addUsageH(x, y, static_cast<int>(delta));
-      }
-    }
-    if (y_grid_ > 1) {
-      const int y_minus1 = y_grid_ - 1;
-      for (int index : batch_v_touched) {
-        const int32_t delta = batch_v_delta[static_cast<size_t>(index)];
-        batch_v_delta[static_cast<size_t>(index)] = 0;
-        if (delta == 0) {
-          continue;
+        if (y_grid_ > 1) {
+          const int y_minus1 = y_grid_ - 1;
+          for (int index : batch_v_touched) {
+            const int32_t delta = batch_v_delta[static_cast<size_t>(index)];
+            batch_v_delta[static_cast<size_t>(index)] = 0;
+            if (delta == 0) {
+              continue;
+            }
+            const int x = index / y_minus1;
+            const int y = index - x * y_minus1;
+            graph2d_.addUsageV(x, y, static_cast<int>(delta));
+          }
         }
-        const int x = index / y_minus1;
-        const int y = index - x * y_minus1;
-        graph2d_.addUsageV(x, y, static_cast<int>(delta));
       }
     }
   }
