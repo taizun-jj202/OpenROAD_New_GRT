@@ -1157,6 +1157,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
 
+    // Add pin-to-grid connection length so NEWGR's internal WL budgeting tracks
+    // the detailed-router-reported wirelength more closely.
+    if (grouter_ != nullptr) {
+      for (const auto& [db_net, segments] : routes) {
+        static_cast<void>(segments);
+        Net* net = grouter_->getNet(db_net);
+        if (net == nullptr) {
+          continue;
+        }
+        for (const Pin& pin : net->getPins()) {
+          const odb::Point& pt = pin.getPosition();
+          const odb::Point& grid_pt = pin.getOnGridPosition();
+          metrics.wirelength_dbu += std::abs(pt.getX() - grid_pt.getX())
+                                   + std::abs(pt.getY() - grid_pt.getY());
+        }
+      }
+    }
+
     if (grouter_ != nullptr && grouter_->fastroute_ != nullptr) {
       FastRouteCore* core = grouter_->fastroute_;
       core->computeCongestionInformation();
@@ -1871,14 +1889,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const double baseline_wl = baseline.metrics.wirelength_um > 0.0
                                  ? baseline.metrics.wirelength_um
                                  : static_cast<double>(baseline.metrics.wirelength_dbu);
+  const double baseline_wirelength_budget = kRuntimeWirelengthBudget + 650.0;
+  const long baseline_via_budget = kRuntimeViaBudget + 220;
   const bool baseline_good_enough
       = baseline.metrics.overflow == 0
-        && baseline_wl <= (kRuntimeWirelengthBudget + 2500.0)
-        && baseline.metrics.via_count <= (kRuntimeViaBudget + 1200)
-        // Relax utilization guard to avoid expensive scenario sweeps when the
-        // baseline already meets the WL/Via budgets (SPRoute-style runtime
-        // focus: fewer full reruns).
-        && baseline.metrics.max_utilization < 0.985f;
+        && baseline_wl <= baseline_wirelength_budget
+        && baseline.metrics.via_count <= baseline_via_budget
+        && baseline.metrics.max_utilization < 0.95f;
   if (baseline_good_enough) {
     logger_->info(
         GNR,
