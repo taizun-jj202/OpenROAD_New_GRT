@@ -1277,15 +1277,15 @@ NetRouteMap FastRouteCore::run()
         for (const auto& edge : edges) {
           max_len = std::max(max_len, edge.len);
         }
-        if (max_len >= 30) {
+        if (max_len >= 24) {
           candidates.push_back({net_id, max_len});
         }
       }
 
       const int desired
-          = std::clamp(static_cast<int>(std::round(net_ids_.size() * 0.03)),
-                       50,
-                       400);
+          = std::clamp(static_cast<int>(std::round(net_ids_.size() * 0.06)),
+                       80,
+                       800);
       if (static_cast<int>(candidates.size()) > desired) {
         std::nth_element(candidates.begin(),
                          candidates.begin() + desired,
