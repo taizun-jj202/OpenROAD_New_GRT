@@ -1003,12 +1003,33 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = grid_tiles > 0
               ? static_cast<double>(nets.size()) / static_cast<double>(grid_tiles)
               : 0.0;
-    const bool mild_design
-        = nets_per_tile > 0.0 && nets_per_tile < 2.4 && !grouter_->allow_congestion_;
-    if (mild_design) {
-      return grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
-    }
-  }
+	    const bool mild_design
+	        = nets_per_tile > 0.0 && nets_per_tile < 2.4 && !grouter_->allow_congestion_;
+	    if (mild_design) {
+	      const int saved_iters = grouter_->congestion_iterations_;
+	      int tuned_iters = saved_iters;
+	      if (saved_iters > 0) {
+	        int cap_iters = 6;
+	        if (nets_per_tile < 1.2) {
+	          cap_iters = 4;
+	        } else if (nets_per_tile < 1.8) {
+	          cap_iters = 5;
+	        }
+	        tuned_iters = std::min(saved_iters, cap_iters);
+	        if (tuned_iters < saved_iters) {
+	          grouter_->setCongestionIterations(tuned_iters);
+	        }
+	      }
+
+	      NetRouteMap routes
+	          = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
+
+	      if (tuned_iters != saved_iters) {
+	        grouter_->setCongestionIterations(saved_iters);
+	      }
+	      return routes;
+	    }
+	  }
 
   constexpr double kRuntimeWirelengthBudget = 778065.0;
   constexpr long kRuntimeViaBudget = 122783;
