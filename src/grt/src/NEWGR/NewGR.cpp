@@ -995,6 +995,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return {};
   }
 
+  if (grouter_ != nullptr && grouter_->grid_ != nullptr
+      && grouter_->fastroute_ != nullptr) {
+    const int grid_tiles
+        = grouter_->grid_->getXGrids() * grouter_->grid_->getYGrids();
+    const double nets_per_tile
+        = grid_tiles > 0
+              ? static_cast<double>(nets.size()) / static_cast<double>(grid_tiles)
+              : 0.0;
+    const bool mild_design
+        = nets_per_tile > 0.0 && nets_per_tile < 2.4 && !grouter_->allow_congestion_;
+    if (mild_design) {
+      return grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
+    }
+  }
+
   constexpr double kRuntimeWirelengthBudget = 778065.0;
   constexpr long kRuntimeViaBudget = 122783;
 
