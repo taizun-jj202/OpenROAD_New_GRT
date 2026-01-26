@@ -879,10 +879,22 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
   for (auto& ctx : thread_updates) {
     ctx.init(x_grid_, y_grid_);
   }
+
+  const int h_edges = std::max(0, x_grid_ - 1) * std::max(0, y_grid_);
+  const int v_edges = std::max(0, x_grid_) * std::max(0, y_grid_ - 1);
+  std::vector<int32_t> batch_h_delta(static_cast<size_t>(h_edges), 0);
+  std::vector<int32_t> batch_v_delta(static_cast<size_t>(v_edges), 0);
+  std::vector<int> batch_h_touched;
+  std::vector<int> batch_v_touched;
+  batch_h_touched.reserve(16384);
+  batch_v_touched.reserve(16384);
+
   for (int batch = 0; batch < nbatch; ++batch) {
     for (auto& ctx : thread_updates) {
       ctx.clearBatch();
     }
+    batch_h_touched.clear();
+    batch_v_touched.clear();
     const int begin = batch_offsets[static_cast<size_t>(batch)];
     const int end = batch_offsets[static_cast<size_t>(batch + 1)];
 
@@ -904,22 +916,16 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
       for (int index : ctx.h_touched) {
         const int32_t delta = ctx.h_delta[static_cast<size_t>(index)];
         ctx.h_delta[static_cast<size_t>(index)] = 0;
-        if (delta == 0 || ctx.y_grid <= 0) {
-          continue;
+        if (delta != 0) {
+          accumulateDelta(batch_h_delta, batch_h_touched, index, delta);
         }
-        const int x = index / ctx.y_grid;
-        const int y = index - x * ctx.y_grid;
-        graph2d_.addUsageH(x, y, static_cast<int>(delta));
       }
       for (int index : ctx.v_touched) {
         const int32_t delta = ctx.v_delta[static_cast<size_t>(index)];
         ctx.v_delta[static_cast<size_t>(index)] = 0;
-        if (delta == 0 || ctx.y_grid_minus1 <= 0) {
-          continue;
+        if (delta != 0) {
+          accumulateDelta(batch_v_delta, batch_v_touched, index, delta);
         }
-        const int x = index / ctx.y_grid_minus1;
-        const int y = index - x * ctx.y_grid_minus1;
-        graph2d_.addUsageV(x, y, static_cast<int>(delta));
       }
       ctx.h_touched.clear();
       ctx.v_touched.clear();
@@ -932,6 +938,32 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
         }
       }
       ctx.ndr_updates.clear();
+    }
+
+    if (y_grid_ > 0) {
+      for (int index : batch_h_touched) {
+        const int32_t delta = batch_h_delta[static_cast<size_t>(index)];
+        batch_h_delta[static_cast<size_t>(index)] = 0;
+        if (delta == 0) {
+          continue;
+        }
+        const int x = index / y_grid_;
+        const int y = index - x * y_grid_;
+        graph2d_.addUsageH(x, y, static_cast<int>(delta));
+      }
+    }
+    if (y_grid_ > 1) {
+      const int y_minus1 = y_grid_ - 1;
+      for (int index : batch_v_touched) {
+        const int32_t delta = batch_v_delta[static_cast<size_t>(index)];
+        batch_v_delta[static_cast<size_t>(index)] = 0;
+        if (delta == 0) {
+          continue;
+        }
+        const int x = index / y_minus1;
+        const int y = index - x * y_minus1;
+        graph2d_.addUsageV(x, y, static_cast<int>(delta));
+      }
     }
   }
 #endif
