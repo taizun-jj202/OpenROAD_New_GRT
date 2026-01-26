@@ -1003,9 +1003,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = grid_tiles > 0
               ? static_cast<double>(nets.size()) / static_cast<double>(grid_tiles)
               : 0.0;
-    const bool mild_design = nets_per_tile > 0.0 && nets_per_tile < 2.4
-                             && !grouter_->allow_congestion_;
-    if (mild_design) {
+    // Keep a very small fast-path only for ultra-sparse designs.
+    // For typical densities (e.g. sky130hd/aes), the main NEWGR flow's
+    // congestion-aware trimming + soft-cap guidance tends to produce better
+    // wirelength at equal or better runtime.
+    const bool ultra_sparse_design
+        = nets_per_tile > 0.0 && nets_per_tile < 1.0
+          && !grouter_->allow_congestion_;
+    if (ultra_sparse_design) {
       const int saved_iters = grouter_->congestion_iterations_;
       int tuned_iters = saved_iters;
       if (saved_iters > 0) {
@@ -1023,6 +1028,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         }
       }
 
+      logger_->info(GNR,
+                    6075,
+                    "NEWGR ultra-sparse fast path: nets/tile {:.2f}, "
+                    "overflow iters {} -> {}.",
+                    nets_per_tile,
+                    saved_iters,
+                    tuned_iters);
       NetRouteMap routes
           = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
 
