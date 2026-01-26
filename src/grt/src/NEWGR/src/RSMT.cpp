@@ -8,6 +8,10 @@
 #include <tuple>
 #include <vector>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include "AbstractFastRouteRenderer.h"
 #include "DataType.h"
 #include "FastRoute.h"
@@ -620,7 +624,6 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
                                  const bool newType,
                                  const bool noADJ)
 {
-  Tree rsmt;
   int numShift = 0;
 
   int wl = 0;
@@ -629,8 +632,14 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
 
   const int flute_accuracy = 2;
 
-  for (const int& netID : net_ids_) {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (!reRoute) \
+    reduction(+ : numShift, wl, wl1, totalNumSeg)
+#endif
+  for (int net_idx = 0; net_idx < static_cast<int>(net_ids_.size()); net_idx++) {
+    const int netID = net_ids_[net_idx];
     FrNet* net = nets_[netID];
+    Tree rsmt;
 
     int d = net->getNumPins();
 
