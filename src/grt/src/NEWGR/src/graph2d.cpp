@@ -32,6 +32,14 @@ void Graph2D::init(const int x_grid,
 
   h_edges_.resize(boost::extents[x_grid - 1][y_grid]);
   v_edges_.resize(boost::extents[x_grid][y_grid - 1]);
+  h_used_ggrid_.clear();
+  v_used_ggrid_.clear();
+  h_used_mask_.assign(static_cast<size_t>(std::max(0, x_grid - 1))
+                          * static_cast<size_t>(std::max(0, y_grid)),
+                      0);
+  v_used_mask_.assign(static_cast<size_t>(std::max(0, x_grid))
+                          * static_cast<size_t>(std::max(0, y_grid - 1)),
+                      0);
 
   for (int x = 0; x < x_grid - 1; x++) {
     for (int y = 0; y < y_grid; y++) {
@@ -85,8 +93,18 @@ void Graph2D::clear()
 // Clears the sets of used horizontal and vertical grid cells.
 void Graph2D::clearUsed()
 {
-  v_used_ggrid_.clear();
+  if (!h_used_mask_.empty()) {
+    for (const auto& [x, y] : h_used_ggrid_) {
+      h_used_mask_[usedIndexH(x, y)] = 0;
+    }
+  }
+  if (!v_used_mask_.empty()) {
+    for (const auto& [x, y] : v_used_ggrid_) {
+      v_used_mask_[usedIndexV(x, y)] = 0;
+    }
+  }
   h_used_ggrid_.clear();
+  v_used_ggrid_.clear();
 }
 
 // Clears the NDR lists
@@ -182,14 +200,56 @@ uint16_t Graph2D::getCapV(int x, int y) const
   return v_edges_[x][y].cap;
 }
 
-const std::set<std::pair<int, int>>& Graph2D::getUsedGridsH() const
+const std::vector<std::pair<int, int>>& Graph2D::getUsedGridsH() const
 {
   return h_used_ggrid_;
 }
 
-const std::set<std::pair<int, int>>& Graph2D::getUsedGridsV() const
+const std::vector<std::pair<int, int>>& Graph2D::getUsedGridsV() const
 {
   return v_used_ggrid_;
+}
+
+size_t Graph2D::usedIndexH(const int x, const int y) const
+{
+  return static_cast<size_t>(x) * static_cast<size_t>(y_grid_)
+         + static_cast<size_t>(y);
+}
+
+size_t Graph2D::usedIndexV(const int x, const int y) const
+{
+  return static_cast<size_t>(x) * static_cast<size_t>(y_grid_ - 1)
+         + static_cast<size_t>(y);
+}
+
+void Graph2D::markUsedH(const int x, const int y)
+{
+  if (h_used_mask_.empty()) {
+    return;
+  }
+  const size_t idx = usedIndexH(x, y);
+  if (idx >= h_used_mask_.size()) {
+    return;
+  }
+  if (!h_used_mask_[idx]) {
+    h_used_mask_[idx] = 1;
+    h_used_ggrid_.emplace_back(x, y);
+  }
+}
+
+void Graph2D::markUsedV(const int x, const int y)
+{
+  if (v_used_mask_.empty()) {
+    return;
+  }
+  const size_t idx = usedIndexV(x, y);
+  if (idx >= v_used_mask_.size()) {
+    return;
+  }
+  if (!v_used_mask_[idx]) {
+    v_used_mask_[idx] = 1;
+    v_used_ggrid_.emplace_back(x, y);
+  }
 }
 
 // Adds capacity to a horizontal edge.
@@ -225,7 +285,7 @@ void Graph2D::updateEstUsageH(const int x,
       += getCostNDRAware(net, x, y, usage, EdgeDirection::Horizontal);
 
   if (usage > 0) {
-    h_used_ggrid_.insert({x, y});
+    markUsedH(x, y);
   }
 }
 
@@ -256,7 +316,7 @@ void Graph2D::updateEstUsageV(const int x,
       += getCostNDRAware(net, x, y, usage, EdgeDirection::Vertical);
 
   if (usage > 0) {
-    v_used_ggrid_.insert({x, y});
+    markUsedV(x, y);
   }
 }
 
@@ -287,7 +347,7 @@ void Graph2D::addUsageH(const int x, const int y, const int used)
 {
   h_edges_[x][y].usage += used;
   if (used > 0) {
-    h_used_ggrid_.insert({x, y});
+    markUsedH(x, y);
   }
 }
 
@@ -304,7 +364,7 @@ void Graph2D::addUsageV(const int x, const int y, const int used)
 {
   v_edges_[x][y].usage += used;
   if (used > 0) {
-    v_used_ggrid_.insert({x, y});
+    markUsedV(x, y);
   }
 }
 
@@ -348,7 +408,7 @@ void Graph2D::updateUsageH(const int x,
       += getCostNDRAware(net, x, y, usage, EdgeDirection::Horizontal);
 
   if (usage > 0) {
-    h_used_ggrid_.insert({x, y});
+    markUsedH(x, y);
   }
 }
 
@@ -373,7 +433,7 @@ void Graph2D::updateUsageV(const int x,
       += getCostNDRAware(net, x, y, usage, EdgeDirection::Vertical);
 
   if (usage > 0) {
-    v_used_ggrid_.insert({x, y});
+    markUsedV(x, y);
   }
 }
 

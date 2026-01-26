@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <set>
 #include <string>
@@ -78,8 +79,8 @@ class Graph2D
   uint16_t getCapH(int x, int y) const;
   uint16_t getCapV(int x, int y) const;
 
-  const std::set<std::pair<int, int>>& getUsedGridsH() const;
-  const std::set<std::pair<int, int>>& getUsedGridsV() const;
+  const std::vector<std::pair<int, int>>& getUsedGridsH() const;
+  const std::vector<std::pair<int, int>>& getUsedGridsV() const;
 
   void addCapH(int x, int y, int cap);
   void addCapV(int x, int y, int cap);
@@ -147,6 +148,10 @@ class Graph2D
   void printNDRCap(int x, int y);
   void printEdgeCapPerLayer();
   void initNDRnets();
+  void markUsedH(int x, int y);
+  void markUsedV(int x, int y);
+  size_t usedIndexH(int x, int y) const;
+  size_t usedIndexV(int x, int y) const;
 
   template <typename Func>
   void foreachEdge(Func&& func)
@@ -177,8 +182,10 @@ class Graph2D
 
   utl::Logger* logger_;
 
-  std::set<std::pair<int, int>> h_used_ggrid_;
-  std::set<std::pair<int, int>> v_used_ggrid_;
+  std::vector<std::pair<int, int>> h_used_ggrid_;
+  std::vector<std::pair<int, int>> v_used_ggrid_;
+  std::vector<uint8_t> h_used_mask_;
+  std::vector<uint8_t> v_used_mask_;
 };
 
 }  // namespace grt::newgr

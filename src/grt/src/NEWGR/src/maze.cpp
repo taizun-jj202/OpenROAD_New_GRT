@@ -2128,35 +2128,67 @@ int FastRouteCore::getOverflow2Dmaze(int* maxOverflow, int* tUsage)
   check2DEdgesUsage();
 
   int total_usage = 0;
-  for (const auto& [x, y] : graph2d_.getUsedGridsH()) {
-    total_usage += graph2d_.getUsageH(x, y);
-    const int overflow = graph2d_.getOverflowH(x, y);
-    if (overflow > 0) {
-      if (logger_->debugCheck(GNR, "congestion2D", 1)) {
+  const bool debug_congestion = logger_->debugCheck(GNR, "congestion2D", 1);
+  const auto& used_h = graph2d_.getUsedGridsH();
+  const auto& used_v = graph2d_.getUsedGridsV();
+
+  if (debug_congestion) {
+    for (const auto& [x, y] : used_h) {
+      total_usage += graph2d_.getUsageH(x, y);
+      const int overflow = graph2d_.getOverflowH(x, y);
+      if (overflow > 0) {
         // Convert to real coordinates
         int x_real = tile_size_ * (x + 0.5) + x_corner_;
         int y_real = tile_size_ * (y + 0.5) + y_corner_;
         logger_->report("H 2D Overflow x{} y{} ({} {})", x, y, x_real, y_real);
+        H_overflow += overflow;
+        max_H_overflow = std::max(max_H_overflow, overflow);
+        numedges++;
       }
-      H_overflow += overflow;
-      max_H_overflow = std::max(max_H_overflow, overflow);
-      numedges++;
     }
-  }
 
-  for (const auto& [x, y] : graph2d_.getUsedGridsV()) {
-    total_usage += graph2d_.getUsageV(x, y);
-    const int overflow = graph2d_.getOverflowV(x, y);
-    if (overflow > 0) {
-      if (logger_->debugCheck(GNR, "congestion2D", 1)) {
+    for (const auto& [x, y] : used_v) {
+      total_usage += graph2d_.getUsageV(x, y);
+      const int overflow = graph2d_.getOverflowV(x, y);
+      if (overflow > 0) {
         // Convert to real coordinates
         int x_real = tile_size_ * (x + 0.5) + x_corner_;
         int y_real = tile_size_ * (y + 0.5) + y_corner_;
         logger_->report("V 2D Overflow x{} y{} ({} {})", x, y, x_real, y_real);
+        V_overflow += overflow;
+        max_V_overflow = std::max(max_V_overflow, overflow);
+        numedges++;
       }
-      V_overflow += overflow;
-      max_V_overflow = std::max(max_V_overflow, overflow);
-      numedges++;
+    }
+  } else {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (used_h.size() > 16384) \
+    reduction(+ : total_usage, H_overflow, numedges) reduction(max : max_H_overflow)
+#endif
+    for (size_t i = 0; i < used_h.size(); ++i) {
+      const auto [x, y] = used_h[i];
+      total_usage += graph2d_.getUsageH(x, y);
+      const int overflow = graph2d_.getOverflowH(x, y);
+      if (overflow > 0) {
+        H_overflow += overflow;
+        max_H_overflow = std::max(max_H_overflow, overflow);
+        numedges++;
+      }
+    }
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (used_v.size() > 16384) \
+    reduction(+ : total_usage, V_overflow, numedges) reduction(max : max_V_overflow)
+#endif
+    for (size_t i = 0; i < used_v.size(); ++i) {
+      const auto [x, y] = used_v[i];
+      total_usage += graph2d_.getUsageV(x, y);
+      const int overflow = graph2d_.getOverflowV(x, y);
+      if (overflow > 0) {
+        V_overflow += overflow;
+        max_V_overflow = std::max(max_V_overflow, overflow);
+        numedges++;
+      }
     }
   }
 
@@ -2202,38 +2234,75 @@ int FastRouteCore::getOverflow2D(int* maxOverflow)
   int numedges = 0;
 
   int total_usage = 0;
+  const bool debug_congestion = logger_->debugCheck(GNR, "congestion2D", 1);
+  const auto& used_h = graph2d_.getUsedGridsH();
+  const auto& used_v = graph2d_.getUsedGridsV();
 
-  for (const auto& [x, y] : graph2d_.getUsedGridsH()) {
-    total_usage += graph2d_.getEstUsageH(x, y);
-    const int overflow = graph2d_.getEstUsageH(x, y) - graph2d_.getCapH(x, y);
-    hCap += graph2d_.getCapH(x, y);
-    if (overflow > 0) {
-      if (logger_->debugCheck(GNR, "congestion2D", 1)) {
+  if (debug_congestion) {
+    for (const auto& [x, y] : used_h) {
+      total_usage += graph2d_.getEstUsageH(x, y);
+      const int overflow
+          = graph2d_.getEstUsageH(x, y) - graph2d_.getCapH(x, y);
+      hCap += graph2d_.getCapH(x, y);
+      if (overflow > 0) {
         // Convert to real coordinates
         int x_real = tile_size_ * (x + 0.5) + x_corner_;
         int y_real = tile_size_ * (y + 0.5) + y_corner_;
         logger_->report("H 2D Overflow x{} y{} ({} {})", x, y, x_real, y_real);
+        H_overflow += overflow;
+        max_H_overflow = std::max(max_H_overflow, overflow);
+        numedges++;
       }
-      H_overflow += overflow;
-      max_H_overflow = std::max(max_H_overflow, overflow);
-      numedges++;
     }
-  }
 
-  for (const auto& [x, y] : graph2d_.getUsedGridsV()) {
-    total_usage += graph2d_.getEstUsageV(x, y);
-    const int overflow = graph2d_.getEstUsageV(x, y) - graph2d_.getCapV(x, y);
-    vCap += graph2d_.getCapV(x, y);
-    if (overflow > 0) {
-      if (logger_->debugCheck(GNR, "congestion2D", 1)) {
+    for (const auto& [x, y] : used_v) {
+      total_usage += graph2d_.getEstUsageV(x, y);
+      const int overflow
+          = graph2d_.getEstUsageV(x, y) - graph2d_.getCapV(x, y);
+      vCap += graph2d_.getCapV(x, y);
+      if (overflow > 0) {
         // Convert to real coordinates
         int x_real = tile_size_ * (x + 0.5) + x_corner_;
         int y_real = tile_size_ * (y + 0.5) + y_corner_;
         logger_->report("V 2D Overflow x{} y{} ({} {})", x, y, x_real, y_real);
+        V_overflow += overflow;
+        max_V_overflow = std::max(max_V_overflow, overflow);
+        numedges++;
       }
-      V_overflow += overflow;
-      max_V_overflow = std::max(max_V_overflow, overflow);
-      numedges++;
+    }
+  } else {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (used_h.size() > 16384) \
+    reduction(+ : total_usage, hCap, H_overflow, numedges) reduction(max : max_H_overflow)
+#endif
+    for (size_t i = 0; i < used_h.size(); ++i) {
+      const auto [x, y] = used_h[i];
+      total_usage += graph2d_.getEstUsageH(x, y);
+      const int overflow
+          = graph2d_.getEstUsageH(x, y) - graph2d_.getCapH(x, y);
+      hCap += graph2d_.getCapH(x, y);
+      if (overflow > 0) {
+        H_overflow += overflow;
+        max_H_overflow = std::max(max_H_overflow, overflow);
+        numedges++;
+      }
+    }
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (used_v.size() > 16384) \
+    reduction(+ : total_usage, vCap, V_overflow, numedges) reduction(max : max_V_overflow)
+#endif
+    for (size_t i = 0; i < used_v.size(); ++i) {
+      const auto [x, y] = used_v[i];
+      total_usage += graph2d_.getEstUsageV(x, y);
+      const int overflow
+          = graph2d_.getEstUsageV(x, y) - graph2d_.getCapV(x, y);
+      vCap += graph2d_.getCapV(x, y);
+      if (overflow > 0) {
+        V_overflow += overflow;
+        max_V_overflow = std::max(max_V_overflow, overflow);
+        numedges++;
+      }
     }
   }
 
