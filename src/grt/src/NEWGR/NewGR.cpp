@@ -21,7 +21,6 @@
 #include "grt/Rudy.h"
 #include "grt/SprouteAdapter.h"
 #include "utl/Logger.h"
-#include "galois/Galois.h"
 #include "galois/Threads.h"
 
 // SPRoute (mysproute) uses a global `numThreads` variable to control the
@@ -276,12 +275,8 @@ int pickSprouteThreadCount(size_t net_count)
     threads = std::min(threads, 4u);
   } else if (net_count < 8000) {
     threads = std::min(threads, 8u);
-  } else if (net_count < 24000) {
-    threads = std::min(threads, 16u);
-  } else if (net_count < 48000) {
-    threads = std::min(threads, 24u);
   } else {
-    threads = std::min(threads, 32u);
+    threads = std::min(threads, 16u);
   }
 
   if (const char* env = std::getenv("NEWGR_SPROUTE_THREADS");
@@ -295,38 +290,6 @@ int pickSprouteThreadCount(size_t net_count)
   }
 
   return static_cast<int>(std::max(1u, threads));
-}
-
-template <typename Func>
-void runInParallelChunks(size_t task_count, int thread_count, Func&& func)
-{
-  if (task_count == 0) {
-    return;
-  }
-
-  thread_count = std::max(thread_count, 1);
-  thread_count = std::min(thread_count, static_cast<int>(task_count));
-  if (thread_count <= 1) {
-    func(0, task_count, 0);
-    return;
-  }
-
-  const size_t chunk_size
-      = (task_count + static_cast<size_t>(thread_count) - 1)
-        / static_cast<size_t>(thread_count);
-  std::vector<std::thread> workers;
-  workers.reserve(thread_count);
-  for (int tid = 0; tid < thread_count; ++tid) {
-    const size_t begin = static_cast<size_t>(tid) * chunk_size;
-    if (begin >= task_count) {
-      break;
-    }
-    const size_t end = std::min(begin + chunk_size, task_count);
-    workers.emplace_back([&, begin, end, tid]() { func(begin, end, tid); });
-  }
-  for (auto& worker : workers) {
-    worker.join();
-  }
 }
 
 float summarizeHotspotScore(const std::vector<Hotspot>& hotspots)
@@ -1096,6 +1059,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->sproute_adapter_->initialize(tuned_grid, grouter_->sproute_nets_);
     NetRouteMap routes = grouter_->sproute_adapter_->run();
 
+    // Work around a shutdown-time Galois stats crash when using >1 thread.
+    // Reduce the active thread count so stats merging only touches thread 0.
+    galois::setActiveThreads(1);
+
     grouter_->addRemainingGuides(
         routes, nets, min_routing_layer, max_routing_layer);
     grouter_->connectPadPins(routes);
@@ -1108,41 +1075,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
 
-    struct MergeTask
-    {
-      const std::vector<Pin>* pins;
-      GRoute* route;
-    };
-    std::vector<MergeTask> merge_tasks;
-    merge_tasks.reserve(routes.size());
     for (auto& [db_net, route] : routes) {
       auto it = net_lookup.find(db_net);
       if (it == net_lookup.end() || it->second == nullptr) {
         continue;
       }
-      merge_tasks.push_back({&it->second->getPins(), &route});
-    }
-
-    if (!merge_tasks.empty()) {
-      const int task_count = static_cast<int>(merge_tasks.size());
-      galois::do_all(
-          galois::iterate(0, task_count),
-          [&](int i) {
-            const MergeTask& task = merge_tasks[i];
-            if (task.pins == nullptr || task.route == nullptr) {
-              return;
-            }
-            grouter_->mergeSegments(*task.pins, *task.route);
-          });
+      grouter_->mergeSegments(it->second->getPins(), route);
     }
 
     // Ensure GlobalRouter::updateDbCongestion() uses SPRoute's congestion data
     // instead of FastRoute's when NEWGR selects the SPRoute engine.
     grouter_->router_type_ = RouterType::Sproute;
-
-    // Work around a shutdown-time Galois stats crash when using >1 thread.
-    // Reduce the active thread count so stats merging only touches thread 0.
-    galois::setActiveThreads(1);
 
     return routes;
   }
@@ -1994,35 +1937,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->addRemainingGuides(
         routes, state_nets, min_routing_layer, max_routing_layer);
     grouter_->connectPadPins(routes);
-    struct MergeTask
-    {
-      const std::vector<Pin>* pins;
-      GRoute* route;
-    };
-    std::vector<MergeTask> merge_tasks;
-    merge_tasks.reserve(routes.size());
     for (auto& [db_net, route] : routes) {
       Net* net = grouter_->getNet(db_net);
       if (net == nullptr) {
         continue;
       }
-      merge_tasks.push_back({&net->getPins(), &route});
+      grouter_->mergeSegments(net->getPins(), route);
     }
-
-    const int merge_threads = std::max(
-        1, std::min(pickSprouteThreadCount(merge_tasks.size()), 32));
-    runInParallelChunks(
-        merge_tasks.size(),
-        merge_threads,
-        [&](size_t begin, size_t end, int /*tid*/) {
-          for (size_t i = begin; i < end; ++i) {
-            const MergeTask& task = merge_tasks[i];
-            if (task.pins == nullptr || task.route == nullptr) {
-              continue;
-            }
-            grouter_->mergeSegments(*task.pins, *task.route);
-          }
-        });
 
     metrics = compute_metrics(routes, &core);
     if (hotspots_out != nullptr) {
