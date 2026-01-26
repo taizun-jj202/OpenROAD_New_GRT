@@ -1259,6 +1259,67 @@ NetRouteMap FastRouteCore::run()
     // Rip-up a tree edge according to its ripup type and Z-route it
     newrouteZAll(10);
   } else {
+    // In speed-mode we normally skip spiral routing, but running it on a small
+    // subset of long nets can recover some guide quality with limited runtime
+    // impact.
+    std::vector<int> selective_ids;
+    if (!net_ids_.empty()) {
+      struct Candidate
+      {
+        int net_id = 0;
+        int score = 0;
+      };
+      std::vector<Candidate> candidates;
+      candidates.reserve(net_ids_.size());
+      for (const int net_id : net_ids_) {
+        int max_len = 0;
+        const auto& edges = sttrees_[net_id].edges;
+        for (const auto& edge : edges) {
+          max_len = std::max(max_len, edge.len);
+        }
+        if (max_len >= 30) {
+          candidates.push_back({net_id, max_len});
+        }
+      }
+
+      const int desired
+          = std::clamp(static_cast<int>(std::round(net_ids_.size() * 0.03)),
+                       50,
+                       400);
+      if (static_cast<int>(candidates.size()) > desired) {
+        std::nth_element(candidates.begin(),
+                         candidates.begin() + desired,
+                         candidates.end(),
+                         [](const Candidate& lhs, const Candidate& rhs) {
+                           if (lhs.score != rhs.score) {
+                             return lhs.score > rhs.score;
+                           }
+                           return lhs.net_id < rhs.net_id;
+                         });
+        candidates.resize(desired);
+      }
+      std::sort(candidates.begin(),
+                candidates.end(),
+                [](const Candidate& lhs, const Candidate& rhs) {
+                  if (lhs.score != rhs.score) {
+                    return lhs.score > rhs.score;
+                  }
+                  return lhs.net_id < rhs.net_id;
+                });
+
+      selective_ids.reserve(candidates.size());
+      for (const Candidate& candidate : candidates) {
+        selective_ids.push_back(candidate.net_id);
+      }
+    }
+
+    if (!selective_ids.empty()) {
+      std::vector<int> saved_ids = net_ids_;
+      net_ids_ = std::move(selective_ids);
+      spiralRouteAll();
+      net_ids_ = std::move(saved_ids);
+    }
+
     const int fast_z_rounds = std::max(4, overflow_iterations_ + 1);
     newrouteZAll(fast_z_rounds);
     if (logger_->debugCheck(GNR, "grtSteps", 1)) {
