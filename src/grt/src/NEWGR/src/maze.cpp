@@ -1155,7 +1155,8 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
 
 #ifdef _OPENMP
   const bool try_parallel = omp_get_max_threads() > 1
-                            && static_cast<int>(net_ids_.size()) >= 512;
+                            && static_cast<int>(net_ids_.size()) >= 512
+                            && iter <= 10;
 #else
   const bool try_parallel = false;
 #endif

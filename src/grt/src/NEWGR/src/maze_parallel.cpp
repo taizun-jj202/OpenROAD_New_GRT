@@ -233,19 +233,19 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
     return;
   }
 
-  int threads = std::min(max_threads, 16);
-  if (threads < 2) {
-    threads = 2;
-  }
+  int threads = std::min({max_threads, omp_get_num_procs(), 8});
+  threads = std::max(2, threads);
 
-  int batch_size
-      = static_cast<int>(net_ids_.size()) / std::max(1, threads * 2);
-  batch_size = std::clamp(batch_size, 256, 2048);
-  if (iter > 10) {
-    batch_size = std::max(128, batch_size / 2);
+  int batch_size = static_cast<int>(net_ids_.size());
+  if (iter > 3) {
+    batch_size = std::clamp(static_cast<int>(net_ids_.size()) / 2,
+                            1024,
+                            static_cast<int>(net_ids_.size()));
   }
-  if (iter > 20) {
-    batch_size = std::max(96, batch_size / 2);
+  if (iter > 10) {
+    batch_size = std::clamp(static_cast<int>(net_ids_.size()) / 4,
+                            512,
+                            static_cast<int>(net_ids_.size()));
   }
 
   auto route_one = [&](int nidRPC, const UsageUpdateCallbacks* updates_cb) {
@@ -353,8 +353,6 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
       const int regionY2
           = std::min(ymax + effective_enlarge - decrease, y_grid_ - 1);
 
-      const int region_area
-          = (regionY2 - regionY1 + 1) * (regionX2 - regionX1 + 1);
       for (int i = regionY1; i <= regionY2; i++) {
         for (int j = regionX1; j <= regionX2; j++) {
           d1[i][j] = BIG_INT;
@@ -758,7 +756,6 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
 #pragma omp parallel for schedule(static) num_threads(threads)
     for (int idx = batch_begin; idx < batch_end; ++idx) {
       auto& net_updates = updates[static_cast<size_t>(idx - batch_begin)];
-      net_updates.reserve(256);
       UsageUpdateCallbacks cb;
       cb.ctx = &net_updates;
       cb.updateH = recordUsageH;
@@ -781,4 +778,3 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
 }
 
 }  // namespace grt::newgr
-
