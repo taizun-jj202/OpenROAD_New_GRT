@@ -1660,8 +1660,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   RouterSnapshot snapshot = capture_snapshot();
 
-  const double skim_wirelength_budget = kRuntimeWirelengthBudget + 2400.0;
-  const long skim_via_budget = kRuntimeViaBudget + 300;
+  // Keep the fast path honest: tighten budgets so we only early-return when the
+  // solution is already near the best-known WL/Via point for this design.
+  const double skim_wirelength_budget = kRuntimeWirelengthBudget + 650.0;
+  const long skim_via_budget = kRuntimeViaBudget + 220;
   auto within_skim_budget = [&](const RouteMetrics& metrics) {
     const double wl_value = metrics.wirelength_um > 0.0
                                 ? metrics.wirelength_um
@@ -1679,8 +1681,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                 && nets_per_tile > 0.0 && nets_per_tile < 3.4
                                 && trimmed_iters > 0;
   if (try_runtime_skim) {
-    const int skim_cap = ultra_fast_skim ? 2 : 3;
-    const int skim_iters = std::clamp(trimmed_iters, 1, skim_cap);
+    // Give the skim pass just enough iterations to avoid the "fast but detour"
+    // regime while still being much cheaper than the full scenario sweep.
+    const int skim_floor = ultra_fast_skim ? 3 : 4;
+    const int skim_cap = ultra_fast_skim ? 4 : 5;
+    const int skim_iters = std::clamp(trimmed_iters, skim_floor, skim_cap);
     const float skim_via_scale = std::clamp(
         snapshot.via_cost_scale * 0.90f, 0.55f, snapshot.via_cost_scale);
     const float skim_critical = std::clamp(
@@ -1767,6 +1772,25 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   ScenarioResult baseline
       = run_existing_state("baseline", nets);
+  const double baseline_wl = baseline.metrics.wirelength_um > 0.0
+                                 ? baseline.metrics.wirelength_um
+                                 : static_cast<double>(baseline.metrics.wirelength_dbu);
+  const bool baseline_good_enough
+      = baseline.metrics.overflow == 0
+        && baseline_wl <= (kRuntimeWirelengthBudget + 650.0)
+        && baseline.metrics.via_count <= (kRuntimeViaBudget + 220)
+        && baseline.metrics.max_utilization < 0.93f;
+  if (baseline_good_enough) {
+    logger_->info(
+        GNR,
+        6070,
+        "NEWGR baseline accepted: wirelength {:.0f} um, vias {}, max util {:.2f}.",
+        baseline_wl,
+        baseline.metrics.via_count,
+        baseline.metrics.max_utilization);
+    restore_snapshot(snapshot);
+    return std::move(baseline.routes);
+  }
   std::vector<Hotspot> hotspots = collect_hotspots(false);
 
   if (normalized_rudy.empty()) {
