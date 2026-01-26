@@ -1639,12 +1639,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   RouterSnapshot snapshot = capture_snapshot();
 
-  auto within_budget = [&](const RouteMetrics& metrics) {
+  const double skim_wirelength_budget = kRuntimeWirelengthBudget + 2400.0;
+  const long skim_via_budget = kRuntimeViaBudget + 300;
+  auto within_skim_budget = [&](const RouteMetrics& metrics) {
     const double wl_value = metrics.wirelength_um > 0.0
                                 ? metrics.wirelength_um
                                 : static_cast<double>(metrics.wirelength_dbu);
-    return metrics.overflow == 0 && wl_value <= kRuntimeWirelengthBudget
-           && metrics.via_count <= kRuntimeViaBudget;
+    return metrics.overflow == 0 && wl_value <= skim_wirelength_budget
+           && metrics.via_count <= skim_via_budget;
   };
 
   bool runtime_skim_rejected = false;
@@ -1687,7 +1689,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                ? skim_result.metrics.wirelength_um
                                : static_cast<double>(skim_result.metrics.wirelength_dbu);
     const bool skim_guard
-        = within_budget(skim_result.metrics)
+        = within_skim_budget(skim_result.metrics)
           && skim_result.metrics.max_utilization
                  < (ultra_fast_skim ? 0.93f : 0.94f);
     if (skim_guard) {
