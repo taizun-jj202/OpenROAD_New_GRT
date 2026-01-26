@@ -45,6 +45,10 @@ namespace sta {
 class dbSta;
 }
 
+namespace grt {
+class FastRouteCore;
+}
+
 namespace grt::newgr {
 
 using boost::multi_array;
@@ -173,6 +177,10 @@ class FastRouteCore
                               int& adjustment);
   void initBlockedIntervals(std::vector<int>& track_space);
   void initAuxVar();
+  // Imports per-edge capacities/reductions from OpenROAD's baseline FastRoute
+  // instance (after all adjustments/pin-access updates) so NEWGR routes on an
+  // identical resource model while using its own parallel maze router.
+  void importCapacitiesFrom(::grt::FastRouteCore& src);
   NetRouteMap run();
   int totalOverflow() const { return total_overflow_; }
   bool has2Doverflow() const { return has_2D_overflow_; }

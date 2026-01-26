@@ -8,14 +8,17 @@
 #include <numeric>
 #include <thread>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "FastRoute.h"
+#include "include/FastRoute.h"
 #include "Grid.h"
 #include "Net.h"
 #include "grt/Rudy.h"
+#include "grt/SprouteAdapter.h"
 #include "utl/Logger.h"
 
 namespace grt {
@@ -994,6 +997,41 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 {
   if (nets.empty()) {
     return {};
+  }
+
+  // NEWGR runtime path: use SPRoute's deterministic parallel engine (BSP),
+  // optionally with a small capacity inflation to recover wirelength.
+  if (grouter_ != nullptr && grouter_->sproute_adapter_ != nullptr
+      && grouter_->sproute_grid_ready_ && grouter_->sproute_nets_ready_) {
+    SprouteGridData tuned_grid = grouter_->sproute_grid_data_;
+    constexpr float kCapScale = 1.05f;
+    auto scale_caps = [&](std::vector<int>& caps) {
+      for (int& cap : caps) {
+        if (cap <= 0) {
+          continue;
+        }
+        const float scaled = static_cast<float>(cap) * kCapScale;
+        cap = std::max(1, static_cast<int>(std::lround(scaled)));
+      }
+    };
+    scale_caps(tuned_grid.h_capacities);
+    scale_caps(tuned_grid.v_capacities);
+
+    grouter_->sproute_adapter_->initialize(tuned_grid, grouter_->sproute_nets_);
+    NetRouteMap routes = grouter_->sproute_adapter_->run();
+    if (grouter_->block_ != nullptr) {
+      grouter_->sproute_adapter_->updateDbCongestion(grouter_->block_);
+    }
+
+    grouter_->addRemainingGuides(
+        routes, nets, min_routing_layer, max_routing_layer);
+    grouter_->connectPadPins(routes);
+    for (auto& net_route : routes) {
+      std::vector<Pin>& pins = grouter_->db_net_map_[net_route.first]->getPins();
+      GRoute& route = net_route.second;
+      grouter_->mergeSegments(pins, route);
+    }
+    return routes;
   }
 
   if (grouter_ != nullptr && grouter_->grid_ != nullptr

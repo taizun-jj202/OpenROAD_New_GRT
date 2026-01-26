@@ -25,6 +25,8 @@
 #include "stt/SteinerTreeBuilder.h"
 #include "utl/Logger.h"
 
+#include "../../fastroute/include/FastRoute.h"
+
 namespace grt::newgr {
 
 using utl::GNR;
@@ -161,11 +163,14 @@ void FastRouteCore::setGridsAndLayers(int x, int y, int nLayers)
   y_grid_ = y;
   num_layers_ = nLayers;
   layer_directions_.resize(num_layers_);
-  // Size working buffers to the actual grid dimensions. The legacy FastRoute
-  // implementation used a fixed 1000x1000 workspace which inflates memory and
-  // slows down allocation/initialization for typical designs.
-  x_range_ = std::max(1, x_grid_);
-  y_range_ = std::max(1, y_grid_);
+  // Keep the original FastRoute workspace sizing to avoid subtle corner cases
+  // with off-grid pin projections and expanded search regions.
+  if (std::max(x_grid_, y_grid_) >= 1000) {
+    x_range_ = std::max(x_grid_, y_grid_);
+  } else {
+    x_range_ = 1000;
+  }
+  y_range_ = x_range_;
 
   v_capacity_3D_.resize(num_layers_);
   h_capacity_3D_.resize(num_layers_);
@@ -431,6 +436,102 @@ void FastRouteCore::initEdgesCapacityPerLayer()
               x, y, l, EdgeDirection::Vertical, v_edges_3D_[l][y][x].cap);
         }
       }
+    }
+  }
+}
+
+void FastRouteCore::importCapacitiesFrom(::grt::FastRouteCore& src)
+{
+  if (!graph2d_.hasEdges() || h_edges_3D_.num_elements() == 0
+      || v_edges_3D_.num_elements() == 0) {
+    logger_->warn(GNR,
+                  6101,
+                  "NEWGR capacity import skipped: edges are not initialized.");
+    return;
+  }
+
+  const auto& src_h = src.getHorizontalEdges3D();
+  const auto& src_v = src.getVerticalEdges3D();
+  const size_t* src_shape = src_h.shape();
+
+  const int src_layers = static_cast<int>(src_shape[0]);
+  const int src_y = static_cast<int>(src_shape[1]);
+  const int src_x = static_cast<int>(src_shape[2]);
+
+  if (src_layers != num_layers_ || src_y != y_grid_ || src_x != x_grid_) {
+    logger_->warn(
+        GNR,
+        6102,
+        "NEWGR capacity import skipped: dimension mismatch (src {}x{}x{}, dst "
+        "{}x{}x{}).",
+        src_layers,
+        src_y,
+        src_x,
+        num_layers_,
+        y_grid_,
+        x_grid_);
+    return;
+  }
+
+  const auto& src_last_col = src.getLastColumnVerticalCapacities();
+  if (static_cast<int>(src_last_col.size()) == num_layers_) {
+    for (int l = 0; l < num_layers_; ++l) {
+      setLastColVCapacity(static_cast<short>(src_last_col[static_cast<size_t>(l)]),
+                          l);
+    }
+  }
+  const auto& src_last_row = src.getLastRowHorizontalCapacities();
+  if (static_cast<int>(src_last_row.size()) == num_layers_) {
+    for (int l = 0; l < num_layers_; ++l) {
+      setLastRowHCapacity(static_cast<short>(src_last_row[static_cast<size_t>(l)]),
+                          l);
+    }
+  }
+
+  for (int l = 0; l < num_layers_; ++l) {
+    for (int y = 0; y < y_grid_; ++y) {
+      for (int x = 0; x < x_grid_; ++x) {
+        const auto& sh = src_h[l][y][x];
+        auto& dh = h_edges_3D_[l][y][x];
+        dh.cap = sh.cap;
+        dh.red = sh.red;
+        dh.real_cap = sh.real_cap;
+        dh.usage = 0;
+
+        const auto& sv = src_v[l][y][x];
+        auto& dv = v_edges_3D_[l][y][x];
+        dv.cap = sv.cap;
+        dv.red = sv.red;
+        dv.real_cap = sv.real_cap;
+        dv.usage = 0;
+      }
+    }
+  }
+
+  // Rebuild the 2D capacity/reduction map as the sum across layers.
+  for (int x = 0; x < x_grid_ - 1; ++x) {
+    for (int y = 0; y < y_grid_; ++y) {
+      int cap_sum = 0;
+      int red_sum = 0;
+      for (int l = 0; l < num_layers_; ++l) {
+        cap_sum += h_edges_3D_[l][y][x].cap;
+        red_sum += h_edges_3D_[l][y][x].red;
+      }
+      graph2d_.setCapH(x, y, cap_sum);
+      graph2d_.setRedH(x, y, red_sum);
+    }
+  }
+
+  for (int x = 0; x < x_grid_; ++x) {
+    for (int y = 0; y < y_grid_ - 1; ++y) {
+      int cap_sum = 0;
+      int red_sum = 0;
+      for (int l = 0; l < num_layers_; ++l) {
+        cap_sum += v_edges_3D_[l][y][x].cap;
+        red_sum += v_edges_3D_[l][y][x].red;
+      }
+      graph2d_.setCapV(x, y, cap_sum);
+      graph2d_.setRedV(x, y, red_sum);
     }
   }
 }

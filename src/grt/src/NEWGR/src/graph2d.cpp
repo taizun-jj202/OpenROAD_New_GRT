@@ -264,6 +264,18 @@ void Graph2D::addCapV(const int x, const int y, const int cap)
   v_edges_[x][y].cap += cap;
 }
 
+void Graph2D::setCapH(const int x, const int y, const int cap)
+{
+  const int clamped = std::clamp(cap, 0, static_cast<int>(UINT16_MAX));
+  h_edges_[x][y].cap = static_cast<uint16_t>(clamped);
+}
+
+void Graph2D::setCapV(const int x, const int y, const int cap)
+{
+  const int clamped = std::clamp(cap, 0, static_cast<int>(UINT16_MAX));
+  v_edges_[x][y].cap = static_cast<uint16_t>(clamped);
+}
+
 // Updates estimated usage for a horizontal edge segment, considering NDRs.
 void Graph2D::updateEstUsageH(const Interval& xi,
                               const int y,
@@ -332,6 +344,18 @@ void Graph2D::addRedV(const int x, const int y, const int red)
 {
   auto& val = v_edges_[x][y].red;
   val = std::max(val + red, 0);
+}
+
+void Graph2D::setRedH(const int x, const int y, const int red)
+{
+  const int clamped = std::clamp(red, 0, static_cast<int>(UINT16_MAX));
+  h_edges_[x][y].red = static_cast<uint16_t>(clamped);
+}
+
+void Graph2D::setRedV(const int x, const int y, const int red)
+{
+  const int clamped = std::clamp(red, 0, static_cast<int>(UINT16_MAX));
+  v_edges_[x][y].red = static_cast<uint16_t>(clamped);
 }
 
 // Adds usage to a horizontal edge segment.

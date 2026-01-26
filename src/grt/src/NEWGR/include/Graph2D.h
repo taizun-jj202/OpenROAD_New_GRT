@@ -84,9 +84,13 @@ class Graph2D
 
   void addCapH(int x, int y, int cap);
   void addCapV(int x, int y, int cap);
+  void setCapH(int x, int y, int cap);
+  void setCapV(int x, int y, int cap);
   void addEstUsageToUsage();
   void addRedH(int x, int y, int red);
   void addRedV(int x, int y, int red);
+  void setRedH(int x, int y, int red);
+  void setRedV(int x, int y, int red);
   void addUsageH(const Interval& xi, int y, int used);
   void addUsageH(int x, int y, int used);
   void addUsageV(int x, const Interval& yi, int used);

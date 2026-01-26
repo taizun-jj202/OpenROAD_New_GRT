@@ -1209,11 +1209,14 @@ void FastRouteCore::layerAssignmentV4()
       TreeEdge* treeedge = &(treeedges[edgeID]);
 
       if (treeedge->len > 0) {
-        const int routeLen = treeedge->route.routelen;
-
         const int n1 = treeedge->n1;
         const int n2 = treeedge->n2;
         const std::vector<GPoint3D>& grids = treeedge->route.grids;
+        if (grids.empty()) {
+          continue;
+        }
+        int routeLen = treeedge->route.routelen;
+        routeLen = std::min(routeLen, static_cast<int>(grids.size()) - 1);
 
         const int n1a = treenodes[n1].stackAlias;
         const int n2a = treenodes[n2].stackAlias;
@@ -1575,7 +1578,12 @@ void FastRouteCore::StNetOrder()
       const TreeEdge* treeedge = &(treeedges[ind]);
 
       const std::vector<GPoint3D>& grids = treeedge->route.grids;
-      for (int i = 0; i < treeedge->route.routelen; i++) {
+      if (grids.size() < 2) {
+        continue;
+      }
+      int routeLen = treeedge->route.routelen;
+      routeLen = std::min(routeLen, static_cast<int>(grids.size()) - 1);
+      for (int i = 0; i < routeLen; i++) {
         if (grids[i].x == grids[i + 1].x) {  // a vertical edge
           const int min_y = std::min(grids[i].y, grids[i + 1].y);
           const int cap = getEdgeCapacity(
@@ -1692,7 +1700,11 @@ void FastRouteCore::recoverEdge(const int netID, const int edgeID)
 
   treenodes[n1a].assigned = true;
 
-  const int routeLen = treeedge->route.routelen;
+  if (grids.empty()) {
+    return;
+  }
+  int routeLen = treeedge->route.routelen;
+  routeLen = std::min(routeLen, static_cast<int>(grids.size()) - 1);
   const int connectionCNT2 = treenodes[n2a].conCNT;
   treenodes[n2a].heights[connectionCNT2] = grids[routeLen].layer;
   treenodes[n2a].eID[connectionCNT2] = edgeID;
@@ -1709,7 +1721,10 @@ void FastRouteCore::recoverEdge(const int netID, const int edgeID)
   treenodes[n2a].assigned = true;
 
   FrNet* net = nets_[netID];
-  for (int i = 0; i < treeedge->route.routelen; i++) {
+  if (grids.size() < 2) {
+    return;
+  }
+  for (int i = 0; i < routeLen; i++) {
     if (grids[i].layer == grids[i + 1].layer) {
       if (grids[i].x == grids[i + 1].x)  // a vertical edge
       {
