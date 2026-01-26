@@ -292,6 +292,61 @@ int pickSprouteThreadCount(size_t net_count)
   return static_cast<int>(std::max(1u, threads));
 }
 
+int pickPostThreadCount(size_t task_count)
+{
+  const unsigned int hw_threads
+      = std::max(1u, std::thread::hardware_concurrency());
+
+  unsigned int threads = 1u;
+  if (task_count < 512) {
+    threads = 1u;
+  } else if (task_count < 2048) {
+    threads = std::min(hw_threads, 4u);
+  } else if (task_count < 8192) {
+    threads = std::min(hw_threads, 8u);
+  } else {
+    threads = std::min(hw_threads, 16u);
+  }
+
+  if (const char* env = std::getenv("NEWGR_POST_THREADS");
+      env != nullptr && *env != '\0') {
+    char* end = nullptr;
+    const long parsed = std::strtol(env, &end, 10);
+    if (end != env && parsed > 0) {
+      threads = static_cast<unsigned int>(
+          std::clamp(parsed, 1L, static_cast<long>(hw_threads)));
+    }
+  }
+
+  return static_cast<int>(std::max(1u, threads));
+}
+
+template <typename Func>
+void parallelFor(size_t total, unsigned int thread_count, Func&& func)
+{
+  if (thread_count <= 1 || total == 0) {
+    func(0, total);
+    return;
+  }
+
+  std::vector<std::thread> threads;
+  threads.reserve(thread_count);
+  const size_t chunk = (total + thread_count - 1) / thread_count;
+  for (unsigned int t = 0; t < thread_count; ++t) {
+    const size_t begin = static_cast<size_t>(t) * chunk;
+    if (begin >= total) {
+      break;
+    }
+    const size_t end = std::min(total, begin + chunk);
+    threads.emplace_back(
+        [begin, end, &func]() { func(begin, end); });
+  }
+
+  for (auto& thread : threads) {
+    thread.join();
+  }
+}
+
 float summarizeHotspotScore(const std::vector<Hotspot>& hotspots)
 {
   if (hotspots.empty()) {
@@ -1069,11 +1124,46 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->addRemainingGuides(
         routes, nets, min_routing_layer, max_routing_layer);
     grouter_->connectPadPins(routes);
-    for (auto& net_route : routes) {
-      std::vector<Pin>& pins = grouter_->db_net_map_[net_route.first]->getPins();
-      GRoute& route = net_route.second;
-      grouter_->mergeSegments(pins, route);
+
+    std::unordered_map<odb::dbNet*, Net*> net_lookup;
+    net_lookup.reserve(nets.size());
+    for (Net* net : nets) {
+      if (net != nullptr && net->getDbNet() != nullptr) {
+        net_lookup.emplace(net->getDbNet(), net);
+      }
     }
+
+    struct MergeTask
+    {
+      const std::vector<Pin>* pins = nullptr;
+      GRoute* route = nullptr;
+    };
+
+    std::vector<MergeTask> merge_tasks;
+    merge_tasks.reserve(routes.size());
+    for (auto& [db_net, route] : routes) {
+      auto it = net_lookup.find(db_net);
+      if (it == net_lookup.end() || it->second == nullptr) {
+        continue;
+      }
+      merge_tasks.push_back({&it->second->getPins(), &route});
+    }
+
+    const unsigned int merge_threads
+        = static_cast<unsigned int>(pickPostThreadCount(merge_tasks.size()));
+    parallelFor(
+        merge_tasks.size(),
+        merge_threads,
+        [&](size_t begin, size_t end) {
+          for (size_t i = begin; i < end; ++i) {
+            const MergeTask& task = merge_tasks[i];
+            if (task.pins == nullptr || task.route == nullptr) {
+              continue;
+            }
+            grouter_->mergeSegments(*task.pins, *task.route);
+          }
+        });
+
     return routes;
   }
 
