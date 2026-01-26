@@ -275,8 +275,13 @@ int pickSprouteThreadCount(size_t net_count)
     threads = std::min(threads, 4u);
   } else if (net_count < 8000) {
     threads = std::min(threads, 8u);
-  } else {
+  } else if (net_count < 15000) {
+    // Mid-sized designs generally scale well up to ~16 threads on modern CPUs.
     threads = std::min(threads, 16u);
+  } else {
+    // Large designs (e.g., sky130hd/aes) benefit from more parallelism.
+    // Cap to avoid excessive Galois overhead on very wide machines.
+    threads = std::min(threads, 32u);
   }
 
   if (const char* env = std::getenv("NEWGR_SPROUTE_THREADS");
