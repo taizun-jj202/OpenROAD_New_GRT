@@ -1617,15 +1617,15 @@ NetRouteMap FastRouteCore::run()
     }
 
     auto cost_params = CostParams(logistic_coef, costheight_, slope);
-    mazeRouteMSMD(i,
-                  enlarge_,
-                  ripup_threshold,
-                  mazeedge_threshold_,
-                  !(i % 3),
-                  VIA,
-                  L,
-                  cost_params,
-                  slack_th);
+    mazeRouteMSMDParallel(i,
+                          enlarge_,
+                          ripup_threshold,
+                          mazeedge_threshold_,
+                          !(i % 3),
+                          VIA,
+                          L,
+                          cost_params,
+                          slack_th);
 
     int last_cong = past_cong;
     past_cong = getOverflow2Dmaze(&maxOverflow, &tUsage);
@@ -1656,15 +1656,15 @@ NetRouteMap FastRouteCore::run()
         stopDEC = true;
         slope = 5;
         auto cost_params = CostParams(logistic_coef, costheight_, slope);
-        mazeRouteMSMD(i,
-                      enlarge_,
-                      ripup_threshold,
-                      mazeedge_threshold_,
-                      !(i % 3),
-                      VIA,
-                      L,
-                      cost_params,
-                      slack_th);
+        mazeRouteMSMDParallel(i,
+                              enlarge_,
+                              ripup_threshold,
+                              mazeedge_threshold_,
+                              !(i % 3),
+                              VIA,
+                              L,
+                              cost_params,
+                              slack_th);
         last_cong = past_cong;
         past_cong = getOverflow2Dmaze(&maxOverflow, &tUsage);
 
@@ -1705,15 +1705,15 @@ NetRouteMap FastRouteCore::run()
 
         L = 0;
         auto cost_params = CostParams(logistic_coef, costheight_, slope);
-        mazeRouteMSMD(i,
-                      enlarge_,
-                      ripup_threshold,
-                      mazeedge_threshold_,
-                      !(i % 3),
-                      VIA,
-                      L,
-                      cost_params,
-                      slack_th);
+        mazeRouteMSMDParallel(i,
+                              enlarge_,
+                              ripup_threshold,
+                              mazeedge_threshold_,
+                              !(i % 3),
+                              VIA,
+                              L,
+                              cost_params,
+                              slack_th);
         last_cong = past_cong;
         past_cong = getOverflow2Dmaze(&maxOverflow, &tUsage);
         if (past_cong < last_cong) {

@@ -1172,7 +1172,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     });
   };
 
-  auto compute_metrics = [&](const NetRouteMap& routes) -> RouteMetrics {
+  auto compute_metrics = [&](const NetRouteMap& routes,
+                             grt::newgr::FastRouteCore* route_core)
+      -> RouteMetrics {
     RouteMetrics metrics;
     const int tile_size
         = grouter_ != nullptr && grouter_->grid_ != nullptr
@@ -1268,8 +1270,37 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
 
-    if (grouter_ != nullptr && grouter_->fastroute_ != nullptr) {
-      FastRouteCore* core = grouter_->fastroute_;
+    if (route_core != nullptr) {
+      route_core->computeCongestionInformation();
+      metrics.overflow = route_core->totalOverflow();
+
+      const auto& usage = route_core->getTotalUsagePerLayer();
+      const auto& capacity = route_core->getTotalCapacityPerLayer();
+      const size_t layer_count = std::min(usage.size(), capacity.size());
+      double stress = 0.0;
+      double reserve = 0.0;
+      for (size_t i = 0; i < layer_count; ++i) {
+        const double cap = static_cast<double>(capacity[i]);
+        if (cap <= std::numeric_limits<double>::epsilon()) {
+          continue;
+        }
+        const double util = static_cast<double>(usage[i]) / cap;
+        metrics.max_utilization = std::max(metrics.max_utilization, util);
+        metrics.avg_utilization += util;
+        const double overload = std::max(0.0, util - 0.86);
+        stress += overload * overload;
+        reserve += std::max(0.0, 1.0 - util);
+      }
+
+      if (layer_count > 0) {
+        metrics.avg_utilization
+            /= std::max<double>(static_cast<double>(layer_count), 1.0);
+        metrics.stress_cost = stress * static_cast<double>(tile_size);
+        metrics.reserve_score = reserve;
+      }
+    } else if (grouter_ != nullptr && grouter_->fastroute_ != nullptr) {
+      // Fallback for paths that do not instantiate NEWGR's parallel core.
+      ::grt::FastRouteCore* core = grouter_->fastroute_;
       core->computeCongestionInformation();
       metrics.overflow = core->totalOverflow();
 
@@ -1732,40 +1763,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   predicted_hotspots.size());
   }
 
-  auto run_existing_state = [&](const std::string& name,
-                                std::vector<Net*>& state_nets) {
-    NetRouteMap routes;
-    if (!state_nets.empty()) {
-      sort_nets_deterministic(state_nets);
-      routes = grouter_->findRouting(
-          state_nets, min_routing_layer, max_routing_layer);
-    }
-    RouteMetrics metrics = compute_metrics(routes);
-    logger_->info(GNR,
-                  6005,
-                  "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}, "
-                  "max util {:.2f}",
-                  name,
-                  metrics.wirelength_um,
-                  metrics.via_count,
-                  metrics.overflow,
-                  metrics.max_utilization);
-    return ScenarioResult{name, metrics, std::move(routes)};
-  };
-
-  auto collect_hotspots = [&](bool recompute) -> std::vector<Hotspot> {
+  auto collect_hotspots_from_core = [&](grt::newgr::FastRouteCore& core)
+      -> std::vector<Hotspot> {
     std::vector<Hotspot> hotspots;
-    if (grouter_->fastroute_ == nullptr || grouter_->grid_ == nullptr) {
+    if (grouter_->grid_ == nullptr) {
       return hotspots;
-    }
-
-    if (recompute) {
-      grouter_->fastroute_->computeCongestionInformation();
     }
 
     std::vector<CongestionInformation> vertical;
     std::vector<CongestionInformation> horizontal;
-    grouter_->fastroute_->getCongestionGrid(vertical, horizontal);
+    core.getCongestionGrid(vertical, horizontal);
 
     const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
     const int x_min = grouter_->grid_->getXMin();
@@ -1802,6 +1809,161 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return hotspots;
   };
 
+  auto run_parallel_core = [&](const std::string& name,
+                               std::vector<Net*>& state_nets,
+                               int overflow_iters,
+                               std::vector<Hotspot>* hotspots_out) {
+    NetRouteMap routes;
+    RouteMetrics metrics;
+    if (state_nets.empty() || grouter_ == nullptr || grouter_->grid_ == nullptr
+        || grouter_->fastroute_ == nullptr) {
+      return ScenarioResult{name, metrics, std::move(routes)};
+    }
+
+    sort_nets_deterministic(state_nets);
+
+    grt::newgr::FastRouteCore core(grouter_->db_,
+                                   logger_,
+                                   grouter_->callback_handler_,
+                                   grouter_->stt_builder_,
+                                   grouter_->sta_);
+
+    Grid* grid = grouter_->grid_;
+    const int num_layers = grid->getNumLayers();
+    core.setLowerLeft(grid->getXMin(), grid->getYMin());
+    core.setTileSize(grid->getTileSize());
+    core.setGridsAndLayers(grid->getXGrids(), grid->getYGrids(), num_layers);
+    core.setGridMax(grid->getGridArea().xMax(), grid->getGridArea().yMax());
+    core.setRegularX(grid->isPerfectRegularX());
+    core.setRegularY(grid->isPerfectRegularY());
+
+    odb::dbTech* tech = grouter_->db_->getTech();
+    for (int l = 1; l <= num_layers; ++l) {
+      odb::dbTechLayer* tech_layer = tech->findRoutingLayer(l);
+      if (tech_layer != nullptr) {
+        core.addLayerDirection(l - 1, tech_layer->getDirection());
+      }
+    }
+
+    const auto& h_caps = grid->getHorizontalEdgesCapacities();
+    const auto& v_caps = grid->getVerticalEdgesCapacities();
+    for (int l = 1; l <= num_layers; ++l) {
+      const int idx = l - 1;
+      if (idx < static_cast<int>(h_caps.size())) {
+        core.addHCapacity(static_cast<short>(h_caps[static_cast<size_t>(idx)]),
+                          l);
+      }
+      if (idx < static_cast<int>(v_caps.size())) {
+        core.addVCapacity(static_cast<short>(v_caps[static_cast<size_t>(idx)]),
+                          l);
+      }
+    }
+
+    const auto& src_last_col
+        = grouter_->fastroute_->getLastColumnVerticalCapacities();
+    const auto& src_last_row
+        = grouter_->fastroute_->getLastRowHorizontalCapacities();
+    const int copy_layers = std::min<int>(
+        num_layers,
+        std::min<int>(static_cast<int>(src_last_col.size()),
+                      static_cast<int>(src_last_row.size())));
+    for (int l = 0; l < copy_layers; ++l) {
+      core.setLastColVCapacity(static_cast<short>(src_last_col[l]), l);
+      core.setLastRowHCapacity(static_cast<short>(src_last_row[l]), l);
+    }
+
+    core.setVerbose(grouter_->verbose_);
+    core.setOverflowIterations(overflow_iters);
+    core.setCriticalNetsPercentage(grouter_->fastroute_->getCriticalNetsPercentage());
+    core.setViaCostScale(grouter_->fastroute_->getViaCostScale());
+
+    core.initEdges();
+    core.init3DEdges();
+    core.importCapacitiesFrom(*grouter_->fastroute_);
+    core.initEdgesCapacityPerLayer();
+
+    int max_degree = 2;
+    for (Net* net : state_nets) {
+      if (net == nullptr) {
+        continue;
+      }
+      std::vector<RoutePt> pins_on_grid;
+      int root_idx = 0;
+      grouter_->findFastRoutePins(net, pins_on_grid, root_idx);
+      max_degree = std::max(max_degree, static_cast<int>(pins_on_grid.size()));
+    }
+    core.setMaxNetDegree(max_degree);
+
+    for (Net* net : state_nets) {
+      if (net == nullptr) {
+        continue;
+      }
+      std::vector<RoutePt> pins_on_grid;
+      int root_idx = 0;
+      grouter_->findFastRoutePins(net, pins_on_grid, root_idx);
+      if (pins_on_grid.empty()) {
+        continue;
+      }
+
+      const bool is_clock = (net->getSignalType() == odb::dbSigType::CLOCK);
+      std::vector<int8_t>* edge_cost_per_layer = nullptr;
+      int8_t edge_cost_for_net = 1;
+      grouter_->computeTrackConsumption(net,
+                                        edge_cost_for_net,
+                                        edge_cost_per_layer);
+
+      int min_layer = min_routing_layer;
+      int max_layer = max_routing_layer;
+      grouter_->getNetLayerRange(net->getDbNet(), min_layer, max_layer);
+
+      grt::newgr::FrNet* fr_net = core.addNet(net->getDbNet(),
+                                  is_clock,
+                                  net->isLocal(),
+                                  root_idx,
+                                  edge_cost_for_net,
+                                  min_layer - 1,
+                                  max_layer - 1,
+                                  net->getSlack(),
+                                  edge_cost_per_layer);
+      for (RoutePt& pin_pos : pins_on_grid) {
+        fr_net->addPin(
+            pin_pos.x(), pin_pos.y(), std::max(pin_pos.layer() - 1, 0));
+      }
+    }
+
+    routes = core.run();
+
+    grouter_->addRemainingGuides(
+        routes, state_nets, min_routing_layer, max_routing_layer);
+    grouter_->connectPadPins(routes);
+    for (auto& [db_net, route] : routes) {
+      Net* net = grouter_->getNet(db_net);
+      if (net == nullptr) {
+        continue;
+      }
+      grouter_->mergeSegments(net->getPins(), route);
+    }
+
+    metrics = compute_metrics(routes, &core);
+    if (hotspots_out != nullptr) {
+      core.computeCongestionInformation();
+      *hotspots_out = collect_hotspots_from_core(core);
+    }
+
+    if (hotspots_out != nullptr || name == "baseline") {
+      logger_->info(GNR,
+                    6005,
+                    "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}, "
+                    "max util {:.2f}",
+                    name,
+                    metrics.wirelength_um,
+                    metrics.via_count,
+                    metrics.overflow,
+                    metrics.max_utilization);
+    }
+    return ScenarioResult{name, metrics, std::move(routes)};
+  };
+
   auto run_scenario = [&](const ScenarioDefinition& scenario,
                           const RouterSnapshot& snapshot,
                           int tuned_congestion_iterations) {
@@ -1819,19 +1981,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     std::vector<Net*> scenario_nets
         = grouter_->initFastRoute(min_routing_layer, max_routing_layer);
-    if (!scenario_nets.empty()) {
-      sort_nets_deterministic(scenario_nets);
-    }
     if (scenario.post_init) {
       scenario.post_init();
     }
 
-    NetRouteMap routes;
-    if (!scenario_nets.empty()) {
-      routes = grouter_->findRouting(
-          scenario_nets, min_routing_layer, max_routing_layer);
-    }
-    RouteMetrics metrics = compute_metrics(routes);
+    ScenarioResult result = run_parallel_core(
+        scenario.name, scenario_nets, desired_iterations, nullptr);
+    const RouteMetrics& metrics = result.metrics;
     logger_->info(GNR,
                   6006,
                   "NEWGR scenario {}: wirelength {:.0f} um, vias {}, overflow {}, "
@@ -1841,7 +1997,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   metrics.via_count,
                   metrics.overflow,
                   metrics.max_utilization);
-    return ScenarioResult{scenario.name, metrics, std::move(routes)};
+    return result;
   };
 
   RouterSnapshot snapshot = capture_snapshot();
@@ -1979,8 +2135,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
 
+  std::vector<Hotspot> hotspots;
   ScenarioResult baseline
-      = run_existing_state("baseline", nets);
+      = run_parallel_core("baseline", nets, trimmed_iters, &hotspots);
   const double baseline_wl = baseline.metrics.wirelength_um > 0.0
                                  ? baseline.metrics.wirelength_um
                                  : static_cast<double>(baseline.metrics.wirelength_dbu);
@@ -2002,8 +2159,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     restore_snapshot(snapshot);
     return std::move(baseline.routes);
   }
-  std::vector<Hotspot> hotspots = collect_hotspots(false);
-
   if (normalized_rudy.empty()) {
     if (Rudy* rudy = grouter_->getRudy()) {
       rudy->calculateRudy();
@@ -5810,7 +5965,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               min_routing_layer,
                               max_routing_layer);
     if (patch_summary.segments_added > 0) {
-      RouteMetrics patched_metrics = compute_metrics(final_result.routes);
+      RouteMetrics patched_metrics = compute_metrics(final_result.routes, nullptr);
       logger_->info(
           GNR,
           6010,
