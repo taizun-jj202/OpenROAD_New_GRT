@@ -1873,9 +1873,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  : static_cast<double>(baseline.metrics.wirelength_dbu);
   const bool baseline_good_enough
       = baseline.metrics.overflow == 0
-        && baseline_wl <= (kRuntimeWirelengthBudget + 650.0)
-        && baseline.metrics.via_count <= (kRuntimeViaBudget + 220)
-        && baseline.metrics.max_utilization < 0.93f;
+        && baseline_wl <= (kRuntimeWirelengthBudget + 2500.0)
+        && baseline.metrics.via_count <= (kRuntimeViaBudget + 1200)
+        && baseline.metrics.max_utilization < 0.95f;
   if (baseline_good_enough) {
     logger_->info(
         GNR,

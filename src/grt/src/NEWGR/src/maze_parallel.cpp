@@ -159,6 +159,8 @@ struct Maze2DScratch
   std::vector<int> src_heap_touched;
   std::vector<double*> src_heap;
   std::vector<double*> dest_heap;
+  std::vector<OrderNetEdge> net_edge_order;
+  std::vector<GPoint3D> tmp_grids;
 
   void ensure(int x_range_in, int y_range_in, int x_grid_in, int y_grid_in)
   {
@@ -192,6 +194,9 @@ struct Maze2DScratch
     dest_heap.clear();
     src_heap.reserve(static_cast<size_t>(y_grid) * static_cast<size_t>(x_range));
     dest_heap.reserve(static_cast<size_t>(y_grid) * static_cast<size_t>(x_range));
+
+    net_edge_order.clear();
+    tmp_grids.clear();
   }
 };
 
@@ -233,19 +238,64 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
     return;
   }
 
-  int threads = std::min({max_threads, omp_get_num_procs(), 8});
+  int threads = std::min(max_threads, omp_get_num_procs());
+  threads = std::min(threads, 16);
   threads = std::max(2, threads);
 
-  int batch_size = static_cast<int>(net_ids_.size());
+  const int net_count = static_cast<int>(net_ids_.size());
+  int desired_batches = threads * 2;
   if (iter > 3) {
-    batch_size = std::clamp(static_cast<int>(net_ids_.size()) / 2,
-                            1024,
-                            static_cast<int>(net_ids_.size()));
+    desired_batches = threads * 4;
   }
-  if (iter > 10) {
-    batch_size = std::clamp(static_cast<int>(net_ids_.size()) / 4,
-                            512,
-                            static_cast<int>(net_ids_.size()));
+  if (iter > 8) {
+    desired_batches = threads * 6;
+  }
+  if (iter > 14) {
+    desired_batches = threads * 8;
+  }
+  desired_batches = std::clamp(desired_batches, 1, std::max(net_count, 1));
+
+  int batch_size = (net_count + desired_batches - 1) / desired_batches;
+  batch_size = std::clamp(batch_size, 256, std::max(net_count, 1));
+  const int nbatch = (net_count + batch_size - 1) / batch_size;
+
+  std::vector<int> work_indices(static_cast<size_t>(net_count));
+  for (int i = 0; i < net_count; ++i) {
+    work_indices[static_cast<size_t>(i)] = i;
+  }
+
+  if (ordering && static_cast<int>(tree_order_cong_.size()) == net_count) {
+    std::stable_sort(
+        work_indices.begin(),
+        work_indices.end(),
+        [&](int lhs, int rhs) {
+          const OrderTree& a = tree_order_cong_[lhs];
+          const OrderTree& b = tree_order_cong_[rhs];
+          if (a.xmin != b.xmin) {
+            return a.xmin < b.xmin;
+          }
+          if (a.length != b.length) {
+            return a.length > b.length;
+          }
+          return a.treeIndex < b.treeIndex;
+        });
+  }
+
+  std::vector<int> batch_offsets(static_cast<size_t>(nbatch + 1), 0);
+  for (int i = 0; i < net_count; ++i) {
+    const int bucket = i % nbatch;
+    batch_offsets[static_cast<size_t>(bucket + 1)]++;
+  }
+  for (int b = 1; b <= nbatch; ++b) {
+    batch_offsets[static_cast<size_t>(b)]
+        += batch_offsets[static_cast<size_t>(b - 1)];
+  }
+  std::vector<int> next_offsets = batch_offsets;
+  std::vector<int> schedule(static_cast<size_t>(net_count));
+  for (int i = 0; i < net_count; ++i) {
+    const int bucket = i % nbatch;
+    const int write_pos = next_offsets[static_cast<size_t>(bucket)]++;
+    schedule[static_cast<size_t>(write_pos)] = work_indices[static_cast<size_t>(i)];
   }
 
   auto route_one = [&](int nidRPC, const UsageUpdateCallbacks* updates_cb) {
@@ -289,7 +339,8 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
     const int num_terminals = sttrees_[netID].num_terminals;
     const int origENG = expand;
 
-    std::vector<OrderNetEdge> net_eo;
+    auto& net_eo = scratch.net_edge_order;
+    net_eo.clear();
     net_eo.reserve(2ul * max_degree_);
     netedgeOrderDec(netID, net_eo);
 
@@ -506,13 +557,15 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
 
       const int16_t crossX = ind1 % x_range_;
       const int16_t crossY = ind1 / x_range_;
+      const int edge_n1n2 = edgeID;
 
       int tmpX = 0;
       int tmpY = 0;
       int cnt = 0;
       int16_t curX = crossX;
       int16_t curY = crossY;
-      std::vector<GPoint3D> tmp_grids;
+      auto& tmp_grids = scratch.tmp_grids;
+      tmp_grids.clear();
       while (d1[curY][curX] != 0) {
         bool hypered = false;
         if (cnt != 0) {
@@ -539,16 +592,21 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
         cnt++;
       }
 
-      std::vector<GPoint3D> grids(tmp_grids.rbegin(), tmp_grids.rend());
-      grids.push_back({crossX, crossY, -1});
-      cnt++;
+      const int cnt_n1n2 = static_cast<int>(tmp_grids.size()) + 1;
+      cnt = cnt_n1n2;
 
-      const int cnt_n1n2 = cnt;
-      const int E1x = grids[0].x;
-      const int E1y = grids[0].y;
-      const int E2x = grids.back().x;
-      const int E2y = grids.back().y;
-      const int edge_n1n2 = edgeID;
+      auto& route_grids = treeedges[edge_n1n2].route.grids;
+      route_grids.resize(static_cast<size_t>(cnt_n1n2));
+      int write_idx = 0;
+      for (auto it = tmp_grids.rbegin(); it != tmp_grids.rend(); ++it) {
+        route_grids[static_cast<size_t>(write_idx++)] = *it;
+      }
+      route_grids[static_cast<size_t>(write_idx)] = {crossX, crossY, -1};
+
+      const int E1x = route_grids.front().x;
+      const int E1y = route_grids.front().y;
+      const int E2x = route_grids.back().x;
+      const int E2y = route_grids.back().y;
 
       if (n1 < num_terminals && (E1x != n1x || E1y != n1y)) {
         n1 = splitEdge(treeedges, treenodes, n2, n1, edgeID);
@@ -719,53 +777,52 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
         }
       }
 
-      if (treeedges[edge_n1n2].route.type == RouteType::MazeRoute) {
-        treeedges[edge_n1n2].route.grids.clear();
-      }
-      treeedges[edge_n1n2].route.grids.resize(cnt_n1n2);
       treeedges[edge_n1n2].route.type = RouteType::MazeRoute;
       treeedges[edge_n1n2].route.routelen = cnt_n1n2 - 1;
       treeedges[edge_n1n2].len = abs(E1x - E2x) + abs(E1y - E2y);
 
-      for (int i = 0; i < cnt_n1n2; i++) {
-        treeedges[edge_n1n2].route.grids[i].x = grids[i].x;
-        treeedges[edge_n1n2].route.grids[i].y = grids[i].y;
-      }
-
       FrNet* net = nets_[netID];
       const int8_t edgeCost = net->getEdgeCost();
       for (int i = 0; i < cnt_n1n2 - 1; i++) {
-        if (grids[i].x == grids[i + 1].x) {
-          const int min_y = std::min(grids[i].y, grids[i + 1].y);
-          update_usage_v(grids[i].x, min_y, net, edgeCost);
+        if (route_grids[static_cast<size_t>(i)].x
+            == route_grids[static_cast<size_t>(i + 1)].x) {
+          const int min_y = std::min(route_grids[static_cast<size_t>(i)].y,
+                                     route_grids[static_cast<size_t>(i + 1)].y);
+          update_usage_v(route_grids[static_cast<size_t>(i)].x, min_y, net, edgeCost);
         } else {
-          const int min_x = std::min(grids[i].x, grids[i + 1].x);
-          update_usage_h(min_x, grids[i].y, net, edgeCost);
+          const int min_x = std::min(route_grids[static_cast<size_t>(i)].x,
+                                     route_grids[static_cast<size_t>(i + 1)].x);
+          update_usage_h(min_x, route_grids[static_cast<size_t>(i)].y, net, edgeCost);
         }
       }
     }
   };
 
-  for (int batch_begin = 0; batch_begin < static_cast<int>(net_ids_.size());
-       batch_begin += batch_size) {
-    const int batch_end
-        = std::min(static_cast<int>(net_ids_.size()), batch_begin + batch_size);
-    std::vector<std::vector<UsageUpdate>> updates(
-        static_cast<size_t>(batch_end - batch_begin));
+  std::vector<std::vector<UsageUpdate>> thread_updates(
+      static_cast<size_t>(threads));
+  for (int batch = 0; batch < nbatch; ++batch) {
+    for (auto& vec : thread_updates) {
+      vec.clear();
+    }
+    const int begin = batch_offsets[static_cast<size_t>(batch)];
+    const int end = batch_offsets[static_cast<size_t>(batch + 1)];
 
-#pragma omp parallel for schedule(static) num_threads(threads)
-    for (int idx = batch_begin; idx < batch_end; ++idx) {
-      auto& net_updates = updates[static_cast<size_t>(idx - batch_begin)];
+#pragma omp parallel num_threads(threads)
+    {
+      const int tid = omp_get_thread_num();
       UsageUpdateCallbacks cb;
-      cb.ctx = &net_updates;
+      cb.ctx = &thread_updates[static_cast<size_t>(tid)];
       cb.updateH = recordUsageH;
       cb.updateV = recordUsageV;
-      route_one(idx, &cb);
+
+#pragma omp for schedule(static)
+      for (int pos = begin; pos < end; ++pos) {
+        route_one(schedule[static_cast<size_t>(pos)], &cb);
+      }
     }
 
-    for (int idx = batch_begin; idx < batch_end; ++idx) {
-      const auto& net_updates = updates[static_cast<size_t>(idx - batch_begin)];
-      for (const UsageUpdate& upd : net_updates) {
+    for (const auto& vec : thread_updates) {
+      for (const UsageUpdate& upd : vec) {
         if (upd.vertical) {
           graph2d_.updateUsageV(upd.x, upd.y, upd.net, upd.delta);
         } else {
