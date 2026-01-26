@@ -17,6 +17,11 @@ add_library(NEWGR_lib OBJECT
   src/graph2d.cpp
 )
 
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(NEWGR_lib PRIVATE OpenMP::OpenMP_CXX)
+endif()
+
 target_compile_options(NEWGR_lib
   PRIVATE
     -Wno-array-bounds

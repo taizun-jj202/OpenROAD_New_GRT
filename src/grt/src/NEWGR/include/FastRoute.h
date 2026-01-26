@@ -326,6 +326,8 @@ class FastRouteCore
                  int edgeID,
                  std::vector<double*>& src_heap,
                  std::vector<double*>& dest_heap,
+                 std::vector<int>& src_heap_pos,
+                 std::vector<int>& src_heap_touched,
                  multi_array<double, 2>& d1,
                  multi_array<double, 2>& d2,
                  int regionX1,

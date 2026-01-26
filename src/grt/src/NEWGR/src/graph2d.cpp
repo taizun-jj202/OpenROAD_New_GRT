@@ -7,7 +7,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <set>
 #include <string>
 #include <utility>
@@ -442,22 +441,6 @@ void Graph2D::str_accu(const int rnd)
       edge.last_usage += edge.congCNT * overflow / 2;
     }
   });
-}
-
-// Applies a function to each edge in the graph.
-void Graph2D::foreachEdge(const std::function<void(Edge&)>& func)
-{
-  auto inner = [&](auto& edges) {
-    Edge* edges_data = edges.data();
-
-    const size_t num_edges = edges.num_elements();
-
-    for (size_t i = 0; i < num_edges; ++i) {
-      func(edges_data[i]);
-    }
-  };
-  inner(h_edges_);
-  inner(v_edges_);
 }
 
 void Graph2D::saveResources(const int x, const int y, bool is_horizontal)

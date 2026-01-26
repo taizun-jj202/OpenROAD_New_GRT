@@ -13,6 +13,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include "AbstractFastRouteRenderer.h"
 #include "DataType.h"
 #include "grt/GRoute.h"
@@ -2019,39 +2023,48 @@ void FastRouteCore::computeCongestionInformation()
   max_h_overflow_.resize(num_layers_);
   max_v_overflow_.resize(num_layers_);
 
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
   for (int l = 0; l < num_layers_; l++) {
-    cap_per_layer_[l] = 0;
-    usage_per_layer_[l] = 0;
-    overflow_per_layer_[l] = 0;
-    max_h_overflow_[l] = 0;
-    max_v_overflow_[l] = 0;
+    int cap = 0;
+    int usage = 0;
+    int overflow_sum = 0;
+    int max_h = 0;
+    int max_v = 0;
 
     for (int i = 0; i < y_grid_; i++) {
       for (int j = 0; j < x_grid_ - 1; j++) {
-        cap_per_layer_[l] += h_edges_3D_[l][i][j].cap;
-        usage_per_layer_[l] += h_edges_3D_[l][i][j].usage;
+        cap += h_edges_3D_[l][i][j].cap;
+        usage += h_edges_3D_[l][i][j].usage;
 
         const int overflow
             = h_edges_3D_[l][i][j].usage - h_edges_3D_[l][i][j].cap;
         if (overflow > 0) {
-          overflow_per_layer_[l] += overflow;
-          max_h_overflow_[l] = std::max(max_h_overflow_[l], overflow);
+          overflow_sum += overflow;
+          max_h = std::max(max_h, overflow);
         }
       }
     }
     for (int i = 0; i < y_grid_ - 1; i++) {
       for (int j = 0; j < x_grid_; j++) {
-        cap_per_layer_[l] += v_edges_3D_[l][i][j].cap;
-        usage_per_layer_[l] += v_edges_3D_[l][i][j].usage;
+        cap += v_edges_3D_[l][i][j].cap;
+        usage += v_edges_3D_[l][i][j].usage;
 
         const int overflow
             = v_edges_3D_[l][i][j].usage - v_edges_3D_[l][i][j].cap;
         if (overflow > 0) {
-          overflow_per_layer_[l] += overflow;
-          max_v_overflow_[l] = std::max(max_v_overflow_[l], overflow);
+          overflow_sum += overflow;
+          max_v = std::max(max_v, overflow);
         }
       }
     }
+
+    cap_per_layer_[l] = cap;
+    usage_per_layer_[l] = usage;
+    overflow_per_layer_[l] = overflow_sum;
+    max_h_overflow_[l] = max_h;
+    max_v_overflow_[l] = max_v;
   }
 }
 

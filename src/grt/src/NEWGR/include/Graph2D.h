@@ -4,7 +4,6 @@
 #pragma once
 
 #include <cstdint>
-#include <functional>
 #include <set>
 #include <string>
 #include <utility>
@@ -149,7 +148,22 @@ class Graph2D
   void printEdgeCapPerLayer();
   void initNDRnets();
 
-  void foreachEdge(const std::function<void(Edge&)>& func);
+  template <typename Func>
+  void foreachEdge(Func&& func)
+  {
+    auto inner = [&](auto& edges) {
+      Edge* edges_data = edges.data();
+      const size_t num_edges = edges.num_elements();
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (num_edges > 16384)
+#endif
+      for (size_t i = 0; i < num_edges; ++i) {
+        func(edges_data[i]);
+      }
+    };
+    inner(h_edges_);
+    inner(v_edges_);
+  }
 
   multi_array<Edge, 2> v_edges_;    // The way it is indexed is (X, Y)
   multi_array<Edge, 2> h_edges_;    // The way it is indexed is (X, Y)

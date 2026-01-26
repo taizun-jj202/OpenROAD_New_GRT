@@ -10,6 +10,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include "DataType.h"
 #include "FastRoute.h"
 #include "odb/geom.h"
@@ -407,8 +411,15 @@ void FastRouteCore::convertToMazeroute()
   check2DEdgesUsage();
 }
 
+static inline int heap_elem_index(const double* base, const double* elem)
+{
+  return static_cast<int>(elem - base);
+}
+
 // non recursive version of heapify
-static void heapify(std::vector<double*>& array)
+static void heapify(std::vector<double*>& array,
+                    std::vector<int>& heap_pos,
+                    double* base)
 {
   bool stop = false;
   const int heapSize = array.size();
@@ -433,31 +444,53 @@ static void heapify(std::vector<double*>& array)
     }
     if (smallest != i) {
       array[i] = array[smallest];
+      heap_pos[heap_elem_index(base, array[i])] = i;
       i = smallest;
     } else {
       array[i] = tmp;
+      heap_pos[heap_elem_index(base, tmp)] = i;
       stop = true;
     }
   } while (!stop);
 }
 
-static void updateHeap(std::vector<double*>& array, int i)
+static void updateHeap(std::vector<double*>& array,
+                       std::vector<int>& heap_pos,
+                       double* base,
+                       int i)
 {
   double* tmpi = array[i];
+  const int tmp_index = heap_elem_index(base, tmpi);
   while (i > 0 && *(array[parent_index(i)]) > *tmpi) {
     const int parent = parent_index(i);
     array[i] = array[parent];
+    heap_pos[heap_elem_index(base, array[i])] = i;
     i = parent;
   }
   array[i] = tmpi;
+  heap_pos[tmp_index] = i;
 }
 
 // remove the entry with minimum distance from Priority queue
-static void removeMin(std::vector<double*>& array)
+static void removeMin(std::vector<double*>& array,
+                      std::vector<int>& heap_pos,
+                      double* base)
 {
+  if (array.empty()) {
+    return;
+  }
+
+  heap_pos[heap_elem_index(base, array[0])] = -1;
+
+  if (array.size() == 1) {
+    array.pop_back();
+    return;
+  }
+
   array[0] = array.back();
-  heapify(array);
   array.pop_back();
+  heap_pos[heap_elem_index(base, array[0])] = 0;
+  heapify(array, heap_pos, base);
 }
 
 // ripup a tree edge according to its ripup type and Z-route it
@@ -472,6 +505,8 @@ void FastRouteCore::setupHeap(const int netID,
                               const int edgeID,
                               std::vector<double*>& src_heap,
                               std::vector<double*>& dest_heap,
+                              std::vector<int>& src_heap_pos,
+                              std::vector<int>& src_heap_touched,
                               multi_array<double, 2>& d1,
                               multi_array<double, 2>& d2,
                               const int regionX1,
@@ -479,6 +514,11 @@ void FastRouteCore::setupHeap(const int netID,
                               const int regionY1,
                               const int regionY2)
 {
+  const int region_area
+      = (regionY2 - regionY1 + 1) * (regionX2 - regionX1 + 1);
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static) if (region_area > 4096)
+#endif
   for (int i = regionY1; i <= regionY2; i++) {
     for (int j = regionX1; j <= regionX2; j++) {
       in_region_[i][j] = true;
@@ -502,7 +542,14 @@ void FastRouteCore::setupHeap(const int netID,
   if (num_terminals == 2)  // 2-pin net
   {
     d1[y1][x1] = 0;
-    src_heap.push_back(&d1[y1][x1]);
+    {
+      const int idx = y1 * x_range_ + x1;
+      if (src_heap_pos[idx] == -1) {
+        src_heap_pos[idx] = static_cast<int>(src_heap.size());
+        src_heap_touched.push_back(idx);
+        src_heap.push_back(&d1[y1][x1]);
+      }
+    }
     d2[y2][x2] = 0;
     dest_heap.push_back(&d2[y2][x2]);
   } else {  // net with more than 2 pins
@@ -518,7 +565,14 @@ void FastRouteCore::setupHeap(const int netID,
 
     // add n1 into src_heap
     d1[y1][x1] = 0;
-    src_heap.push_back(&d1[y1][x1]);
+    {
+      const int idx = y1 * x_range_ + x1;
+      if (src_heap_pos[idx] == -1) {
+        src_heap_pos[idx] = static_cast<int>(src_heap.size());
+        src_heap_touched.push_back(idx);
+        src_heap.push_back(&d1[y1][x1]);
+      }
+    }
     visited[n1] = true;
 
     // add n1 into the queue
@@ -553,7 +607,12 @@ void FastRouteCore::setupHeap(const int netID,
             const int nbrX = nbr_node.x;
             const int nbrY = nbr_node.y;
             d1[nbrY][nbrX] = 0;
-            src_heap.push_back(&d1[nbrY][nbrX]);
+            const int idx = nbrY * x_range_ + nbrX;
+            if (src_heap_pos[idx] == -1) {
+              src_heap_pos[idx] = static_cast<int>(src_heap.size());
+              src_heap_touched.push_back(idx);
+              src_heap.push_back(&d1[nbrY][nbrX]);
+            }
             corr_edge_[nbrY][nbrX] = edge;
           }
           const Route* route = &(treeedges[edge].route);
@@ -568,7 +627,12 @@ void FastRouteCore::setupHeap(const int netID,
 
             if (in_region_[y_grid][x_grid]) {
               d1[y_grid][x_grid] = 0;
-              src_heap.push_back(&d1[y_grid][x_grid]);
+              const int idx = y_grid * x_range_ + x_grid;
+              if (src_heap_pos[idx] == -1) {
+                src_heap_pos[idx] = static_cast<int>(src_heap.size());
+                src_heap_touched.push_back(idx);
+                src_heap.push_back(&d1[y_grid][x_grid]);
+              }
               corr_edge_[y_grid][x_grid] = edge;
             }
           }
@@ -651,6 +715,9 @@ void FastRouteCore::setupHeap(const int netID,
     }  // while queue is not empty
   }  // net with more than two pins
 
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static) if (region_area > 4096)
+#endif
   for (int i = regionY1; i <= regionY2; i++) {
     for (int j = regionX1; j <= regionX2; j++) {
       in_region_[i][j] = false;
@@ -1050,13 +1117,39 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
 
   const int max_usage_multiplier = 40;
 
-  for (int i = 0; i < max_usage_multiplier * h_capacity_; i++) {
-    h_cost_table_.push_back(getCost(i, true, cost_params));
+  const int slope = cost_params.slope;
+  const double logistic_coef = cost_params.logistic_coef;
+  const double cost_height = cost_params.cost_height;
+  auto build_cost = [&](int index, int capacity) -> double {
+    double cost = cost_height / (std::exp((capacity - index) * logistic_coef) + 1)
+                  + 1;
+    if (index >= capacity) {
+      cost += (cost_height / slope * (index - capacity));
+    }
+    return cost;
+  };
+
+  const int h_cost_size = max_usage_multiplier * h_capacity_;
+  const int v_cost_size = max_usage_multiplier * v_capacity_;
+  h_cost_table_.resize(h_cost_size);
+  v_cost_table_.resize(v_cost_size);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (h_cost_size > 8192)
+#endif
+  for (int i = 0; i < h_cost_size; i++) {
+    h_cost_table_[i] = build_cost(i, h_capacity_);
   }
-  for (int i = 0; i < max_usage_multiplier * v_capacity_; i++) {
-    v_cost_table_.push_back(getCost(i, false, cost_params));
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (v_cost_size > 8192)
+#endif
+  for (int i = 0; i < v_cost_size; i++) {
+    v_cost_table_[i] = build_cost(i, v_capacity_);
   }
 
+  const int grid_area = x_grid_ * y_grid_;
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static) if (grid_area > 4096)
+#endif
   for (int i = 0; i < y_grid_; i++) {
     for (int j = 0; j < x_grid_; j++) {
       in_region_[i][j] = false;
@@ -1079,6 +1172,10 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
   multi_array<double, 2> d2(boost::extents[y_range_][x_range_]);
 
   std::vector<bool> pop_heap2(y_grid_ * x_range_, false);
+  std::vector<int> src_heap_pos(y_grid_ * x_range_, -1);
+  std::vector<int> src_heap_touched;
+  src_heap_touched.reserve(1024);
+  double* d1_base = d1.data();
 
   /**
    * @brief Updates the cost of an adjacent grid if the new cost is lower,
@@ -1110,20 +1207,23 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
 
     if (adj_cost >= BIG_INT) {  // neighbor has not been put into src_heap
       src_heap.push_back(&d1[adj_y][adj_x]);
-      updateHeap(src_heap, src_heap.size() - 1);
+      const int idx = adj_y * x_range_ + adj_x;
+      if (src_heap_pos[idx] == -1) {
+        src_heap_touched.push_back(idx);
+      }
+      src_heap_pos[idx] = static_cast<int>(src_heap.size()) - 1;
+      updateHeap(src_heap, src_heap_pos, d1_base, src_heap.size() - 1);
     } else if (adj_cost > cost) {  // neighbor has been put into src_heap
                                    // but needs update
-      double* dtmp = &d1[adj_y][adj_x];
-      const auto it = std::find(src_heap.begin(), src_heap.end(), dtmp);
-      if (it != src_heap.end()) {
-        const int pos = it - src_heap.begin();
-        updateHeap(src_heap, pos);
+      const int idx = adj_y * x_range_ + adj_x;
+      const int pos = src_heap_pos[idx];
+      if (pos >= 0) {
+        updateHeap(src_heap, src_heap_pos, d1_base, pos);
       } else {
-        logger_->error(
-            GNR,
-            607,
-            "Unable to update: position not found in 2D heap for net {}.",
-            nets_[net_id]->getName());
+        logger_->error(GNR,
+                       607,
+                       "Unable to update: position not found in 2D heap for net {}.",
+                       nets_[net_id]->getName());
       }
     }
   };
@@ -1254,6 +1354,11 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
           = std::min(ymax + effective_enlarge - decrease, y_grid_ - 1);
 
       // initialize d1[][] and d2[][] as BIG_INT
+      const int region_area
+          = (regionY2 - regionY1 + 1) * (regionX2 - regionX1 + 1);
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static) if (region_area > 4096)
+#endif
       for (int i = regionY1; i <= regionY2; i++) {
         for (int j = regionX1; j <= regionX2; j++) {
           d1[i][j] = BIG_INT;
@@ -1265,10 +1370,16 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
 
       // setup src_heap, dest_heap and initialize d1[][] and d2[][] for all the
       // grids on the two subtrees
+      for (const int idx : src_heap_touched) {
+        src_heap_pos[idx] = -1;
+      }
+      src_heap_touched.clear();
       setupHeap(netID,
                 edgeID,
                 src_heap,
                 dest_heap,
+                src_heap_pos,
+                src_heap_touched,
                 d1,
                 d2,
                 regionX1,
@@ -1277,7 +1388,7 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
                 regionY2);
 
       // while loop to find shortest path
-      int ind1 = (src_heap[0] - &d1[0][0]);
+      int ind1 = (src_heap[0] - d1_base);
       for (int i = 0; i < dest_heap.size(); i++) {
         pop_heap2[(dest_heap[i] - &d2[0][0])] = true;
       }
@@ -1299,7 +1410,7 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
                                  : parent_y3_[curY][curX];
         }
 
-        removeMin(src_heap);
+        removeMin(src_heap, src_heap_pos, d1_base);
 
         if (curX > regionX1) {  // left
           relaxAdjacent(
@@ -1319,7 +1430,7 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
         }
 
         // update ind1 for next loop
-        ind1 = (src_heap[0] - &d1[0][0]);
+        ind1 = (src_heap[0] - d1_base);
 
       }  // while loop
 
