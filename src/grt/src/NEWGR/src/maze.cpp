@@ -1172,9 +1172,20 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
   multi_array<double, 2> d2(boost::extents[y_range_][x_range_]);
 
   std::vector<bool> pop_heap2(y_grid_ * x_range_, false);
-  std::vector<int> src_heap_pos(y_grid_ * x_range_, -1);
-  std::vector<int> src_heap_touched;
-  src_heap_touched.reserve(1024);
+  static thread_local std::vector<int> src_heap_pos;
+  static thread_local std::vector<int> src_heap_touched;
+  const int heap_map_size = y_grid_ * x_range_;
+  if (static_cast<int>(src_heap_pos.size()) != heap_map_size) {
+    src_heap_pos.assign(heap_map_size, -1);
+  } else {
+    for (const int idx : src_heap_touched) {
+      src_heap_pos[idx] = -1;
+    }
+  }
+  src_heap_touched.clear();
+  if (src_heap_touched.capacity() < 1024) {
+    src_heap_touched.reserve(1024);
+  }
   double* d1_base = d1.data();
 
   /**
