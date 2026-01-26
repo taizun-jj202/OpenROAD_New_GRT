@@ -1,6 +1,7 @@
 #include "NEWGR/NewGR.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -295,6 +296,31 @@ int pickSprouteThreadCount(size_t net_count)
   }
 
   return static_cast<int>(std::max(1u, threads));
+}
+
+unsigned int pickMergeThreadCount(size_t task_count)
+{
+  const unsigned int hw_threads
+      = std::max(1u, std::thread::hardware_concurrency());
+
+  unsigned int threads = std::min(hw_threads, 16u);
+  if (task_count < 512) {
+    threads = std::min(threads, 4u);
+  } else if (task_count < 4096) {
+    threads = std::min(threads, 8u);
+  }
+
+  if (const char* env = std::getenv("NEWGR_MERGE_THREADS");
+      env != nullptr && *env != '\0') {
+    char* end = nullptr;
+    const long parsed = std::strtol(env, &end, 10);
+    if (end != env && parsed > 0) {
+      threads = static_cast<unsigned int>(
+          std::clamp(parsed, 1L, static_cast<long>(hw_threads)));
+    }
+  }
+
+  return std::max(1u, threads);
 }
 
 float summarizeHotspotScore(const std::vector<Hotspot>& hotspots)
@@ -1080,12 +1106,48 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
 
+    struct MergeTask
+    {
+      Net* net = nullptr;
+      GRoute* route = nullptr;
+    };
+
+    std::vector<MergeTask> merge_tasks;
+    merge_tasks.reserve(routes.size());
     for (auto& [db_net, route] : routes) {
       auto it = net_lookup.find(db_net);
       if (it == net_lookup.end() || it->second == nullptr) {
         continue;
       }
-      grouter_->mergeSegments(it->second->getPins(), route);
+      merge_tasks.push_back(MergeTask{it->second, &route});
+    }
+
+    unsigned int merge_threads = pickMergeThreadCount(merge_tasks.size());
+    merge_threads
+        = std::min<unsigned int>(merge_threads, merge_tasks.size());
+    if (merge_threads <= 1 || merge_tasks.size() < 256) {
+      for (const MergeTask& task : merge_tasks) {
+        grouter_->mergeSegments(task.net->getPins(), *task.route);
+      }
+    } else {
+      std::atomic<size_t> next{0};
+      std::vector<std::thread> workers;
+      workers.reserve(merge_threads);
+      for (unsigned int i = 0; i < merge_threads; ++i) {
+        workers.emplace_back([&]() {
+          while (true) {
+            const size_t idx = next.fetch_add(1, std::memory_order_relaxed);
+            if (idx >= merge_tasks.size()) {
+              break;
+            }
+            const MergeTask& task = merge_tasks[idx];
+            grouter_->mergeSegments(task.net->getPins(), *task.route);
+          }
+        });
+      }
+      for (std::thread& worker : workers) {
+        worker.join();
+      }
     }
 
     // Ensure GlobalRouter::updateDbCongestion() uses SPRoute's congestion data
