@@ -161,12 +161,11 @@ void FastRouteCore::setGridsAndLayers(int x, int y, int nLayers)
   y_grid_ = y;
   num_layers_ = nLayers;
   layer_directions_.resize(num_layers_);
-  if (std::max(x_grid_, y_grid_) >= 1000) {
-    x_range_ = std::max(x_grid_, y_grid_);
-  } else {
-    x_range_ = 1000;
-  }
-  y_range_ = x_range_;
+  // Size working buffers to the actual grid dimensions. The legacy FastRoute
+  // implementation used a fixed 1000x1000 workspace which inflates memory and
+  // slows down allocation/initialization for typical designs.
+  x_range_ = std::max(1, x_grid_);
+  y_range_ = std::max(1, y_grid_);
 
   v_capacity_3D_.resize(num_layers_);
   h_capacity_3D_.resize(num_layers_);
