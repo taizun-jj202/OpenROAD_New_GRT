@@ -11,6 +11,7 @@ add_library(NEWGR_lib OBJECT
   src/RSMT.cpp
   src/RipUp.cpp
   src/maze.cpp
+  src/maze_parallel.cpp
   src/maze3D.cpp
   src/route.cpp
   src/utility.cpp

@@ -51,6 +51,15 @@ using boost::multi_array;
 using boost::icl::interval;
 using boost::icl::interval_set;
 
+struct UsageUpdateCallbacks
+{
+  void* ctx = nullptr;
+  void (*updateH)(void* ctx, int x, int y, FrNet* net, int delta) = nullptr;
+  void (*updateV)(void* ctx, int x, int y, FrNet* net, int delta) = nullptr;
+
+  bool enabled() const { return updateH != nullptr && updateV != nullptr; }
+};
+
 class AbstractFastRouteRenderer;
 // Debug mode settings
 struct DebugSetting
@@ -300,6 +309,15 @@ class FastRouteCore
                      int L,
                      const CostParams& cost_params,
                      float& slack_th);
+  void mazeRouteMSMDParallel(int iter,
+                             int expand,
+                             int ripup_threshold,
+                             int maze_edge_threshold,
+                             bool ordering,
+                             int via,
+                             int L,
+                             const CostParams& cost_params,
+                             float& slack_th);
   void convertToMazeroute();
   int getOverflow2D(int* maxOverflow);
   int getOverflow2Dmaze(int* maxOverflow, int* tUsage);
@@ -330,6 +348,8 @@ class FastRouteCore
                  std::vector<int>& src_heap_touched,
                  multi_array<double, 2>& d1,
                  multi_array<double, 2>& d2,
+                 multi_array<bool, 2>& in_region,
+                 multi_array<int, 2>& corr_edge,
                  int regionX1,
                  int regionX2,
                  int regionY1,
@@ -499,6 +519,17 @@ class FastRouteCore
                      float critical_slack,
                      int netID,
                      int edgeID);
+
+  bool newRipupCheck(const TreeEdge* treeedge,
+                     int x1,
+                     int y1,
+                     int x2,
+                     int y2,
+                     int ripup_threshold,
+                     float critical_slack,
+                     int netID,
+                     int edgeID,
+                     const UsageUpdateCallbacks* usage_updates);
 
   bool newRipupCongestedL(const TreeEdge* treeedge,
                           std::vector<TreeNode>& treenodes,

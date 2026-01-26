@@ -509,6 +509,8 @@ void FastRouteCore::setupHeap(const int netID,
                               std::vector<int>& src_heap_touched,
                               multi_array<double, 2>& d1,
                               multi_array<double, 2>& d2,
+                              multi_array<bool, 2>& in_region,
+                              multi_array<int, 2>& corr_edge,
                               const int regionX1,
                               const int regionX2,
                               const int regionY1,
@@ -521,7 +523,7 @@ void FastRouteCore::setupHeap(const int netID,
 #endif
   for (int i = regionY1; i <= regionY2; i++) {
     for (int j = regionX1; j <= regionX2; j++) {
-      in_region_[i][j] = true;
+      in_region[i][j] = true;
     }
   }
 
@@ -603,7 +605,7 @@ void FastRouteCore::setupHeap(const int netID,
         if (treeedges[edge].route.routelen > 0) {  // not a degraded edge
           // put nbr into src_heap if in enlarged region
           const TreeNode& nbr_node = treenodes[nbr];
-          if (in_region_[nbr_node.y][nbr_node.x]) {
+          if (in_region[nbr_node.y][nbr_node.x]) {
             const int nbrX = nbr_node.x;
             const int nbrY = nbr_node.y;
             d1[nbrY][nbrX] = 0;
@@ -613,7 +615,7 @@ void FastRouteCore::setupHeap(const int netID,
               src_heap_touched.push_back(idx);
               src_heap.push_back(&d1[nbrY][nbrX]);
             }
-            corr_edge_[nbrY][nbrX] = edge;
+            corr_edge[nbrY][nbrX] = edge;
           }
           const Route* route = &(treeedges[edge].route);
           if (route->type != RouteType::MazeRoute) {
@@ -625,7 +627,7 @@ void FastRouteCore::setupHeap(const int netID,
             const int x_grid = route->grids[j].x;
             const int y_grid = route->grids[j].y;
 
-            if (in_region_[y_grid][x_grid]) {
+            if (in_region[y_grid][x_grid]) {
               d1[y_grid][x_grid] = 0;
               const int idx = y_grid * x_range_ + x_grid;
               if (src_heap_pos[idx] == -1) {
@@ -633,7 +635,7 @@ void FastRouteCore::setupHeap(const int netID,
                 src_heap_touched.push_back(idx);
                 src_heap.push_back(&d1[y_grid][x_grid]);
               }
-              corr_edge_[y_grid][x_grid] = edge;
+              corr_edge[y_grid][x_grid] = edge;
             }
           }
         }  // if not a degraded edge (len>0)
@@ -683,12 +685,12 @@ void FastRouteCore::setupHeap(const int netID,
         if (treeedges[edge].route.routelen > 0) {  // not a degraded edge
           // put nbr into dest_heap
           const TreeNode& nbr_node = treenodes[nbr];
-          if (in_region_[nbr_node.y][nbr_node.x]) {
+          if (in_region[nbr_node.y][nbr_node.x]) {
             const int nbrX = nbr_node.x;
             const int nbrY = nbr_node.y;
             d2[nbrY][nbrX] = 0;
             dest_heap.push_back(&d2[nbrY][nbrX]);
-            corr_edge_[nbrY][nbrX] = edge;
+            corr_edge[nbrY][nbrX] = edge;
           }
 
           const Route* route = &(treeedges[edge].route);
@@ -700,10 +702,10 @@ void FastRouteCore::setupHeap(const int netID,
           for (int j = 1; j < route->routelen; j++) {
             const int x_grid = route->grids[j].x;
             const int y_grid = route->grids[j].y;
-            if (in_region_[y_grid][x_grid]) {
+            if (in_region[y_grid][x_grid]) {
               d2[y_grid][x_grid] = 0;
               dest_heap.push_back(&d2[y_grid][x_grid]);
-              corr_edge_[y_grid][x_grid] = edge;
+              corr_edge[y_grid][x_grid] = edge;
             }
           }
         }  // if the edge is not degraded (len>0)
@@ -720,7 +722,7 @@ void FastRouteCore::setupHeap(const int netID,
 #endif
   for (int i = regionY1; i <= regionY2; i++) {
     for (int j = regionX1; j <= regionX2; j++) {
-      in_region_[i][j] = false;
+      in_region[i][j] = false;
     }
   }
 }
@@ -1113,8 +1115,6 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
                                   float& slack_th)
 {
   // maze routing for multi-source, multi-destination
-  int tmpX, tmpY;
-
   const int max_usage_multiplier = 40;
 
   const int slope = cost_params.slope;
@@ -1146,6 +1146,34 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
     v_cost_table_[i] = build_cost(i, v_capacity_);
   }
 
+  if (ordering) {
+    if (critical_nets_percentage_) {
+      slack_th = CalculatePartialSlack();
+    }
+    StNetOrder();
+  }
+
+#ifdef _OPENMP
+  const bool try_parallel = omp_get_max_threads() > 1
+                            && static_cast<int>(net_ids_.size()) >= 512;
+#else
+  const bool try_parallel = false;
+#endif
+  if (try_parallel) {
+    mazeRouteMSMDParallel(iter,
+                          expand,
+                          ripup_threshold,
+                          maze_edge_threshold,
+                          ordering,
+                          via,
+                          L,
+                          cost_params,
+                          slack_th);
+    h_cost_table_.clear();
+    v_cost_table_.clear();
+    return;
+  }
+
   const int grid_area = x_grid_ * y_grid_;
 #ifdef _OPENMP
 #pragma omp parallel for collapse(2) schedule(static) if (grid_area > 4096)
@@ -1154,13 +1182,6 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
     for (int j = 0; j < x_grid_; j++) {
       in_region_[i][j] = false;
     }
-  }
-
-  if (ordering) {
-    if (critical_nets_percentage_) {
-      slack_th = CalculatePartialSlack();
-    }
-    StNetOrder();
   }
 
   std::vector<double*> src_heap;
@@ -1393,6 +1414,8 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
                 src_heap_touched,
                 d1,
                 d2,
+                in_region_,
+                corr_edge_,
                 regionX1,
                 regionX2,
                 regionY1,
@@ -1452,6 +1475,8 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
       const int16_t crossX = ind1 % x_range_;
       const int16_t crossY = ind1 / x_range_;
 
+      int tmpX = 0;
+      int tmpY = 0;
       int cnt = 0;
       int16_t curX = crossX;
       int16_t curY = crossY;

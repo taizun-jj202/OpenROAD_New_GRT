@@ -181,6 +181,29 @@ bool FastRouteCore::newRipupCheck(const TreeEdge* treeedge,
                                   const int netID,
                                   const int edgeID)
 {
+  return newRipupCheck(treeedge,
+                       x1,
+                       y1,
+                       x2,
+                       y2,
+                       ripup_threshold,
+                       critical_slack,
+                       netID,
+                       edgeID,
+                       nullptr);
+}
+
+bool FastRouteCore::newRipupCheck(const TreeEdge* treeedge,
+                                  const int x1,
+                                  const int y1,
+                                  const int x2,
+                                  const int y2,
+                                  const int ripup_threshold,
+                                  const float critical_slack,
+                                  const int netID,
+                                  const int edgeID,
+                                  const UsageUpdateCallbacks* usage_updates)
+{
   if (treeedge->len == 0) {
     return false;
   }  // no ripup for degraded edge
@@ -231,10 +254,18 @@ bool FastRouteCore::newRipupCheck(const TreeEdge* treeedge,
     for (int i = 0; i < treeedge->route.routelen; i++) {
       if (grids[i].x == grids[i + 1].x) {  // a vertical edge
         const int ymin = std::min(grids[i].y, grids[i + 1].y);
-        graph2d_.updateUsageV(grids[i].x, ymin, net, -edgeCost);
+        if (usage_updates != nullptr && usage_updates->enabled()) {
+          usage_updates->updateV(usage_updates->ctx, grids[i].x, ymin, net, -edgeCost);
+        } else {
+          graph2d_.updateUsageV(grids[i].x, ymin, net, -edgeCost);
+        }
       } else {  /// if(grids[i].y==grids[i+1].y)// a horizontal edge
         const int xmin = std::min(grids[i].x, grids[i + 1].x);
-        graph2d_.updateUsageH(xmin, grids[i].y, net, -edgeCost);
+        if (usage_updates != nullptr && usage_updates->enabled()) {
+          usage_updates->updateH(usage_updates->ctx, xmin, grids[i].y, net, -edgeCost);
+        } else {
+          graph2d_.updateUsageH(xmin, grids[i].y, net, -edgeCost);
+        }
       }
     }
   }
