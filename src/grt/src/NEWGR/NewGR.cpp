@@ -276,13 +276,11 @@ int pickSprouteThreadCount(size_t net_count)
     threads = std::min(threads, 4u);
   } else if (net_count < 8000) {
     threads = std::min(threads, 8u);
-  } else if (net_count < 15000) {
-    // Mid-sized designs generally scale well up to ~16 threads on modern CPUs.
-    threads = std::min(threads, 16u);
   } else {
-    // Large designs (e.g., sky130hd/aes) benefit from more parallelism.
-    // Cap to avoid excessive Galois overhead on very wide machines.
-    threads = std::min(threads, 32u);
+    // Large designs are often limited by NUMA effects when oversubscribing
+    // multi-socket machines. Default to a conservative cap; override with
+    // NEWGR_SPROUTE_THREADS to experiment.
+    threads = std::min(threads, 16u);
   }
 
   if (const char* env = std::getenv("NEWGR_SPROUTE_THREADS");
@@ -303,12 +301,7 @@ unsigned int pickMergeThreadCount(size_t task_count)
   const unsigned int hw_threads
       = std::max(1u, std::thread::hardware_concurrency());
 
-  unsigned int threads = std::min(hw_threads, 16u);
-  if (task_count < 512) {
-    threads = std::min(threads, 4u);
-  } else if (task_count < 4096) {
-    threads = std::min(threads, 8u);
-  }
+  unsigned int threads = 1u;
 
   if (const char* env = std::getenv("NEWGR_MERGE_THREADS");
       env != nullptr && *env != '\0') {
