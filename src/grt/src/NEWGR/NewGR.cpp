@@ -1592,18 +1592,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                && grouter_->fastroute_ != nullptr
                                && grouter_->grid_ != nullptr;
   if (guided_fastlane) {
+    const int greedy_seed = grouter_->seed_ + 37;
     float preset_perturb
-        = std::clamp(0.03f + 0.05f * preroute_severity, 0.0f, 0.09f);
+        = preroute_severity > 0.30f ? 0.12f : 0.0f;
     float preset_via_scale
-        = std::clamp(0.50f + 0.18f * preroute_severity, 0.46f, 0.82f);
+        = std::clamp(0.52f + 0.12f * (0.70f - preroute_severity), 0.40f, 0.64f);
     float preset_critical = std::clamp(
-        5.2f + 2.4f * (0.60f - preroute_severity), 4.2f, 8.5f);
+        5.5f + 3.5f * (0.60f - preroute_severity) - 0.8f, 3.5f, 10.0f);
     if (nets_per_tile < 1.6) {
       preset_perturb *= 0.85f;
-      preset_via_scale = std::max(preset_via_scale - 0.04f, 0.46f);
+      preset_via_scale = std::max(preset_via_scale - 0.04f, 0.40f);
     }
     grouter_->setCapacitiesPerturbationPercentage(preset_perturb);
     grouter_->setPerturbationAmount(preset_perturb > 0.0f ? 1 : 0);
+    grouter_->setSeed(greedy_seed);
     grouter_->setAllowCongestion(false);
     grouter_->fastroute_->setCriticalNetsPercentage(preset_critical);
     grouter_->fastroute_->setViaCostScale(preset_via_scale);
