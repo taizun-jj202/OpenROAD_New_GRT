@@ -1773,12 +1773,15 @@ NetRouteMap FastRouteCore::run()
     const int maze_enlarge = mild_congestion ? std::min(enlarge_, relax_cap)
                                              : enlarge_;
     double maze3d_fraction = 0.9;
-    if (overflow_clean && mild_congestion) {
+    const bool clean_2d = (maxOverflow == 0 && total_overflow_ == 0);
+    if (mild_congestion) {
       // SPRoute-style runtime tuning: when the 2D solution is already clean,
       // only refine a subset of nets in 3D to reduce runtime.
-      maze3d_fraction = speed_mode ? 0.28 : 0.42;
-      if (nets_per_tile > 0.0 && nets_per_tile < 1.6) {
-        maze3d_fraction = std::min(maze3d_fraction, 0.34);
+      maze3d_fraction = speed_mode ? 0.22 : 0.38;
+      if (clean_2d) {
+        maze3d_fraction = speed_mode ? 0.12 : 0.18;
+      } else if (nets_per_tile > 0.0 && nets_per_tile < 1.6) {
+        maze3d_fraction = std::min(maze3d_fraction, 0.30);
       }
     }
     if (!overflow_clean) {
