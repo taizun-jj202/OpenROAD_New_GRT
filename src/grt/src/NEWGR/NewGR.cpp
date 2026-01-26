@@ -1009,11 +1009,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	      const int saved_iters = grouter_->congestion_iterations_;
 	      int tuned_iters = saved_iters;
 	      if (saved_iters > 0) {
-	        int cap_iters = 6;
-	        if (nets_per_tile < 1.2) {
+	        int cap_iters = 5;
+	        if (nets_per_tile < 1.4) {
+	          cap_iters = 3;
+	        } else if (nets_per_tile < 2.0) {
 	          cap_iters = 4;
-	        } else if (nets_per_tile < 1.8) {
-	          cap_iters = 5;
 	        }
 	        tuned_iters = std::min(saved_iters, cap_iters);
 	        if (tuned_iters < saved_iters) {
