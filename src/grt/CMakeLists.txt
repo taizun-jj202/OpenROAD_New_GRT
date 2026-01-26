@@ -52,6 +52,15 @@ if(USE_NEWGR)
       src/NEWGR
       src/NEWGR/include
   )
+  # NEWGR may directly call into the Galois stats manager to avoid
+  # shutdown-time crashes when SPRoute runs multi-threaded.
+  target_include_directories(grt_lib
+    PRIVATE
+      ${CMAKE_SOURCE_DIR}/src/sproute_tool/Galois/libgalois/include
+      ${CMAKE_SOURCE_DIR}/src/sproute_tool/Galois/libsupport/include
+      ${CMAKE_SOURCE_DIR}/src/sproute_tool/Galois/lonestar/liblonestar/include
+      ${CMAKE_SOURCE_DIR}/src/sproute_tool/Galois/build/libgalois/include
+  )
   target_sources(grt_lib PRIVATE $<TARGET_OBJECTS:NEWGR_lib> src/NEWGR/NewGR.cpp)
   target_compile_definitions(grt_lib PUBLIC GRT_ENABLE_NEWGR=1)
 else()

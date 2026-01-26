@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -20,6 +21,12 @@
 #include "grt/Rudy.h"
 #include "grt/SprouteAdapter.h"
 #include "utl/Logger.h"
+#include "galois/Threads.h"
+
+// SPRoute (mysproute) uses a global `numThreads` variable to control the
+// Galois parallel runtime.  Declare it here without including mysproute's
+// `global.h` to avoid multiple-definition link errors.
+extern int numThreads;
 
 namespace grt {
 
@@ -256,6 +263,35 @@ std::vector<Hotspot> collectRudyHotspots(const RudyGrid& normalized_rudy,
   }
 
   return hotspots;
+}
+
+int pickSprouteThreadCount(size_t net_count)
+{
+  const unsigned int hw_threads
+      = std::max(1u, std::thread::hardware_concurrency());
+
+  unsigned int threads = hw_threads;
+  if (net_count < 2000) {
+    threads = std::min(threads, 4u);
+  } else if (net_count < 8000) {
+    threads = std::min(threads, 8u);
+  } else {
+    // Galois teardown (stat reporting) can be unstable at high thread counts
+    // in some builds; cap the default to a conservative value.
+    threads = std::min(threads, 8u);
+  }
+
+  if (const char* env = std::getenv("NEWGR_SPROUTE_THREADS");
+      env != nullptr && *env != '\0') {
+    char* end = nullptr;
+    const long parsed = std::strtol(env, &end, 10);
+    if (end != env && parsed > 0) {
+      threads = static_cast<unsigned int>(
+          std::clamp(parsed, 1L, static_cast<long>(hw_threads)));
+    }
+  }
+
+  return static_cast<int>(std::max(1u, threads));
 }
 
 float summarizeHotspotScore(const std::vector<Hotspot>& hotspots)
@@ -1003,6 +1039,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // optionally with a small capacity inflation to recover wirelength.
   if (grouter_ != nullptr && grouter_->sproute_adapter_ != nullptr
       && grouter_->sproute_grid_ready_ && grouter_->sproute_nets_ready_) {
+    const int requested_threads = pickSprouteThreadCount(nets.size());
+    if (requested_threads > 0) {
+      ::numThreads = requested_threads;
+    }
+
     SprouteGridData tuned_grid = grouter_->sproute_grid_data_;
     constexpr float kCapScale = 1.05f;
     auto scale_caps = [&](std::vector<int>& caps) {
@@ -1019,6 +1060,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     grouter_->sproute_adapter_->initialize(tuned_grid, grouter_->sproute_nets_);
     NetRouteMap routes = grouter_->sproute_adapter_->run();
+    // Work around a shutdown-time Galois stats crash when using >1 thread.
+    // Reduce the active thread count so stats merging only touches thread 0.
+    galois::setActiveThreads(1);
+
     if (grouter_->block_ != nullptr) {
       grouter_->sproute_adapter_->updateDbCongestion(grouter_->block_);
     }
