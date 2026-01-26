@@ -161,6 +161,7 @@ struct Maze2DScratch
   std::vector<double*> dest_heap;
   std::vector<OrderNetEdge> net_edge_order;
   std::vector<GPoint3D> tmp_grids;
+  std::vector<int> touched_cells;
 
   void ensure(int x_range_in, int y_range_in, int x_grid_in, int y_grid_in)
   {
@@ -185,6 +186,12 @@ struct Maze2DScratch
     d1.resize(boost::extents[y_range][x_range]);
     d2.resize(boost::extents[y_range][x_range]);
 
+    constexpr double big = 1.0e9;
+    std::fill(d1.data(), d1.data() + d1.num_elements(), big);
+    std::fill(d2.data(), d2.data() + d2.num_elements(), big);
+    std::fill(hyper_h.data(), hyper_h.data() + hyper_h.num_elements(), false);
+    std::fill(hyper_v.data(), hyper_v.data() + hyper_v.num_elements(), false);
+
     const int heap_map_size = y_grid * x_range;
     pop_heap2.assign(heap_map_size, false);
     src_heap_pos.assign(heap_map_size, -1);
@@ -197,6 +204,8 @@ struct Maze2DScratch
 
     net_edge_order.clear();
     tmp_grids.clear();
+    touched_cells.clear();
+    touched_cells.reserve(4096);
   }
 };
 
@@ -379,8 +388,8 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
         continue;
       }
 
-      const auto [ymin, ymax] = std::minmax(n1y, n2y);
-      const auto [xmin, xmax] = std::minmax(n1x, n2x);
+    const auto [ymin, ymax] = std::minmax(n1y, n2y);
+    const auto [xmin, xmax] = std::minmax(n1x, n2x);
 
       const int manhattan_len = treeedge->len;
       const int min_local_expand = 3;
@@ -404,14 +413,16 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
       const int regionY2
           = std::min(ymax + effective_enlarge - decrease, y_grid_ - 1);
 
-      for (int i = regionY1; i <= regionY2; i++) {
-        for (int j = regionX1; j <= regionX2; j++) {
-          d1[i][j] = BIG_INT;
-          d2[i][j] = BIG_INT;
-          hyper_h_[i][j] = false;
-          hyper_v_[i][j] = false;
-        }
+      constexpr double big = 1.0e9;
+      for (const int idx : scratch.touched_cells) {
+        const int y = idx / x_range_;
+        const int x = idx - y * x_range_;
+        d1[y][x] = big;
+        d2[y][x] = big;
+        hyper_h_[y][x] = false;
+        hyper_v_[y][x] = false;
       }
+      scratch.touched_cells.clear();
 
       for (const int idx : src_heap_touched) {
         src_heap_pos[idx] = -1;
@@ -433,6 +444,14 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
                 regionY1,
                 regionY2);
 
+      scratch.touched_cells.insert(scratch.touched_cells.end(),
+                                   src_heap_touched.begin(),
+                                   src_heap_touched.end());
+      const double* d2_base = d2.data();
+      for (const double* elem : dest_heap) {
+        scratch.touched_cells.push_back(static_cast<int>(elem - d2_base));
+      }
+
       double* d1_base = d1.data();
 
       auto updateAdjacent = [&](const int cur_x,
@@ -445,6 +464,9 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
           return;
         }
 
+        if (adj_cost >= big) {
+          scratch.touched_cells.push_back(adj_y * x_range_ + adj_x);
+        }
         d1[adj_y][adj_x] = cost;
 
         if (cur_x != adj_x) {
