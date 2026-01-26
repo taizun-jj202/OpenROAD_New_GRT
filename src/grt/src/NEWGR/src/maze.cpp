@@ -2162,7 +2162,8 @@ int FastRouteCore::getOverflow2Dmaze(int* maxOverflow, int* tUsage)
     }
   } else {
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if (used_h.size() > 16384) \
+#pragma omp parallel for num_threads(4) schedule(static) \
+    if (used_h.size() > 65536) \
     reduction(+ : total_usage, H_overflow, numedges) reduction(max : max_H_overflow)
 #endif
     for (size_t i = 0; i < used_h.size(); ++i) {
@@ -2177,7 +2178,8 @@ int FastRouteCore::getOverflow2Dmaze(int* maxOverflow, int* tUsage)
     }
 
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if (used_v.size() > 16384) \
+#pragma omp parallel for num_threads(4) schedule(static) \
+    if (used_v.size() > 65536) \
     reduction(+ : total_usage, V_overflow, numedges) reduction(max : max_V_overflow)
 #endif
     for (size_t i = 0; i < used_v.size(); ++i) {
@@ -2272,7 +2274,8 @@ int FastRouteCore::getOverflow2D(int* maxOverflow)
     }
   } else {
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if (used_h.size() > 16384) \
+#pragma omp parallel for num_threads(4) schedule(static) \
+    if (used_h.size() > 65536) \
     reduction(+ : total_usage, hCap, H_overflow, numedges) reduction(max : max_H_overflow)
 #endif
     for (size_t i = 0; i < used_h.size(); ++i) {
@@ -2289,7 +2292,8 @@ int FastRouteCore::getOverflow2D(int* maxOverflow)
     }
 
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if (used_v.size() > 16384) \
+#pragma omp parallel for num_threads(4) schedule(static) \
+    if (used_v.size() > 65536) \
     reduction(+ : total_usage, vCap, V_overflow, numedges) reduction(max : max_V_overflow)
 #endif
     for (size_t i = 0; i < used_v.size(); ++i) {
