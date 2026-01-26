@@ -21,6 +21,7 @@
 #include "grt/Rudy.h"
 #include "grt/SprouteAdapter.h"
 #include "utl/Logger.h"
+#include "galois/Galois.h"
 #include "galois/Threads.h"
 
 // SPRoute (mysproute) uses a global `numThreads` variable to control the
@@ -275,9 +276,9 @@ int pickSprouteThreadCount(size_t net_count)
     threads = std::min(threads, 4u);
   } else if (net_count < 8000) {
     threads = std::min(threads, 8u);
-  } else if (net_count < 14000) {
+  } else if (net_count < 24000) {
     threads = std::min(threads, 16u);
-  } else if (net_count < 22000) {
+  } else if (net_count < 48000) {
     threads = std::min(threads, 24u);
   } else {
     threads = std::min(threads, 32u);
@@ -1094,9 +1095,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     grouter_->sproute_adapter_->initialize(tuned_grid, grouter_->sproute_nets_);
     NetRouteMap routes = grouter_->sproute_adapter_->run();
-    // Work around a shutdown-time Galois stats crash when using >1 thread.
-    // Reduce the active thread count so stats merging only touches thread 0.
-    galois::setActiveThreads(1);
 
     grouter_->addRemainingGuides(
         routes, nets, min_routing_layer, max_routing_layer);
@@ -1125,22 +1123,26 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       merge_tasks.push_back({&it->second->getPins(), &route});
     }
 
-    runInParallelChunks(
-        merge_tasks.size(),
-        std::max(1, requested_threads),
-        [&](size_t begin, size_t end, int /*tid*/) {
-          for (size_t i = begin; i < end; ++i) {
+    if (!merge_tasks.empty()) {
+      const int task_count = static_cast<int>(merge_tasks.size());
+      galois::do_all(
+          galois::iterate(0, task_count),
+          [&](int i) {
             const MergeTask& task = merge_tasks[i];
             if (task.pins == nullptr || task.route == nullptr) {
-              continue;
+              return;
             }
             grouter_->mergeSegments(*task.pins, *task.route);
-          }
-        });
+          });
+    }
 
     // Ensure GlobalRouter::updateDbCongestion() uses SPRoute's congestion data
     // instead of FastRoute's when NEWGR selects the SPRoute engine.
     grouter_->router_type_ = RouterType::Sproute;
+
+    // Work around a shutdown-time Galois stats crash when using >1 thread.
+    // Reduce the active thread count so stats merging only touches thread 0.
+    galois::setActiveThreads(1);
 
     return routes;
   }
