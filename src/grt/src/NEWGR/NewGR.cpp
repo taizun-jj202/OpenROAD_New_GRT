@@ -1750,17 +1750,39 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                && rudy_stats.p80 < 0.90f
                                && nets_per_tile > 0.0
                                && nets_per_tile < 2.2;
-  const bool try_runtime_skim = preroute_severity < 0.76f
-                                && nets_per_tile > 0.0 && nets_per_tile < 3.4
-                                && trimmed_iters > 0;
+  const bool try_runtime_skim = trimmed_iters >= 8
+                                && preroute_severity < 0.82f
+                                && rudy_stats.p80 < 0.95f
+                                && nets_per_tile > 0.0;
   if (try_runtime_skim) {
-    // Give the skim pass just enough iterations to avoid the "fast but detour"
-    // regime while still being much cheaper than the full scenario sweep.
-    const int skim_floor = ultra_fast_skim ? 3 : 4;
-    const int skim_cap = ultra_fast_skim ? 4 : 5;
+    // SPRoute-style fast lane: attempt a cheaper overflow iteration budget
+    // first, then fall back to the tuned baseline if quality regresses.
+    int skim_floor = 4;
+    int skim_cap = 6;
+    if (ultra_fast_skim) {
+      skim_floor = 3;
+      skim_cap = 4;
+    } else if (nets_per_tile >= 6.0) {
+      skim_floor = 10;
+      skim_cap = 16;
+    } else if (nets_per_tile >= 3.4) {
+      skim_floor = 8;
+      skim_cap = 12;
+    }
+
+    if (preroute_severity < 0.72f && rudy_stats.p80 < 0.92f
+        && nets_per_tile >= 3.4) {
+      skim_floor = std::min(skim_floor, 8);
+      skim_cap = std::min(skim_cap, 12);
+    }
+
     const int skim_iters = std::clamp(trimmed_iters, skim_floor, skim_cap);
-    const float skim_via_scale = std::clamp(
-        snapshot.via_cost_scale * 0.90f, 0.55f, snapshot.via_cost_scale);
+    if (skim_iters < trimmed_iters) {
+      const float skim_via_scale = std::clamp(
+          snapshot.via_cost_scale
+              * (nets_per_tile >= 3.4 ? 0.96f : 0.90f),
+          0.55f,
+          snapshot.via_cost_scale);
     const float skim_critical = std::clamp(
         5.5f + 2.5f * (0.60f - preroute_severity), 4.5f, 9.5f);
     const int skim_seed = snapshot.seed + 211;
@@ -1814,6 +1836,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   skim_result.metrics.max_utilization);
     runtime_skim_rejected = true;
     restore_snapshot(snapshot);
+    }
   }
 
   if (runtime_skim_rejected) {

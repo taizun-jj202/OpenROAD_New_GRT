@@ -1154,9 +1154,12 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
   }
 
 #ifdef _OPENMP
+  // Use SPRoute-style BSP routing beyond the first few iterations as well.
+  // The parallel implementation keeps the global congestion graph read-only
+  // within each batch and applies usage deltas at the batch barrier, which
+  // preserves determinism while improving runtime on dense designs.
   const bool try_parallel = omp_get_max_threads() > 1
-                            && static_cast<int>(net_ids_.size()) >= 512
-                            && iter <= 10;
+                            && static_cast<int>(net_ids_.size()) >= 512;
 #else
   const bool try_parallel = false;
 #endif
