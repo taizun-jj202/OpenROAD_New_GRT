@@ -913,7 +913,7 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
       }
       thread_updates[static_cast<size_t>(tid)].clearBatch();
 
-#pragma omp for schedule(static)
+#pragma omp for schedule(static, 1)
       for (int pos = begin; pos < end; ++pos) {
         route_one(schedule[static_cast<size_t>(pos)], &cb);
       }
