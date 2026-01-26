@@ -276,7 +276,7 @@ int pickSprouteThreadCount(size_t net_count)
   } else if (net_count < 8000) {
     threads = std::min(threads, 8u);
   } else {
-    threads = std::min(threads, 32u);
+    threads = std::min(threads, 16u);
   }
 
   if (const char* env = std::getenv("NEWGR_SPROUTE_THREADS");
@@ -1062,10 +1062,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     // Reduce the active thread count so stats merging only touches thread 0.
     galois::setActiveThreads(1);
 
-    if (grouter_->block_ != nullptr) {
-      grouter_->sproute_adapter_->updateDbCongestion(grouter_->block_);
-    }
-
     grouter_->addRemainingGuides(
         routes, nets, min_routing_layer, max_routing_layer);
     grouter_->connectPadPins(routes);
@@ -1085,6 +1081,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
       grouter_->mergeSegments(it->second->getPins(), route);
     }
+
+    // Ensure GlobalRouter::updateDbCongestion() uses SPRoute's congestion data
+    // instead of FastRoute's when NEWGR selects the SPRoute engine.
+    grouter_->router_type_ = RouterType::Sproute;
 
     return routes;
   }
