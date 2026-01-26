@@ -1875,7 +1875,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = baseline.metrics.overflow == 0
         && baseline_wl <= (kRuntimeWirelengthBudget + 2500.0)
         && baseline.metrics.via_count <= (kRuntimeViaBudget + 1200)
-        && baseline.metrics.max_utilization < 0.95f;
+        // Relax utilization guard to avoid expensive scenario sweeps when the
+        // baseline already meets the WL/Via budgets (SPRoute-style runtime
+        // focus: fewer full reruns).
+        && baseline.metrics.max_utilization < 0.985f;
   if (baseline_good_enough) {
     logger_->info(
         GNR,
