@@ -121,17 +121,72 @@ struct UsageUpdate
   FrNet* net = nullptr;
 };
 
+struct ThreadUsageContext
+{
+  int y_grid = 0;
+  int y_grid_minus1 = 0;
+  std::vector<int32_t> h_delta;
+  std::vector<int32_t> v_delta;
+  std::vector<int> h_touched;
+  std::vector<int> v_touched;
+  std::vector<UsageUpdate> ndr_updates;
+
+  void init(int x_grid_in, int y_grid_in)
+  {
+    y_grid = std::max(0, y_grid_in);
+    y_grid_minus1 = std::max(0, y_grid - 1);
+    const int h_edges = std::max(0, x_grid_in - 1) * y_grid;
+    const int v_edges = std::max(0, x_grid_in) * y_grid_minus1;
+    h_delta.assign(static_cast<size_t>(h_edges), 0);
+    v_delta.assign(static_cast<size_t>(v_edges), 0);
+    h_touched.reserve(4096);
+    v_touched.reserve(4096);
+    ndr_updates.reserve(2048);
+  }
+
+  void clearBatch()
+  {
+    h_touched.clear();
+    v_touched.clear();
+    ndr_updates.clear();
+  }
+};
+
+static inline void accumulateDelta(std::vector<int32_t>& delta_map,
+                                   std::vector<int>& touched,
+                                   int index,
+                                   int delta)
+{
+  if (index < 0 || static_cast<size_t>(index) >= delta_map.size()) {
+    return;
+  }
+  if (delta_map[static_cast<size_t>(index)] == 0) {
+    touched.push_back(index);
+  }
+  delta_map[static_cast<size_t>(index)] += delta;
+}
+
 static void recordUsageH(void* ctx, int x, int y, FrNet* net, int delta)
 {
-  auto* updates = static_cast<std::vector<UsageUpdate>*>(ctx);
-  updates->push_back(
+  auto* updates = static_cast<ThreadUsageContext*>(ctx);
+  if (net != nullptr && net->getEdgeCost() == 1 && updates->y_grid > 0) {
+    const int index = x * updates->y_grid + y;
+    accumulateDelta(updates->h_delta, updates->h_touched, index, delta);
+    return;
+  }
+  updates->ndr_updates.push_back(
       UsageUpdate{false, static_cast<int16_t>(x), static_cast<int16_t>(y), delta, net});
 }
 
 static void recordUsageV(void* ctx, int x, int y, FrNet* net, int delta)
 {
-  auto* updates = static_cast<std::vector<UsageUpdate>*>(ctx);
-  updates->push_back(
+  auto* updates = static_cast<ThreadUsageContext*>(ctx);
+  if (net != nullptr && net->getEdgeCost() == 1 && updates->y_grid_minus1 > 0) {
+    const int index = x * updates->y_grid_minus1 + y;
+    accumulateDelta(updates->v_delta, updates->v_touched, index, delta);
+    return;
+  }
+  updates->ndr_updates.push_back(
       UsageUpdate{true, static_cast<int16_t>(x), static_cast<int16_t>(y), delta, net});
 }
 
@@ -820,11 +875,13 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
     }
   };
 
-  std::vector<std::vector<UsageUpdate>> thread_updates(
-      static_cast<size_t>(threads));
+  std::vector<ThreadUsageContext> thread_updates(static_cast<size_t>(threads));
+  for (auto& ctx : thread_updates) {
+    ctx.init(x_grid_, y_grid_);
+  }
   for (int batch = 0; batch < nbatch; ++batch) {
-    for (auto& vec : thread_updates) {
-      vec.clear();
+    for (auto& ctx : thread_updates) {
+      ctx.clearBatch();
     }
     const int begin = batch_offsets[static_cast<size_t>(batch)];
     const int end = batch_offsets[static_cast<size_t>(batch + 1)];
@@ -843,14 +900,38 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
       }
     }
 
-    for (const auto& vec : thread_updates) {
-      for (const UsageUpdate& upd : vec) {
+    for (auto& ctx : thread_updates) {
+      for (int index : ctx.h_touched) {
+        const int32_t delta = ctx.h_delta[static_cast<size_t>(index)];
+        ctx.h_delta[static_cast<size_t>(index)] = 0;
+        if (delta == 0 || ctx.y_grid <= 0) {
+          continue;
+        }
+        const int x = index / ctx.y_grid;
+        const int y = index - x * ctx.y_grid;
+        graph2d_.addUsageH(x, y, static_cast<int>(delta));
+      }
+      for (int index : ctx.v_touched) {
+        const int32_t delta = ctx.v_delta[static_cast<size_t>(index)];
+        ctx.v_delta[static_cast<size_t>(index)] = 0;
+        if (delta == 0 || ctx.y_grid_minus1 <= 0) {
+          continue;
+        }
+        const int x = index / ctx.y_grid_minus1;
+        const int y = index - x * ctx.y_grid_minus1;
+        graph2d_.addUsageV(x, y, static_cast<int>(delta));
+      }
+      ctx.h_touched.clear();
+      ctx.v_touched.clear();
+
+      for (const UsageUpdate& upd : ctx.ndr_updates) {
         if (upd.vertical) {
           graph2d_.updateUsageV(upd.x, upd.y, upd.net, upd.delta);
         } else {
           graph2d_.updateUsageH(upd.x, upd.y, upd.net, upd.delta);
         }
       }
+      ctx.ndr_updates.clear();
     }
   }
 #endif
