@@ -1693,6 +1693,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   ScenarioResult baseline
       = run_existing_state("baseline", nets);
+  if (within_budget(baseline.metrics) && baseline.metrics.max_utilization < 0.72
+      && preroute_severity < 0.78f && nets_per_tile > 0.0
+      && nets_per_tile < 2.6) {
+    logger_->info(
+        GNR,
+        6062,
+        "NEWGR ultra-fast accept: baseline already meets WL/via budgets "
+        "(WL {:.0f} um, vias {}, max util {:.2f}, severity {:.2f}); skipping "
+        "scenario sweep for runtime.",
+        baseline.metrics.wirelength_um,
+        baseline.metrics.via_count,
+        baseline.metrics.max_utilization,
+        preroute_severity);
+    return baseline.routes;
+  }
   std::vector<Hotspot> hotspots = collect_hotspots(false);
 
   if (normalized_rudy.empty()) {
