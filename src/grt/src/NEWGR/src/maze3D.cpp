@@ -720,7 +720,8 @@ float FastRouteCore::getMazeRouteCost3D(const int net_id,
 
 void FastRouteCore::mazeRouteMSMDOrder3D(int expand,
                                          int ripupTHlb,
-                                         int ripupTHub)
+                                         int ripupTHub,
+                                         double net_fraction)
 {
   const int grid_area = x_grid_ * y_grid_;
 #ifdef _OPENMP
@@ -744,7 +745,11 @@ void FastRouteCore::mazeRouteMSMDOrder3D(int expand,
   }
   int* d1_base = &d1_3D_[0][0][0];
 
-  const int endIND = tree_order_pv_.size() * 0.9;
+  net_fraction = std::clamp(net_fraction, 0.05, 1.0);
+  const int endIND = std::clamp(
+      static_cast<int>(std::round(tree_order_pv_.size() * net_fraction)),
+      0,
+      static_cast<int>(tree_order_pv_.size()));
 
   for (int orderIndex = 0; orderIndex < endIND; orderIndex++) {
     const int netID = tree_order_pv_[orderIndex].treeIndex;

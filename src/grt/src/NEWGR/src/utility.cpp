@@ -1256,61 +1256,64 @@ void FastRouteCore::layerAssignment()
 {
   updateSlacks();
 
-  for (const int& netID : net_ids_) {
-    auto& treenodes = sttrees_[netID].nodes;
+  const int scratch_size = std::max(1, 2 * max_degree_);
+#ifdef _OPENMP
+#pragma omp parallel
+  {
+    std::vector<int> xcor(scratch_size);
+    std::vector<int> ycor(scratch_size);
+    std::vector<int> dcor(scratch_size);
+#pragma omp for schedule(dynamic, 32)
+    for (int idx = 0; idx < static_cast<int>(net_ids_.size()); ++idx) {
+      const int netID = net_ids_[idx];
+      auto& treenodes = sttrees_[netID].nodes;
+      auto& treeedges = sttrees_[netID].edges;
 
-    int numpoints = 0;
+      int numpoints = 0;
+      for (int d = 0; d < sttrees_[netID].num_nodes(); d++) {
+        treenodes[d].topL = -1;
+        treenodes[d].botL = num_layers_;
+        treenodes[d].assigned = false;
+        treenodes[d].stackAlias = d;
+        treenodes[d].conCNT = 0;
+        treenodes[d].hID = BIG_INT;
+        treenodes[d].lID = BIG_INT;
+        treenodes[d].status = 0;
 
-    for (int d = 0; d < sttrees_[netID].num_nodes(); d++) {
-      treenodes[d].topL = -1;
-      treenodes[d].botL = num_layers_;
-      // treenodes[d].l = 0;
-      treenodes[d].assigned = false;
-      treenodes[d].stackAlias = d;
-      treenodes[d].conCNT = 0;
-      treenodes[d].hID = BIG_INT;
-      treenodes[d].lID = BIG_INT;
-      treenodes[d].status = 0;
+        if (d < sttrees_[netID].num_terminals) {
+          const int pin_idx = sttrees_[netID].node_to_pin_idx[d];
+          treenodes[d].botL = nets_[netID]->getPinL()[pin_idx];
+          treenodes[d].topL = nets_[netID]->getPinL()[pin_idx];
+          treenodes[d].assigned = true;
+          treenodes[d].status = 1;
 
-      if (d < sttrees_[netID].num_terminals) {
-        const int pin_idx = sttrees_[netID].node_to_pin_idx[d];
-        treenodes[d].botL = nets_[netID]->getPinL()[pin_idx];
-        treenodes[d].topL = nets_[netID]->getPinL()[pin_idx];
-        // treenodes[d].l = 0;
-        treenodes[d].assigned = true;
-        treenodes[d].status = 1;
-
-        xcor_[numpoints] = treenodes[d].x;
-        ycor_[numpoints] = treenodes[d].y;
-        dcor_[numpoints] = d;
-        numpoints++;
-      } else {
-        bool redundant = false;
-        for (int k = 0; k < numpoints; k++) {
-          if ((treenodes[d].x == xcor_[k]) && (treenodes[d].y == ycor_[k])) {
-            treenodes[d].stackAlias = dcor_[k];
-
-            redundant = true;
-            break;
+          xcor[numpoints] = treenodes[d].x;
+          ycor[numpoints] = treenodes[d].y;
+          dcor[numpoints] = d;
+          numpoints++;
+        } else {
+          bool redundant = false;
+          for (int k = 0; k < numpoints; k++) {
+            if ((treenodes[d].x == xcor[k]) && (treenodes[d].y == ycor[k])) {
+              treenodes[d].stackAlias = dcor[k];
+              redundant = true;
+              break;
+            }
+          }
+          if (!redundant) {
+            xcor[numpoints] = treenodes[d].x;
+            ycor[numpoints] = treenodes[d].y;
+            dcor[numpoints] = d;
+            numpoints++;
           }
         }
-        if (!redundant) {
-          xcor_[numpoints] = treenodes[d].x;
-          ycor_[numpoints] = treenodes[d].y;
-          dcor_[numpoints] = d;
-          numpoints++;
-        }
       }
-    }
-  }
 
-  for (const int& netID : net_ids_) {
-    auto& treeedges = sttrees_[netID].edges;
-    auto& treenodes = sttrees_[netID].nodes;
-
-    for (int edgeID = 0; edgeID < sttrees_[netID].num_edges(); edgeID++) {
-      TreeEdge* treeedge = &(treeedges[edgeID]);
-      if (treeedge->len > 0) {
+      for (int edgeID = 0; edgeID < sttrees_[netID].num_edges(); edgeID++) {
+        TreeEdge* treeedge = &(treeedges[edgeID]);
+        if (treeedge->len <= 0) {
+          continue;
+        }
         const int n1 = treeedge->n1;
         const int n2 = treeedge->n2;
 
@@ -1323,6 +1326,71 @@ void FastRouteCore::layerAssignment()
       }
     }
   }
+#else
+  std::vector<int> xcor(scratch_size);
+  std::vector<int> ycor(scratch_size);
+  std::vector<int> dcor(scratch_size);
+  for (const int& netID : net_ids_) {
+    auto& treenodes = sttrees_[netID].nodes;
+    auto& treeedges = sttrees_[netID].edges;
+
+    int numpoints = 0;
+    for (int d = 0; d < sttrees_[netID].num_nodes(); d++) {
+      treenodes[d].topL = -1;
+      treenodes[d].botL = num_layers_;
+      treenodes[d].assigned = false;
+      treenodes[d].stackAlias = d;
+      treenodes[d].conCNT = 0;
+      treenodes[d].hID = BIG_INT;
+      treenodes[d].lID = BIG_INT;
+      treenodes[d].status = 0;
+
+      if (d < sttrees_[netID].num_terminals) {
+        const int pin_idx = sttrees_[netID].node_to_pin_idx[d];
+        treenodes[d].botL = nets_[netID]->getPinL()[pin_idx];
+        treenodes[d].topL = nets_[netID]->getPinL()[pin_idx];
+        treenodes[d].assigned = true;
+        treenodes[d].status = 1;
+
+        xcor[numpoints] = treenodes[d].x;
+        ycor[numpoints] = treenodes[d].y;
+        dcor[numpoints] = d;
+        numpoints++;
+      } else {
+        bool redundant = false;
+        for (int k = 0; k < numpoints; k++) {
+          if ((treenodes[d].x == xcor[k]) && (treenodes[d].y == ycor[k])) {
+            treenodes[d].stackAlias = dcor[k];
+            redundant = true;
+            break;
+          }
+        }
+        if (!redundant) {
+          xcor[numpoints] = treenodes[d].x;
+          ycor[numpoints] = treenodes[d].y;
+          dcor[numpoints] = d;
+          numpoints++;
+        }
+      }
+    }
+
+    for (int edgeID = 0; edgeID < sttrees_[netID].num_edges(); edgeID++) {
+      TreeEdge* treeedge = &(treeedges[edgeID]);
+      if (treeedge->len <= 0) {
+        continue;
+      }
+      const int n1 = treeedge->n1;
+      const int n2 = treeedge->n2;
+
+      treeedge->n1a = treenodes[n1].stackAlias;
+      treenodes[treeedge->n1a].eID[treenodes[treeedge->n1a].conCNT] = edgeID;
+      treenodes[treeedge->n1a].conCNT++;
+      treeedge->n2a = treenodes[n2].stackAlias;
+      treenodes[treeedge->n2a].eID[treenodes[treeedge->n2a].conCNT] = edgeID;
+      treenodes[treeedge->n2a].conCNT++;
+    }
+  }
+#endif
 
   layerAssignmentV4();
   ConvertToFull3DType2();
@@ -1492,7 +1560,10 @@ void FastRouteCore::StNetOrder()
 
   tree_order_cong_.resize(net_ids_.size());
 
-  for (int j = 0; j < net_ids_.size(); j++) {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (net_ids_.size() > 2048)
+#endif
+  for (int j = 0; j < static_cast<int>(net_ids_.size()); j++) {
     const int netID = net_ids_[j];
 
     StTree* stree = &(sttrees_[netID]);

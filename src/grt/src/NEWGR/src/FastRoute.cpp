@@ -1772,10 +1772,19 @@ NetRouteMap FastRouteCore::run()
   if (past_cong == 0) {
     const int maze_enlarge = mild_congestion ? std::min(enlarge_, relax_cap)
                                              : enlarge_;
-    if (!overflow_clean) {
-      mazeRouteMSMDOrder3D(maze_enlarge, 0, long_edge_len);
+    double maze3d_fraction = 0.9;
+    if (overflow_clean && mild_congestion) {
+      // SPRoute-style runtime tuning: when the 2D solution is already clean,
+      // only refine a subset of nets in 3D to reduce runtime.
+      maze3d_fraction = speed_mode ? 0.28 : 0.42;
+      if (nets_per_tile > 0.0 && nets_per_tile < 1.6) {
+        maze3d_fraction = std::min(maze3d_fraction, 0.34);
+      }
     }
-    mazeRouteMSMDOrder3D(maze_enlarge, 0, short_edge_len);
+    if (!overflow_clean) {
+      mazeRouteMSMDOrder3D(maze_enlarge, 0, long_edge_len, maze3d_fraction);
+    }
+    mazeRouteMSMDOrder3D(maze_enlarge, 0, short_edge_len, maze3d_fraction);
   }
 
   // Disable estimate parasitics for grt incremental steps with resistance-aware
