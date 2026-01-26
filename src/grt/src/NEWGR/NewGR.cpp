@@ -6,6 +6,7 @@
 #include <functional>
 #include <limits>
 #include <numeric>
+#include <thread>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -1085,16 +1086,74 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               ? std::max(grouter_->grid_->getTileSize(), 1)
               : 1;
 
+    std::vector<const std::vector<GSegment>*> segment_sets;
+    segment_sets.reserve(routes.size());
     for (const auto& [db_net, segments] : routes) {
       static_cast<void>(db_net);
-      for (const GSegment& segment : segments) {
-        if (segment.isVia()) {
-          metrics.via_count++;
-        } else {
-          metrics.wirelength_dbu
-              += std::abs(segment.final_x - segment.init_x)
-                 + std::abs(segment.final_y - segment.init_y);
+      segment_sets.push_back(&segments);
+    }
+
+    const unsigned int hw_threads
+        = std::max(1u, std::thread::hardware_concurrency());
+    const unsigned int thread_count = std::min<unsigned int>(
+        4u, std::min<unsigned int>(hw_threads, segment_sets.size()));
+
+    if (thread_count <= 1 || segment_sets.size() < 2048) {
+      for (const auto* segments : segment_sets) {
+        for (const GSegment& segment : *segments) {
+          if (segment.isVia()) {
+            metrics.via_count++;
+          } else {
+            metrics.wirelength_dbu
+                += std::abs(segment.final_x - segment.init_x)
+                   + std::abs(segment.final_y - segment.init_y);
+          }
         }
+      }
+    } else {
+      struct Partial
+      {
+        long wirelength_dbu = 0;
+        long via_count = 0;
+      };
+
+      std::vector<Partial> partials(thread_count);
+      std::vector<std::thread> threads;
+      threads.reserve(thread_count);
+
+      const size_t total = segment_sets.size();
+      const size_t chunk = (total + thread_count - 1) / thread_count;
+      for (unsigned int t = 0; t < thread_count; ++t) {
+        const size_t begin = t * chunk;
+        const size_t end = std::min(total, begin + chunk);
+        if (begin >= end) {
+          break;
+        }
+        threads.emplace_back([&, t, begin, end]() {
+          Partial local;
+          for (size_t i = begin; i < end; ++i) {
+            const auto* segments = segment_sets[i];
+            for (const GSegment& segment : *segments) {
+              if (segment.isVia()) {
+                local.via_count++;
+              } else {
+                local.wirelength_dbu
+                    += std::abs(segment.final_x - segment.init_x)
+                       + std::abs(segment.final_y - segment.init_y);
+              }
+            }
+          }
+          partials[t] = local;
+        });
+      }
+
+      for (auto& th : threads) {
+        th.join();
+      }
+
+      for (const Partial& partial : partials) {
+        metrics.wirelength_dbu += partial.wirelength_dbu;
+        metrics.via_count += partial.via_count;
       }
     }
 
@@ -1794,11 +1853,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         && baseline_wl <= (kRuntimeWirelengthBudget + 650.0)
         && baseline.metrics.via_count <= (kRuntimeViaBudget + 220)
         && baseline.metrics.max_utilization < 0.93f;
-  const bool baseline_ultra_fast_accept
-      = baseline_good_enough && preroute_severity < 0.70f && nets_per_tile > 0.0
-        && nets_per_tile < 1.15
-        && (normalized_rudy.empty() || rudy_stats.p80 < 0.86f);
-  if (baseline_ultra_fast_accept) {
+  if (baseline_good_enough) {
     logger_->info(
         GNR,
         6070,
