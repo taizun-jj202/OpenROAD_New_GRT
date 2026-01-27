@@ -1734,20 +1734,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                    && nets_per_tile < 2.4
                                    && trimmed_iters <= original_congestion_iters
                                    && grouter_->fastroute_ != nullptr;
-  if (predictive_fastlane) {
-    float warm_perturb
-        = std::clamp(0.04f + 0.06f * preroute_severity, 0.02f, 0.10f);
-    float warm_critical = std::clamp(
-        5.0f + 2.0f * (0.60f - preroute_severity), 4.2f, 7.5f);
-    float warm_via_scale = std::clamp(
-        0.58f + 0.20f * (0.70f - preroute_severity), 0.46f, 0.82f);
-    if (nets_per_tile < 1.8) {
-      warm_perturb *= 0.85f;
-      warm_via_scale = std::max(warm_via_scale - 0.06f, 0.46f);
-    }
-    grouter_->setCapacitiesPerturbationPercentage(warm_perturb);
-    grouter_->setPerturbationAmount(warm_perturb > 0.0f ? 1 : 0);
-    grouter_->setAllowCongestion(false);
+	  if (predictive_fastlane) {
+	    float warm_perturb
+	        = std::clamp(0.04f + 0.06f * preroute_severity, 0.02f, 0.10f);
+	    float warm_critical = std::clamp(
+	        5.0f + 2.0f * (0.60f - preroute_severity), 4.2f, 7.5f);
+	    float warm_via_scale = std::clamp(
+	        0.60f + 0.20f * (0.70f - preroute_severity), 0.50f, 0.86f);
+	    if (nets_per_tile < 1.8) {
+	      warm_perturb *= 0.85f;
+	      warm_via_scale = std::max(warm_via_scale - 0.04f, 0.50f);
+	    }
+	    grouter_->setCapacitiesPerturbationPercentage(warm_perturb);
+	    grouter_->setPerturbationAmount(warm_perturb > 0.0f ? 1 : 0);
+	    grouter_->setAllowCongestion(false);
     grouter_->fastroute_->setCriticalNetsPercentage(warm_critical);
     grouter_->fastroute_->setViaCostScale(warm_via_scale);
     logger_->info(GNR,
@@ -1776,21 +1776,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                && nets_per_tile < 2.8
                                && grouter_->fastroute_ != nullptr
                                && grouter_->grid_ != nullptr;
-  if (guided_fastlane) {
-    const int greedy_seed = grouter_->seed_ + 37;
-    float preset_perturb
-        = preroute_severity > 0.30f ? 0.12f : 0.0f;
-    float preset_via_scale
-        = std::clamp(0.52f + 0.12f * (0.70f - preroute_severity), 0.40f, 0.64f);
-    float preset_critical = std::clamp(
-        5.5f + 3.5f * (0.60f - preroute_severity) - 0.8f, 3.5f, 10.0f);
-    if (nets_per_tile < 1.6) {
-      preset_perturb *= 0.85f;
-      preset_via_scale = std::max(preset_via_scale - 0.04f, 0.40f);
-    }
-    grouter_->setCapacitiesPerturbationPercentage(preset_perturb);
-    grouter_->setPerturbationAmount(preset_perturb > 0.0f ? 1 : 0);
-    grouter_->setSeed(greedy_seed);
+	  if (guided_fastlane) {
+	    const int greedy_seed = grouter_->seed_ + 37;
+	    float preset_perturb
+	        = preroute_severity > 0.30f ? 0.12f : 0.0f;
+	    float preset_via_scale
+	        = std::clamp(0.56f + 0.12f * (0.70f - preroute_severity), 0.46f, 0.72f);
+	    float preset_critical = std::clamp(
+	        5.5f + 3.5f * (0.60f - preroute_severity) - 0.8f, 3.5f, 10.0f);
+	    if (nets_per_tile < 1.6) {
+	      preset_perturb *= 0.85f;
+	      preset_via_scale = std::max(preset_via_scale - 0.03f, 0.46f);
+	    }
+	    grouter_->setCapacitiesPerturbationPercentage(preset_perturb);
+	    grouter_->setPerturbationAmount(preset_perturb > 0.0f ? 1 : 0);
+	    grouter_->setSeed(greedy_seed);
     grouter_->setAllowCongestion(false);
     grouter_->fastroute_->setCriticalNetsPercentage(preset_critical);
     grouter_->fastroute_->setViaCostScale(preset_via_scale);
@@ -2684,6 +2684,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   float wl_via_scale = 1.0f;
+  const long via_over_budget = baseline.metrics.via_count - kRuntimeViaBudget;
+  const bool via_pressure = !force_routability && via_over_budget > 900;
   const bool clean_wl_focus
       = !force_routability && baseline.metrics.overflow == 0
         && light_congestion && hotspot_bias < 0.24f
@@ -2692,14 +2694,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     float base_via_scale = 0.60f + 0.25f * congestion_severity
                            - 0.12f * hotspot_bias;
     if (relaxed_utilization) {
-      base_via_scale -= 0.05f;
+      base_via_scale -= via_pressure ? 0.02f : 0.05f;
     }
     if (light_congestion) {
-      base_via_scale -= 0.06f;
+      base_via_scale -= via_pressure ? 0.02f : 0.06f;
     }
     wl_via_scale = std::clamp(
         base_via_scale, clean_wl_focus ? 0.50f : 0.52f, 1.0f);
-    if (baseline.metrics.overflow == 0 && light_congestion
+    if (!via_pressure && baseline.metrics.overflow == 0 && light_congestion
         && hotspot_bias < 0.22f) {
       const float util_relief = std::clamp(
           static_cast<float>((0.66f - baseline.metrics.max_utilization) * 0.6f),
@@ -2740,9 +2742,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   };
 
   const float via_trim_scale_base
-      = std::max(wl_via_scale * 1.05f,
-                 0.98f + 0.30f * std::max(0.0f, 0.70f - congestion_severity)
-                     - 0.10f * hotspot_bias);
+      = std::max(
+          wl_via_scale * 1.05f,
+          std::max(0.98f + 0.30f * std::max(0.0f, 0.70f - congestion_severity)
+                       - 0.10f * hotspot_bias,
+                   via_pressure
+                       ? (1.08f
+                          + std::min(
+                              0.18f,
+                              0.00004f
+                                  * static_cast<float>(
+                                      std::max<long>(0, via_over_budget))))
+                       : 0.0f));
   const float via_trim_scale = std::clamp(
       via_trim_scale_base,
       force_routability ? 0.95f : 1.02f,
@@ -5789,15 +5800,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       return lhs.metrics.overflow < rhs.metrics.overflow;
     }
 
-    const double wl_a = static_cast<double>(lhs.metrics.wirelength_dbu);
-    const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
-    const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
-    const bool wl_first = clean_wl_focus && light_congestion
-                          && lhs.metrics.overflow == 0
-                          && rhs.metrics.overflow == 0;
-    const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
-    const double wl_primary
-        = wl_first ? 0.00030 : 0.00035;    // ~0.030% / 0.035%
+	    const double wl_a = static_cast<double>(lhs.metrics.wirelength_dbu);
+	    const double wl_b = static_cast<double>(rhs.metrics.wirelength_dbu);
+	    const double wl_den = std::max(std::max(wl_a, wl_b), 1.0);
+	    const bool wl_first = clean_wl_focus && light_congestion
+	                          && baseline.metrics.via_count
+	                                 <= (kRuntimeViaBudget + 900)
+	                          && lhs.metrics.overflow == 0
+	                          && rhs.metrics.overflow == 0;
+	    const double wl_rel = std::abs(wl_a - wl_b) / wl_den;
+	    const double wl_primary
+	        = wl_first ? 0.00030 : 0.00035;    // ~0.030% / 0.035%
     const double wl_tie
         = wl_first ? 0.00012 : 0.00015;    // ~0.012% / 0.015%
 
