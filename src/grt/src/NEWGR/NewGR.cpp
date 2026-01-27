@@ -2114,10 +2114,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // This typically reduces detailed-router via insertion at small WL cost.
   if (grouter_->fastroute_ != nullptr && preroute_severity <= 0.82f
       && rudy_stats.p80 < 0.92f) {
-    const float target_via_scale = preroute_severity < 0.70f ? 1.80f : 1.60f;
+    // Keep the scale below 2.5 to avoid a step-change in the internal rounded
+    // via penalty (FastRoute uses std::round when deriving integer penalties).
+    const float target_via_scale = preroute_severity < 0.68f ? 2.45f : 2.25f;
     const float tuned_via_scale
         = std::max(snapshot.via_cost_scale, target_via_scale);
     grouter_->fastroute_->setViaCostScale(tuned_via_scale);
+    snapshot.via_cost_scale = tuned_via_scale;
   }
 
   // Keep the fast path honest: tighten budgets so we only early-return when the
