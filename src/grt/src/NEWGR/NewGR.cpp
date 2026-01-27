@@ -1057,8 +1057,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return {};
   }
 
+  // NEWGR: default to the FastRoute-based flow for better quality knobs
+  // (wirelength/vias). Enable the SPRoute runtime path only when explicitly
+  // requested.
   const bool enable_sproute_runtime_path
-      = std::getenv("NEWGR_DISABLE_SPROUTE") == nullptr;
+      = (std::getenv("NEWGR_ENABLE_SPROUTE") != nullptr)
+        && (std::getenv("NEWGR_DISABLE_SPROUTE") == nullptr);
 
   // Optional runtime path: use SPRoute's deterministic parallel engine (BSP),
   // optionally with capacity scaling to steer detailed-routability.
