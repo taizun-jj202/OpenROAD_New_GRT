@@ -1628,8 +1628,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                     && rudy_stats.mean < 0.85f;
     const bool slim_density = nets_per_tile > 0.0 && nets_per_tile < 2.2;
     if ((sproute_like_light || slim_density) && trimmed_iters > 6) {
-      const double drop_scale = sproute_like_light ? 0.60 : 0.68;
-      const int min_iters = sproute_like_light ? 8 : 10;
+      // Avoid over-trimming on moderate-density designs; fewer congestion
+      // iterations can inflate layer switching and detailed-router via count.
+      const double drop_scale = sproute_like_light ? 0.60 : 0.82;
+      const int min_iters = sproute_like_light ? 8 : 14;
       const int sproute_iters = std::clamp(
           static_cast<int>(
               std::round(static_cast<double>(trimmed_iters) * drop_scale)),
@@ -1652,7 +1654,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
 
     const bool sproute_speed_lane = !normalized_rudy.empty()
-                                    && preroute_severity < 0.82f
+                                    && preroute_severity < 0.76f
                                     && rudy_stats.p80 < 0.92f
                                     && nets_per_tile > 0.0
                                     && nets_per_tile < 2.2;
