@@ -1084,13 +1084,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (const char* env = std::getenv("NEWGR_SPROUTE_CAP_SCALE"); env != nullptr) {
       cap_scale = std::clamp(std::strtof(env, nullptr), 0.90f, 1.05f);
     }
+    float m3_scale = 1.00f;
+    float high_scale = 0.70f;
+    if (const char* env = std::getenv("NEWGR_SPROUTE_M3_CAP_SCALE"); env != nullptr) {
+      m3_scale = std::clamp(std::strtof(env, nullptr), 0.40f, 1.05f);
+    }
+    if (const char* env = std::getenv("NEWGR_SPROUTE_HIGH_CAP_SCALE"); env != nullptr) {
+      high_scale = std::clamp(std::strtof(env, nullptr), 0.10f, 1.05f);
+    }
     auto scale_caps = [&](std::vector<int>& caps) {
-      for (int& cap : caps) {
+      for (size_t layer = 0; layer < caps.size(); ++layer) {
+        int& cap = caps[layer];
         if (cap <= 0) {
           continue;
         }
-        const float scaled = static_cast<float>(cap) * cap_scale;
-        cap = std::max(1, static_cast<int>(std::lround(scaled)));
+        float scale = cap_scale;
+        if (layer == 2) {
+          scale *= m3_scale;
+        } else if (layer >= 3) {
+          scale *= high_scale;
+        }
+        cap = std::max(1, static_cast<int>(std::lround(static_cast<float>(cap) * scale)));
       }
     };
     scale_caps(tuned_grid.h_capacities);
