@@ -328,7 +328,10 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
     work_indices[static_cast<size_t>(i)] = i;
   }
 
-  if (ordering && static_cast<int>(tree_order_cong_.size()) == net_count) {
+  const bool use_tree_order
+      = ordering && static_cast<int>(tree_order_cong_.size()) == net_count;
+
+  if (use_tree_order) {
     std::sort(work_indices.begin(), work_indices.end(), [&](int lhs, int rhs) {
       const OrderTree& a = tree_order_cong_[lhs];
       const OrderTree& b = tree_order_cong_[rhs];
@@ -399,7 +402,7 @@ void FastRouteCore::mazeRouteMSMDParallel(const int iter,
     };
 
     const int netID
-        = ordering ? tree_order_cong_[nidRPC].treeIndex : net_ids_[nidRPC];
+        = use_tree_order ? tree_order_cong_[nidRPC].treeIndex : net_ids_[nidRPC];
     const int num_terminals = sttrees_[netID].num_terminals;
     const int origENG = expand;
 

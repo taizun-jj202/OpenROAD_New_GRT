@@ -1057,10 +1057,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return {};
   }
 
-  // NEWGR runtime path: use SPRoute's deterministic parallel engine (BSP),
+  const bool enable_sproute_runtime_path
+      = std::getenv("NEWGR_USE_SPROUTE") != nullptr;
+
+  // Optional runtime path: use SPRoute's deterministic parallel engine (BSP),
   // optionally with a small capacity inflation to recover wirelength.
-  if (grouter_ != nullptr && grouter_->sproute_adapter_ != nullptr
-      && grouter_->sproute_grid_ready_ && grouter_->sproute_nets_ready_) {
+  if (enable_sproute_runtime_path && grouter_ != nullptr
+      && grouter_->sproute_adapter_ != nullptr && grouter_->sproute_grid_ready_
+      && grouter_->sproute_nets_ready_) {
+    logger_->info(GNR, 6076, "NEWGR: using SPRoute runtime path.");
     const int requested_threads = pickSprouteThreadCount(nets.size());
     if (requested_threads > 0) {
       ::numThreads = requested_threads;
@@ -1148,6 +1153,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->router_type_ = RouterType::Sproute;
 
     return routes;
+  } else if (!enable_sproute_runtime_path && grouter_ != nullptr
+             && grouter_->sproute_adapter_ != nullptr
+             && grouter_->sproute_grid_ready_ && grouter_->sproute_nets_ready_) {
+    logger_->info(GNR,
+                  6077,
+                  "NEWGR: skipping SPRoute runtime path (set NEWGR_USE_SPROUTE=1 "
+                  "to enable).");
   }
 
   if (grouter_ != nullptr && grouter_->grid_ != nullptr
