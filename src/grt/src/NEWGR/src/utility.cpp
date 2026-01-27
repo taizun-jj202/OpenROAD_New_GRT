@@ -613,6 +613,8 @@ void FastRouteCore::assignEdge(const int netID,
             : 1.0;
   constexpr double early_phase_limit = 0.2;
   constexpr double cleanup_phase_limit = 0.7;
+  const double via_scale
+      = std::clamp(static_cast<double>(via_cost_scale_), 0.35, 2.75);
 
   auto iterationPenaltyScale = [&](int layer_delta) -> double {
     if (layer_delta == 0) {
@@ -848,10 +850,15 @@ void FastRouteCore::assignEdge(const int netID,
           const int layer_delta = abs(i - l);
           const int base_via_cost = layer_delta * (k == 0 ? 2 : 3);
           const double phase_scale = iterationPenaltyScale(layer_delta);
+          const double scaled_base_via
+              = static_cast<double>(base_via_cost) * via_scale;
+          const int scaled_ref_via_cost
+              = static_cast<int>(std::round(scaled_base_via));
           const int adaptive_via_cost
-              = static_cast<int>(std::round(base_via_cost * phase_scale));
+              = static_cast<int>(std::round(scaled_base_via * phase_scale));
           const int congestion_penalty
-              = congestionPenalty(l, i, k, base_via_cost, phase_scale);
+              = congestionPenalty(
+                  l, i, k, scaled_ref_via_cost, phase_scale);
           int total_via_cost
               = adaptive_via_cost + via_resistance_cost + congestion_penalty;
 
@@ -888,10 +895,15 @@ void FastRouteCore::assignEdge(const int netID,
         const int layer_delta = abs(i - l);
         const int base_via_cost = layer_delta;
         const double phase_scale = iterationPenaltyScale(layer_delta);
+        const double scaled_base_via
+            = static_cast<double>(base_via_cost) * via_scale;
+        const int scaled_ref_via_cost
+            = static_cast<int>(std::round(scaled_base_via));
         const int adaptive_via_cost
-            = static_cast<int>(std::round(base_via_cost * phase_scale));
+            = static_cast<int>(std::round(scaled_base_via * phase_scale));
         const int congestion_penalty
-            = congestionPenalty(l, i, routelen, base_via_cost, phase_scale);
+            = congestionPenalty(
+                l, i, routelen, scaled_ref_via_cost, phase_scale);
         int total_cost
             = adaptive_via_cost + via_resistance_cost + congestion_penalty;
 
@@ -991,10 +1003,15 @@ void FastRouteCore::assignEdge(const int netID,
           const int layer_delta = abs(i - l);
           const int base_via_cost = layer_delta * (k == routelen ? 2 : 3);
           const double phase_scale = iterationPenaltyScale(layer_delta);
+          const double scaled_base_via
+              = static_cast<double>(base_via_cost) * via_scale;
+          const int scaled_ref_via_cost
+              = static_cast<int>(std::round(scaled_base_via));
           const int adaptive_via_cost
-              = static_cast<int>(std::round(base_via_cost * phase_scale));
+              = static_cast<int>(std::round(scaled_base_via * phase_scale));
           const int congestion_penalty
-              = congestionPenalty(l, i, k, base_via_cost, phase_scale);
+              = congestionPenalty(
+                  l, i, k, scaled_ref_via_cost, phase_scale);
           int total_via_cost
               = adaptive_via_cost + via_resistance_cost + congestion_penalty;
 
@@ -1031,10 +1048,14 @@ void FastRouteCore::assignEdge(const int netID,
         const int layer_delta = abs(i - l);
         const int base_via_cost = layer_delta;
         const double phase_scale = iterationPenaltyScale(layer_delta);
+        const double scaled_base_via
+            = static_cast<double>(base_via_cost) * via_scale;
+        const int scaled_ref_via_cost
+            = static_cast<int>(std::round(scaled_base_via));
         const int adaptive_via_cost
-            = static_cast<int>(std::round(base_via_cost * phase_scale));
+            = static_cast<int>(std::round(scaled_base_via * phase_scale));
         const int congestion_penalty
-            = congestionPenalty(l, i, 0, base_via_cost, phase_scale);
+            = congestionPenalty(l, i, 0, scaled_ref_via_cost, phase_scale);
         int total_cost
             = adaptive_via_cost + via_resistance_cost + congestion_penalty;
 
