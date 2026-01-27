@@ -1110,7 +1110,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scale_caps(tuned_grid.h_capacities);
     scale_caps(tuned_grid.v_capacities);
 
-    int via_cost = 3;
+    // Bias SPRoute toward fewer layer changes to help reduce detailed-router
+    // via insertion without impacting runtime significantly.
+    int via_cost = 5;
     if (const char* env = std::getenv("NEWGR_SPROUTE_VIA_COST"); env != nullptr) {
       via_cost = std::atoi(env);
     }
