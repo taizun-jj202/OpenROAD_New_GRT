@@ -1063,7 +1063,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   const bool enable_sproute_runtime_path
-      = std::getenv("NEWGR_DISABLE_SPROUTE") == nullptr;
+      = std::getenv("NEWGR_USE_SPROUTE") != nullptr;
 
   // Optional runtime path: use SPRoute's deterministic parallel engine (BSP),
   // optionally with capacity scaling to steer detailed-routability.
@@ -1194,7 +1194,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     logger_->info(
         GNR,
         6077,
-        "NEWGR: skipping SPRoute runtime path (unset NEWGR_DISABLE_SPROUTE to enable).");
+        "NEWGR: skipping SPRoute runtime path (set NEWGR_USE_SPROUTE=1 to enable).");
   }
 
   if (grouter_ != nullptr && grouter_->grid_ != nullptr
@@ -2109,6 +2109,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   };
 
   RouterSnapshot snapshot = capture_snapshot();
+
+  // If preroute congestion looks mild, bias the baseline toward fewer vias.
+  // This typically reduces detailed-router via insertion at small WL cost.
+  if (grouter_->fastroute_ != nullptr && preroute_severity < 0.78f
+      && rudy_stats.p80 < 0.92f) {
+    const float tuned_via_scale
+        = std::max(snapshot.via_cost_scale, preroute_severity < 0.65f ? 1.35f
+                                                                      : 1.25f);
+    grouter_->fastroute_->setViaCostScale(tuned_via_scale);
+  }
 
   // Keep the fast path honest: tighten budgets so we only early-return when the
   // solution is already near the best-known WL/Via point for this design.
