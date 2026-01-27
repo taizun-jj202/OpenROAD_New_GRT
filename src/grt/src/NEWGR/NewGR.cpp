@@ -28,6 +28,11 @@
 // Galois parallel runtime.  Declare it here without including mysproute's
 // `global.h` to avoid multiple-definition link errors.
 extern int numThreads;
+// Additional mysproute knobs (declared here to avoid including mysproute
+// headers, which define many globals and can trigger multiple-definition
+// link errors).
+extern int VIA;
+extern int viacost;
 
 namespace grt {
 
@@ -1057,12 +1062,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return {};
   }
 
-  // NEWGR: default to the FastRoute-based flow for better quality knobs
-  // (wirelength/vias). Enable the SPRoute runtime path only when explicitly
-  // requested.
   const bool enable_sproute_runtime_path
-      = (std::getenv("NEWGR_ENABLE_SPROUTE") != nullptr)
-        && (std::getenv("NEWGR_DISABLE_SPROUTE") == nullptr);
+      = std::getenv("NEWGR_DISABLE_SPROUTE") == nullptr;
 
   // Optional runtime path: use SPRoute's deterministic parallel engine (BSP),
   // optionally with capacity scaling to steer detailed-routability.
@@ -1077,20 +1078,31 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
 
     SprouteGridData tuned_grid = grouter_->sproute_grid_data_;
-    // SPRoute's capacities are global per-layer; slightly deflate them to
-    // encourage guide slack and reduce downstream via detours in TritonRoute.
-    constexpr float kCapScale = 0.97f;
+    // Prefer higher quality routes by default; allow light capacity deflation
+    // via env override if needed for guide slack.
+    float cap_scale = 1.0f;
+    if (const char* env = std::getenv("NEWGR_SPROUTE_CAP_SCALE"); env != nullptr) {
+      cap_scale = std::clamp(std::strtof(env, nullptr), 0.90f, 1.05f);
+    }
     auto scale_caps = [&](std::vector<int>& caps) {
       for (int& cap : caps) {
         if (cap <= 0) {
           continue;
         }
-        const float scaled = static_cast<float>(cap) * kCapScale;
+        const float scaled = static_cast<float>(cap) * cap_scale;
         cap = std::max(1, static_cast<int>(std::lround(scaled)));
       }
     };
     scale_caps(tuned_grid.h_capacities);
     scale_caps(tuned_grid.v_capacities);
+
+    int via_cost = 3;
+    if (const char* env = std::getenv("NEWGR_SPROUTE_VIA_COST"); env != nullptr) {
+      via_cost = std::atoi(env);
+    }
+    via_cost = std::clamp(via_cost, 1, 10);
+    ::VIA = via_cost;
+    ::viacost = via_cost;
 
     grouter_->sproute_adapter_->initialize(tuned_grid, grouter_->sproute_nets_);
     NetRouteMap routes = grouter_->sproute_adapter_->run();
