@@ -1058,21 +1058,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   const bool enable_sproute_runtime_path
-      = std::getenv("NEWGR_USE_SPROUTE") != nullptr;
+      = std::getenv("NEWGR_DISABLE_SPROUTE") == nullptr;
 
   // Optional runtime path: use SPRoute's deterministic parallel engine (BSP),
-  // optionally with a small capacity inflation to recover wirelength.
+  // optionally with capacity scaling to steer detailed-routability.
   if (enable_sproute_runtime_path && grouter_ != nullptr
       && grouter_->sproute_adapter_ != nullptr && grouter_->sproute_grid_ready_
       && grouter_->sproute_nets_ready_) {
     logger_->info(GNR, 6076, "NEWGR: using SPRoute runtime path.");
+
     const int requested_threads = pickSprouteThreadCount(nets.size());
     if (requested_threads > 0) {
       ::numThreads = requested_threads;
     }
 
     SprouteGridData tuned_grid = grouter_->sproute_grid_data_;
-    constexpr float kCapScale = 1.05f;
+    // SPRoute's capacities are global per-layer; slightly deflate them to
+    // encourage guide slack and reduce downstream via detours in TritonRoute.
+    constexpr float kCapScale = 0.97f;
     auto scale_caps = [&](std::vector<int>& caps) {
       for (int& cap : caps) {
         if (cap <= 0) {
@@ -1156,10 +1159,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   } else if (!enable_sproute_runtime_path && grouter_ != nullptr
              && grouter_->sproute_adapter_ != nullptr
              && grouter_->sproute_grid_ready_ && grouter_->sproute_nets_ready_) {
-    logger_->info(GNR,
-                  6077,
-                  "NEWGR: skipping SPRoute runtime path (set NEWGR_USE_SPROUTE=1 "
-                  "to enable).");
+    logger_->info(
+        GNR,
+        6077,
+        "NEWGR: skipping SPRoute runtime path (unset NEWGR_DISABLE_SPROUTE to enable).");
   }
 
   if (grouter_ != nullptr && grouter_->grid_ != nullptr
