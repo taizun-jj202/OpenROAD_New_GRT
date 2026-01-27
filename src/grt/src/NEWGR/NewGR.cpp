@@ -2112,7 +2112,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   // If preroute congestion looks mild, bias the baseline toward fewer vias.
   // This typically reduces detailed-router via insertion at small WL cost.
-  if (grouter_->fastroute_ != nullptr && preroute_severity < 0.78f
+  if (grouter_->fastroute_ != nullptr && preroute_severity <= 0.82f
       && rudy_stats.p80 < 0.92f) {
     const float tuned_via_scale
         = std::max(snapshot.via_cost_scale, preroute_severity < 0.65f ? 1.35f
@@ -2274,6 +2274,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         baseline_wl,
         baseline.metrics.via_count,
         baseline.metrics.max_utilization);
+    restore_snapshot(snapshot);
+    return std::move(baseline.routes);
+  }
+
+  const bool baseline_practical_accept
+      = baseline.metrics.max_utilization < 0.72f
+        && baseline.metrics.overflow <= 9000
+        && baseline_wl <= (baseline_wirelength_budget + 50000.0);
+  if (baseline_practical_accept) {
+    logger_->info(GNR,
+                  6071,
+                  "NEWGR baseline practical-accept: wirelength {:.0f} um, vias {}, "
+                  "overflow {}, max util {:.2f}.",
+                  baseline_wl,
+                  baseline.metrics.via_count,
+                  baseline.metrics.overflow,
+                  baseline.metrics.max_utilization);
     restore_snapshot(snapshot);
     return std::move(baseline.routes);
   }
