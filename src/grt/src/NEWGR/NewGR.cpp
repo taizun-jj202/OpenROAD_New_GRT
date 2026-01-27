@@ -1583,20 +1583,42 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
   trimmed_iters = grouter_->congestion_iterations_;
 
-  double nets_per_tile = 0.0;
-  if (grouter_->grid_ != nullptr) {
-    const int grid_tiles
-        = grouter_->grid_->getXGrids() * grouter_->grid_->getYGrids();
-    if (grid_tiles > 0) {
-      nets_per_tile
-          = static_cast<double>(nets.size()) / static_cast<double>(grid_tiles);
-    }
-  }
+	  double nets_per_tile = 0.0;
+	  if (grouter_->grid_ != nullptr) {
+	    const int grid_tiles
+	        = grouter_->grid_->getXGrids() * grouter_->grid_->getYGrids();
+	    if (grid_tiles > 0) {
+	      nets_per_tile
+	          = static_cast<double>(nets.size()) / static_cast<double>(grid_tiles);
+	    }
+	  }
+	  // Baseline bias: once wirelength is stable, modestly penalize vias to
+	  // reduce detailed-router via insertion. Keep the bias near 1.0 when
+	  // congestion severity is high to preserve routability.
+	  if (grouter_->fastroute_ != nullptr) {
+	    const float sparse_bonus
+	        = std::clamp(static_cast<float>(2.0 - nets_per_tile), 0.0f, 1.0f);
+	    const float calm_bonus
+	        = std::clamp(0.80f - preroute_severity, 0.0f, 0.35f);
+	    const float severe_penalty
+	        = std::clamp(preroute_severity - 0.84f, 0.0f, 0.20f);
+	    float baseline_via_scale
+	        = 1.05f + 0.10f * sparse_bonus + 0.18f * calm_bonus - 0.25f * severe_penalty;
+	    baseline_via_scale = std::clamp(baseline_via_scale, 1.0f, 1.35f);
+	    grouter_->fastroute_->setViaCostScale(baseline_via_scale);
+	    logger_->info(GNR,
+	                  6080,
+	                  "NEWGR baseline via bias: via scale {:.2f} (severity {:.2f}, "
+	                  "nets/tile {:.2f}).",
+	                  baseline_via_scale,
+	                  preroute_severity,
+	                  nets_per_tile);
+	  }
 
-  if (trimmed_iters > 0) {
-    const bool calm_rudy = !normalized_rudy.empty()
-                           && preroute_severity < 0.66f
-                           && rudy_stats.p80 < 0.90f;
+	  if (trimmed_iters > 0) {
+	    const bool calm_rudy = !normalized_rudy.empty()
+	                           && preroute_severity < 0.66f
+	                           && rudy_stats.p80 < 0.90f;
     const bool sparse_design = nets_per_tile > 0.0 && nets_per_tile < 2.6;
     if (calm_rudy || sparse_design) {
       const double scale = calm_rudy ? 0.62 : 0.70;
