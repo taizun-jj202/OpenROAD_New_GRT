@@ -1085,7 +1085,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       cap_scale = std::clamp(std::strtof(env, nullptr), 0.90f, 1.05f);
     }
     float m3_scale = 1.00f;
-    float high_scale = 0.70f;
+    float high_scale = 1.00f;
     if (const char* env = std::getenv("NEWGR_SPROUTE_M3_CAP_SCALE"); env != nullptr) {
       m3_scale = std::clamp(std::strtof(env, nullptr), 0.40f, 1.05f);
     }
