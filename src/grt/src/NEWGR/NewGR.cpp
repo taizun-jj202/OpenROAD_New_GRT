@@ -2290,18 +2290,25 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  : static_cast<double>(baseline.metrics.wirelength_dbu);
   const double baseline_wirelength_budget = kRuntimeWirelengthBudget + 650.0;
   const long baseline_via_budget = kRuntimeViaBudget + 220;
+  // NEWGR's internal via metric counts only guide layer-changes, while the
+  // detailed-router-reported vias also include pin-access and local detours.
+  // Use a small empirical offset to better predict DR via pressure.
+  constexpr long kEstimatedDrViaOffset = 29000;
+  const long baseline_estimated_dr_vias
+      = baseline.metrics.via_count + kEstimatedDrViaOffset;
   const bool baseline_good_enough
       = baseline.metrics.overflow == 0
         && baseline_wl <= baseline_wirelength_budget
-        && baseline.metrics.via_count <= baseline_via_budget
+        && baseline_estimated_dr_vias <= baseline_via_budget
         && baseline.metrics.max_utilization < 0.95f;
   if (baseline_good_enough) {
     logger_->info(
         GNR,
         6070,
-        "NEWGR baseline accepted: wirelength {:.0f} um, vias {}, max util {:.2f}.",
+        "NEWGR baseline accepted: wirelength {:.0f} um, vias {} (est DR {}), max util {:.2f}.",
         baseline_wl,
         baseline.metrics.via_count,
+        baseline_estimated_dr_vias,
         baseline.metrics.max_utilization);
     restore_snapshot(snapshot);
     return std::move(baseline.routes);
@@ -2309,15 +2316,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   const bool baseline_practical_accept
       = baseline.metrics.max_utilization < 0.72f
-        && baseline.metrics.overflow <= 9000
-        && baseline.metrics.via_count <= (baseline_via_budget + 10000);
+        && baseline.metrics.overflow == 0
+        && baseline_wl <= (baseline_wirelength_budget + 25000.0)
+        && baseline_estimated_dr_vias <= (baseline_via_budget + 1500);
   if (baseline_practical_accept) {
     logger_->info(GNR,
                   6071,
-                  "NEWGR baseline practical-accept: wirelength {:.0f} um, vias {}, "
-                  "overflow {}, max util {:.2f}.",
+                  "NEWGR baseline practical-accept: wirelength {:.0f} um, vias {} "
+                  "(est DR {}), overflow {}, max util {:.2f}.",
                   baseline_wl,
                   baseline.metrics.via_count,
+                  baseline_estimated_dr_vias,
                   baseline.metrics.overflow,
                   baseline.metrics.max_utilization);
     restore_snapshot(snapshot);
@@ -2787,7 +2796,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
 	  float wl_via_scale = 1.0f;
-	  const long via_over_budget = baseline.metrics.via_count - kRuntimeViaBudget;
+	  const long via_over_budget
+	      = baseline_estimated_dr_vias - kRuntimeViaBudget;
 	  const bool via_pressure = !force_routability && via_over_budget > 900;
 	  const bool clean_wl_focus
 	      = !force_routability && baseline.metrics.overflow == 0
