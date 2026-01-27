@@ -2812,14 +2812,29 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	    if (light_congestion) {
 	      base_via_scale += via_pressure ? 0.02f : 0.08f;
 	    }
-	    const float wl_via_min = via_pressure ? 1.08f : 1.00f;
-	    const float wl_via_max = via_pressure ? 1.65f : (clean_wl_focus ? 1.20f : 1.35f);
+	    const float wl_via_min = via_pressure ? 1.12f : 1.00f;
+	    const float wl_via_max = via_pressure ? 2.45f : (clean_wl_focus ? 1.25f : 1.45f);
 	    wl_via_scale = std::clamp(base_via_scale, wl_via_min, wl_via_max);
 	  } else {
 	    const float base_via_scale
 	        = 1.0f + 0.12f * congestion_severity + 0.08f * hotspot_bias;
 	    wl_via_scale = std::clamp(base_via_scale, 1.0f, 1.20f);
 	  }
+  // If we're already above the via budget but routability is clean, keep the
+  // via penalty close to the (possibly higher) baseline bias so we can reduce
+  // detailed-router via insertion without reintroducing overflow.
+  if (!force_routability && via_pressure && baseline.metrics.overflow == 0
+      && baseline.metrics.max_utilization < 0.90f) {
+    const float floor_from_snapshot
+        = std::clamp(snapshot.via_cost_scale * 0.90f, 1.20f, 2.45f);
+    wl_via_scale = std::clamp(std::max(wl_via_scale, floor_from_snapshot),
+                              1.0f,
+                              2.45f);
+  }
+  const float via_scale_cap = force_routability ? 1.32f : 2.45f;
+  const auto clamp_via_scale = [&](float scale) {
+    return std::clamp(scale, 1.0f, via_scale_cap);
+  };
   const auto apply_wl_via_scale = [this, wl_via_scale]() {
     if (grouter_->fastroute_ != nullptr) {
       grouter_->fastroute_->setViaCostScale(wl_via_scale);
@@ -3054,7 +3069,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = std::clamp(wl_greedy_critical - 0.5f, 3.2f, 8.5f);
     const int feather_seed = snapshot.seed + 977;
     const float feather_via_scale
-        = std::clamp(wl_via_scale * 0.88f, 0.36f, 0.92f);
+        = clamp_via_scale(wl_via_scale * (via_pressure ? 1.18f : 1.08f));
     const int feather_top_k = std::max(
         1, std::min(2, max_routing_layer - min_routing_layer + 1));
     const float feather_top_threshold
@@ -3157,8 +3172,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   if (baseline.metrics.overflow == 0 && light_congestion) {
-    const float via_focus_scale = std::clamp(
-        wl_via_scale * (relaxed_utilization ? 0.70f : 0.78f), 0.38f, 0.86f);
+    const float via_focus_scale = clamp_via_scale(
+        wl_via_scale * (relaxed_utilization ? 1.22f : 1.15f));
     const float via_focus_perturb = std::clamp(
         wl_greedy_perturb * 0.70f + 0.01f, 0.0f, 0.12f);
     const float via_focus_critical = std::clamp(
@@ -3390,8 +3405,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                         * 0.5f),
                      0.0f,
                      0.08f);
-    const float leanlite_via_scale = std::clamp(
-        wl_via_scale * (0.88f - leanlite_util_relief), 0.44f, 0.96f);
+    const float leanlite_via_scale = clamp_via_scale(
+        wl_via_scale * (1.02f + leanlite_util_relief));
     const float leanlite_min_base
         = std::clamp(0.94f + 0.02f * (0.60f - congestion_severity),
                      0.92f,
@@ -3845,10 +3860,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       scenario_defs.push_back(wl_openlane);
     }
 
-    const float shortcut_via_scale = std::clamp(
-        wl_via_scale * (0.58f + 0.16f * (0.70f - congestion_severity)),
-        0.32f,
-        0.80f);
+    const float shortcut_via_scale
+        = clamp_via_scale(wl_via_scale * (via_pressure ? 1.14f : 1.06f));
     const float shortcut_perturb = std::clamp(
         0.008f + 0.10f * (0.65f - congestion_severity), 0.0f, 0.10f);
     const float shortcut_critical = std::clamp(
@@ -3963,10 +3976,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const float skim_critical = std::clamp(
         4.5f + 2.0f * (0.60f - congestion_severity), 3.8f, 9.0f);
     const int skim_seed = snapshot.seed + 569;
-    const float skim_via_scale = std::clamp(
-        wl_via_scale * (0.76f + 0.16f * (0.65f - congestion_severity)),
-        0.40f,
-        0.88f);
+    const float skim_via_scale
+        = clamp_via_scale(wl_via_scale * (via_pressure ? 1.10f : 1.04f));
     const float skim_cool_threshold = std::clamp(
         0.56f + 0.10f * (0.60f - congestion_severity), 0.48f, 0.70f);
     const float skim_base_boost
@@ -4073,7 +4084,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         4.8f + 2.0f * (0.60f - congestion_severity), 4.0f, 9.0f);
     const int direct_top_seed = snapshot.seed + 887;
     const float direct_top_via_scale
-        = std::clamp(wl_via_scale * 0.72f, 0.38f, 0.82f);
+        = clamp_via_scale(wl_via_scale * (via_pressure ? 1.12f : 1.05f));
     const int direct_top_k = std::max(
         1, std::min(2, max_routing_layer - min_routing_layer + 1));
     const float direct_top_threshold
@@ -4912,10 +4923,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const float squeeze_critical = std::clamp(
         wl_critical_pct + 0.8f * (0.60f - congestion_severity), 4.0f, 11.0f);
     const int squeeze_seed = snapshot.seed + 709;
-    const float squeeze_via_scale = std::clamp(
-        wl_via_scale * (0.82f + 0.10f * (0.65f - congestion_severity)),
-        0.52f,
-        0.98f);
+    const float squeeze_via_scale
+        = clamp_via_scale(wl_via_scale * (via_pressure ? 1.10f : 1.03f));
     const float squeeze_cool_threshold = std::clamp(
         0.55f + 0.08f * (0.65f - congestion_severity), 0.50f, 0.70f);
     const float squeeze_base_boost
@@ -6137,16 +6146,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 final_result.metrics.overflow,
                 final_result.metrics.max_utilization);
 
-  const bool dense_hotspots = hotspots.size() > 4;
-  const bool heavy_congestion = congestion_severity > 0.75f;
-  const bool near_overflow = final_result.metrics.max_utilization > 0.92;
   const bool overflowing = final_result.metrics.overflow > 0;
-  const bool severe_hotspots
-      = congestion_severity > 0.68f && hotspots.size() > 2;
-  const bool should_patch
-      = overflowing || near_overflow
-        || (heavy_congestion && dense_hotspots)
-        || (severe_hotspots && final_result.metrics.max_utilization > 0.88);
+  // Hotspot patching expands the guide set (and can increase layer switching).
+  // Keep it as a strict routability fallback to avoid inflating via count on
+  // already-overflow-free solutions.
+  const bool should_patch = overflowing;
 
   if (should_patch) {
     PatchSummary patch_summary
