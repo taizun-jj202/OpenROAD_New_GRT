@@ -611,17 +611,24 @@ void FastRouteCore::assignEdge(const int netID,
             ? static_cast<double>(layer_assign_iter_snapshot_)
               / layer_assign_total_iters_snapshot_
             : 1.0;
+  // NEWGR: runtime-tuned flows may use very few overflow iterations, which can
+  // cause layer assignment to under-penalize vias early and inflate DR via
+  // count. Apply a small baseline via penalty when the iteration budget is
+  // trimmed to keep layer switching in check.
+  const bool runtime_trimmed = layer_assign_total_iters_snapshot_ <= 12;
   constexpr double early_phase_limit = 0.2;
   constexpr double cleanup_phase_limit = 0.7;
-  const double via_scale
-      = std::clamp(static_cast<double>(via_cost_scale_), 0.35, 2.75);
+  double via_scale = std::clamp(static_cast<double>(via_cost_scale_), 0.35, 2.75);
+  if (runtime_trimmed) {
+    via_scale = std::max(via_scale, 0.90);
+  }
 
   auto iterationPenaltyScale = [&](int layer_delta) -> double {
     if (layer_delta == 0) {
       return 0.0;
     }
     if (iter_ratio <= early_phase_limit) {
-      return 0.0;
+      return runtime_trimmed ? 0.45 : 0.0;
     }
     if (iter_ratio >= cleanup_phase_limit) {
       const double late = (iter_ratio - cleanup_phase_limit)
