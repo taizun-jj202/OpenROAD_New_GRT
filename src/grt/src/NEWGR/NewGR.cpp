@@ -2114,9 +2114,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // This typically reduces detailed-router via insertion at small WL cost.
   if (grouter_->fastroute_ != nullptr && preroute_severity <= 0.82f
       && rudy_stats.p80 < 0.92f) {
+    const float target_via_scale = preroute_severity < 0.70f ? 1.80f : 1.60f;
     const float tuned_via_scale
-        = std::max(snapshot.via_cost_scale, preroute_severity < 0.65f ? 1.35f
-                                                                      : 1.25f);
+        = std::max(snapshot.via_cost_scale, target_via_scale);
     grouter_->fastroute_->setViaCostScale(tuned_via_scale);
   }
 
@@ -2281,7 +2281,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const bool baseline_practical_accept
       = baseline.metrics.max_utilization < 0.72f
         && baseline.metrics.overflow <= 9000
-        && baseline_wl <= (baseline_wirelength_budget + 50000.0);
+        && baseline.metrics.via_count <= (baseline_via_budget + 10000);
   if (baseline_practical_accept) {
     logger_->info(GNR,
                   6071,
