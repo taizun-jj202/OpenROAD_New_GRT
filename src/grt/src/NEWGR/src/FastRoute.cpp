@@ -1326,7 +1326,9 @@ NetRouteMap FastRouteCore::run()
   const int soft_ndr_overflow_th = 10000;
 
   // call FLUTE to generate RSMT and break the nets into segments (2-pin nets)
-  via_cost_ = scaledViaCost(0);
+  // Enable a non-zero via penalty early so 2D pattern/maze phases can avoid
+  // unnecessary bends when we are already meeting overflow targets.
+  via_cost_ = std::max(1, scaledViaCost(1));
   gen_brk_RSMT(false, false, false, false, noADJ);
   if (logger_->debugCheck(GNR, "grtSteps", 1)) {
     logger_->report("After RSMT");
@@ -1694,7 +1696,7 @@ NetRouteMap FastRouteCore::run()
     }
 
     if (past_cong >= last_cong) {
-      VIA = 0;
+      VIA = mild_congestion ? std::max(1, VIA) : 0;
     }
 
     if (past_cong < bmfl) {

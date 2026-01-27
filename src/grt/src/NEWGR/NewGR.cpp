@@ -2708,14 +2708,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   if (!force_routability) {
     float base_via_scale = 0.60f + 0.25f * congestion_severity
                            - 0.12f * hotspot_bias;
+    if (via_pressure) {
+      // When we're already above the runtime via budget, lean harder on
+      // via-minimization even if it slightly increases wirelength.
+      base_via_scale += std::clamp(
+          0.55f + 0.00006f * static_cast<float>(via_over_budget), 0.55f, 0.85f);
+    }
     if (relaxed_utilization) {
       base_via_scale -= via_pressure ? 0.02f : 0.05f;
     }
     if (light_congestion) {
       base_via_scale -= via_pressure ? 0.02f : 0.06f;
     }
-    wl_via_scale = std::clamp(
-        base_via_scale, clean_wl_focus ? 0.50f : 0.52f, 1.0f);
+    const float wl_via_min = via_pressure ? 1.02f
+                                          : (clean_wl_focus ? 0.50f : 0.52f);
+    const float wl_via_max = via_pressure ? 1.35f : 1.0f;
+    wl_via_scale = std::clamp(base_via_scale, wl_via_min, wl_via_max);
     if (!via_pressure && baseline.metrics.overflow == 0 && light_congestion
         && hotspot_bias < 0.22f) {
       const float util_relief = std::clamp(
@@ -2738,7 +2746,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   };
   const float wl_pure_via_scale
-      = clean_wl_focus
+      = (clean_wl_focus && !via_pressure)
             ? std::clamp(wl_via_scale * 0.72f, 0.32f, wl_via_scale)
             : wl_via_scale;
   const auto apply_wl_pure_via_scale = [this, wl_pure_via_scale]() {
@@ -2762,17 +2770,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           std::max(0.98f + 0.30f * std::max(0.0f, 0.70f - congestion_severity)
                        - 0.10f * hotspot_bias,
                    via_pressure
-                       ? (1.08f
+                       ? (1.12f
                           + std::min(
-                              0.18f,
-                              0.00004f
+                              0.26f,
+                              0.00006f
                                   * static_cast<float>(
                                       std::max<long>(0, via_over_budget))))
                        : 0.0f));
-  const float via_trim_scale = std::clamp(
-      via_trim_scale_base,
-      force_routability ? 0.95f : 1.02f,
-      force_routability ? 1.32f : 1.28f);
+  const float via_trim_upper
+      = force_routability ? 1.32f : (via_pressure ? 1.55f : 1.35f);
+  const float via_trim_scale = std::clamp(via_trim_scale_base,
+                                          force_routability ? 0.95f : 1.02f,
+                                          via_trim_upper);
   const auto apply_via_trim_scale = [this, via_trim_scale]() {
     if (grouter_->fastroute_ != nullptr) {
       grouter_->fastroute_->setViaCostScale(via_trim_scale);
@@ -5840,6 +5849,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = std::abs(via_gap)
           / std::max<double>(
               std::min(lhs.metrics.via_count, rhs.metrics.via_count), 1.0);
+
+    // If we're over the runtime via budget, allow a small WL trade for a
+    // meaningful via reduction (keeps DR via count in check).
+    if (!wl_first && via_pressure && wl_rel < 0.0038) {  // ~0.38%
+      const bool util_safe
+          = lhs.metrics.max_utilization
+            <= rhs.metrics.max_utilization + 0.03;
+      const bool via_meaningful
+          = via_rel > 0.0040 || std::abs(via_gap) > 600.0;
+      if (via_meaningful && util_safe) {
+        return via_gap < 0.0;
+      }
+    }
 
     // Prefer shorter wirelength while allowing a modest utilization cushion.
     if (wl_a != wl_b && wl_rel > wl_primary) {
