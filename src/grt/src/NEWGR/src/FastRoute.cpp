@@ -1868,14 +1868,19 @@ NetRouteMap FastRouteCore::run()
     // with a higher bend penalty to reduce via count with minimal runtime.
     bend_cleanup_active_ = true;
     bend_cleanup_overflow_limit_ = 0;
-    bend_cleanup_min_routelen_ = speed_mode ? 12 : 10;
-    bend_cleanup_bend_threshold_ = speed_mode ? 5 : 4;
-    bend_cleanup_detour_threshold_ = 0;
-    const int cleanup_enlarge = std::max(8, std::min(enlarge_, x_grid_ / 28));
+    // Make the cleanup a bit more aggressive so it can actually reduce total
+    // layer changes (vias) without waiting for extremely "wiggly" routes.
+    bend_cleanup_min_routelen_ = speed_mode ? 10 : 8;
+    bend_cleanup_bend_threshold_ = speed_mode ? 4 : 3;
+    // Only revisit true detours; L-shapes with no detour already have the
+    // minimum number of bends.
+    bend_cleanup_detour_threshold_ = 2;
+    const int cleanup_enlarge
+        = std::max(10, std::min(enlarge_ + 2, x_grid_ / 24));
     const int cleanup_mazeedge_threshold = speed_mode ? 10 : 8;
     const int cleanup_L = 1;
-    const int cleanup_via = speed_mode ? 6 : 8;
-    const int cleanup_passes = speed_mode ? 2 : 3;
+    const int cleanup_via = speed_mode ? 8 : 10;
+    const int cleanup_passes = speed_mode ? 1 : 2;
     const float saved_slack_th = slack_th;
     copyRS();
     for (int pass = 0; pass < cleanup_passes; pass++) {

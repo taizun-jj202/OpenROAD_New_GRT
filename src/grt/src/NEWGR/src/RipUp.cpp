@@ -274,8 +274,12 @@ bool FastRouteCore::newRipupCheck(const TreeEdge* treeedge,
         }
         prev_dir = dir;
       }
+      // Prefer reducing actual bend count (via drivers) over a strict
+      // bend-density threshold; long detours with many bends are still worth
+      // revisiting when the 2D solution is overflow-clean.
+      const bool dense_bends = bend_count * 5 >= routeLen;
       if (bend_count >= bend_cleanup_bend_threshold_
-          && bend_count * 3 >= routeLen) {
+          && (dense_bends || bend_count >= bend_cleanup_bend_threshold_ + 3)) {
         needRipup = true;
       }
     }
