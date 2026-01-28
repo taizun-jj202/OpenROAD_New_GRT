@@ -1943,36 +1943,38 @@ NetRouteMap FastRouteCore::run()
   costheight_ = 3;
   via_cost_ = std::max(1, scaledViaCost(1));
 
-	  if (past_cong == 0) {
-	    const int maze_enlarge = mild_congestion ? std::min(enlarge_, relax_cap)
-	                                             : enlarge_;
-	    double maze3d_fraction = 0.9;
-	    const bool clean_2d = (maxOverflow == 0 && total_overflow_ == 0);
-	    bool run_short_3d_refine = true;
-	    if (mild_congestion) {
-	      // SPRoute-style runtime tuning: when the 2D solution is already clean,
-	      // only refine a subset of nets in 3D to reduce runtime.
-	      maze3d_fraction = speed_mode ? 0.22 : 0.38;
-	      if (clean_2d) {
-	        maze3d_fraction = speed_mode ? 0.12 : 0.18;
-	        // If we're already in speed-mode with a clean 2D solution, skip the
-	        // extra 3D short-edge refinement (layerAssignment already produced a
-	        // valid 3D solution).
-	        if (speed_mode) {
-	          run_short_3d_refine = false;
-	        }
-	        // When congestion is already clean, 3D short-edge refinement tends
-	        // to add extra layer changes for marginal congestion benefit; skip
-	        // it to reduce via count and keep runtime low.
-	        run_short_3d_refine = false;
-	      } else if (nets_per_tile > 0.0 && nets_per_tile < 1.6) {
-	        maze3d_fraction = std::min(maze3d_fraction, 0.30);
-	      }
-	    }
-    if (!overflow_clean) {
+  if (past_cong == 0) {
+    const int maze_enlarge
+        = mild_congestion ? std::min(enlarge_, relax_cap) : enlarge_;
+    double maze3d_fraction = 0.9;
+    const bool clean_2d = overflow_clean_2d;
+
+    // Check whether layer assignment already produced a 3D overflow-clean
+    // solution. When 3D is clean, additional 3D refinement typically increases
+    // layer changes (vias) for marginal benefit.
+    getOverflow3D();
+    const bool clean_3d = (total_overflow_ == 0);
+
+    bool run_short_3d_refine = true;
+    if (mild_congestion) {
+      // SPRoute-style runtime tuning: when the 2D solution is already clean,
+      // only refine a subset of nets in 3D to reduce runtime.
+      maze3d_fraction = speed_mode ? 0.22 : 0.38;
+      if (clean_2d) {
+        maze3d_fraction = speed_mode ? 0.12 : 0.18;
+        // When congestion is already clean, 3D short-edge refinement tends to
+        // add extra layer changes for marginal congestion benefit; skip it to
+        // reduce via count and keep runtime low.
+        run_short_3d_refine = false;
+      } else if (nets_per_tile > 0.0 && nets_per_tile < 1.6) {
+        maze3d_fraction = std::min(maze3d_fraction, 0.30);
+      }
+    }
+
+    if (!clean_3d) {
       mazeRouteMSMDOrder3D(maze_enlarge, 0, long_edge_len, maze3d_fraction);
     }
-    if (run_short_3d_refine) {
+    if (!clean_3d && run_short_3d_refine) {
       mazeRouteMSMDOrder3D(maze_enlarge, 0, short_edge_len, maze3d_fraction);
     }
   }
