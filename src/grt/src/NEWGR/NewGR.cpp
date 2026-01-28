@@ -969,7 +969,7 @@ PatchSummary applyHotspotPatches(NetRouteMap& routes,
     prioritized.resize(std::min<size_t>(8, capped));
   }
 
-  const int per_net_budget = 2;
+  const int per_net_budget = 1;
 
   for (auto& [db_net, segments] : routes) {
     std::unordered_set<GSegment, GSegmentHash> seen(segments.begin(),
@@ -1034,7 +1034,9 @@ PatchSummary applyHotspotPatches(NetRouteMap& routes,
 
       add_segment(x0, y0, target_layer, x1, y0, target_layer);
       add_segment(x0, y0, target_layer, x0, y1, target_layer);
-      if (alt_layer != target_layer) {
+      // Avoid adding extra layer-changes unless the hotspot is severe; these
+      // patches are a frequent source of DR via inflation.
+      if (alt_layer != target_layer && hotspot.severity >= 1.20f) {
         add_segment(x0, y0, target_layer, x0, y0, alt_layer);
         add_segment(x0, y0, alt_layer, x1, y0, alt_layer);
       }
@@ -2375,11 +2377,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return std::move(baseline.routes);
   }
 
-  // Avoid early-exiting on overflowing routes when DR-via pressure is already
-  // high; use the scenario sweep to resolve overflow instead of relying on
-  // guide patching (which can increase layer switching downstream).
-  constexpr long kPracticalViaSlack = 3500;
-  constexpr int kPracticalOverflowCap = 1800;
+  // Prefer keeping the runtime low for mild overflow by applying lightweight
+  // guide patching; avoid forcing the full scenario sweep unless needed.
+  constexpr long kPracticalViaSlack = 12000;
+  constexpr int kPracticalOverflowCap = 9000;
   const bool baseline_practical_accept
       = baseline.metrics.max_utilization < 0.72f
         && baseline.metrics.overflow <= kPracticalOverflowCap
