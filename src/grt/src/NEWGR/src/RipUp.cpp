@@ -252,7 +252,7 @@ bool FastRouteCore::newRipupCheck(const TreeEdge* treeedge,
     // Only try to clean up detour-heavy maze routes; these create many turns
     // which later translate into extra layer changes (vias).
     const int manhattan = treeedge->len;
-    const int detour = routeLen - manhattan;
+    const int detour = std::max(0, routeLen - manhattan);
     if (routeLen >= bend_cleanup_min_routelen_
         && detour >= bend_cleanup_detour_threshold_
         && net->getDbNet()->getNonDefaultRule() == nullptr) {
@@ -271,12 +271,12 @@ bool FastRouteCore::newRipupCheck(const TreeEdge* treeedge,
         }
         if (prev_dir != 0 && dir != prev_dir) {
           bend_count++;
-          if (bend_count >= bend_cleanup_bend_threshold_) {
-            needRipup = true;
-            break;
-          }
         }
         prev_dir = dir;
+      }
+      if (bend_count >= bend_cleanup_bend_threshold_
+          && bend_count * 3 >= routeLen) {
+        needRipup = true;
       }
     }
   }

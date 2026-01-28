@@ -1868,12 +1868,16 @@ NetRouteMap FastRouteCore::run()
     // with a higher bend penalty to reduce via count with minimal runtime.
     bend_cleanup_active_ = true;
     bend_cleanup_overflow_limit_ = 0;
-    const int cleanup_enlarge = std::max(6, std::min(enlarge_, x_grid_ / 40));
-    const int cleanup_mazeedge_threshold = 12;
+    bend_cleanup_min_routelen_ = speed_mode ? 12 : 10;
+    bend_cleanup_bend_threshold_ = speed_mode ? 5 : 4;
+    bend_cleanup_detour_threshold_ = 0;
+    const int cleanup_enlarge = std::max(8, std::min(enlarge_, x_grid_ / 28));
+    const int cleanup_mazeedge_threshold = speed_mode ? 10 : 8;
     const int cleanup_L = 1;
     const int cleanup_via = speed_mode ? 6 : 8;
-    const int cleanup_passes = speed_mode ? 1 : 2;
+    const int cleanup_passes = speed_mode ? 2 : 3;
     const float saved_slack_th = slack_th;
+    copyRS();
     for (int pass = 0; pass < cleanup_passes; pass++) {
       auto cleanup_cost = CostParams(logistic_coef, costheight_, slope);
       float cleanup_slack = saved_slack_th;
@@ -1888,6 +1892,8 @@ NetRouteMap FastRouteCore::run()
                             cleanup_slack);
       getOverflow2Dmaze(&maxOverflow, &tUsage);
       if (total_overflow_ != 0) {
+        copyBR();
+        getOverflow2Dmaze(&maxOverflow, &tUsage);
         break;
       }
     }
