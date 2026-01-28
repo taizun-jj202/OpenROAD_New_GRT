@@ -1583,42 +1583,69 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
   trimmed_iters = grouter_->congestion_iterations_;
 
-	  double nets_per_tile = 0.0;
-	  if (grouter_->grid_ != nullptr) {
-	    const int grid_tiles
-	        = grouter_->grid_->getXGrids() * grouter_->grid_->getYGrids();
-	    if (grid_tiles > 0) {
-	      nets_per_tile
-	          = static_cast<double>(nets.size()) / static_cast<double>(grid_tiles);
-	    }
-	  }
-	  // Baseline bias: once wirelength is stable, modestly penalize vias to
-	  // reduce detailed-router via insertion. Keep the bias near 1.0 when
-	  // congestion severity is high to preserve routability.
-	  if (grouter_->fastroute_ != nullptr) {
-	    const float sparse_bonus
-	        = std::clamp(static_cast<float>(2.0 - nets_per_tile), 0.0f, 1.0f);
-	    const float calm_bonus
-	        = std::clamp(0.80f - preroute_severity, 0.0f, 0.35f);
-	    const float severe_penalty
-	        = std::clamp(preroute_severity - 0.84f, 0.0f, 0.20f);
-	    float baseline_via_scale
-	        = 1.05f + 0.10f * sparse_bonus + 0.18f * calm_bonus - 0.25f * severe_penalty;
-	    baseline_via_scale = std::clamp(baseline_via_scale, 1.0f, 1.35f);
-	    grouter_->fastroute_->setViaCostScale(baseline_via_scale);
-	    logger_->info(GNR,
-	                  6080,
-	                  "NEWGR baseline via bias: via scale {:.2f} (severity {:.2f}, "
-	                  "nets/tile {:.2f}).",
-	                  baseline_via_scale,
-	                  preroute_severity,
-	                  nets_per_tile);
-	  }
+  double nets_per_tile = 0.0;
+  if (grouter_->grid_ != nullptr) {
+    const int grid_tiles
+        = grouter_->grid_->getXGrids() * grouter_->grid_->getYGrids();
+    if (grid_tiles > 0) {
+      nets_per_tile
+          = static_cast<double>(nets.size()) / static_cast<double>(grid_tiles);
+    }
+  }
 
-	  if (trimmed_iters > 0) {
-	    const bool calm_rudy = !normalized_rudy.empty()
-	                           && preroute_severity < 0.66f
-	                           && rudy_stats.p80 < 0.90f;
+  auto apply_baseline_via_bias = [&](int congestion_iters,
+                                     const char* context) {
+    // Baseline bias: modestly penalize vias to reduce detailed-router via
+    // insertion. If we aggressively cap overflow iterations, bump the penalty
+    // so layer assignment/3D refinement avoid unnecessary layer hopping.
+    if (grouter_->fastroute_ == nullptr) {
+      return;
+    }
+    const float sparse_bonus
+        = std::clamp(static_cast<float>(2.0 - nets_per_tile), 0.0f, 1.0f);
+    const float calm_bonus = std::clamp(0.82f - preroute_severity, 0.0f, 0.40f);
+    const float severe_penalty
+        = std::clamp(preroute_severity - 0.86f, 0.0f, 0.25f);
+
+    float baseline_via_scale = 1.15f + 0.16f * sparse_bonus
+                               + 0.22f * calm_bonus
+                               - 0.40f * severe_penalty;
+    if (congestion_iters > 0 && congestion_iters <= 4) {
+      baseline_via_scale = std::max(baseline_via_scale, 1.35f);
+    }
+    baseline_via_scale = std::clamp(baseline_via_scale, 1.0f, 1.65f);
+    baseline_via_scale
+        = std::max(baseline_via_scale, grouter_->fastroute_->getViaCostScale());
+    grouter_->fastroute_->setViaCostScale(baseline_via_scale);
+    logger_->info(
+        GNR,
+        6080,
+        "NEWGR via bias{}: via scale {:.2f} (severity {:.2f}, nets/tile {:.2f}, "
+        "iters {}).",
+        context,
+        baseline_via_scale,
+        preroute_severity,
+        nets_per_tile,
+        congestion_iters);
+  };
+
+  auto restore_fastroute_knobs = [&](const RouterSnapshot& snapshot) {
+    // GlobalRouter::initFastRoute() clears the fastroute core; re-apply NEWGR's
+    // tuned knobs after re-initialization without touching the outer router
+    // state (e.g., congestion iteration caps).
+    if (grouter_->fastroute_ == nullptr) {
+      return;
+    }
+    grouter_->fastroute_->setCriticalNetsPercentage(snapshot.critical_percentage);
+    grouter_->fastroute_->setViaCostScale(snapshot.via_cost_scale);
+  };
+
+  apply_baseline_via_bias(trimmed_iters, " (pre-skim)");
+
+  if (trimmed_iters > 0) {
+    const bool calm_rudy = !normalized_rudy.empty()
+                           && preroute_severity < 0.66f
+                           && rudy_stats.p80 < 0.90f;
     const bool sparse_design = nets_per_tile > 0.0 && nets_per_tile < 2.6;
     if (calm_rudy || sparse_design) {
       const double scale = calm_rudy ? 0.62 : 0.70;
@@ -2257,6 +2284,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   if (runtime_skim_rejected) {
     nets = grouter_->initFastRoute(min_routing_layer, max_routing_layer);
+    restore_fastroute_knobs(snapshot);
+    apply_baseline_via_bias(trimmed_iters, " (post-skim)");
   }
 
   if (trimmed_iters > 0 && preroute_severity < 0.82f
@@ -2271,6 +2300,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (capped_iters < trimmed_iters) {
       trimmed_iters = capped_iters;
       grouter_->setCongestionIterations(trimmed_iters);
+      apply_baseline_via_bias(trimmed_iters, " (runtime-cap)");
       logger_->info(GNR,
                     6058,
                     "NEWGR runtime cap: limiting overflow iterations to {} "

@@ -622,6 +622,7 @@ void FastRouteCore::assignEdge(const int netID,
   if (runtime_trimmed) {
     via_scale = std::max(via_scale, 0.90);
   }
+  const int switch_penalty = runtime_trimmed ? 2 : 1;
 
   auto iterationPenaltyScale = [&](int layer_delta) -> double {
     if (layer_delta == 0) {
@@ -855,7 +856,10 @@ void FastRouteCore::assignEdge(const int netID,
           }
 
           const int layer_delta = abs(i - l);
-          const int base_via_cost = layer_delta * (k == 0 ? 2 : 3);
+          const int base_via_cost = layer_delta == 0
+                                        ? 0
+                                        : layer_delta * (k == 0 ? 2 : 3)
+                                              + switch_penalty;
           const double phase_scale = iterationPenaltyScale(layer_delta);
           const double scaled_base_via
               = static_cast<double>(base_via_cost) * via_scale;
@@ -900,7 +904,8 @@ void FastRouteCore::assignEdge(const int netID,
           via_resistance_cost = getViaResistance(l, i);
         }
         const int layer_delta = abs(i - l);
-        const int base_via_cost = layer_delta;
+        const int base_via_cost
+            = layer_delta == 0 ? 0 : layer_delta + switch_penalty;
         const double phase_scale = iterationPenaltyScale(layer_delta);
         const double scaled_base_via
             = static_cast<double>(base_via_cost) * via_scale;
