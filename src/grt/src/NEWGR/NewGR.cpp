@@ -1657,6 +1657,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     baseline_via_scale
         = std::max(baseline_via_scale, grouter_->fastroute_->getViaCostScale());
     grouter_->fastroute_->setViaCostScale(baseline_via_scale);
+    int effective_iters = congestion_iters;
+    if (moderate_congestion_band && density_friendly && baseline_via_scale >= 2.45f
+        && original_congestion_iters > 0 && congestion_iters > 0
+        && congestion_iters < original_congestion_iters) {
+      // Strong via penalties can slow overflow convergence; keep more
+      // congestion iterations so we don't accept a high-overflow solution
+      // that the detailed router resolves with extra detours/vias.
+      const int boosted_iters = std::max(congestion_iters,
+                                         std::max(20, original_congestion_iters - 12));
+      const int clamped_iters
+          = std::clamp(boosted_iters, congestion_iters, original_congestion_iters);
+      if (clamped_iters > congestion_iters) {
+        grouter_->setCongestionIterations(clamped_iters);
+        effective_iters = clamped_iters;
+      }
+    }
     logger_->info(
         GNR,
         6080,
@@ -1666,7 +1682,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         baseline_via_scale,
         preroute_severity,
         nets_per_tile,
-        congestion_iters);
+        effective_iters);
   };
 
   auto restore_fastroute_knobs = [&](const RouterSnapshot& snapshot) {
@@ -1681,6 +1697,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   };
 
   apply_baseline_via_bias(trimmed_iters, " (pre-skim)");
+  trimmed_iters = grouter_->congestion_iterations_;
 
     if (trimmed_iters > 0) {
       const bool calm_rudy = !normalized_rudy.empty()
@@ -2409,12 +2426,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   // Prefer keeping the runtime low for mild overflow by applying lightweight
   // guide patching; avoid forcing the full scenario sweep unless needed.
-  constexpr long kPracticalViaSlack = 12000;
-  constexpr int kPracticalOverflowCap = 9000;
+  constexpr long kPracticalViaSlack = 3500;
+  constexpr int kPracticalOverflowCap = 1200;
+  const bool practical_overflow_ok
+      = baseline.metrics.overflow > 0
+        && baseline.metrics.overflow <= kPracticalOverflowCap
+        && preroute_severity < 0.70f
+        && rudy_stats.p80 < 0.90f;
   const bool baseline_practical_accept
       = baseline.metrics.max_utilization < 0.72f
-        && baseline.metrics.overflow <= kPracticalOverflowCap
-        && baseline_estimated_dr_vias <= (baseline_via_budget + kPracticalViaSlack);
+        && baseline_estimated_dr_vias
+               <= (baseline_via_budget + kPracticalViaSlack)
+        && (baseline.metrics.overflow == 0 || practical_overflow_ok);
   if (baseline_practical_accept) {
     NetRouteMap routes = std::move(baseline.routes);
     if (baseline.metrics.overflow > 0 && !hotspots.empty()) {
