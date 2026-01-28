@@ -625,25 +625,42 @@ void FastRouteCore::assignEdge(const int netID,
   // NEWGR: allow slightly higher via scaling under via-pressure flows.
   // Keep an upper clamp to avoid runaway layer-switch penalties.
   double via_scale = std::clamp(static_cast<double>(via_cost_scale_), 0.35, 3.25);
+  // Treat elevated via scaling as a hint that we should keep the layer span
+  // tight (to reduce DR via stacks) when overflow is already resolved.
+  const bool strong_via_pressure
+      = via_scale >= 1.55 || (via_min_focus && via_scale >= 1.40);
   if (runtime_trimmed) {
     via_scale = std::max(via_scale, 0.90);
   }
   if (via_min_focus) {
     via_scale = std::max(via_scale, 1.65);
   }
-  const int switch_penalty = (runtime_trimmed ? 2 : 1) + (via_min_focus ? 1 : 0);
+  if (strong_via_pressure) {
+    via_scale = std::max(via_scale, 1.75);
+  }
+  const int switch_penalty = (runtime_trimmed ? 2 : 1)
+                             + (via_min_focus ? 1 : 0)
+                             + (strong_via_pressure ? 1 : 0);
   // NEWGR: penalize transitions to very high layers to reduce via stacks in
   // detailed routing (each additional routing layer hop implies more vias).
   // Keep the penalty gentle so overflow fixes can still use upper layers.
-  const int high_layer_start = std::max(0, std::min(2, num_layers_ - 1));
+  const int high_layer_start = std::max(
+      0, std::min(strong_via_pressure ? 1 : 2, num_layers_ - 1));
   auto layerHeightPenalty = [&](int from_layer, int to_layer) -> int {
     const int top_layer = std::max(from_layer, to_layer);
     if (top_layer <= high_layer_start) {
       return 0;
     }
     const int delta = top_layer - high_layer_start;
-    const double factor = via_min_focus ? 0.9 : 0.6;
-    return static_cast<int>(std::round(static_cast<double>(delta) * factor));
+    const double base_factor = via_min_focus ? 0.85 : 0.55;
+    const double factor = base_factor + (strong_via_pressure ? 0.35 : 0.0);
+    int weighted_delta = delta;
+    if (strong_via_pressure && delta > 2) {
+      const int extra = delta - 2;
+      weighted_delta += (extra * extra + 1) / 2;
+    }
+    return static_cast<int>(
+        std::round(static_cast<double>(weighted_delta) * factor));
   };
 
   auto iterationPenaltyScale = [&](int layer_delta) -> double {
