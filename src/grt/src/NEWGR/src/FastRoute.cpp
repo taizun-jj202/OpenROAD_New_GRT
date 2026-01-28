@@ -1890,7 +1890,6 @@ NetRouteMap FastRouteCore::run()
     // 2D solution is already overflow-clean, reroute only those detoured edges
     // with a higher bend penalty to reduce via count with minimal runtime.
     const bool via_pressure_cleanup = via_cost_scale_ >= 1.35f;
-    const bool strong_via_pressure = via_cost_scale_ >= 2.45f;
     bend_cleanup_active_ = true;
     bend_cleanup_overflow_limit_ = 0;
     // Make the cleanup a bit more aggressive so it can actually reduce total
@@ -1904,10 +1903,7 @@ NetRouteMap FastRouteCore::run()
         = std::max(10, std::min(enlarge_ + 2, x_grid_ / 24));
     const int cleanup_mazeedge_threshold = speed_mode ? 10 : 8;
     const int cleanup_L = 1;
-    const int cleanup_via
-        = speed_mode ? 8
-                     : (strong_via_pressure ? 16
-                                            : (via_pressure_cleanup ? 12 : 10));
+    const int cleanup_via = speed_mode ? 8 : (via_pressure_cleanup ? 12 : 10);
     const int cleanup_passes = speed_mode ? 1 : 2;
     const float saved_slack_th = slack_th;
     copyRS();
