@@ -632,6 +632,19 @@ void FastRouteCore::assignEdge(const int netID,
     via_scale = std::max(via_scale, 1.65);
   }
   const int switch_penalty = (runtime_trimmed ? 2 : 1) + (via_min_focus ? 1 : 0);
+  // NEWGR: penalize transitions to very high layers to reduce via stacks in
+  // detailed routing (each additional routing layer hop implies more vias).
+  // Keep the penalty gentle so overflow fixes can still use upper layers.
+  const int high_layer_start = std::max(0, std::min(2, num_layers_ - 1));
+  auto layerHeightPenalty = [&](int from_layer, int to_layer) -> int {
+    const int top_layer = std::max(from_layer, to_layer);
+    if (top_layer <= high_layer_start) {
+      return 0;
+    }
+    const int delta = top_layer - high_layer_start;
+    const double factor = via_min_focus ? 0.9 : 0.6;
+    return static_cast<int>(std::round(static_cast<double>(delta) * factor));
+  };
 
   auto iterationPenaltyScale = [&](int layer_delta) -> double {
     if (layer_delta == 0) {
@@ -869,7 +882,8 @@ void FastRouteCore::assignEdge(const int netID,
           const int base_via_cost = layer_delta == 0
                                         ? 0
                                         : layer_delta * (k == 0 ? 2 : 3)
-                                              + switch_penalty;
+                                              + switch_penalty
+                                              + layerHeightPenalty(l, i);
           const double phase_scale = iterationPenaltyScale(layer_delta);
           const double scaled_base_via
               = static_cast<double>(base_via_cost) * via_scale;
@@ -901,7 +915,17 @@ void FastRouteCore::assignEdge(const int netID,
           gridD[l][k + 1] = gridD[l][k] + 2 * BIG_INT;
         } else {
           // Congested case - still include resistance but with higher base cost
-          const int congested_penalty = via_min_focus ? 40 : BIG_INT;
+          int congested_penalty = BIG_INT;
+          if (via_min_focus) {
+            const int deficit
+                = std::max(0, net->getLayerEdgeCost(l) - layer_grid[l][k]);
+            const int base = runtime_trimmed ? 80 : 100;
+            const int slope = runtime_trimmed ? 10 : 12;
+            const int phase = static_cast<int>(std::round(
+                60.0 * std::clamp(iter_ratio, 0.0, 1.0)));
+            congested_penalty
+                = std::min(BIG_INT, base + slope * deficit + phase);
+          }
           int wire_resistance = getLayerResistance(l, tile_size_, net);
           gridD[l][k + 1]
               = gridD[l][k] + congested_penalty + wire_resistance;
@@ -917,7 +941,9 @@ void FastRouteCore::assignEdge(const int netID,
         }
         const int layer_delta = abs(i - l);
         const int base_via_cost
-            = layer_delta == 0 ? 0 : layer_delta + switch_penalty;
+            = layer_delta == 0
+                  ? 0
+                  : layer_delta + switch_penalty + layerHeightPenalty(l, i);
         const double phase_scale = iterationPenaltyScale(layer_delta);
         const double scaled_base_via
             = static_cast<double>(base_via_cost) * via_scale;
@@ -1025,7 +1051,11 @@ void FastRouteCore::assignEdge(const int netID,
           }
 
           const int layer_delta = abs(i - l);
-          const int base_via_cost = layer_delta * (k == routelen ? 2 : 3);
+          const int base_via_cost
+              = layer_delta == 0
+                    ? 0
+                    : layer_delta * (k == routelen ? 2 : 3) + switch_penalty
+                          + layerHeightPenalty(l, i);
           const double phase_scale = iterationPenaltyScale(layer_delta);
           const double scaled_base_via
               = static_cast<double>(base_via_cost) * via_scale;
@@ -1070,7 +1100,10 @@ void FastRouteCore::assignEdge(const int netID,
           via_resistance_cost = getViaResistance(l, i);
         }
         const int layer_delta = abs(i - l);
-        const int base_via_cost = layer_delta;
+        const int base_via_cost = layer_delta == 0
+                                      ? 0
+                                      : layer_delta + switch_penalty
+                                            + layerHeightPenalty(l, i);
         const double phase_scale = iterationPenaltyScale(layer_delta);
         const double scaled_base_via
             = static_cast<double>(base_via_cost) * via_scale;
