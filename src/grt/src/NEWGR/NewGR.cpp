@@ -1634,16 +1634,26 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = std::clamp(preroute_severity - 0.86f, 0.0f, 0.25f);
 
     // NEWGR: push harder on via reduction once runtime is already improved.
-    // A modestly higher baseline bend/layer-switch penalty reduces DR via
-    // insertion on sparse-to-moderate congestion cases without materially
-    // impacting runtime.
-    float baseline_via_scale = 1.45f + 0.35f * sparse_bonus
-                               + 0.35f * calm_bonus
-                               - 0.70f * severe_penalty;
+    // Raising the via (bend/layer-switch) penalty tends to reduce DR via
+    // insertion with small WL impact on moderate congestion cases like
+    // sky130hd/aes. Keep the penalty lower under severe congestion to avoid
+    // reintroducing overflow.
+    float baseline_via_scale = 2.15f + 0.55f * sparse_bonus
+                               + 0.30f * calm_bonus
+                               - 1.10f * severe_penalty;
+    const bool moderate_congestion_band
+        = preroute_severity >= 0.72f && preroute_severity <= 0.84f;
+    const bool density_friendly = nets_per_tile > 0.0 && nets_per_tile < 2.4;
+    if (moderate_congestion_band && density_friendly && congestion_iters >= 20) {
+      // Enough overflow-iteration budget remains to absorb a stronger via bias
+      // without hurting routability. This intentionally pushes the internal
+      // rounded via penalty over the next step to have a tangible effect.
+      baseline_via_scale += 0.38f;
+    }
     if (congestion_iters > 0 && congestion_iters <= 4) {
       baseline_via_scale = std::max(baseline_via_scale, 1.45f);
     }
-    baseline_via_scale = std::clamp(baseline_via_scale, 1.15f, 2.35f);
+    baseline_via_scale = std::clamp(baseline_via_scale, 1.20f, 3.25f);
     baseline_via_scale
         = std::max(baseline_via_scale, grouter_->fastroute_->getViaCostScale());
     grouter_->fastroute_->setViaCostScale(baseline_via_scale);
