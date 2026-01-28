@@ -2375,10 +2375,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return std::move(baseline.routes);
   }
 
+  // Avoid early-exiting on overflowing routes when DR-via pressure is already
+  // high; use the scenario sweep to resolve overflow instead of relying on
+  // guide patching (which can increase layer switching downstream).
+  constexpr long kPracticalViaSlack = 3500;
+  constexpr int kPracticalOverflowCap = 1800;
   const bool baseline_practical_accept
       = baseline.metrics.max_utilization < 0.72f
-        && baseline.metrics.overflow <= 9000
-        && baseline_estimated_dr_vias <= (baseline_via_budget + 12000);
+        && baseline.metrics.overflow <= kPracticalOverflowCap
+        && baseline_estimated_dr_vias <= (baseline_via_budget + kPracticalViaSlack);
   if (baseline_practical_accept) {
     NetRouteMap routes = std::move(baseline.routes);
     if (baseline.metrics.overflow > 0 && !hotspots.empty()) {
