@@ -2312,6 +2312,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
 
+  if (grouter_->fastroute_ != nullptr && trimmed_iters > 0 && trimmed_iters <= 4
+      && preroute_severity < 0.86f) {
+    const float current_scale = grouter_->fastroute_->getViaCostScale();
+    const float boosted_scale = std::max(current_scale, 3.00f);
+    if (boosted_scale > current_scale + 0.01f) {
+      grouter_->fastroute_->setViaCostScale(boosted_scale);
+      snapshot.via_cost_scale = boosted_scale;
+      logger_->info(GNR,
+                    6081,
+                    "NEWGR via squeeze: boosting via scale {:.2f} -> {:.2f} "
+                    "(iters {}, severity {:.2f}).",
+                    current_scale,
+                    boosted_scale,
+                    trimmed_iters,
+                    preroute_severity);
+    }
+  }
+
   std::vector<Hotspot> hotspots;
   ScenarioResult baseline
       = run_parallel_core("baseline", nets, trimmed_iters, &hotspots);
