@@ -1570,10 +1570,26 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  : (nets.size() > 20000 ? 0.56 : 0.46);
       const int fallback_min
           = nets.size() > 45000 ? 24 : (nets.size() > 20000 ? 20 : 18);
+      // NEWGR: the fallback trimming is purely size-based and can be too
+      // aggressive on moderate-to-busy designs (e.g., sky130hd/aes), leaving
+      // small global overflow that detailed routing resolves with extra detours
+      // (and vias). Keep a few more iterations when the pre-route congestion
+      // estimate is on the high side.
+      double tuned_fallback_scale = fallback_scale;
+      int tuned_fallback_min = fallback_min;
+      if (!normalized_rudy.empty()) {
+        const bool moderate_congestion
+            = preroute_severity >= 0.72f || rudy_stats.p80 >= 0.92f;
+        if (moderate_congestion) {
+          tuned_fallback_scale = std::max(tuned_fallback_scale, 0.58);
+          tuned_fallback_min = std::max(tuned_fallback_min, 24);
+        }
+      }
       const int fallback_iters = std::clamp(
           static_cast<int>(std::round(
-              static_cast<double>(original_congestion_iters) * fallback_scale)),
-          fallback_min,
+              static_cast<double>(original_congestion_iters)
+              * tuned_fallback_scale)),
+          tuned_fallback_min,
           original_congestion_iters);
       if (fallback_iters < trimmed_iters) {
         trimmed_iters = fallback_iters;
