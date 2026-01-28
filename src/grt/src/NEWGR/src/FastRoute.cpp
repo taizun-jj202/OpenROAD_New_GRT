@@ -92,6 +92,8 @@ void FastRouteCore::clear()
   h_capacity_ = 0;
   total_overflow_ = 0;
   has_2D_overflow_ = false;
+  bend_cleanup_active_ = false;
+  bend_cleanup_overflow_limit_ = 0;
   via_cost_scale_ = 1.0f;
   layer_assign_iter_snapshot_ = 0;
   layer_assign_total_iters_snapshot_ = 1;
@@ -1857,6 +1859,40 @@ NetRouteMap FastRouteCore::run()
   removeLoops();
 
   getOverflow2Dmaze(&maxOverflow, &tUsage);
+
+  const bool overflow_clean_2d = (total_overflow_ == 0 && maxOverflow == 0);
+  if (overflow_clean_2d) {
+    // Bend reduction cleanup: detour-heavy maze routes create many direction
+    // changes that translate into extra vias after layer assignment. When the
+    // 2D solution is already overflow-clean, reroute only those detoured edges
+    // with a higher bend penalty to reduce via count with minimal runtime.
+    bend_cleanup_active_ = true;
+    bend_cleanup_overflow_limit_ = 0;
+    const int cleanup_enlarge = std::max(6, std::min(enlarge_, x_grid_ / 40));
+    const int cleanup_mazeedge_threshold = 12;
+    const int cleanup_L = 1;
+    const int cleanup_via = speed_mode ? 6 : 8;
+    const int cleanup_passes = speed_mode ? 1 : 2;
+    const float saved_slack_th = slack_th;
+    for (int pass = 0; pass < cleanup_passes; pass++) {
+      auto cleanup_cost = CostParams(logistic_coef, costheight_, slope);
+      float cleanup_slack = saved_slack_th;
+      mazeRouteMSMDParallel(i + pass,
+                            cleanup_enlarge,
+                            -1,
+                            cleanup_mazeedge_threshold,
+                            true,
+                            cleanup_via,
+                            cleanup_L,
+                            cleanup_cost,
+                            cleanup_slack);
+      getOverflow2Dmaze(&maxOverflow, &tUsage);
+      if (total_overflow_ != 0) {
+        break;
+      }
+    }
+    bend_cleanup_active_ = false;
+  }
 
   layer_assign_iter_snapshot_ = std::max(1, i - 1);
   layer_assign_total_iters_snapshot_ = std::max(1, overflow_iterations_);

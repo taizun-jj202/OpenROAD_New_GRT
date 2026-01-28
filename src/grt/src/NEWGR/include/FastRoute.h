@@ -688,6 +688,11 @@ class FastRouteCore
   float h_capacity_lb_;
   bool regular_x_;
   bool regular_y_;
+  bool bend_cleanup_active_{false};
+  int bend_cleanup_overflow_limit_{0};
+  int bend_cleanup_min_routelen_{18};
+  int bend_cleanup_bend_threshold_{6};
+  int bend_cleanup_detour_threshold_{4};
 
   std::vector<short> v_capacity_3D_;
   std::vector<short> h_capacity_3D_;

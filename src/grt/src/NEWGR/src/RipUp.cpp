@@ -246,6 +246,41 @@ bool FastRouteCore::newRipupCheck(const TreeEdge* treeedge,
       }
     }
   }
+
+  if (!needRipup && bend_cleanup_active_
+      && total_overflow_ <= bend_cleanup_overflow_limit_) {
+    // Only try to clean up detour-heavy maze routes; these create many turns
+    // which later translate into extra layer changes (vias).
+    const int manhattan = treeedge->len;
+    const int detour = routeLen - manhattan;
+    if (routeLen >= bend_cleanup_min_routelen_
+        && detour >= bend_cleanup_detour_threshold_
+        && net->getDbNet()->getNonDefaultRule() == nullptr) {
+      int bend_count = 0;
+      int prev_dir = 0;
+      for (int i = 0; i < routeLen; i++) {
+        const auto& a = grids[i];
+        const auto& b = grids[i + 1];
+        int dir = 0;
+        if (a.x != b.x) {
+          dir = 1;
+        } else if (a.y != b.y) {
+          dir = 2;
+        } else {
+          continue;
+        }
+        if (prev_dir != 0 && dir != prev_dir) {
+          bend_count++;
+          if (bend_count >= bend_cleanup_bend_threshold_) {
+            needRipup = true;
+            break;
+          }
+        }
+        prev_dir = dir;
+      }
+    }
+  }
+
   if (!needRipup && critical_nets_percentage_ && treeedge->route.last_routelen
       && critical_slack) {
     const float delta = (float) routeLen
