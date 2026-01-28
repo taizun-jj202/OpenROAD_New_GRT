@@ -618,7 +618,9 @@ void FastRouteCore::assignEdge(const int netID,
   const bool runtime_trimmed = layer_assign_total_iters_snapshot_ <= 12;
   constexpr double early_phase_limit = 0.2;
   constexpr double cleanup_phase_limit = 0.7;
-  double via_scale = std::clamp(static_cast<double>(via_cost_scale_), 0.35, 2.75);
+  // NEWGR: allow slightly higher via scaling under via-pressure flows.
+  // Keep an upper clamp to avoid runaway layer-switch penalties.
+  double via_scale = std::clamp(static_cast<double>(via_cost_scale_), 0.35, 3.25);
   if (runtime_trimmed) {
     via_scale = std::max(via_scale, 0.90);
   }

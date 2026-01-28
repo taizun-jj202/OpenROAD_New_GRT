@@ -2871,6 +2871,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	      = !force_routability && baseline.metrics.overflow == 0
 	        && light_congestion && hotspot_bias < 0.24f
 	        && baseline.metrics.max_utilization < 0.70f;
+	  const float via_scale_cap
+	      = force_routability ? 1.32f : (via_pressure ? 3.25f : 2.45f);
 	  if (!force_routability) {
 	    // By default, keep via penalty >= 1.0 so NEWGR can reduce detailed-router
 	    // vias now that wirelength is in budget. Allow higher penalty when the
@@ -2891,7 +2893,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	      base_via_scale += via_pressure ? 0.02f : 0.08f;
 	    }
 	    const float wl_via_min = via_pressure ? 1.12f : 1.00f;
-	    const float wl_via_max = via_pressure ? 2.45f : (clean_wl_focus ? 1.25f : 1.45f);
+	    const float wl_via_max
+	        = via_pressure ? via_scale_cap
+	                       : (clean_wl_focus ? 1.25f : 1.45f);
 	    wl_via_scale = std::clamp(base_via_scale, wl_via_min, wl_via_max);
 	  } else {
 	    const float base_via_scale
@@ -2904,12 +2908,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   if (!force_routability && via_pressure && baseline.metrics.overflow == 0
       && baseline.metrics.max_utilization < 0.90f) {
     const float floor_from_snapshot
-        = std::clamp(snapshot.via_cost_scale * 0.90f, 1.20f, 2.45f);
+        = std::clamp(snapshot.via_cost_scale * 0.90f, 1.20f, via_scale_cap);
     wl_via_scale = std::clamp(std::max(wl_via_scale, floor_from_snapshot),
                               1.0f,
-                              2.45f);
+                              via_scale_cap);
   }
-  const float via_scale_cap = force_routability ? 1.32f : 2.45f;
   const auto clamp_via_scale = [&](float scale) {
     return std::clamp(scale, 1.0f, via_scale_cap);
   };
@@ -2939,7 +2942,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   const float via_trim_scale_base
       = std::max(
-          wl_via_scale * 1.05f,
+          wl_via_scale * (via_pressure ? 1.10f : 1.05f),
           std::max(0.98f + 0.30f * std::max(0.0f, 0.70f - congestion_severity)
                        - 0.10f * hotspot_bias,
                    via_pressure
@@ -2951,7 +2954,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                       std::max<long>(0, via_over_budget))))
                        : 0.0f));
   const float via_trim_upper
-      = force_routability ? 1.32f : (via_pressure ? 1.55f : 1.35f);
+      = force_routability ? 1.32f : (via_pressure ? via_scale_cap : 1.35f);
   const float via_trim_scale = std::clamp(via_trim_scale_base,
                                           force_routability ? 0.95f : 1.02f,
                                           via_trim_upper);
