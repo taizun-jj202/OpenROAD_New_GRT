@@ -2316,10 +2316,30 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   const bool baseline_practical_accept
       = baseline.metrics.max_utilization < 0.72f
-        && baseline.metrics.overflow == 0
-        && baseline_wl <= (baseline_wirelength_budget + 25000.0)
-        && baseline_estimated_dr_vias <= (baseline_via_budget + 1500);
+        && baseline.metrics.overflow <= 9000
+        && baseline_estimated_dr_vias <= (baseline_via_budget + 12000);
   if (baseline_practical_accept) {
+    NetRouteMap routes = std::move(baseline.routes);
+    if (baseline.metrics.overflow > 0 && !hotspots.empty()) {
+      PatchSummary patch_summary
+          = applyHotspotPatches(routes,
+                                hotspots,
+                                grouter_->grid(),
+                                min_routing_layer,
+                                max_routing_layer);
+      if (patch_summary.segments_added > 0) {
+        RouteMetrics patched_metrics = compute_metrics(routes, nullptr);
+        logger_->info(
+            GNR,
+            6028,
+            "NEWGR applied {} hotspot patches on {} nets. "
+            "Patched wirelength {:.0f} um, vias {}.",
+            patch_summary.segments_added,
+            patch_summary.nets_touched,
+            patched_metrics.wirelength_um,
+            patched_metrics.via_count);
+      }
+    }
     logger_->info(GNR,
                   6071,
                   "NEWGR baseline practical-accept: wirelength {:.0f} um, vias {} "
@@ -2330,7 +2350,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   baseline.metrics.overflow,
                   baseline.metrics.max_utilization);
     restore_snapshot(snapshot);
-    return std::move(baseline.routes);
+    return routes;
   }
   if (normalized_rudy.empty()) {
     if (Rudy* rudy = grouter_->getRudy()) {
