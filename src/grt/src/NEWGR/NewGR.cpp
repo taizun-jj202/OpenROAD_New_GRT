@@ -2193,10 +2193,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                && rudy_stats.p80 < 0.90f
                                && nets_per_tile > 0.0
                                && nets_per_tile < 2.2;
-  const bool try_runtime_skim = trimmed_iters >= 8
-                                && preroute_severity < 0.82f
-                                && rudy_stats.p80 < 0.95f
-                                && nets_per_tile > 0.0;
+  // Avoid spending an extra routing pass unless pre-route congestion looks
+  // genuinely mild. Otherwise the skim is usually rejected and just adds
+  // runtime without improving DR metrics (via count especially).
+  const bool try_runtime_skim = trimmed_iters >= 10
+                                && preroute_severity < 0.68f
+                                && rudy_stats.p80 < 0.88f
+                                && nets_per_tile > 0.0
+                                && nets_per_tile < 2.0;
   if (try_runtime_skim) {
     // SPRoute-style fast lane: attempt a cheaper overflow iteration budget
     // first, then fall back to the tuned baseline if quality regresses.
@@ -2288,12 +2292,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     apply_baseline_via_bias(trimmed_iters, " (post-skim)");
   }
 
-  if (trimmed_iters > 0 && preroute_severity < 0.82f
-      && rudy_stats.p80 < 0.90f && nets_per_tile > 0.0
-      && nets_per_tile < 2.4) {
-    const bool mellow_runtime = preroute_severity < 0.74f
-                                && rudy_stats.p80 < 0.88f
-                                && nets_per_tile < 2.0;
+  // Hard capping overflow iterations can leave significant global overflow
+  // which then increases detailed-router detours (and via count). Only apply
+  // this cap on very mild congestion.
+  if (trimmed_iters > 0 && preroute_severity < 0.65f
+      && rudy_stats.p80 < 0.86f && nets_per_tile > 0.0
+      && nets_per_tile < 1.6) {
+    const bool mellow_runtime = preroute_severity < 0.62f
+                                && rudy_stats.p80 < 0.84f
+                                && nets_per_tile < 1.4;
     const int hard_cap = mellow_runtime ? 2 : 3;
     const int min_cap = mellow_runtime ? 2 : 3;
     const int capped_iters = std::clamp(trimmed_iters, min_cap, hard_cap);
@@ -2313,7 +2320,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   if (grouter_->fastroute_ != nullptr && trimmed_iters > 0 && trimmed_iters <= 4
-      && preroute_severity < 0.86f) {
+      && preroute_severity < 0.70f && rudy_stats.p80 < 0.88f) {
     const float current_scale = grouter_->fastroute_->getViaCostScale();
     const float boosted_scale = std::max(current_scale, 3.00f);
     if (boosted_scale > current_scale + 0.01f) {
