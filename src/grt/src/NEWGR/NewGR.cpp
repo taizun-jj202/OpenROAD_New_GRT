@@ -1617,13 +1617,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const float severe_penalty
         = std::clamp(preroute_severity - 0.86f, 0.0f, 0.25f);
 
-    float baseline_via_scale = 1.15f + 0.16f * sparse_bonus
-                               + 0.22f * calm_bonus
-                               - 0.40f * severe_penalty;
+    // NEWGR: push harder on via reduction once runtime is already improved.
+    // A modestly higher baseline bend/layer-switch penalty reduces DR via
+    // insertion on sparse-to-moderate congestion cases without materially
+    // impacting runtime.
+    float baseline_via_scale = 1.28f + 0.28f * sparse_bonus
+                               + 0.30f * calm_bonus
+                               - 0.60f * severe_penalty;
     if (congestion_iters > 0 && congestion_iters <= 4) {
-      baseline_via_scale = std::max(baseline_via_scale, 1.35f);
+      baseline_via_scale = std::max(baseline_via_scale, 1.45f);
     }
-    baseline_via_scale = std::clamp(baseline_via_scale, 1.0f, 1.65f);
+    baseline_via_scale = std::clamp(baseline_via_scale, 1.05f, 1.85f);
     baseline_via_scale
         = std::max(baseline_via_scale, grouter_->fastroute_->getViaCostScale());
     grouter_->fastroute_->setViaCostScale(baseline_via_scale);

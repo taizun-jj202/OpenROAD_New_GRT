@@ -1311,7 +1311,10 @@ NetRouteMap FastRouteCore::run()
   const int CSTEP3 = 5;    // 15
   const int COSHEIGHT = 4;
   int L = 0;
-  int VIA = 2;
+  // NEWGR: Treat bend penalty as a proxy for via minimization. Tie it to the
+  // tunable via scale so the router produces straighter guides when we're
+  // in via-focused modes.
+  int VIA = std::max(2, scaledViaCost(2));
   const int Ripvalue = -1;
   const bool noADJ = false;
   const int thStep1 = 10;
@@ -1698,7 +1701,27 @@ NetRouteMap FastRouteCore::run()
     }
 
     if (past_cong >= last_cong) {
-      VIA = mild_congestion ? std::max(1, VIA) : 0;
+      // Keep a small bend penalty unless we are in a severe congestion regime.
+      // Dropping it to zero tends to create detour-heavy paths that inflate DR
+      // via counts after layer assignment.
+      const bool severe_congestion
+          = (past_cong > 25000 && maxOverflow > 200) || maxOverflow > 700;
+      if (mild_congestion) {
+        VIA = std::max(1, VIA);
+      } else if (severe_congestion) {
+        VIA = 0;
+      } else {
+        VIA = std::max(1, VIA - 1);
+      }
+    }
+
+    // As congestion converges, increase the bend penalty to reduce detours and
+    // subsequent layer changes (vias) without affecting routability.
+    if (past_cong < 2500 && maxOverflow < 120) {
+      VIA = std::max(VIA, std::max(3, scaledViaCost(3)));
+    }
+    if (past_cong < 800 && maxOverflow < 40) {
+      VIA = std::max(VIA, std::max(4, scaledViaCost(4)));
     }
 
     if (past_cong < bmfl) {
