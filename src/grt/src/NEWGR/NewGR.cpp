@@ -1642,11 +1642,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   apply_baseline_via_bias(trimmed_iters, " (pre-skim)");
 
-  if (trimmed_iters > 0) {
-    const bool calm_rudy = !normalized_rudy.empty()
-                           && preroute_severity < 0.66f
-                           && rudy_stats.p80 < 0.90f;
-    const bool sparse_design = nets_per_tile > 0.0 && nets_per_tile < 2.6;
+    if (trimmed_iters > 0) {
+      const bool calm_rudy = !normalized_rudy.empty()
+                             && preroute_severity < 0.66f
+                             && rudy_stats.p80 < 0.90f;
+    const bool sparse_design = nets_per_tile > 0.0 && nets_per_tile < 2.6
+                               && preroute_severity < 0.74f;
     if (calm_rudy || sparse_design) {
       const double scale = calm_rudy ? 0.62 : 0.70;
       const int min_iters = calm_rudy ? 12 : 14;
@@ -1675,7 +1676,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                     && preroute_severity < 0.72f
                                     && rudy_stats.p80 < 0.92f
                                     && rudy_stats.mean < 0.85f;
-    const bool slim_density = nets_per_tile > 0.0 && nets_per_tile < 2.2;
+    const bool slim_density = nets_per_tile > 0.0 && nets_per_tile < 2.2
+                              && preroute_severity < 0.74f;
     if ((sproute_like_light || slim_density) && trimmed_iters > 6) {
       // Avoid over-trimming on moderate-density designs; fewer congestion
       // iterations can inflate layer switching and detailed-router via count.
