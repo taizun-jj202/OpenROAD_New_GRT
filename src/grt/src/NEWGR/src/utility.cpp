@@ -611,6 +611,10 @@ void FastRouteCore::assignEdge(const int netID,
             ? static_cast<double>(layer_assign_iter_snapshot_)
               / layer_assign_total_iters_snapshot_
             : 1.0;
+  // NEWGR: once 2D overflow is resolved, prioritize reducing layer switches
+  // (and therefore DR vias) even if it means tolerating slightly more local
+  // 3D congestion during layer assignment.
+  const bool via_min_focus = !has_2D_overflow_;
   // NEWGR: runtime-tuned flows may use very few overflow iterations, which can
   // cause layer assignment to under-penalize vias early and inflate DR via
   // count. Apply a small baseline via penalty when the iteration budget is
@@ -624,7 +628,10 @@ void FastRouteCore::assignEdge(const int netID,
   if (runtime_trimmed) {
     via_scale = std::max(via_scale, 0.90);
   }
-  const int switch_penalty = runtime_trimmed ? 2 : 1;
+  if (via_min_focus) {
+    via_scale = std::max(via_scale, 1.65);
+  }
+  const int switch_penalty = (runtime_trimmed ? 2 : 1) + (via_min_focus ? 1 : 0);
 
   auto iterationPenaltyScale = [&](int layer_delta) -> double {
     if (layer_delta == 0) {
@@ -686,7 +693,8 @@ void FastRouteCore::assignEdge(const int netID,
                                int grid_idx,
                                int reference_cost,
                                double phase_scale) -> int {
-    if (phase_scale <= 0.0 || reference_cost <= 0 || from_layer == to_layer) {
+    if (via_min_focus || phase_scale <= 0.0 || reference_cost <= 0
+        || from_layer == to_layer) {
       return 0;
     }
     const double from_ratio = localLayerCongestion(from_layer, grid_idx);
@@ -893,8 +901,10 @@ void FastRouteCore::assignEdge(const int netID,
           gridD[l][k + 1] = gridD[l][k] + 2 * BIG_INT;
         } else {
           // Congested case - still include resistance but with higher base cost
+          const int congested_penalty = via_min_focus ? 40 : BIG_INT;
           int wire_resistance = getLayerResistance(l, tile_size_, net);
-          gridD[l][k + 1] = gridD[l][k] + BIG_INT + wire_resistance;
+          gridD[l][k + 1]
+              = gridD[l][k] + congested_penalty + wire_resistance;
         }
       }
     }
