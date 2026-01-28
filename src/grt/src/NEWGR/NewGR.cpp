@@ -1679,8 +1679,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if ((sproute_like_light || slim_density) && trimmed_iters > 6) {
       // Avoid over-trimming on moderate-density designs; fewer congestion
       // iterations can inflate layer switching and detailed-router via count.
-      const double drop_scale = sproute_like_light ? 0.60 : 0.82;
-      const int min_iters = sproute_like_light ? 8 : 14;
+      const double drop_scale = sproute_like_light ? 0.60 : 0.90;
+      const int min_iters = sproute_like_light ? 8 : 16;
       const int sproute_iters = std::clamp(
           static_cast<int>(
               std::round(static_cast<double>(trimmed_iters) * drop_scale)),
