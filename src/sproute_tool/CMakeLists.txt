@@ -2,7 +2,7 @@ set(SPROUTE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(SPROUTE_VENDOR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor/mysproute)
 
 # Pin Galois to the in-tree copy for reproducibility.
-set(GALOIS_ROOT "/home/tsjafri/TAIZUN/OpenROAD/src/sproute_tool/Galois" CACHE PATH "Path to Galois source/build tree" FORCE)
+set(GALOIS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/Galois" CACHE PATH "Path to Galois source/build tree" FORCE)
 
 set(GALOIS_INCLUDE_DIRS
     ${GALOIS_ROOT}/libgalois/include
