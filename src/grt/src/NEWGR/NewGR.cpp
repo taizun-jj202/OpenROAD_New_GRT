@@ -967,8 +967,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
       // Keep candidates very close to the best global WL, then pick the
       // loosest (lowest congestion score) within that window.
-      constexpr double wl_slack_ratio = 0.0010;   // 0.10%
-      constexpr long wl_slack_min_dbu = 150000;   // ~150um @ 1000 DBU/um
+      // Keep this window tight: otherwise the selector can drift toward a
+      // "looser" but meaningfully longer GR solution that tends to increase
+      // detailed wirelength on this regression.
+      constexpr double wl_slack_ratio = 0.0003;   // 0.03%
+      constexpr long wl_slack_min_dbu = 100000;   // ~100um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
           static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
