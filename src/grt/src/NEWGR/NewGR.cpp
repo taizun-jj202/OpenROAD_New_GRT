@@ -58,6 +58,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     long wirelength_dbu = 0;
     long via_count = 0;
     double wirelength_um = 0.0;
+    long long pressure_over_85 = 0;  // edges > 85% utilized (approx)
+    double max_utilization = 0.0;
   };
 
   auto compute_metrics = [&](const NetRouteMap& routes) -> RouteMetrics {
@@ -80,6 +82,49 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             / static_cast<double>(
                 grouter_->db_->getTech()->getDbUnitsPerMicron());
     }
+
+    // Estimate "detailed-routability risk" by looking at how close the final
+    // 3D edge utilization is to capacity. This is a cheap proxy (no DR run)
+    // that helps avoid picking a globally-short route that is hard for DRT,
+    // which often increases post-DR wirelength.
+    const auto accumulate_edge = [&](const Edge3D& edge) {
+      if (edge.cap == 0) {
+        return;
+      }
+      metrics.max_utilization
+          = std::max(metrics.max_utilization,
+                     static_cast<double>(edge.usage)
+                         / static_cast<double>(edge.cap));
+      const int threshold = static_cast<int>(std::floor(edge.cap * 0.85));
+      const int over = static_cast<int>(edge.usage) - threshold;
+      if (over > 0) {
+        metrics.pressure_over_85 += over;
+      }
+    };
+
+    const auto& h_edges = grouter_->fastroute_->getHorizontalEdges3D();
+    const auto& v_edges = grouter_->fastroute_->getVerticalEdges3D();
+    const int h_layers = static_cast<int>(h_edges.shape()[0]);
+    const int h_y = static_cast<int>(h_edges.shape()[1]);
+    const int h_x = static_cast<int>(h_edges.shape()[2]);
+    for (int l = 0; l < h_layers; l++) {
+      for (int y = 0; y < h_y; y++) {
+        for (int x = 0; x < h_x; x++) {
+          accumulate_edge(h_edges[l][y][x]);
+        }
+      }
+    }
+    const int v_layers = static_cast<int>(v_edges.shape()[0]);
+    const int v_y = static_cast<int>(v_edges.shape()[1]);
+    const int v_x = static_cast<int>(v_edges.shape()[2]);
+    for (int l = 0; l < v_layers; l++) {
+      for (int y = 0; y < v_y; y++) {
+        for (int x = 0; x < v_x; x++) {
+          accumulate_edge(v_edges[l][y][x]);
+        }
+      }
+    }
+
     return metrics;
   };
 
@@ -207,6 +252,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                         snapshot.congestion_iterations});
 
   const auto better = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
+    if (lhs.pressure_over_85 != rhs.pressure_over_85) {
+      return lhs.pressure_over_85 < rhs.pressure_over_85;
+    }
     if (lhs.wirelength_dbu != rhs.wirelength_dbu) {
       return lhs.wirelength_dbu < rhs.wirelength_dbu;
     }
@@ -227,10 +275,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const RouteMetrics metrics = compute_metrics(routes);
     logger_->info(GNR,
                   6005,
-                  "NEWGR {}: wirelength {:.0f} um, vias {}",
+                  "NEWGR {}: wirelength {:.0f} um, vias {}, pressure {}, max_util {:.2f}",
                   candidate.name,
                   metrics.wirelength_um,
-                  metrics.via_count);
+                  metrics.via_count,
+                  metrics.pressure_over_85,
+                  metrics.max_utilization);
 
     if (!have_choice || better(metrics, chosen_metrics)) {
       chosen_routes = std::move(routes);
