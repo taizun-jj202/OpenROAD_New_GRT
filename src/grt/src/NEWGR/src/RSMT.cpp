@@ -643,7 +643,7 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
     // downstream DR QoR. Empirically, extending the "small-net" window a bit
     // is a good tradeoff on our regression without measurable runtime impact.
     const int flute_accuracy
-        = (!congestionDriven && d <= 16) ? flute_accuracy_high
+        = (!congestionDriven && d <= 18) ? flute_accuracy_high
                                          : flute_accuracy_default;
 
     if (reRoute) {

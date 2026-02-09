@@ -1274,10 +1274,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               0.0f,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
-                              0,
-                              0,
-                              1.0f,
-                              0};
+                              20,
+                              1,
+                              0.95f,
+                              2};
 
   // Keep candidate exploration minimal to preserve runtime. A second candidate
   // can help when tuned hits local congestion regimes, but on our regression
