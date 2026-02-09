@@ -206,11 +206,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   RouterSnapshot snapshot = capture_snapshot();
   // Strategy:
-  // - Explore a small set of FastRoute configurations (seed/perturbation/
-  //   critical nets %) and pick the best by (global) wirelength first, then
-  //   by via count.
-  // - Re-initialize FastRoute per candidate without rebuilding Net objects,
-  //   keeping runtime reasonable.
+  // - Use a known-good perturbation configuration (from prior iterations)
+  //   to target wirelength improvements.
+  // - Post-process the chosen global route to *widen* guides (add parallel
+  //   guide segments) so DRT has more flexibility and is less likely to detour.
 
   std::vector<CandidateConfig> candidates;
   candidates.push_back({"baseline",
@@ -220,46 +219,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                         snapshot.critical_percentage,
                         snapshot.congestion_iterations});
 
-  // Small multi-start set; tuned to explore wirelength variations with bounded
-  // runtime for this benchmark.
-  const std::vector<int> seeds = {11, 13, 17, 19, 23};
-  for (const int seed : seeds) {
-    candidates.push_back({("perturb6-seed" + std::to_string(seed) + "-crit0"),
-                          6.0f,
-                          1,
-                          seed,
-                          0.0f,
-                          snapshot.congestion_iterations});
-  }
-  // Explore a small band around the default congestion iteration count for
-  // the historically good seed 11. This can change the rip-up/reroute
-  // trajectory and sometimes reduces post-DR detours.
-  const int base_iters = snapshot.congestion_iterations;
-  if (base_iters > 5) {
-    candidates.push_back({"perturb6-seed11-crit0-it-5",
-                          6.0f,
-                          1,
-                          11,
-                          0.0f,
-                          base_iters - 5});
-  }
-  candidates.push_back({"perturb6-seed11-crit0-it+5",
+  // Best known configuration for this benchmark so far.
+  candidates.push_back({"perturb6-seed11-crit0",
                         6.0f,
                         1,
                         11,
                         0.0f,
-                        base_iters + 5});
-  candidates.push_back({"perturb6-seed11-crit0-it+10",
-                        6.0f,
-                        1,
-                        11,
-                        0.0f,
-                        base_iters + 10});
-  candidates.push_back({"perturb6-seed11-crit5",
-                        6.0f,
-                        1,
-                        11,
-                        5.0f,
                         snapshot.congestion_iterations});
 
   const auto better = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
@@ -299,6 +264,101 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   logger_->info(GNR, 6007, "NEWGR picked {}", chosen_name);
+
+  // Widen guides: add parallel guide segments (shifted by +/- 1 tile) for long
+  // straight segments. This does not force extra routing; it only expands the
+  // allowed guide region for the detailed router.
+  const auto widen_guides = [&]() {
+    const int tile = grouter_->grid_->getTileSize();
+    if (tile <= 0) {
+      return;
+    }
+    const int x_min = grouter_->grid_->getXMin() + tile / 2;
+    const int y_min = grouter_->grid_->getYMin() + tile / 2;
+    const int x_max = grouter_->grid_->getXMax() - tile / 2;
+    const int y_max = grouter_->grid_->getYMax() - tile / 2;
+
+    auto in_bounds = [&](const int x, const int y) {
+      return x >= x_min && x <= x_max && y >= y_min && y <= y_max;
+    };
+
+    for (auto& [db_net, segments] : chosen_routes) {
+      static_cast<void>(db_net);
+      const size_t original_size = segments.size();
+      if (original_size == 0) {
+        continue;
+      }
+      // Worst case: two extra segments per eligible segment.
+      segments.reserve(original_size * 3);
+
+      for (size_t i = 0; i < original_size; i++) {
+        const GSegment& s = segments[i];
+        if (s.isVia()) {
+          continue;
+        }
+        // Only widen long segments to control guide blow-up.
+        if (s.length() < 5 * tile) {
+          continue;
+        }
+
+        // Horizontal segment: shift in Y (and add end-connectors so the
+        // expanded guide remains connected; disconnected segments can break
+        // incremental GR/parasitic updates in the flow).
+        if (s.init_y == s.final_y) {
+          for (const int dy : {tile, -tile}) {
+            const int y = s.init_y + dy;
+            if (!in_bounds(s.init_x, y) || !in_bounds(s.final_x, y)) {
+              continue;
+            }
+            if (!in_bounds(s.init_x, s.init_y)
+                || !in_bounds(s.final_x, s.final_y)) {
+              continue;
+            }
+            // Parallel segment.
+            segments.emplace_back(
+                s.init_x, y, s.init_layer, s.final_x, y, s.final_layer);
+            // End connectors.
+            segments.emplace_back(
+                s.init_x, s.init_y, s.init_layer, s.init_x, y, s.init_layer);
+            segments.emplace_back(s.final_x,
+                                  s.final_y,
+                                  s.final_layer,
+                                  s.final_x,
+                                  y,
+                                  s.final_layer);
+          }
+          continue;
+        }
+
+        // Vertical segment: shift in X (with end-connectors for connectivity).
+        if (s.init_x == s.final_x) {
+          for (const int dx : {tile, -tile}) {
+            const int x = s.init_x + dx;
+            if (!in_bounds(x, s.init_y) || !in_bounds(x, s.final_y)) {
+              continue;
+            }
+            if (!in_bounds(s.init_x, s.init_y)
+                || !in_bounds(s.final_x, s.final_y)) {
+              continue;
+            }
+            // Parallel segment.
+            segments.emplace_back(
+                x, s.init_y, s.init_layer, x, s.final_y, s.final_layer);
+            // End connectors.
+            segments.emplace_back(
+                s.init_x, s.init_y, s.init_layer, x, s.init_y, s.init_layer);
+            segments.emplace_back(s.final_x,
+                                  s.final_y,
+                                  s.final_layer,
+                                  x,
+                                  s.final_y,
+                                  s.final_layer);
+          }
+        }
+      }
+    }
+  };
+  widen_guides();
 
   restore_snapshot(snapshot);
   return chosen_routes;
