@@ -627,12 +627,20 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
   int wl1 = 0;
   int totalNumSeg = 0;
 
-  const int flute_accuracy = 2;
+  // Steiner tree accuracy is a meaningful lever for downstream wirelength.
+  // Use a slightly higher accuracy only for small-degree nets during the
+  // initial (non-congestion-driven) tree generation so we avoid inflating
+  // runtime in later rip-up/reroute phases.
+  constexpr int flute_accuracy_default = 2;
+  constexpr int flute_accuracy_high = 3;
 
   for (const int& netID : net_ids_) {
     FrNet* net = nets_[netID];
 
     int d = net->getNumPins();
+    const int flute_accuracy
+        = (!congestionDriven && d <= 8) ? flute_accuracy_high
+                                        : flute_accuracy_default;
 
     if (reRoute) {
       if (newType) {

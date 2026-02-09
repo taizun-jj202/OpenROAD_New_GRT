@@ -5,7 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <string>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -752,6 +754,142 @@ static void patch_guides_for_dr_friendliness(
   }
 }
 
+static void simplify_guides(NetRouteMap& routes, utl::Logger* logger)
+{
+  if (routes.empty()) {
+    return;
+  }
+
+  int nets_touched = 0;
+  int merged_segments = 0;
+  int removed_duplicates = 0;
+
+  for (auto& [db_net, route] : routes) {
+    static_cast<void>(db_net);
+    if (route.size() < 2) {
+      continue;
+    }
+
+    // Keep unmergeable segments (vias + any unexpected diagonals).
+    std::vector<GSegment> keep;
+    keep.reserve(route.size());
+
+    // Group wires by (layer, is_jumper, horizontal, fixed_coord).
+    using Key = std::tuple<int, int, int, int>;
+    std::map<Key, std::vector<std::pair<int, int>>> intervals;
+
+    for (const GSegment& seg : route) {
+      if (seg.isVia()) {
+        keep.push_back(seg);
+        continue;
+      }
+      if (seg.init_layer != seg.final_layer) {
+        keep.push_back(seg);
+        continue;
+      }
+
+      const bool horizontal = (seg.init_y == seg.final_y);
+      const bool vertical = (seg.init_x == seg.final_x);
+      if (!horizontal && !vertical) {
+        keep.push_back(seg);
+        continue;
+      }
+
+      const int layer = seg.init_layer;
+      const int jumper = seg.is_jumper ? 1 : 0;
+      if (horizontal) {
+        const int y = seg.init_y;
+        const int x0 = std::min(seg.init_x, seg.final_x);
+        const int x1 = std::max(seg.init_x, seg.final_x);
+        intervals[Key{layer, jumper, 1, y}].push_back({x0, x1});
+      } else {
+        const int x = seg.init_x;
+        const int y0 = std::min(seg.init_y, seg.final_y);
+        const int y1 = std::max(seg.init_y, seg.final_y);
+        intervals[Key{layer, jumper, 0, x}].push_back({y0, y1});
+      }
+    }
+
+    std::vector<GSegment> rebuilt;
+    rebuilt.reserve(keep.size() + intervals.size());
+    for (const GSegment& seg : keep) {
+      rebuilt.push_back(seg);
+    }
+
+    for (auto& [key, seg_intervals] : intervals) {
+      if (seg_intervals.empty()) {
+        continue;
+      }
+      std::sort(seg_intervals.begin(),
+                seg_intervals.end(),
+                [](const auto& a, const auto& b) {
+                  if (a.first != b.first) {
+                    return a.first < b.first;
+                  }
+                  return a.second < b.second;
+                });
+
+      std::vector<std::pair<int, int>> merged;
+      merged.reserve(seg_intervals.size());
+      int cur_lo = seg_intervals[0].first;
+      int cur_hi = seg_intervals[0].second;
+      for (std::size_t i = 1; i < seg_intervals.size(); i++) {
+        const int lo = seg_intervals[i].first;
+        const int hi = seg_intervals[i].second;
+        if (lo <= cur_hi) {  // overlap or touch
+          cur_hi = std::max(cur_hi, hi);
+        } else {
+          merged.push_back({cur_lo, cur_hi});
+          cur_lo = lo;
+          cur_hi = hi;
+        }
+      }
+      merged.push_back({cur_lo, cur_hi});
+
+      const auto [layer, jumper, horizontal, fixed] = key;
+      for (const auto& [lo, hi] : merged) {
+        if (horizontal) {
+          rebuilt.emplace_back(lo, fixed, layer, hi, fixed, layer, jumper != 0);
+        } else {
+          rebuilt.emplace_back(fixed, lo, layer, fixed, hi, layer, jumper != 0);
+        }
+      }
+
+      merged_segments
+          += static_cast<int>(seg_intervals.size())
+             - static_cast<int>(merged.size());
+    }
+
+    // Deduplicate (also removes any wire segments that may have been kept and
+    // reconstructed identically).
+    std::unordered_set<GSegment, GSegmentHash> seen;
+    seen.reserve(rebuilt.size() * 2);
+    std::vector<GSegment> unique;
+    unique.reserve(rebuilt.size());
+    for (const GSegment& seg : rebuilt) {
+      if (seen.insert(seg).second) {
+        unique.push_back(seg);
+      } else {
+        removed_duplicates++;
+      }
+    }
+
+    if (unique.size() != route.size()) {
+      nets_touched++;
+    }
+    route.swap(unique);
+  }
+
+  if (logger != nullptr && (merged_segments > 0 || removed_duplicates > 0)) {
+    logger->info(GNR,
+                 6012,
+                 "NEWGR guide simplify: touched {} nets, merged {}, removed dup {}",
+                 nets_touched,
+                 merged_segments,
+                 removed_duplicates);
+  }
+}
+
 }  // namespace
 
 NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
@@ -1280,15 +1418,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	  // returned routes (important for subsequent incremental calls in the flow).
 	  auto [winner_routes, winner_metrics] = run_candidate(best_candidate);
 
-    // Post-processing: add conservative DR-friendly "patch" guides in/around
-    // the hottest Rudy regions to help reduce downstream detours (wirelength)
-    // without materially changing the GR topology.
-    patch_guides_for_dr_friendliness(grouter_,
-                                     winner_routes,
-                                     min_routing_layer,
-                                     max_routing_layer,
-                                     rudy_hotspot_regions,
-                                     logger_);
+  // Post-processing: add conservative DR-friendly "patch" guides in/around
+  // the hottest Rudy regions to help reduce downstream detours (wirelength)
+  // without materially changing the GR topology.
+  patch_guides_for_dr_friendliness(grouter_,
+                                   winner_routes,
+                                   min_routing_layer,
+                                   max_routing_layer,
+                                   rudy_hotspot_regions,
+                                   logger_);
+  // Guide post-pass: merge collinear segments and drop duplicates. This is a
+  // cheap way to reduce guide fragmentation, which tends to reduce DR detours
+  // (wirelength) and can also avoid unnecessary layer switching (vias).
+  simplify_guides(winner_routes, logger_);
 
   logger_->info(GNR,
                 6007,
