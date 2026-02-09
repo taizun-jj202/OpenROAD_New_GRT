@@ -697,6 +697,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       return;
     }
 
+    // GlobalRouter::computeRegionAdjustments expects a *reduction percentage*
+    // (0.10 => reduce capacity by 10%), while NEWGR candidate configs specify
+    // a more intuitive capacity multiplier (0.90 => keep 90% capacity).
+    const float reduction
+        = std::clamp(1.0f - config.rudy_adjustment, 0.0f, 1.0f);
+    if (reduction <= 0.0f) {
+      return;
+    }
+
     const int x_grids = grouter_->grid_->getXGrids();
     const int y_grids = grouter_->grid_->getYGrids();
     const int tile = grouter_->grid_->getTileSize();
@@ -726,7 +735,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                                   rect.xMax(),
                                                   rect.yMax(),
                                                   layer,
-                                                  config.rudy_adjustment);
+                                                  reduction);
       }
     }
   };
