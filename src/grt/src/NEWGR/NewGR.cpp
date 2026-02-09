@@ -754,10 +754,20 @@ static void patch_guides_for_dr_friendliness(
   }
 }
 
-static void simplify_guides(NetRouteMap& routes, utl::Logger* logger)
+static void simplify_guides(GlobalRouter* grouter,
+                            NetRouteMap& routes,
+                            utl::Logger* logger)
 {
   if (routes.empty()) {
     return;
+  }
+
+  int merge_gap_dbu = 0;
+  if (grouter != nullptr && grouter->grid() != nullptr) {
+    // Many guide endpoints are snapped to the GCell centers spaced by
+    // `tile_size`. Allowing a small (<= 1 tile) merge gap can reduce guide
+    // fragmentation without materially increasing guide area.
+    merge_gap_dbu = std::max(0, grouter->grid()->getTileSize());
   }
 
   int nets_touched = 0;
@@ -836,7 +846,7 @@ static void simplify_guides(NetRouteMap& routes, utl::Logger* logger)
       for (std::size_t i = 1; i < seg_intervals.size(); i++) {
         const int lo = seg_intervals[i].first;
         const int hi = seg_intervals[i].second;
-        if (lo <= cur_hi) {  // overlap or touch
+        if (lo <= cur_hi + merge_gap_dbu) {  // overlap, touch, or small gap
           cur_hi = std::max(cur_hi, hi);
         } else {
           merged.push_back({cur_lo, cur_hi});
@@ -883,10 +893,11 @@ static void simplify_guides(NetRouteMap& routes, utl::Logger* logger)
   if (logger != nullptr && (merged_segments > 0 || removed_duplicates > 0)) {
     logger->info(GNR,
                  6012,
-                 "NEWGR guide simplify: touched {} nets, merged {}, removed dup {}",
+                 "NEWGR guide simplify: touched {} nets, merged {}, removed dup {} (gap {} dbu)",
                  nets_touched,
                  merged_segments,
-                 removed_duplicates);
+                 removed_duplicates,
+                 merge_gap_dbu);
   }
 }
 
@@ -1430,7 +1441,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Guide post-pass: merge collinear segments and drop duplicates. This is a
   // cheap way to reduce guide fragmentation, which tends to reduce DR detours
   // (wirelength) and can also avoid unnecessary layer switching (vias).
-  simplify_guides(winner_routes, logger_);
+  simplify_guides(grouter_, winner_routes, logger_);
 
   logger_->info(GNR,
                 6007,
