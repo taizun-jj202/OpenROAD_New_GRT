@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -442,7 +441,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	  evals.reserve(candidates.size());
 
 	  int best_overflow = -1;
-	  long best_wl_dbu = 0;
 	  for (const auto& candidate : candidates) {
 	    auto candidate_result = run_candidate(candidate);
 	    const RouteMetrics& metrics = candidate_result.second;
@@ -456,36 +454,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
 	  // Selection policy:
 	  // 1) Prefer routable solutions (overflow == 0), else minimize overflow.
-	  // 2) Among those, keep candidates within a tiny global-WL window.
-	  // 3) Pick the DR-friendlier one using congestion tightness, then vias.
+	  // 2) Among those, pick the lowest global wirelength.
+	  // 3) Tie-break with congestion tightness, then vias.
 	  //
-	  // This guards against picking a marginally-shorter global route that is
-	  // noticeably tighter and causes longer detours during detailed routing.
+	  // Note: this is intentionally "WL-hard" to probe whether the final
+	  // detailed-route wirelength is better correlated with the global WL
+	  // winner than with DR-friendliness proxies on this benchmark.
 	  const int target_overflow = (best_overflow == 0) ? 0 : best_overflow;
-
-	  bool have_wl = false;
-	  for (const auto& eval : evals) {
-	    if (eval.metrics.total_overflow != target_overflow) {
-	      continue;
-	    }
-	    if (!have_wl || eval.metrics.wirelength_dbu < best_wl_dbu) {
-	      best_wl_dbu = eval.metrics.wirelength_dbu;
-	      have_wl = true;
-	    }
-	  }
-
-	  // Global-WL tolerance window for DR tie-breaks.
-	  constexpr double kWirelengthWindow = 0.0005;  // 0.05%
-	  const double wl_limit
-	      = have_wl ? static_cast<double>(best_wl_dbu) * (1.0 + kWirelengthWindow)
-	                : std::numeric_limits<double>::infinity();
 
 	  for (const auto& eval : evals) {
 	    const RouteMetrics& metrics = eval.metrics;
 	    if (metrics.total_overflow != target_overflow) {
-	      continue;
-	    }
-	    if (static_cast<double>(metrics.wirelength_dbu) > wl_limit) {
 	      continue;
 	    }
 
@@ -493,6 +472,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	      best_candidate = eval.candidate;
 	      best_metrics = metrics;
 	      have_best = true;
+	      continue;
+	    }
+
+	    if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
+	      if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
+	        best_candidate = eval.candidate;
+	        best_metrics = metrics;
+	      }
 	      continue;
 	    }
 
