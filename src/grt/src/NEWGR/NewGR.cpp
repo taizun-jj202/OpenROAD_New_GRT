@@ -1022,8 +1022,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  1.0f,
                                  0};
 
-  // Tuned deterministic configuration that historically minimizes DR wirelength
-  // on this regression without harming via count.
+  // Candidate set (small + deterministic): keep runtime bounded while still
+  // allowing a DR-aware choice among a few known-good perturbation regimes.
+  //
+  // NOTE: Our objective metric is *detailed* wirelength. In practice, the best
+  // DR outcomes are usually among candidates with near-minimal GR wirelength,
+  // but with slightly looser congestion (more flexibility for the detailed
+  // router). We therefore pick the loosest candidate inside a tight GR-WL
+  // window.
   const CandidateConfig tuned{"perturb3-seed11-crit0",
                               3.0f,
                               /*perturbation_amount=*/1,
@@ -1035,6 +1041,33 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               /*rudy_expand_tiles=*/0,
                               /*rudy_adjustment=*/1.0f,
                               /*rudy_layers=*/0};
+
+  const CandidateConfig tuned_crit10{"perturb3-seed11-crit10",
+                                     3.0f,
+                                     /*perturbation_amount=*/1,
+                                     /*seed=*/11,
+                                     /*critical_percentage=*/10.0f,
+                                     snapshot.congestion_iterations,
+                                     snapshot.global_adjustment,
+                                     /*rudy_hotspots=*/0,
+                                     /*rudy_expand_tiles=*/0,
+                                     /*rudy_adjustment=*/1.0f,
+                                     /*rudy_layers=*/0};
+
+  const CandidateConfig tuned_crit10_rudy15{"perturb3-seed11-crit10-rudy15",
+                                           3.0f,
+                                           /*perturbation_amount=*/1,
+                                           /*seed=*/11,
+                                           /*critical_percentage=*/10.0f,
+                                           snapshot.congestion_iterations,
+                                           snapshot.global_adjustment,
+                                           /*rudy_hotspots=*/15,
+                                           /*rudy_expand_tiles=*/1,
+                                           /*rudy_adjustment=*/0.95f,
+                                           /*rudy_layers=*/2};
+
+  const std::vector<CandidateConfig> candidates
+      = {tuned, tuned_crit10, tuned_crit10_rudy15, baseline};
 
 		  const auto run_candidate = [&](const CandidateConfig& candidate) {
 		    restore_snapshot(snapshot);
@@ -1072,32 +1105,110 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	    }
 	  };
 
-  auto [winner_routes, winner_metrics] = run_candidate(tuned);
-  CandidateConfig winner_candidate = tuned;
+  struct CandidateEval
+  {
+    CandidateConfig candidate;
+    RouteMetrics metrics;
+  };
+  std::vector<CandidateEval> evals;
+  evals.reserve(candidates.size());
 
-  // If we fail to converge (overflow) with the tuned config, fall back to the
-  // caller's snapshot config to avoid regressing routability.
-  if (winner_metrics.total_overflow > 0) {
-    logger_->warn(GNR,
-                  6010,
-                  "NEWGR {} has overflow ({}); falling back to baseline config.",
-                  tuned.name,
-                  winner_metrics.total_overflow);
-    auto [baseline_routes, baseline_metrics] = run_candidate(baseline);
-    // Prefer routable, then shortest, then fewer vias (simple, deterministic).
-    const bool baseline_better
-        = (baseline_metrics.total_overflow < winner_metrics.total_overflow)
-          || (baseline_metrics.total_overflow == winner_metrics.total_overflow
-              && (baseline_metrics.wirelength_dbu < winner_metrics.wirelength_dbu
-                  || (baseline_metrics.wirelength_dbu
-                          == winner_metrics.wirelength_dbu
-                      && baseline_metrics.via_count < winner_metrics.via_count)));
-    if (baseline_better) {
-      winner_routes = std::move(baseline_routes);
-      winner_metrics = baseline_metrics;
-      winner_candidate = baseline;
+  int best_overflow = -1;
+  for (const auto& candidate : candidates) {
+    auto [routes, metrics] = run_candidate(candidate);
+    evals.push_back({candidate, metrics});
+    if (best_overflow < 0 || metrics.total_overflow < best_overflow) {
+      best_overflow = metrics.total_overflow;
     }
   }
+
+  // Selection policy (wirelength-first; DR-aware tie-breaks):
+  // 1) Prefer routable solutions (overflow == 0), else minimize overflow.
+  // 2) Primary objective: minimize *global* wirelength (proxy for DR WL).
+  // 3) Tie-breakers (within a tight WL window): looser congestion, then fewer
+  //    vias, then absolute WL.
+  const int target_overflow = (best_overflow == 0) ? 0 : best_overflow;
+
+  long min_wl_dbu = std::numeric_limits<long>::max();
+  for (const auto& eval : evals) {
+    const RouteMetrics& metrics = eval.metrics;
+    if (metrics.total_overflow != target_overflow) {
+      continue;
+    }
+    min_wl_dbu = std::min(min_wl_dbu, metrics.wirelength_dbu);
+  }
+
+  // Keep candidates close to the best global WL, then pick the loosest
+  // (lowest congestion score) within that window.
+  constexpr double wl_slack_ratio = 0.0003;  // 0.03%
+  constexpr long wl_slack_min_dbu = 100000;  // ~100um @ 1000 DBU/um
+  const long wl_slack_dbu = std::max<long>(
+      wl_slack_min_dbu,
+      static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
+  const long wl_limit_dbu = min_wl_dbu + wl_slack_dbu;
+
+  logger_->info(GNR,
+                6010,
+                "NEWGR selection: overflow {} wl_ref {} dbu wl_limit {} dbu (+{} / {:.2f}%)",
+                target_overflow,
+                min_wl_dbu,
+                wl_limit_dbu,
+                wl_slack_dbu,
+                100.0 * wl_slack_dbu / std::max<double>(1.0, min_wl_dbu));
+
+  CandidateConfig best_candidate = baseline;
+  RouteMetrics best_metrics;
+  bool have_best = false;
+
+  for (const auto& eval : evals) {
+    const RouteMetrics& metrics = eval.metrics;
+    if (metrics.total_overflow != target_overflow) {
+      continue;
+    }
+    if (metrics.wirelength_dbu > wl_limit_dbu) {
+      continue;
+    }
+
+    if (!have_best) {
+      best_candidate = eval.candidate;
+      best_metrics = metrics;
+      have_best = true;
+      continue;
+    }
+
+    if (metrics.congestion.score != best_metrics.congestion.score) {
+      if (metrics.congestion.score < best_metrics.congestion.score) {
+        best_candidate = eval.candidate;
+        best_metrics = metrics;
+      }
+      continue;
+    }
+
+    if (metrics.via_count != best_metrics.via_count) {
+      if (metrics.via_count < best_metrics.via_count) {
+        best_candidate = eval.candidate;
+        best_metrics = metrics;
+      }
+      continue;
+    }
+
+    if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
+      if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
+        best_candidate = eval.candidate;
+        best_metrics = metrics;
+      }
+      continue;
+    }
+
+    if (eval.candidate.name < best_candidate.name) {
+      best_candidate = eval.candidate;
+      best_metrics = metrics;
+    }
+  }
+
+  // Re-run the winner so `grouter_->fastroute_` internal state matches the
+  // returned routes.
+  auto [winner_routes, winner_metrics] = run_candidate(best_candidate);
 
     // Post-processing: add conservative DR-friendly "patch" guides in/around
     // the hottest Rudy regions to help reduce downstream detours (wirelength)
@@ -1112,7 +1223,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   logger_->info(GNR,
                 6007,
                 "NEWGR picked {} (overflow {}, wl {:.0f} um, vias {})",
-                winner_candidate.name,
+                best_candidate.name,
                 winner_metrics.total_overflow,
                 winner_metrics.wirelength_um,
                 winner_metrics.via_count);
