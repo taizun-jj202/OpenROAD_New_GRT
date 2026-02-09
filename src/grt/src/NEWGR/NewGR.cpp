@@ -77,7 +77,7 @@ struct GuidePatchingOptions
   // Derived-from-GR congestion hot tiles (based on edge utilization).
   // These complement Rudy hotspots by reacting to actual GR usage patterns.
   int cong_layer_count = 2;           // apply to [min_layer, min_layer + N)
-  double cong_util_threshold = 0.90;  // utilization (usage / eff_cap)
+  double cong_util_threshold = 0.92;  // utilization (usage / eff_cap)
   int cong_edge_prefix = 700;         // keep only top-N hot edges
   int cong_max_tiles = 2200;          // cap on unique hot tiles tracked
 
@@ -85,16 +85,16 @@ struct GuidePatchingOptions
   int pin_patch_radius_tiles = 1;
   // Add short wire stubs on the pin connection layer to improve local access
   // without forcing extra layer switching.
-  int pin_wire_stub_tiles = 2;
+  int pin_wire_stub_tiles = 1;
 
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 14;
   int very_long_segment_tiles = 30;
-  int long_segment_stub_tiles = 2;
+  int long_segment_stub_tiles = 1;
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
   // explicitly encouraging layer switching (vias).
-  int long_segment_side_lane_span_tiles = 10;
+  int long_segment_side_lane_span_tiles = 8;
 };
 
 static bool is_valid_grid_center(const odb::Rect& die_bounds,
