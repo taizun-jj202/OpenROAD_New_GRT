@@ -58,7 +58,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     long wirelength_dbu = 0;
     long via_count = 0;
     double wirelength_um = 0.0;
-    long long pressure_over_85 = 0;  // edges > 85% utilized (approx)
+    long long pressure_over_90 = 0;  // edges > 90% utilized (approx)
     double max_utilization = 0.0;
   };
 
@@ -84,9 +84,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
 
     // Estimate "detailed-routability risk" by looking at how close the final
-    // 3D edge utilization is to capacity. This is a cheap proxy (no DR run)
-    // that helps avoid picking a globally-short route that is hard for DRT,
-    // which often increases post-DR wirelength.
+    // 3D edge utilization is to capacity. This is a cheap proxy (no DR run).
+    // We only use it as a tie-break when global wirelength is very close, to
+    // avoid the failure mode where "overly-safe" routes become longer and
+    // increase post-DR wirelength.
     const auto accumulate_edge = [&](const Edge3D& edge) {
       if (edge.cap == 0) {
         return;
@@ -95,10 +96,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = std::max(metrics.max_utilization,
                      static_cast<double>(edge.usage)
                          / static_cast<double>(edge.cap));
-      const int threshold = static_cast<int>(std::floor(edge.cap * 0.85));
+      const int threshold = static_cast<int>(std::floor(edge.cap * 0.90));
       const int over = static_cast<int>(edge.usage) - threshold;
       if (over > 0) {
-        metrics.pressure_over_85 += over;
+        metrics.pressure_over_90 += over;
       }
     };
 
@@ -232,14 +233,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                           snapshot.congestion_iterations});
   }
   // A couple of extra variants around the historically-good seed 11.
-  candidates.push_back({"perturb4-seed11-crit0",
-                        4.0f,
+  candidates.push_back({"perturb5-seed11-crit0",
+                        5.0f,
                         1,
                         11,
                         0.0f,
                         snapshot.congestion_iterations});
-  candidates.push_back({"perturb8-seed11-crit0",
-                        8.0f,
+  candidates.push_back({"perturb7-seed11-crit0",
+                        7.0f,
                         1,
                         11,
                         0.0f,
@@ -251,12 +252,32 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                         5.0f,
                         snapshot.congestion_iterations});
 
+  // Perturbation "amount" also impacts the randomization strength. Explore a
+  // small range around the default.
+  candidates.push_back({"perturb6-seed11-crit0-amt0",
+                        6.0f,
+                        0,
+                        11,
+                        0.0f,
+                        snapshot.congestion_iterations});
+  candidates.push_back({"perturb6-seed11-crit0-amt2",
+                        6.0f,
+                        2,
+                        11,
+                        0.0f,
+                        snapshot.congestion_iterations});
+
   const auto better = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
-    if (lhs.pressure_over_85 != rhs.pressure_over_85) {
-      return lhs.pressure_over_85 < rhs.pressure_over_85;
+    // Primary objective: global wirelength, which is the best predictor we
+    // have for post-DR wirelength. However, for near-ties we prefer the route
+    // with lower utilization "pressure" to improve detailed-routability.
+    constexpr double kWirelengthTieToleranceUm = 400.0;
+    if (std::fabs(lhs.wirelength_um - rhs.wirelength_um)
+        > kWirelengthTieToleranceUm) {
+      return lhs.wirelength_um < rhs.wirelength_um;
     }
-    if (lhs.wirelength_dbu != rhs.wirelength_dbu) {
-      return lhs.wirelength_dbu < rhs.wirelength_dbu;
+    if (lhs.pressure_over_90 != rhs.pressure_over_90) {
+      return lhs.pressure_over_90 < rhs.pressure_over_90;
     }
     return lhs.via_count < rhs.via_count;
   };
@@ -279,7 +300,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   candidate.name,
                   metrics.wirelength_um,
                   metrics.via_count,
-                  metrics.pressure_over_85,
+                  metrics.pressure_over_90,
                   metrics.max_utilization);
 
     if (!have_choice || better(metrics, chosen_metrics)) {
