@@ -639,7 +639,7 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
 
     int d = net->getNumPins();
     const int flute_accuracy
-        = (!congestionDriven && d <= 8) ? flute_accuracy_high
+        = (!congestionDriven && d <= 12) ? flute_accuracy_high
                                         : flute_accuracy_default;
 
     if (reRoute) {
