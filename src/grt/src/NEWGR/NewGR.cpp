@@ -12,6 +12,7 @@
 #include "Grid.h"
 #include "RoutingTracks.h"
 #include "grt/Rudy.h"
+#include "odb/db.h"
 #include "utl/Logger.h"
 
 namespace grt {
@@ -30,6 +31,7 @@ struct RouterSnapshot
   int congestion_iterations = 0;
   float global_adjustment = 0.0f;
   std::vector<RegionAdjustment> region_adjustments;
+  std::vector<float> routing_layer_adjustments;
 };
 
 struct CandidateConfig
@@ -40,6 +42,7 @@ struct CandidateConfig
   int seed = 0;
   float critical_percentage = 0.0f;
   int congestion_iterations = 0;
+  float global_adjustment = 0.0f;
   int rudy_hotspots = 0;            // number of hotspots to patch (0 disables)
   int rudy_expand_tiles = 0;        // expand each hotspot by N tiles
   float rudy_adjustment = 1.0f;     // capacity multiplier (e.g. 0.8 = -20%)
@@ -51,6 +54,9 @@ struct CongestionScore
   // 0.0 is ideal; higher means "tighter" routing.
   double score = 0.0;
   double max_util = 0.0;
+  double p95_util = 0.0;
+  double mean_util = 0.0;
+  double mean_excess = 0.0;
   double frac_util_90 = 0.0;
   double frac_util_80 = 0.0;
 };
@@ -109,15 +115,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const auto& h_edges = grouter_->fastroute_->getHorizontalEdges3D();
     const auto& v_edges = grouter_->fastroute_->getVerticalEdges3D();
 
+    std::vector<double> utils;
+    utils.reserve(1024);
+
     auto scan_edges = [&](const auto& edges) {
       std::size_t edge_count = 0;
       std::size_t util_80 = 0;
       std::size_t util_90 = 0;
+      double sum_util = 0.0;
+      double sum_excess = 0.0;
 
       for (const auto& layer : edges) {
         for (const auto& row : layer) {
           for (const auto& edge : row) {
-            const int eff_cap = static_cast<int>(edge.cap)
+            // Use real_cap to compute a stable utilization proxy. The adjusted
+            // cap can be overly pessimistic and tends to saturate the metric.
+            const int eff_cap = static_cast<int>(edge.real_cap)
                                 - static_cast<int>(edge.red);
             if (eff_cap <= 0) {
               continue;
@@ -125,18 +138,28 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             const double util = static_cast<double>(edge.usage)
                                 / static_cast<double>(eff_cap);
             out.max_util = std::max(out.max_util, util);
+            sum_util += util;
+            if (util > 1.0) {
+              sum_excess += (util - 1.0);
+            }
             if (util >= 0.8) {
               util_80++;
             }
             if (util >= 0.9) {
               util_90++;
             }
+            utils.push_back(util);
             edge_count++;
           }
         }
       }
 
       if (edge_count > 0) {
+        out.mean_util
+            = std::max(out.mean_util,
+                       sum_util / static_cast<double>(edge_count));
+        out.mean_excess = std::max(
+            out.mean_excess, sum_excess / static_cast<double>(edge_count));
         out.frac_util_80
             = std::max(out.frac_util_80,
                        static_cast<double>(util_80) / edge_count);
@@ -149,9 +172,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scan_edges(h_edges);
     scan_edges(v_edges);
 
-    // A light "DR-friendliness" proxy: peak utilization dominates, with small
-    // penalties when lots of edges are near-full.
-    out.score = out.max_util + 0.10 * out.frac_util_90 + 0.03 * out.frac_util_80;
+    if (!utils.empty()) {
+      const std::size_t idx
+          = static_cast<std::size_t>(0.95 * (utils.size() - 1));
+      std::nth_element(utils.begin(), utils.begin() + idx, utils.end());
+      out.p95_util = utils[idx];
+    }
+
+    // DR-friendliness proxy: avoid near-saturated edges (p95) and discourage
+    // overload (mean_excess). Fractions are light tie-breakers.
+    out.score = out.p95_util + 4.0 * out.mean_excess + 0.15 * out.frac_util_90
+                + 0.05 * out.frac_util_80;
     return out;
   };
 
@@ -166,6 +197,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     snapshot.congestion_iterations = grouter_->congestion_iterations_;
     snapshot.global_adjustment = grouter_->adjustment_;
     snapshot.region_adjustments = grouter_->region_adjustments_;
+
+    if (grouter_->db_ != nullptr && grouter_->db_->getTech() != nullptr) {
+      odb::dbTech* tech = grouter_->db_->getTech();
+      snapshot.routing_layer_adjustments.resize(max_routing_layer + 1, 0.0f);
+      for (int layer = 1; layer <= max_routing_layer; layer++) {
+        odb::dbTechLayer* tech_layer = tech->findRoutingLayer(layer);
+        if (tech_layer != nullptr) {
+          snapshot.routing_layer_adjustments[layer]
+              = tech_layer->getLayerAdjustment();
+        }
+      }
+    }
     return snapshot;
   };
 
@@ -177,8 +220,25 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->fastroute_->setCriticalNetsPercentage(
         snapshot.critical_percentage);
     grouter_->setCongestionIterations(snapshot.congestion_iterations);
-    grouter_->adjustment_ = snapshot.global_adjustment;
+    grouter_->setAdjustment(snapshot.global_adjustment);
     grouter_->region_adjustments_ = snapshot.region_adjustments;
+
+    if (!snapshot.routing_layer_adjustments.empty() && grouter_->db_ != nullptr
+        && grouter_->db_->getTech() != nullptr) {
+      odb::dbTech* tech = grouter_->db_->getTech();
+      const int max_layer
+          = std::min<int>(max_routing_layer,
+                          static_cast<int>(
+                              snapshot.routing_layer_adjustments.size())
+                              - 1);
+      for (int layer = 1; layer <= max_layer; layer++) {
+        odb::dbTechLayer* tech_layer = tech->findRoutingLayer(layer);
+        if (tech_layer != nullptr) {
+          tech_layer->setLayerAdjustment(
+              snapshot.routing_layer_adjustments[layer]);
+        }
+      }
+    }
   };
 
   const RouterSnapshot snapshot = capture_snapshot();
@@ -305,6 +365,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->setPerturbationAmount(config.perturbation_amount);
     grouter_->setSeed(config.seed);
     grouter_->fastroute_->setCriticalNetsPercentage(config.critical_percentage);
+    grouter_->setAdjustment(config.global_adjustment);
 
     // Start from the snapshot's adjustments and optionally add Rudy-based
     // hotspot "soft-capacity" reservations for DR-friendliness.
@@ -362,6 +423,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  snapshot.seed,
                                  snapshot.critical_percentage,
                                  snapshot.congestion_iterations,
+                                 snapshot.global_adjustment,
                                  0,
                                  0,
                                  1.0f,
@@ -374,25 +436,31 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	  const std::vector<CandidateConfig> candidates = {
 	      baseline,
 	      // Historically best on this regression: low perturbation, fixed seed.
-	      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
-	      {"perturb3-seed17-crit0", 3.0f, 1, 17, 0.0f, snapshot.congestion_iterations},
-	      {"perturb3-seed29-crit0", 3.0f, 1, 29, 0.0f, snapshot.congestion_iterations},
+	      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+	      {"perturb3-seed17-crit0", 3.0f, 1, 17, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+	      {"perturb3-seed29-crit0", 3.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
-	      {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
-	      {"perturb6-seed17-crit0", 6.0f, 1, 17, 0.0f, snapshot.congestion_iterations},
-	      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations},
-	      {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations},
-	      {"perturb6-seed31-crit0", 6.0f, 1, 31, 0.0f, snapshot.congestion_iterations},
+	      {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+	      {"perturb6-seed17-crit0", 6.0f, 1, 17, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+	      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+	      {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+	      {"perturb6-seed31-crit0", 6.0f, 1, 31, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
 	      // Keep a small fraction of "critical" nets less detoured.
-	      {"perturb6-seed29-crit10", 6.0f, 1, 29, 10.0f, snapshot.congestion_iterations},
+	      {"perturb6-seed29-crit10", 6.0f, 1, 29, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
-	      {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
+	      {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+
+	      // Light global soft-capacity (adjustment) sweeps for strong seeds:
+	      // trade a tiny GR WL increase for less tightness to help DR.
+	      {"perturb3-seed11-crit0-adj4", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations, 0.04f},
+	      {"perturb3-seed11-crit0-adj6", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations, 0.06f},
+	      {"perturb6-seed23-crit0-adj4", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations, 0.04f},
 	      // A small "soft-capacity" reservation around the hottest Rudy tiles to
 	      // improve detailed-routability; chosen only if it stays competitive in
 	      // wirelength within tolerance and reduces tightness/vias.
-	      {"perturb6-seed29-rudy25", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, 25, 1, 0.85f, 2},
-	      {"perturb6-seed29-rudy40", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, 40, 1, 0.85f, 2},
+	      {"perturb6-seed29-rudy25", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment, 25, 1, 0.85f, 2},
+	      {"perturb6-seed29-rudy40", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment, 40, 1, 0.85f, 2},
 	  };
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
@@ -408,13 +476,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       metrics.congestion = compute_congestion_score();
 	    logger_->info(GNR,
 	                  6005,
-	                  "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}, cong {:.3f} (max util {:.3f})",
+	                  "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}, cong {:.3f} (p95 {:.3f}, max {:.3f}, excess {:.4f})",
                   candidate.name,
                   metrics.wirelength_um,
                   metrics.via_count,
                   metrics.total_overflow,
                   metrics.congestion.score,
-                  metrics.congestion.max_util);
+                  metrics.congestion.p95_util,
+                  metrics.congestion.max_util,
+                  metrics.congestion.mean_excess);
     return std::make_pair(std::move(routes), metrics);
   };
 
@@ -475,7 +545,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		  }
 
 		  // Global-WL tolerance window for DR tie-breaks.
-		  constexpr double kWirelengthWindow = 0.0005;  // 0.05%
+		  constexpr double kWirelengthWindow = 0.005;  // 0.5%
 		  const double wl_limit = have_wl
 		                              ? static_cast<double>(best_wl_dbu)
 		                                    * (1.0 + kWirelengthWindow)
