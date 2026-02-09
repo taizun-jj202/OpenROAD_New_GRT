@@ -174,23 +174,36 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                         snapshot.seed,
                         snapshot.critical_percentage,
                         snapshot.congestion_iterations});
-  candidates.push_back({"perturb-seed11-crit0",
-                        6.0f,
+
+  // Small multi-start set; tuned to explore wirelength variations with bounded
+  // runtime for this benchmark.
+  const std::vector<int> seeds = {11, 17, 23, 29, 37};
+  for (const int seed : seeds) {
+    candidates.push_back({("perturb6-seed" + std::to_string(seed) + "-crit0"),
+                          6.0f,
+                          1,
+                          seed,
+                          0.0f,
+                          snapshot.congestion_iterations});
+  }
+  // A couple of extra variants around the historically-good seed 11.
+  candidates.push_back({"perturb4-seed11-crit0",
+                        4.0f,
                         1,
                         11,
                         0.0f,
                         snapshot.congestion_iterations});
-  candidates.push_back({"perturb-seed11-crit5",
+  candidates.push_back({"perturb8-seed11-crit0",
+                        8.0f,
+                        1,
+                        11,
+                        0.0f,
+                        snapshot.congestion_iterations});
+  candidates.push_back({"perturb6-seed11-crit5",
                         6.0f,
                         1,
                         11,
                         5.0f,
-                        snapshot.congestion_iterations});
-  candidates.push_back({"perturb-seed17-crit0",
-                        6.0f,
-                        1,
-                        17,
-                        0.0f,
                         snapshot.congestion_iterations});
 
   const auto better = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
