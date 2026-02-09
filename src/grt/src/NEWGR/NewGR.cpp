@@ -433,23 +433,25 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	  // - deterministic across runs (fixed seeds),
 	  // - reasonably cheap (single-digit candidates),
 	  // - wirelength-first, with DR-friendliness tie-breaks.
-	  const std::vector<CandidateConfig> candidates = {
-	      baseline,
-	      // Historically best on this regression: low perturbation, fixed seed.
-	      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-	      {"perturb3-seed17-crit0", 3.0f, 1, 17, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-	      {"perturb3-seed29-crit0", 3.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		  const std::vector<CandidateConfig> candidates = {
+		      baseline,
+		      // Historically best on this regression: low perturbation, fixed seed.
+		      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb3-seed17-crit0", 3.0f, 1, 17, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb3-seed29-crit0", 3.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
-	      {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-	      {"perturb6-seed17-crit0", 6.0f, 1, 17, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-	      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-	      {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-	      {"perturb6-seed31-crit0", 6.0f, 1, 31, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb6-seed17-crit0", 6.0f, 1, 17, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb6-seed31-crit0", 6.0f, 1, 31, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
-	      // Keep a small fraction of "critical" nets less detoured.
-	      {"perturb6-seed29-crit10", 6.0f, 1, 29, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      // Keep a small fraction of "critical" nets less detoured.
+		      {"perturb6-seed29-crit10", 6.0f, 1, 29, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb6-seed29-crit20", 6.0f, 1, 29, 20.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb3-seed11-crit10", 3.0f, 1, 11, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
-	      {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
 	      // Light global soft-capacity (adjustment) sweeps for strong seeds:
 	      // trade a tiny GR WL increase for less tightness to help DR.
@@ -523,13 +525,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	    }
 		  }
 
-		  // Selection policy:
+		  // Selection policy (wirelength-first, via-second):
 		  // 1) Prefer routable solutions (overflow == 0), else minimize overflow.
-		  // 2) Keep candidates within a tiny global-WL window.
-		  // 3) Pick the DR-friendlier one using congestion tightness, then vias.
+		  // 2) Consider only candidates within a *very small* global-WL window.
+		  // 3) Within that window, minimize global wirelength, then via count.
+		  // 4) Use congestion tightness only as a last tie-breaker.
 		  //
-		  // This guards against picking a marginally-shorter global route that is
-		  // noticeably tighter and causes longer detours during detailed routing.
+		  // Rationale: downstream DR wirelength tends to correlate strongly with
+		  // global wirelength when comparing near-equivalent candidates. We keep
+		  // the WL window tight to avoid selecting a materially longer global
+		  // route "for safety", which has repeatedly hurt this regression.
 		  const int target_overflow = (best_overflow == 0) ? 0 : best_overflow;
 
 		  bool have_wl = false;
@@ -544,8 +549,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		    }
 		  }
 
-		  // Global-WL tolerance window for DR tie-breaks.
-		  constexpr double kWirelengthWindow = 0.005;  // 0.5%
+		  // Global-WL tolerance window for tie-breaks.
+		  // Keep this tight: candidates outside this window are unlikely to
+		  // recover their WL loss during detailed routing on this design.
+		  constexpr double kWirelengthWindow = 0.0005;  // 0.05%
 		  const double wl_limit = have_wl
 		                              ? static_cast<double>(best_wl_dbu)
 		                                    * (1.0 + kWirelengthWindow)
@@ -567,25 +574,28 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		      continue;
 		    }
 
+		    if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
+		      if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
+		        best_candidate = eval.candidate;
+		        best_metrics = metrics;
+		      }
+		      continue;
+		    }
+
+		    if (metrics.via_count != best_metrics.via_count) {
+		      if (metrics.via_count < best_metrics.via_count) {
+		        best_candidate = eval.candidate;
+		        best_metrics = metrics;
+		      }
+		      continue;
+		    }
+
 		    if (metrics.congestion.score != best_metrics.congestion.score) {
 		      if (metrics.congestion.score < best_metrics.congestion.score) {
 		        best_candidate = eval.candidate;
 		        best_metrics = metrics;
 		      }
-	      continue;
-	    }
-
-	    if (metrics.via_count != best_metrics.via_count) {
-	      if (metrics.via_count < best_metrics.via_count) {
-	        best_candidate = eval.candidate;
-	        best_metrics = metrics;
-	      }
-	      continue;
-	    }
-
-		    if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
-		      best_candidate = eval.candidate;
-		      best_metrics = metrics;
+		      continue;
 		    }
 		  }
 
