@@ -190,7 +190,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     // perturbations are often tiny; for downstream detailed routing we bias
     // toward fewer vias when the wirelength difference is within a small
     // relative tolerance.
-    constexpr double kWirelengthEps = 0.0002;  // 0.02%
+    constexpr double kWirelengthEps = 0.00005;  // 0.005%
     if (lhs.wirelength_dbu < rhs.wirelength_dbu * (1.0 - kWirelengthEps)) {
       return true;
     }
@@ -224,43 +224,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	  // - deterministic across runs (fixed seeds),
 	  // - reasonably cheap (single-digit candidates),
 	  // - biased toward wirelength improvements while staying routable.
-	  const std::vector<CandidateConfig> candidates = {
-	      baseline,
-	      {"shuffle-seed11-crit10",
-	       snapshot.caps_percentage,
-	       snapshot.perturbation_amount,
-	       11,
-	       snapshot.critical_percentage,
-	       snapshot.congestion_iterations},
-	      {"shuffle-seed23-crit10",
-	       snapshot.caps_percentage,
-	       snapshot.perturbation_amount,
-	       23,
-	       snapshot.critical_percentage,
-	       snapshot.congestion_iterations},
-	      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
-	      {"perturb3-seed11-crit10",
-	       3.0f,
-	       1,
-	       11,
-	       snapshot.critical_percentage,
-	       snapshot.congestion_iterations},
-	      {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
-	      {"perturb6-seed11-crit10",
-	       6.0f,
-	       1,
-	       11,
-	       snapshot.critical_percentage,
-	       snapshot.congestion_iterations},
-	      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations},
-	      {"perturb6-seed23-crit10",
-	       6.0f,
-	       1,
-	       23,
-	       snapshot.critical_percentage,
-	       snapshot.congestion_iterations},
-	      {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
-	  };
+  const std::vector<CandidateConfig> candidates = {
+      baseline,
+      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
+      {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
+      {"perturb6-seed17-crit0", 6.0f, 1, 17, 0.0f, snapshot.congestion_iterations},
+      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations},
+      {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
+  };
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
