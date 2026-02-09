@@ -72,13 +72,13 @@ struct GuidePatchingOptions
   int max_patched_pins = 1500;
 
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
-  int rudy_hotspot_prefix = 30;
+  int rudy_hotspot_prefix = 40;
 
   // Derived-from-GR congestion hot tiles (based on edge utilization).
   // These complement Rudy hotspots by reacting to actual GR usage patterns.
-  int cong_layer_count = 2;           // apply to [min_layer, min_layer + N)
+  int cong_layer_count = 3;           // apply to [min_layer, min_layer + N)
   double cong_util_threshold = 0.90;  // utilization (usage / eff_cap)
-  int cong_edge_prefix = 900;         // keep only top-N hot edges
+  int cong_edge_prefix = 1100;        // keep only top-N hot edges
   int cong_max_tiles = 2200;          // cap on unique hot tiles tracked
 
   // Patch radius around selected pins, in tiles (1 => +cross neighbors).
@@ -88,7 +88,7 @@ struct GuidePatchingOptions
   int pin_wire_stub_tiles = 2;
 
   // Long-segment patching (in tiles along segment).
-  int long_segment_tiles = 12;
+  int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
   int long_segment_stub_tiles = 1;
   // When patching a long segment, add a short *same-layer* parallel "side lane"
