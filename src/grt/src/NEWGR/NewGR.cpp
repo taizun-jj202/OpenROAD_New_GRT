@@ -85,9 +85,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     // Estimate "detailed-routability risk" by looking at how close the final
     // 3D edge utilization is to capacity. This is a cheap proxy (no DR run).
-    // We only use it as a tie-break when global wirelength is very close, to
-    // avoid the failure mode where "overly-safe" routes become longer and
-    // increase post-DR wirelength.
+    // This is used for logging/debug only; selection is driven primarily by
+    // global wirelength to keep the algorithm stable across runs.
     const auto accumulate_edge = [&](const Edge3D& edge) {
       if (edge.cap == 0) {
         return;
@@ -223,7 +222,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   // Small multi-start set; tuned to explore wirelength variations with bounded
   // runtime for this benchmark.
-  const std::vector<int> seeds = {11, 17, 23, 29, 37};
+  const std::vector<int> seeds = {11, 13, 17, 19, 23};
   for (const int seed : seeds) {
     candidates.push_back({("perturb6-seed" + std::to_string(seed) + "-crit0"),
                           6.0f,
@@ -232,19 +231,30 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                           0.0f,
                           snapshot.congestion_iterations});
   }
-  // A couple of extra variants around the historically-good seed 11.
-  candidates.push_back({"perturb5-seed11-crit0",
-                        5.0f,
+  // Explore a small band around the default congestion iteration count for
+  // the historically good seed 11. This can change the rip-up/reroute
+  // trajectory and sometimes reduces post-DR detours.
+  const int base_iters = snapshot.congestion_iterations;
+  if (base_iters > 5) {
+    candidates.push_back({"perturb6-seed11-crit0-it-5",
+                          6.0f,
+                          1,
+                          11,
+                          0.0f,
+                          base_iters - 5});
+  }
+  candidates.push_back({"perturb6-seed11-crit0-it+5",
+                        6.0f,
                         1,
                         11,
                         0.0f,
-                        snapshot.congestion_iterations});
-  candidates.push_back({"perturb7-seed11-crit0",
-                        7.0f,
+                        base_iters + 5});
+  candidates.push_back({"perturb6-seed11-crit0-it+10",
+                        6.0f,
                         1,
                         11,
                         0.0f,
-                        snapshot.congestion_iterations});
+                        base_iters + 10});
   candidates.push_back({"perturb6-seed11-crit5",
                         6.0f,
                         1,
@@ -252,32 +262,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                         5.0f,
                         snapshot.congestion_iterations});
 
-  // Perturbation "amount" also impacts the randomization strength. Explore a
-  // small range around the default.
-  candidates.push_back({"perturb6-seed11-crit0-amt0",
-                        6.0f,
-                        0,
-                        11,
-                        0.0f,
-                        snapshot.congestion_iterations});
-  candidates.push_back({"perturb6-seed11-crit0-amt2",
-                        6.0f,
-                        2,
-                        11,
-                        0.0f,
-                        snapshot.congestion_iterations});
-
   const auto better = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
-    // Primary objective: global wirelength, which is the best predictor we
-    // have for post-DR wirelength. However, for near-ties we prefer the route
-    // with lower utilization "pressure" to improve detailed-routability.
-    constexpr double kWirelengthTieToleranceUm = 400.0;
-    if (std::fabs(lhs.wirelength_um - rhs.wirelength_um)
-        > kWirelengthTieToleranceUm) {
-      return lhs.wirelength_um < rhs.wirelength_um;
-    }
-    if (lhs.pressure_over_90 != rhs.pressure_over_90) {
-      return lhs.pressure_over_90 < rhs.pressure_over_90;
+    if (lhs.wirelength_dbu != rhs.wirelength_dbu) {
+      return lhs.wirelength_dbu < rhs.wirelength_dbu;
     }
     return lhs.via_count < rhs.via_count;
   };
