@@ -1235,8 +1235,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		  // Selection policy (wirelength-first; DR-aware tie-breaks):
 		  // 1) Prefer routable solutions (overflow == 0), else minimize overflow.
 		  // 2) Primary objective: minimize *global* wirelength (proxy for DR WL).
-		  // 3) Tie-breakers (within a tight WL window): looser congestion, then
-		  //    fewer vias, then absolute WL.
+		  // 3) Tie-breakers (within a tight WL window): fewer vias, then looser
+		  //    congestion (more DR flexibility).
 		  //
 		  // Rationale: On this regression, picking the absolute best GR WL can
 		  // produce tighter guides that force DR detours. Constraining selection
@@ -1254,10 +1254,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
 
       // Keep candidates very close to the best global WL, then pick the
-      // loosest (lowest congestion score) within that window.
+      // absolute smallest WL within that window (wirelength-first objective).
       // Keep this window tight: otherwise the selector can drift toward a
-      // "looser" but meaningfully longer GR solution that tends to increase
-      // detailed wirelength on this regression.
+      // different routing regime that is meaningfully longer in GR and tends
+      // to increase detailed wirelength on this regression.
       constexpr double wl_slack_ratio = 0.0003;   // 0.03%
       constexpr long wl_slack_min_dbu = 100000;   // ~100um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
@@ -1290,8 +1290,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           continue;
         }
 
-        if (metrics.congestion.score != best_metrics.congestion.score) {
-          if (metrics.congestion.score < best_metrics.congestion.score) {
+        if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
+          if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
             best_candidate = eval.candidate;
             best_metrics = metrics;
           }
@@ -1306,8 +1306,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           continue;
         }
 
-        if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
-          if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
+        if (metrics.congestion.score != best_metrics.congestion.score) {
+          if (metrics.congestion.score < best_metrics.congestion.score) {
             best_candidate = eval.candidate;
             best_metrics = metrics;
           }
