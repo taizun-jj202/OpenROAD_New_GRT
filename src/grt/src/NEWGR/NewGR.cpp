@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <string>
 #include <unordered_set>
@@ -73,8 +74,18 @@ struct GuidePatchingOptions
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
   int rudy_hotspot_prefix = 30;
 
+  // Derived-from-GR congestion hot tiles (based on edge utilization).
+  // These complement Rudy hotspots by reacting to actual GR usage patterns.
+  int cong_layer_count = 2;           // apply to [min_layer, min_layer + N)
+  double cong_util_threshold = 0.92;  // utilization (usage / eff_cap)
+  int cong_edge_prefix = 700;         // keep only top-N hot edges
+  int cong_max_tiles = 2200;          // cap on unique hot tiles tracked
+
   // Patch radius around selected pins, in tiles (1 => +cross neighbors).
   int pin_patch_radius_tiles = 1;
+  // Add short wire stubs on the pin connection layer to improve local access
+  // without forcing extra layer switching.
+  int pin_wire_stub_tiles = 1;
 
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 14;
@@ -83,6 +94,10 @@ struct GuidePatchingOptions
   // either for the full segment (very long) or locally around hotspot sample
   // points (shorter long segments).
   int long_segment_escape_span_tiles = 8;
+
+  // For each long segment, cap the number of via "access points" we add.
+  // This helps avoid inflating via count while still enabling a DR escape.
+  int max_via_access_points_per_segment = 1;
 };
 
 static bool is_valid_grid_center(const odb::Rect& die_bounds,
@@ -110,6 +125,34 @@ static bool point_in_any_rect(const odb::Point& p,
   return false;
 }
 
+static bool dbu_to_grid_index(const odb::Rect& die_bounds,
+                              int tile,
+                              int x_grids,
+                              int y_grids,
+                              int x_dbu,
+                              int y_dbu,
+                              int& gx,
+                              int& gy)
+{
+  if (tile <= 0 || x_grids <= 0 || y_grids <= 0) {
+    return false;
+  }
+  const int half = tile / 2;
+  const int origin_x = die_bounds.xMin() + half;
+  const int origin_y = die_bounds.yMin() + half;
+  const int dx = x_dbu - origin_x;
+  const int dy = y_dbu - origin_y;
+  if (dx < 0 || dy < 0) {
+    return false;
+  }
+  gx = dx / tile;
+  gy = dy / tile;
+  if (gx < 0 || gx >= x_grids || gy < 0 || gy >= y_grids) {
+    return false;
+  }
+  return true;
+}
+
 static void maybe_add_via_patch(GRoute& route,
                                 std::unordered_set<GSegment, GSegmentHash>& seen,
                                 int x,
@@ -117,6 +160,9 @@ static void maybe_add_via_patch(GRoute& route,
                                 int layer0,
                                 int layer1)
 {
+  if (layer0 <= 0 || layer1 <= 0) {
+    return;
+  }
   if (layer0 == layer1) {
     return;
   }
@@ -151,6 +197,61 @@ static void maybe_add_wire_patch(GRoute& route,
   }
 }
 
+static void maybe_add_cross_wire_stubs(
+    GRoute& route,
+    std::unordered_set<GSegment, GSegmentHash>& seen,
+    const odb::Rect& die_bounds,
+    int tile,
+    int x,
+    int y,
+    int layer,
+    int stub_tiles,
+    const odb::dbTechLayerDir& preferred_dir)
+{
+  if (stub_tiles <= 0 || tile <= 0) {
+    return;
+  }
+  if (layer <= 0) {
+    return;
+  }
+
+  const int d = stub_tiles * tile;
+  if (d <= 0) {
+    return;
+  }
+
+  const bool do_h = (preferred_dir == odb::dbTechLayerDir::HORIZONTAL)
+                    || (preferred_dir == odb::dbTechLayerDir::NONE);
+  const bool do_v = (preferred_dir == odb::dbTechLayerDir::VERTICAL)
+                    || (preferred_dir == odb::dbTechLayerDir::NONE);
+
+  auto valid = [&](int xx, int yy) {
+    return is_valid_grid_center(die_bounds, tile, xx, yy);
+  };
+
+  if (do_h && valid(x - d, y) && valid(x + d, y)) {
+    maybe_add_wire_patch(route, seen, x - d, y, layer, x + d, y);
+  } else if (do_h) {
+    if (valid(x - d, y) && valid(x, y)) {
+      maybe_add_wire_patch(route, seen, x - d, y, layer, x, y);
+    }
+    if (valid(x, y) && valid(x + d, y)) {
+      maybe_add_wire_patch(route, seen, x, y, layer, x + d, y);
+    }
+  }
+
+  if (do_v && valid(x, y - d) && valid(x, y + d)) {
+    maybe_add_wire_patch(route, seen, x, y - d, layer, x, y + d);
+  } else if (do_v) {
+    if (valid(x, y - d) && valid(x, y)) {
+      maybe_add_wire_patch(route, seen, x, y - d, layer, x, y);
+    }
+    if (valid(x, y) && valid(x, y + d)) {
+      maybe_add_wire_patch(route, seen, x, y, layer, x, y + d);
+    }
+  }
+}
+
 static void patch_guides_for_dr_friendliness(
     GlobalRouter* grouter,
     NetRouteMap& routes,
@@ -162,6 +263,10 @@ static void patch_guides_for_dr_friendliness(
   if (grouter == nullptr || grouter->grid() == nullptr) {
     return;
   }
+
+  odb::dbDatabase* db = grouter->db();
+  odb::dbTech* tech = (db != nullptr) ? db->getTech() : nullptr;
+
   const int tile = grouter->grid()->getTileSize();
   if (tile <= 0) {
     return;
@@ -169,6 +274,144 @@ static void patch_guides_for_dr_friendliness(
 
   const GuidePatchingOptions opts;
   const odb::Rect die_bounds = grouter->grid()->getGridArea();
+  const int x_grids = grouter->grid()->getXGrids();
+  const int y_grids = grouter->grid()->getYGrids();
+  const int tech_max_routing_layer
+      = (tech != nullptr) ? tech->getRoutingLayerCount() : max_routing_layer;
+  const int min_patch_layer = std::max(1, min_routing_layer);
+  const int max_patch_layer
+      = std::min(max_routing_layer, tech_max_routing_layer);
+  if (min_patch_layer > max_patch_layer) {
+    return;
+  }
+
+  // Build a deterministic set of hot tiles from *actual* GR edge utilization.
+  // This helps focus patching on places where the chosen candidate is tight,
+  // even if Rudy hotspots are imperfect.
+  std::unordered_set<std::uint64_t> cong_tiles;
+  cong_tiles.reserve(static_cast<std::size_t>(opts.cong_max_tiles));
+
+  FastRouteCore* fr = grouter->fastroute();
+  if (fr != nullptr && opts.cong_layer_count > 0 && opts.cong_edge_prefix > 0
+      && opts.cong_util_threshold > 0.0) {
+    struct HotEdge
+    {
+      double util = 0.0;
+      int layer = 0;  // 1-based routing layer
+      int x = 0;
+      int y = 0;
+      bool horizontal = true;
+    };
+    std::vector<HotEdge> hot_edges;
+    hot_edges.reserve(static_cast<std::size_t>(opts.cong_edge_prefix) * 2);
+
+    const auto consider_edge = [&](int layer_1based,
+                                   int x,
+                                   int y,
+                                   bool horizontal,
+                                   const auto& edge) {
+      const int eff_cap = static_cast<int>(edge.real_cap)
+                          - static_cast<int>(edge.red);
+      if (eff_cap <= 0) {
+        return;
+      }
+      const double util
+          = static_cast<double>(edge.usage) / static_cast<double>(eff_cap);
+      if (util < opts.cong_util_threshold) {
+        return;
+      }
+      hot_edges.push_back({util, layer_1based, x, y, horizontal});
+    };
+
+    const int cong_min_layer = min_patch_layer;
+    const int cong_max_layer
+        = std::min(max_patch_layer,
+                   min_patch_layer + opts.cong_layer_count - 1);
+
+    const auto& h_edges = fr->getHorizontalEdges3D();
+    const auto& v_edges = fr->getVerticalEdges3D();
+    const int max_layer_idx = static_cast<int>(h_edges.shape()[0]);
+
+    for (int layer = cong_min_layer; layer <= cong_max_layer; layer++) {
+      const int l_idx = layer - 1;
+      if (l_idx < 0 || l_idx >= max_layer_idx) {
+        continue;
+      }
+      for (int y = 0; y < static_cast<int>(h_edges.shape()[1]); y++) {
+        for (int x = 0; x < static_cast<int>(h_edges.shape()[2]); x++) {
+          consider_edge(layer, x, y, true, h_edges[l_idx][y][x]);
+        }
+      }
+      for (int y = 0; y < static_cast<int>(v_edges.shape()[1]); y++) {
+        for (int x = 0; x < static_cast<int>(v_edges.shape()[2]); x++) {
+          consider_edge(layer, x, y, false, v_edges[l_idx][y][x]);
+        }
+      }
+    }
+
+    std::sort(hot_edges.begin(),
+              hot_edges.end(),
+              [](const HotEdge& a, const HotEdge& b) {
+                if (a.util != b.util) {
+                  return a.util > b.util;
+                }
+                if (a.layer != b.layer) {
+                  return a.layer < b.layer;
+                }
+                if (a.horizontal != b.horizontal) {
+                  return a.horizontal > b.horizontal;
+                }
+                if (a.y != b.y) {
+                  return a.y < b.y;
+                }
+                return a.x < b.x;
+              });
+
+    const int edge_limit
+        = std::min<int>(opts.cong_edge_prefix, static_cast<int>(hot_edges.size()));
+
+    auto add_tile = [&](int gx, int gy) {
+      if (cong_tiles.size() >= static_cast<std::size_t>(opts.cong_max_tiles)) {
+        return;
+      }
+      if (gx < 0 || gx >= x_grids || gy < 0 || gy >= y_grids) {
+        return;
+      }
+      const std::uint64_t key
+          = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(gx)) << 32)
+            | static_cast<std::uint32_t>(gy);
+      cong_tiles.insert(key);
+    };
+
+    for (int i = 0;
+         i < edge_limit
+         && cong_tiles.size() < static_cast<std::size_t>(opts.cong_max_tiles);
+         i++) {
+      const HotEdge& e = hot_edges[i];
+      add_tile(e.x, e.y);
+      if (e.horizontal) {
+        add_tile(e.x + 1, e.y);
+      } else {
+        add_tile(e.x, e.y + 1);
+      }
+    }
+  }
+
+  auto point_in_cong_tiles = [&](int x_dbu, int y_dbu) -> bool {
+    if (cong_tiles.empty()) {
+      return false;
+    }
+    int gx = 0;
+    int gy = 0;
+    if (!dbu_to_grid_index(
+            die_bounds, tile, x_grids, y_grids, x_dbu, y_dbu, gx, gy)) {
+      return false;
+    }
+    const std::uint64_t key
+        = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(gx)) << 32)
+          | static_cast<std::uint32_t>(gy);
+    return cong_tiles.find(key) != cong_tiles.end();
+  };
 
   int total_patches = 0;
   int patched_pins = 0;
@@ -213,24 +456,35 @@ static void patch_guides_for_dr_friendliness(
 
         const bool in_hotspot = point_in_any_rect(
             pin_grid, rudy_hotspot_regions, opts.rudy_hotspot_prefix);
+        const bool in_cong = point_in_cong_tiles(pin_grid.x(), pin_grid.y());
+        const bool dr_risky = in_hotspot || in_cong;
+
         const bool should_patch_pin
             = pin.isPort() || pin.isConnectedToPadOrMacro()
-              || (in_hotspot && net->getNumPins() >= 10);
+              || (dr_risky && net->getNumPins() >= 10);
 
         if (!should_patch_pin) {
           continue;
         }
 
         const int conn_layer = pin.getConnectionLayer();
-        if (conn_layer < min_routing_layer || conn_layer > max_routing_layer) {
+        if (conn_layer < min_patch_layer || conn_layer > max_patch_layer) {
           continue;
         }
 
         const int above = conn_layer + 1;
         const int below = conn_layer - 1;
 
-        const int radius = in_hotspot ? opts.pin_patch_radius_tiles : 0;
+        const int radius = dr_risky ? opts.pin_patch_radius_tiles : 0;
         const int d = radius * tile;
+
+        odb::dbTechLayerDir preferred_dir = odb::dbTechLayerDir::NONE;
+        if (tech != nullptr) {
+          odb::dbTechLayer* tech_layer = tech->findRoutingLayer(conn_layer);
+          if (tech_layer != nullptr) {
+            preferred_dir = tech_layer->getDirection();
+          }
+        }
 
         // Center + cross neighbors (radius 1 => +/-1 tile).
         const std::vector<std::pair<int, int>> offsets = {
@@ -255,11 +509,29 @@ static void patch_guides_for_dr_friendliness(
           }
 
           const int before_total = static_cast<int>(route.size());
-          if (above <= max_routing_layer) {
-            maybe_add_via_patch(route, seen, x, y, conn_layer, above);
-          }
-          if (below >= min_routing_layer) {
-            maybe_add_via_patch(route, seen, x, y, conn_layer, below);
+          // Always add small same-layer stubs to improve local access without
+          // forcing extra vias.
+          maybe_add_cross_wire_stubs(route,
+                                    seen,
+                                    die_bounds,
+                                    tile,
+                                    x,
+                                    y,
+                                    conn_layer,
+                                    opts.pin_wire_stub_tiles,
+                                    preferred_dir);
+
+          // Add via tiles only for ports / macro pins (higher risk of access
+          // issues) and only in genuinely risky regions.
+          const bool allow_pin_vias
+              = pin.isPort() || pin.isConnectedToPadOrMacro();
+          if (allow_pin_vias && dr_risky) {
+            if (above <= max_patch_layer) {
+              maybe_add_via_patch(route, seen, x, y, conn_layer, above);
+            }
+            if (below >= min_patch_layer) {
+              maybe_add_via_patch(route, seen, x, y, conn_layer, below);
+            }
           }
           const int added = static_cast<int>(route.size()) - before_total;
           if (added > 0) {
@@ -291,7 +563,7 @@ static void patch_guides_for_dr_friendliness(
       }
 
       const int layer = seg.init_layer;
-      if (layer < min_routing_layer || layer > max_routing_layer) {
+      if (layer < min_patch_layer || layer > max_patch_layer) {
         continue;
       }
 
@@ -314,8 +586,8 @@ static void patch_guides_for_dr_friendliness(
 
       const int above = layer + 1;
       const int below = layer - 1;
-      const int target_layer = (above <= max_routing_layer) ? above : below;
-      if (target_layer < min_routing_layer || target_layer > max_routing_layer) {
+      const int target_layer = (above <= max_patch_layer) ? above : below;
+      if (target_layer < min_patch_layer || target_layer > max_patch_layer) {
         continue;
       }
 
@@ -345,7 +617,10 @@ static void patch_guides_for_dr_friendliness(
           continue;
         }
         const odb::Point p(x, y);
-        if (point_in_any_rect(p, rudy_hotspot_regions, opts.rudy_hotspot_prefix)) {
+        const bool in_rudy
+            = point_in_any_rect(p, rudy_hotspot_regions, opts.rudy_hotspot_prefix);
+        const bool in_cong = point_in_cong_tiles(x, y);
+        if (in_rudy || in_cong) {
           hot_steps.push_back(step_tiles);
         }
       }
@@ -370,18 +645,6 @@ static void patch_guides_for_dr_friendliness(
           patches_for_net += added;
           total_patches += added;
         }
-      };
-
-      auto add_via_at_step = [&](int step_tiles) {
-        if (step_tiles <= 0 || step_tiles >= tiles) {
-          return;
-        }
-        const int x = horizontal ? (std::min(x0, x1) + step_tiles * tile) : x0;
-        const int y = vertical ? (std::min(y0, y1) + step_tiles * tile) : y0;
-        if (!is_valid_grid_center(die_bounds, tile, x, y)) {
-          return;
-        }
-        try_add_patch([&]() { maybe_add_via_patch(route, seen, x, y, layer, target_layer); });
       };
 
       auto add_local_escape_lane_at_step = [&](int step_tiles) {
@@ -411,6 +674,14 @@ static void patch_guides_for_dr_friendliness(
         });
       };
 
+      odb::dbTechLayerDir preferred_dir = odb::dbTechLayerDir::NONE;
+      if (tech != nullptr) {
+        odb::dbTechLayer* tech_layer = tech->findRoutingLayer(layer);
+        if (tech_layer != nullptr) {
+          preferred_dir = tech_layer->getDirection();
+        }
+      }
+
       // Add an "escape lane" on the adjacent layer. For very long segments we
       // provide the full-length lane; otherwise, keep it local to hotspot
       // samples to control guide/via inflation.
@@ -424,16 +695,47 @@ static void patch_guides_for_dr_friendliness(
         }
       }
 
-      // Ensure layer connectivity at the hotspot samples.
+      // Add same-layer local flexibility at hotspot samples (helps DR avoid
+      // detours without requiring layer switches).
       for (const int step_tiles : hot_steps) {
-        add_via_at_step(step_tiles);
+        const auto [x, y] = step_to_xy(step_tiles);
+        if (!is_valid_grid_center(die_bounds, tile, x, y)) {
+          continue;
+        }
+        try_add_patch([&]() {
+          maybe_add_cross_wire_stubs(route,
+                                    seen,
+                                    die_bounds,
+                                    tile,
+                                    x,
+                                    y,
+                                    layer,
+                                    /*stub_tiles=*/1,
+                                    preferred_dir);
+        });
       }
 
-      // For very long segments, ensure we have at least 2 access points if the
-      // hotspot sampling only hit a single location (common when congestion is
-      // concentrated near one end of a long segment).
-      if (tiles >= opts.very_long_segment_tiles && hot_steps.size() == 1) {
-        add_via_at_step(tiles / 2);
+      // Ensure layer connectivity at a limited number of hotspot samples.
+      if (opts.max_via_access_points_per_segment > 0) {
+        // Pick the hotspot sample closest to the segment midpoint (stable).
+        int best_step = -1;
+        int best_dist = std::numeric_limits<int>::max();
+        const int mid = tiles / 2;
+        for (const int step_tiles : hot_steps) {
+          const int dist_mid = std::abs(step_tiles - mid);
+          if (dist_mid < best_dist) {
+            best_dist = dist_mid;
+            best_step = step_tiles;
+          }
+        }
+
+        if (best_step > 0 && best_step < tiles) {
+          const auto [x, y] = step_to_xy(best_step);
+          if (is_valid_grid_center(die_bounds, tile, x, y)) {
+            try_add_patch(
+                [&]() { maybe_add_via_patch(route, seen, x, y, layer, target_layer); });
+          }
+        }
       }
     }
 
@@ -838,51 +1140,37 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		  // NOTE: Even though our regression metric is *detailed* wirelength, in
 		  // practice the best candidates are usually among the lowest GR-WL
 		  // solutions once we apply DR-friendly guide patching.
-		  const std::vector<CandidateConfig> candidates = {
-		      baseline,
-
-		      // Low perturbation, fixed seeds (historically stable).
-		      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-		      {"perturb3-seed11-crit10", 3.0f, 1, 11, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-		      {"perturb3-seed17-crit0", 3.0f, 1, 17, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-          {"perturb3-seed23-crit0", 3.0f, 1, 23, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-
-		      // Slightly stronger perturbation; keep some nets "critical" to avoid
-		      // excessive detours in the rip-up/reroute stages.
-		      {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-		      {"perturb6-seed29-crit10", 6.0f, 1, 29, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-		      {"perturb6-seed29-crit20", 6.0f, 1, 29, 20.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-
-		      // Alternate seeds for coverage.
-		      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-		      {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-
-          // Rudy hotspot "soft-capacity" reservations (gentle). These often
-          // slightly increase GR-WL while improving DR-WL by avoiding pin-access
-          // bottlenecks and near-saturated edges in lower layers.
-          {"perturb3-seed11-crit10-rudy15",
+      const std::vector<CandidateConfig> candidates = {
+          // Tuned deterministic configuration that usually wins.
+          {"perturb3-seed11-crit0",
            3.0f,
            1,
            11,
-           10.0f,
+           0.0f,
            snapshot.congestion_iterations,
            snapshot.global_adjustment,
-           15,
+           0,
+           0,
+           1.0f,
+           0},
+
+          // Gentle Rudy-based soft-capacity reservations in the lowest layers.
+          // This often slightly increases GR-WL while decreasing DR detours.
+          {"perturb3-seed11-crit0-rudy20",
+           3.0f,
            1,
-           0.95f,
-           2},
-          {"perturb6-seed29-crit10-rudy20",
-           6.0f,
-           1,
-           29,
-           10.0f,
+           11,
+           0.0f,
            snapshot.congestion_iterations,
            snapshot.global_adjustment,
            20,
            1,
-           0.93f,
+           0.95f,
            2},
-		  };
+
+          // Fallback: snapshot/baseline configuration.
+          baseline,
+      };
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
