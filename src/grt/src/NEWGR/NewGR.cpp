@@ -453,15 +453,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		      {"perturb6-seed29-crit20", 6.0f, 1, 29, 20.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 		      {"perturb3-seed11-crit10", 3.0f, 1, 11, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
-          // Reduced congestion-iteration variants: long rip-up/reroute runs can
-          // over-detour and harm wirelength. Keep these eligible only if they
-          // still meet the overflow target.
-          {"perturb6-seed29-crit10-it35", 6.0f, 1, 29, 10.0f, 35, snapshot.global_adjustment},
-          {"perturb6-seed29-crit10-it25", 6.0f, 1, 29, 10.0f, 25, snapshot.global_adjustment},
-          {"perturb6-seed29-crit0-it35", 6.0f, 1, 29, 0.0f, 35, snapshot.global_adjustment},
-          {"perturb6-seed29-crit0-it25", 6.0f, 1, 29, 0.0f, 25, snapshot.global_adjustment},
-          {"perturb3-seed11-crit0-it35", 3.0f, 1, 11, 0.0f, 35, snapshot.global_adjustment},
-
 		      {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
 	      // Light global soft-capacity (adjustment) sweeps for strong seeds:
@@ -560,12 +551,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
 
       // DR-aware WL window:
-      // Keep candidates "near" the best global WL, then pick the loosest
-      // (lowest congestion score) within that window. This often reduces
-      // downstream detailed-routing detours without allowing large GR WL
-      // regressions.
-      constexpr double wl_slack_ratio = 0.0015;  // 0.15%
-      constexpr long wl_slack_min_dbu = 2000;    // avoid a too-tight window
+      // Keep candidates *very* close to the best global WL, then pick the
+      // loosest (lowest congestion score) within that window. A too-wide
+      // window can select "easy" (low congestion) solutions that degrade DR
+      // wirelength on this regression.
+      constexpr double wl_slack_ratio = 0.0003;   // 0.03%
+      constexpr long wl_slack_min_dbu = 100000;   // 100um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
           static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
