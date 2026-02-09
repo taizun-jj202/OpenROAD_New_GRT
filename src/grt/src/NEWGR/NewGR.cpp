@@ -1131,20 +1131,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               0};
 
   // Keep candidate exploration minimal to preserve runtime. A second candidate
-  // provides diversity without significantly changing runtime characteristics.
-  const CandidateConfig alt_seed{"perturb2-seed7-crit0",
-                                 2.0f,
-                                 1,
-                                 7,
-                                 0.0f,
-                                 snapshot.congestion_iterations,
-                                 snapshot.global_adjustment,
-                                 0,
-                                 0,
-                                 1.0f,
-                                 0};
-
-  const std::vector<CandidateConfig> candidates = {tuned, alt_seed};
+  // can help when tuned hits local congestion regimes, but on our regression
+  // it consistently regresses detailed wirelength. Stick to a single tuned
+  // candidate to preserve runtime and wirelength stability.
+  const std::vector<CandidateConfig> candidates = {tuned};
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
