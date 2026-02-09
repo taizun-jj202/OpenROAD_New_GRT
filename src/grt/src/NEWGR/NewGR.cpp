@@ -61,8 +61,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     long wirelength_dbu = 0;
     long via_count = 0;
     double wirelength_um = 0.0;
-    long long pressure_over_90 = 0;  // edges > 90% utilized (approx)
-    double max_utilization = 0.0;
   };
 
   auto compute_metrics = [&](const NetRouteMap& routes) -> RouteMetrics {
@@ -84,48 +82,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = metrics.wirelength_dbu
             / static_cast<double>(
                 grouter_->db_->getTech()->getDbUnitsPerMicron());
-    }
-
-    // Estimate "detailed-routability risk" by looking at how close the final
-    // 3D edge utilization is to capacity. This is a cheap proxy (no DR run).
-    // This is used for logging/debug only; selection is driven primarily by
-    // global wirelength to keep the algorithm stable across runs.
-    const auto accumulate_edge = [&](const Edge3D& edge) {
-      if (edge.cap == 0) {
-        return;
-      }
-      metrics.max_utilization
-          = std::max(metrics.max_utilization,
-                     static_cast<double>(edge.usage)
-                         / static_cast<double>(edge.cap));
-      const int threshold = static_cast<int>(std::floor(edge.cap * 0.90));
-      const int over = static_cast<int>(edge.usage) - threshold;
-      if (over > 0) {
-        metrics.pressure_over_90 += over;
-      }
-    };
-
-    const auto& h_edges = grouter_->fastroute_->getHorizontalEdges3D();
-    const auto& v_edges = grouter_->fastroute_->getVerticalEdges3D();
-    const int h_layers = static_cast<int>(h_edges.shape()[0]);
-    const int h_y = static_cast<int>(h_edges.shape()[1]);
-    const int h_x = static_cast<int>(h_edges.shape()[2]);
-    for (int l = 0; l < h_layers; l++) {
-      for (int y = 0; y < h_y; y++) {
-        for (int x = 0; x < h_x; x++) {
-          accumulate_edge(h_edges[l][y][x]);
-        }
-      }
-    }
-    const int v_layers = static_cast<int>(v_edges.shape()[0]);
-    const int v_y = static_cast<int>(v_edges.shape()[1]);
-    const int v_x = static_cast<int>(v_edges.shape()[2]);
-    for (int l = 0; l < v_layers; l++) {
-      for (int y = 0; y < v_y; y++) {
-        for (int x = 0; x < v_x; x++) {
-          accumulate_edge(v_edges[l][y][x]);
-        }
-      }
     }
 
     return metrics;
@@ -289,27 +245,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                           0.0f});
   }
 
-  const auto better = [&](const RouteMetrics& lhs, const RouteMetrics& rhs) {
-    // Primary objective: reduce final DRT wirelength.
-    // Proxy: favor lower global wirelength, but avoid overly congested
-    // solutions when wirelength is within a small tolerance, since those
-    // often detour during DRT and end up worse.
-    const long wl_min = std::min(lhs.wirelength_dbu, rhs.wirelength_dbu);
-    const long wl_tol = std::max<long>(wl_min / 1000, 1);  // 0.1%
-    if (std::labs(lhs.wirelength_dbu - rhs.wirelength_dbu) > wl_tol) {
+  const auto better = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
+    if (lhs.wirelength_dbu != rhs.wirelength_dbu) {
       return lhs.wirelength_dbu < rhs.wirelength_dbu;
     }
-
-    if (lhs.pressure_over_90 != rhs.pressure_over_90) {
-      return lhs.pressure_over_90 < rhs.pressure_over_90;
-    }
-    if (lhs.max_utilization != rhs.max_utilization) {
-      return lhs.max_utilization < rhs.max_utilization;
-    }
-    if (lhs.via_count != rhs.via_count) {
-      return lhs.via_count < rhs.via_count;
-    }
-    return false;
+    return lhs.via_count < rhs.via_count;
   };
 
   NetRouteMap chosen_routes;
@@ -329,12 +269,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const RouteMetrics metrics = compute_metrics(routes);
     logger_->info(GNR,
                   6005,
-                  "NEWGR {}: wirelength {:.0f} um, vias {}, pressure {}, max_util {:.2f}",
+                  "NEWGR {}: wirelength {:.0f} um, vias {}",
                   candidate.name,
                   metrics.wirelength_um,
-                  metrics.via_count,
-                  metrics.pressure_over_90,
-                  metrics.max_utilization);
+                  metrics.via_count);
 
     if (!have_choice || better(metrics, chosen_metrics)) {
       chosen_routes = std::move(routes);
@@ -345,101 +283,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   logger_->info(GNR, 6007, "NEWGR picked {}", chosen_name);
-
-  // Widen guides: add parallel guide segments (shifted by +/- 1 tile) for long
-  // straight segments. This does not force extra routing; it only expands the
-  // allowed guide region for the detailed router.
-  const auto widen_guides = [&]() {
-    const int tile = grouter_->grid_->getTileSize();
-    if (tile <= 0) {
-      return;
-    }
-    const int x_min = grouter_->grid_->getXMin() + tile / 2;
-    const int y_min = grouter_->grid_->getYMin() + tile / 2;
-    const int x_max = grouter_->grid_->getXMax() - tile / 2;
-    const int y_max = grouter_->grid_->getYMax() - tile / 2;
-
-    auto in_bounds = [&](const int x, const int y) {
-      return x >= x_min && x <= x_max && y >= y_min && y <= y_max;
-    };
-
-    for (auto& [db_net, segments] : chosen_routes) {
-      static_cast<void>(db_net);
-      const size_t original_size = segments.size();
-      if (original_size == 0) {
-        continue;
-      }
-      // Worst case: two extra segments per eligible segment.
-      segments.reserve(original_size * 3);
-
-      for (size_t i = 0; i < original_size; i++) {
-        const GSegment& s = segments[i];
-        if (s.isVia()) {
-          continue;
-        }
-        // Only widen long segments to control guide blow-up.
-        if (s.length() < 5 * tile) {
-          continue;
-        }
-
-        // Horizontal segment: shift in Y (and add end-connectors so the
-        // expanded guide remains connected; disconnected segments can break
-        // incremental GR/parasitic updates in the flow).
-        if (s.init_y == s.final_y) {
-          for (const int dy : {tile, -tile}) {
-            const int y = s.init_y + dy;
-            if (!in_bounds(s.init_x, y) || !in_bounds(s.final_x, y)) {
-              continue;
-            }
-            if (!in_bounds(s.init_x, s.init_y)
-                || !in_bounds(s.final_x, s.final_y)) {
-              continue;
-            }
-            // Parallel segment.
-            segments.emplace_back(
-                s.init_x, y, s.init_layer, s.final_x, y, s.final_layer);
-            // End connectors.
-            segments.emplace_back(
-                s.init_x, s.init_y, s.init_layer, s.init_x, y, s.init_layer);
-            segments.emplace_back(s.final_x,
-                                  s.final_y,
-                                  s.final_layer,
-                                  s.final_x,
-                                  y,
-                                  s.final_layer);
-          }
-          continue;
-        }
-
-        // Vertical segment: shift in X (with end-connectors for connectivity).
-        if (s.init_x == s.final_x) {
-          for (const int dx : {tile, -tile}) {
-            const int x = s.init_x + dx;
-            if (!in_bounds(x, s.init_y) || !in_bounds(x, s.final_y)) {
-              continue;
-            }
-            if (!in_bounds(s.init_x, s.init_y)
-                || !in_bounds(s.final_x, s.final_y)) {
-              continue;
-            }
-            // Parallel segment.
-            segments.emplace_back(
-                x, s.init_y, s.init_layer, x, s.final_y, s.final_layer);
-            // End connectors.
-            segments.emplace_back(
-                s.init_x, s.init_y, s.init_layer, x, s.init_y, s.init_layer);
-            segments.emplace_back(s.final_x,
-                                  s.final_y,
-                                  s.final_layer,
-                                  x,
-                                  s.final_y,
-                                  s.final_layer);
-          }
-        }
-      }
-    }
-  };
-  widen_guides();
 
   restore_snapshot(snapshot);
   return chosen_routes;
