@@ -188,27 +188,35 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return lhs.via_count < rhs.via_count;
   };
 
-  // NEWGR strategy (wirelength-first):
-  // - Prefer a stable configuration that historically yielded the best
-  //   detailed-routing results on our regression design.
-  // - Avoid expensive multi-candidate sweeps (which can also introduce
-  //   nondeterminism if multiple runs vary slightly).
+  // NEWGR strategy (wirelength-first, via-second):
+  // - Explore a small, deterministic set of perturbation/seed/critical-net
+  //   configurations and pick the best by (1) routability, (2) global
+  //   wirelength, and (3) via count.
   //
-  // Fallback to the snapshot/baseline configuration if the tuned config
-  // leaves overflow.
-  const CandidateConfig tuned{"perturb-seed11-crit0",
-                              6.0f,
-                              1,
-                              11,
-                              0.0f,
-                              snapshot.congestion_iterations};
-
+  // Rationale: for our regression, small deterministic perturbations can
+  // improve downstream detailed-routing metrics by nudging congestion away
+  // from hard-to-route pin-access regions, even if global cost differences
+  // are small.
   const CandidateConfig baseline{"baseline",
                                  snapshot.caps_percentage,
                                  snapshot.perturbation_amount,
                                  snapshot.seed,
                                  snapshot.critical_percentage,
                                  snapshot.congestion_iterations};
+
+  // Small candidate set tuned to be:
+  // - deterministic across runs (fixed seeds),
+  // - reasonably cheap (single-digit candidates),
+  // - biased toward wirelength improvements while staying routable.
+  const std::vector<CandidateConfig> candidates = {
+      baseline,
+      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
+      {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
+      {"perturb6-seed11-crit5", 6.0f, 1, 11, 5.0f, snapshot.congestion_iterations},
+      {"perturb6-seed17-crit0", 6.0f, 1, 17, 0.0f, snapshot.congestion_iterations},
+      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations},
+      {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
+  };
 
   const auto run_candidate = [&](const CandidateConfig& candidate) {
     restore_snapshot(snapshot);
@@ -240,45 +248,33 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   };
 
-  auto [tuned_routes, tuned_metrics] = run_candidate(tuned);
-  if (tuned_metrics.total_overflow == 0) {
-    logger_->info(GNR,
-                  6007,
-                  "NEWGR picked {} (overflow {}, wl {:.0f} um, vias {})",
-                  tuned.name,
-                  tuned_metrics.total_overflow,
-                  tuned_metrics.wirelength_um,
-                  tuned_metrics.via_count);
-    finalize(tuned_metrics.total_overflow);
-    return tuned_routes;
+  CandidateConfig best_candidate = baseline;
+  RouteMetrics best_metrics;
+  bool have_best = false;
+
+  for (const auto& candidate : candidates) {
+    auto candidate_result = run_candidate(candidate);
+    const RouteMetrics& metrics = candidate_result.second;
+    if (!have_best || better(metrics, best_metrics)) {
+      best_candidate = candidate;
+      best_metrics = metrics;
+      have_best = true;
+    }
   }
 
-  auto [baseline_routes, baseline_metrics] = run_candidate(baseline);
-  const bool pick_tuned = better(tuned_metrics, baseline_metrics);
-
-  if (pick_tuned) {
-    // Re-run tuned so `grouter_->fastroute_` internal state matches the routes.
-    auto [rerun_routes, rerun_metrics] = run_candidate(tuned);
-    logger_->info(GNR,
-                  6009,
-                  "NEWGR picked {} (overflow {}, wl {:.0f} um, vias {})",
-                  tuned.name,
-                  rerun_metrics.total_overflow,
-                  rerun_metrics.wirelength_um,
-                  rerun_metrics.via_count);
-    finalize(rerun_metrics.total_overflow);
-    return rerun_routes;
-  }
+  // Re-run the winner so `grouter_->fastroute_` internal state matches the
+  // returned routes (important for subsequent incremental calls in the flow).
+  auto [winner_routes, winner_metrics] = run_candidate(best_candidate);
 
   logger_->info(GNR,
-                6010,
+                6007,
                 "NEWGR picked {} (overflow {}, wl {:.0f} um, vias {})",
-                baseline.name,
-                baseline_metrics.total_overflow,
-                baseline_metrics.wirelength_um,
-                baseline_metrics.via_count);
-  finalize(baseline_metrics.total_overflow);
-  return baseline_routes;
+                best_candidate.name,
+                winner_metrics.total_overflow,
+                winner_metrics.wirelength_um,
+                winner_metrics.via_count);
+  finalize(winner_metrics.total_overflow);
+  return winner_routes;
 }
 
 }  // namespace grt
