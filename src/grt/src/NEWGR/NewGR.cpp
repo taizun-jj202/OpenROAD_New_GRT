@@ -90,14 +90,10 @@ struct GuidePatchingOptions
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 14;
   int very_long_segment_tiles = 30;
-  // When patching a long segment, add an "escape lane" on the adjacent layer
-  // either for the full segment (very long) or locally around hotspot sample
-  // points (shorter long segments).
-  int long_segment_escape_span_tiles = 8;
-
-  // For each long segment, cap the number of via "access points" we add.
-  // This helps avoid inflating via count while still enabling a DR escape.
-  int max_via_access_points_per_segment = 1;
+  // When patching a long segment, add a short *same-layer* parallel "side lane"
+  // around hotspot samples. This tends to improve DR flexibility without
+  // explicitly encouraging layer switching (vias).
+  int long_segment_side_lane_span_tiles = 8;
 };
 
 static bool is_valid_grid_center(const odb::Rect& die_bounds,
@@ -584,13 +580,6 @@ static void patch_guides_for_dr_friendliness(
         continue;
       }
 
-      const int above = layer + 1;
-      const int below = layer - 1;
-      const int target_layer = (above <= max_patch_layer) ? above : below;
-      if (target_layer < min_patch_layer || target_layer > max_patch_layer) {
-        continue;
-      }
-
       // Only patch segments that plausibly intersect the hottest Rudy regions.
       // Midpoint-only sampling can miss hotspots concentrated near an endpoint,
       // so use a small deterministic set of samples.
@@ -647,8 +636,8 @@ static void patch_guides_for_dr_friendliness(
         }
       };
 
-      auto add_local_escape_lane_at_step = [&](int step_tiles) {
-        const int span = std::max(1, opts.long_segment_escape_span_tiles);
+      auto add_local_side_lane_at_step = [&](int step_tiles) {
+        const int span = std::max(1, opts.long_segment_side_lane_span_tiles);
         const int start_step = std::max(0, step_tiles - span);
         const int end_step = std::min(tiles, step_tiles + span);
         if (end_step <= start_step) {
@@ -669,8 +658,32 @@ static void patch_guides_for_dr_friendliness(
           return;
         }
 
+        // Add a parallel segment on the same layer, offset by 1 tile in the
+        // perpendicular direction (if both endpoints stay in-bounds). This
+        // creates a narrow corridor that can absorb local detours without
+        // requiring a layer change.
+        const int ox = vertical ? tile : 0;
+        const int oy = horizontal ? tile : 0;
+        const auto endpoints_ok = [&](int dx, int dy) {
+          return is_valid_grid_center(die_bounds, tile, wx0 + dx, wy0 + dy)
+                 && is_valid_grid_center(die_bounds, tile, wx1 + dx, wy1 + dy);
+        };
+
+        int dx = 0;
+        int dy = 0;
+        if (endpoints_ok(ox, oy)) {
+          dx = ox;
+          dy = oy;
+        } else if (endpoints_ok(-ox, -oy)) {
+          dx = -ox;
+          dy = -oy;
+        } else {
+          return;
+        }
+
         try_add_patch([&]() {
-          maybe_add_wire_patch(route, seen, wx0, wy0, target_layer, wx1, wy1);
+          maybe_add_wire_patch(
+              route, seen, wx0 + dx, wy0 + dy, layer, wx1 + dx, wy1 + dy);
         });
       };
 
@@ -682,16 +695,16 @@ static void patch_guides_for_dr_friendliness(
         }
       }
 
-      // Add an "escape lane" on the adjacent layer. For very long segments we
-      // provide the full-length lane; otherwise, keep it local to hotspot
-      // samples to control guide/via inflation.
+      // Add same-layer parallel "side lanes" around hotspot samples. Prefer
+      // this to adjacent-layer escape lanes to avoid inflating via count.
       if (tiles >= opts.very_long_segment_tiles) {
-        try_add_patch([&]() {
-          maybe_add_wire_patch(route, seen, x0, y0, target_layer, x1, y1);
-        });
+        // Very long segments get a couple of side-lane samples to increase
+        // flexibility while keeping guide count bounded.
+        add_local_side_lane_at_step(tiles / 3);
+        add_local_side_lane_at_step((2 * tiles) / 3);
       } else {
         for (const int step_tiles : hot_steps) {
-          add_local_escape_lane_at_step(step_tiles);
+          add_local_side_lane_at_step(step_tiles);
         }
       }
 
@@ -715,28 +728,9 @@ static void patch_guides_for_dr_friendliness(
         });
       }
 
-      // Ensure layer connectivity at a limited number of hotspot samples.
-      if (opts.max_via_access_points_per_segment > 0) {
-        // Pick the hotspot sample closest to the segment midpoint (stable).
-        int best_step = -1;
-        int best_dist = std::numeric_limits<int>::max();
-        const int mid = tiles / 2;
-        for (const int step_tiles : hot_steps) {
-          const int dist_mid = std::abs(step_tiles - mid);
-          if (dist_mid < best_dist) {
-            best_dist = dist_mid;
-            best_step = step_tiles;
-          }
-        }
-
-        if (best_step > 0 && best_step < tiles) {
-          const auto [x, y] = step_to_xy(best_step);
-          if (is_valid_grid_center(die_bounds, tile, x, y)) {
-            try_add_patch(
-                [&]() { maybe_add_via_patch(route, seen, x, y, layer, target_layer); });
-          }
-        }
-      }
+      // Intentionally avoid explicit via guide patches here. These tend to
+      // increase downstream via count; the same-layer side lanes + stubs above
+      // usually provide enough flexibility for DR in hotspot regions.
     }
 
     if (patches_for_net > 0) {
@@ -1154,9 +1148,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
            1.0f,
            0},
 
+          // Alternate seed / smaller perturbation for diversity.
+          {"perturb2-seed7-crit0",
+           2.0f,
+           1,
+           7,
+           0.0f,
+           snapshot.congestion_iterations,
+           snapshot.global_adjustment,
+           0,
+           0,
+           1.0f,
+           0},
+
           // Gentle Rudy-based soft-capacity reservations in the lowest layers.
           // This often slightly increases GR-WL while decreasing DR detours.
-          {"perturb3-seed11-crit0-rudy20",
+          {"perturb3-seed11-crit0-rudy20L3",
            3.0f,
            1,
            11,
@@ -1165,8 +1172,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
            snapshot.global_adjustment,
            20,
            1,
-           0.95f,
-           2},
+           0.96f,
+           3},
+
+          // Slightly stronger soft-cap for a broader set of hotspots.
+          {"perturb3-seed11-crit0-rudy35L3",
+           3.0f,
+           1,
+           11,
+           0.0f,
+           snapshot.congestion_iterations,
+           snapshot.global_adjustment,
+           35,
+           1,
+           0.93f,
+           3},
 
           // Fallback: snapshot/baseline configuration.
           baseline,
@@ -1292,14 +1312,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           continue;
         }
 
-        if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
-          if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
-            best_candidate = eval.candidate;
-            best_metrics = metrics;
-          }
-          continue;
-        }
-
+        // Within the WL window, prioritize fewer vias, then looser congestion,
+        // then the smallest wirelength.
         if (metrics.via_count != best_metrics.via_count) {
           if (metrics.via_count < best_metrics.via_count) {
             best_candidate = eval.candidate;
@@ -1310,6 +1324,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
         if (metrics.congestion.score != best_metrics.congestion.score) {
           if (metrics.congestion.score < best_metrics.congestion.score) {
+            best_candidate = eval.candidate;
+            best_metrics = metrics;
+          }
+          continue;
+        }
+
+        if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
+          if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
             best_candidate = eval.candidate;
             best_metrics = metrics;
           }
