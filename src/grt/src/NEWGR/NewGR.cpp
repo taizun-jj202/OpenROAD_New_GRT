@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <string>
 #include <utility>
 #include <vector>
@@ -9,6 +10,7 @@
 #include "FastRoute.h"
 #include "Grid.h"
 #include "RoutingTracks.h"
+#include "grt/Rudy.h"
 #include "utl/Logger.h"
 
 namespace grt {
@@ -37,6 +39,19 @@ struct CandidateConfig
   int seed = 0;
   float critical_percentage = 0.0f;
   int congestion_iterations = 0;
+  int rudy_hotspots = 0;            // number of hotspots to patch (0 disables)
+  int rudy_expand_tiles = 0;        // expand each hotspot by N tiles
+  float rudy_adjustment = 1.0f;     // capacity multiplier (e.g. 0.8 = -20%)
+  int rudy_layers = 0;              // apply to [min_layer, min_layer + L)
+};
+
+struct CongestionScore
+{
+  // 0.0 is ideal; higher means "tighter" routing.
+  double score = 0.0;
+  double max_util = 0.0;
+  double frac_util_90 = 0.0;
+  double frac_util_80 = 0.0;
 };
 
 }  // namespace
@@ -62,6 +77,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	    long via_count = 0;
 	    double wirelength_um = 0.0;
 	    int total_overflow = 0;
+      CongestionScore congestion;
 	  };
 
   auto compute_metrics = [&](const NetRouteMap& routes) -> RouteMetrics {
@@ -85,6 +101,57 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 grouter_->db_->getTech()->getDbUnitsPerMicron());
     }
     return metrics;
+  };
+
+  const auto compute_congestion_score = [&]() -> CongestionScore {
+    CongestionScore out;
+    const auto& h_edges = grouter_->fastroute_->getHorizontalEdges3D();
+    const auto& v_edges = grouter_->fastroute_->getVerticalEdges3D();
+
+    auto scan_edges = [&](const auto& edges) {
+      std::size_t edge_count = 0;
+      std::size_t util_80 = 0;
+      std::size_t util_90 = 0;
+
+      for (const auto& layer : edges) {
+        for (const auto& row : layer) {
+          for (const auto& edge : row) {
+            const int eff_cap = static_cast<int>(edge.cap)
+                                - static_cast<int>(edge.red);
+            if (eff_cap <= 0) {
+              continue;
+            }
+            const double util = static_cast<double>(edge.usage)
+                                / static_cast<double>(eff_cap);
+            out.max_util = std::max(out.max_util, util);
+            if (util >= 0.8) {
+              util_80++;
+            }
+            if (util >= 0.9) {
+              util_90++;
+            }
+            edge_count++;
+          }
+        }
+      }
+
+      if (edge_count > 0) {
+        out.frac_util_80
+            = std::max(out.frac_util_80,
+                       static_cast<double>(util_80) / edge_count);
+        out.frac_util_90
+            = std::max(out.frac_util_90,
+                       static_cast<double>(util_90) / edge_count);
+      }
+    };
+
+    scan_edges(h_edges);
+    scan_edges(v_edges);
+
+    // A light "DR-friendliness" proxy: peak utilization dominates, with small
+    // penalties when lots of edges are near-full.
+    out.score = out.max_util + 0.10 * out.frac_util_90 + 0.03 * out.frac_util_80;
+    return out;
   };
 
   auto capture_snapshot = [&]() -> RouterSnapshot {
@@ -111,6 +178,104 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->setCongestionIterations(snapshot.congestion_iterations);
     grouter_->adjustment_ = snapshot.global_adjustment;
     grouter_->region_adjustments_ = snapshot.region_adjustments;
+  };
+
+  const RouterSnapshot snapshot = capture_snapshot();
+
+  // Build a deterministic list of "hotspot" regions from Rudy (wire density)
+  // to optionally reserve extra soft-capacity around congested areas, similar
+  // in spirit to SPRoute soft capacity / CUGR patching.
+  std::vector<odb::Rect> rudy_hotspot_regions;
+  {
+    Rudy* rudy = grouter_->getRudy();
+    if (rudy != nullptr && grouter_->grid_ != nullptr) {
+      const int x_grids = grouter_->grid_->getXGrids();
+      const int y_grids = grouter_->grid_->getYGrids();
+      if (x_grids > 0 && y_grids > 0) {
+        rudy->setGridConfig(grouter_->grid_->getGridArea(), x_grids, y_grids);
+        rudy->calculateRudy();
+
+        struct TileRudy
+        {
+          int x = 0;
+          int y = 0;
+          float rudy = 0.0f;
+        };
+        std::vector<TileRudy> tiles;
+        tiles.reserve(static_cast<std::size_t>(x_grids) * y_grids);
+
+        for (int x = 0; x < x_grids; x++) {
+          for (int y = 0; y < y_grids; y++) {
+            const float value = rudy->getTile(x, y).getRudy();
+            if (value <= 0.0f) {
+              continue;
+            }
+            tiles.push_back({x, y, value});
+          }
+        }
+
+        std::sort(tiles.begin(),
+                  tiles.end(),
+                  [](const TileRudy& a, const TileRudy& b) {
+                    if (a.rudy != b.rudy) {
+                      return a.rudy > b.rudy;
+                    }
+                    if (a.x != b.x) {
+                      return a.x < b.x;
+                    }
+                    return a.y < b.y;
+                  });
+
+        // Keep the list small and stable; we'll take prefixes for candidates.
+        const int max_regions
+            = std::min<int>(80, static_cast<int>(tiles.size()));
+        rudy_hotspot_regions.reserve(max_regions);
+        for (int i = 0; i < max_regions; i++) {
+          const auto& t = tiles[i];
+          rudy_hotspot_regions.push_back(rudy->getTile(t.x, t.y).getRect());
+        }
+      }
+    }
+  }
+
+  const auto add_rudy_hotspot_adjustments = [&](const CandidateConfig& config) {
+    if (config.rudy_hotspots <= 0 || config.rudy_adjustment >= 1.0f
+        || config.rudy_layers <= 0 || rudy_hotspot_regions.empty()) {
+      return;
+    }
+
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+    const int tile = grouter_->grid_->getTileSize();
+    if (x_grids <= 0 || y_grids <= 0 || tile <= 0) {
+      return;
+    }
+
+    const int max_hotspots
+        = std::min<int>(config.rudy_hotspots,
+                        static_cast<int>(rudy_hotspot_regions.size()));
+    const int min_layer = min_routing_layer;
+    const int max_layer = std::min(max_routing_layer,
+                                   min_routing_layer + config.rudy_layers - 1);
+
+    for (int i = 0; i < max_hotspots; i++) {
+      odb::Rect rect = rudy_hotspot_regions[i];
+      if (config.rudy_expand_tiles > 0) {
+        const int expand = config.rudy_expand_tiles * tile;
+        rect = odb::Rect(rect.xMin() - expand,
+                         rect.yMin() - expand,
+                         rect.xMax() + expand,
+                         rect.yMax() + expand);
+      }
+      for (int layer = min_layer; layer <= max_layer; layer++) {
+        grouter_->region_adjustments_.emplace_back(rect.xMin(),
+                                                  rect.yMin(),
+                                                  rect.xMax(),
+                                                  rect.yMax(),
+                                                  layer,
+                                                  config.rudy_adjustment);
+      }
+    }
   };
 
 	  const auto prepare_fastroute = [&](const CandidateConfig& config,
@@ -140,6 +305,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->setSeed(config.seed);
     grouter_->fastroute_->setCriticalNetsPercentage(config.critical_percentage);
 
+    // Start from the snapshot's adjustments and optionally add Rudy-based
+    // hotspot "soft-capacity" reservations for DR-friendliness.
+    grouter_->region_adjustments_ = snapshot.region_adjustments;
+
     grouter_->routing_tracks_.clear();
     grouter_->routing_layers_.clear();
     grouter_->grid_->clear();
@@ -153,6 +322,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->initCoreGrid(max_routing_layer);
     grouter_->setCapacities(min_routing_layer, max_routing_layer);
     grouter_->captureSprouteGridData();
+
+    add_rudy_hotspot_adjustments(config);
+
     grouter_->applyAdjustments(min_routing_layer, max_routing_layer);
     grouter_->perturbCapacities();
 
@@ -163,8 +335,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	    grouter_->initFastRouteIncr(candidate_nets);
 	    grouter_->initialized_ = true;
 	  };
-
-  const RouterSnapshot snapshot = capture_snapshot();
 
   logger_->info(GNR,
                 6004,
@@ -187,15 +357,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
 
     // Both solutions are routable. Global wirelength deltas across small
-    // perturbations are often tiny; for downstream detailed routing we bias
-    // toward fewer vias when the wirelength difference is within a small
-    // relative tolerance.
-    constexpr double kWirelengthEps = 0.00005;  // 0.005%
+    // perturbations are often tiny. For downstream detailed routing, we use
+    // a small tolerance window where we prefer lower "tightness" (peak
+    // utilization) and fewer vias as a proxy for DR-friendliness.
+    constexpr double kWirelengthEps = 0.0002;  // 0.02%
     if (lhs.wirelength_dbu < rhs.wirelength_dbu * (1.0 - kWirelengthEps)) {
       return true;
     }
     if (rhs.wirelength_dbu < lhs.wirelength_dbu * (1.0 - kWirelengthEps)) {
       return false;
+    }
+
+    if (lhs.congestion.score != rhs.congestion.score) {
+      return lhs.congestion.score < rhs.congestion.score;
     }
 
     if (lhs.via_count != rhs.via_count) {
@@ -218,19 +392,30 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  snapshot.perturbation_amount,
                                  snapshot.seed,
                                  snapshot.critical_percentage,
-                                 snapshot.congestion_iterations};
+                                 snapshot.congestion_iterations,
+                                 0,
+                                 0,
+                                 1.0f,
+                                 0};
 
 	  // Small candidate set tuned to be:
 	  // - deterministic across runs (fixed seeds),
 	  // - reasonably cheap (single-digit candidates),
-	  // - biased toward wirelength improvements while staying routable.
+	  // - wirelength-first, with DR-friendliness tie-breaks.
   const std::vector<CandidateConfig> candidates = {
       baseline,
       {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
       {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
       {"perturb6-seed17-crit0", 6.0f, 1, 17, 0.0f, snapshot.congestion_iterations},
       {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations},
+      {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations},
+      {"perturb6-seed31-crit0", 6.0f, 1, 31, 0.0f, snapshot.congestion_iterations},
+      {"perturb6-seed37-crit0", 6.0f, 1, 37, 0.0f, snapshot.congestion_iterations},
       {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
+      // A small "soft-capacity" reservation around the hottest Rudy tiles to
+      // improve detailed-routability; chosen only if it stays competitive in
+      // wirelength within tolerance and reduces tightness/vias.
+      {"perturb6-seed29-rudy", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, 25, 1, 0.85f, 2},
   };
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
@@ -243,13 +428,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	        candidate_nets, min_routing_layer, max_routing_layer);
 	    RouteMetrics metrics = compute_metrics(routes);
 	    metrics.total_overflow = grouter_->fastroute_->totalOverflow();
+      metrics.congestion = compute_congestion_score();
 	    logger_->info(GNR,
 	                  6005,
-	                  "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}",
+	                  "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}, cong {:.3f} (max util {:.3f})",
                   candidate.name,
                   metrics.wirelength_um,
                   metrics.via_count,
-                  metrics.total_overflow);
+                  metrics.total_overflow,
+                  metrics.congestion.score,
+                  metrics.congestion.max_util);
     return std::make_pair(std::move(routes), metrics);
   };
 
