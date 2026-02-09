@@ -51,6 +51,10 @@ struct GuideInflationConfig
   // that increase final wirelength.
   int radius_tiles = 1;
   int min_length_tiles = 3;
+  // Edges with small remaining resources are a proxy for regions where DRT
+  // tends to detour. Treat edges with availability <= threshold as "risky"
+  // and only inflate those to avoid guide bloat.
+  int risky_avail_threshold = 2;
   int max_layer_inflate = std::numeric_limits<int>::max();
 };
 
@@ -140,7 +144,7 @@ static void inflate_guides(NetRouteMap& routes,
       if (is_horizontal) {
         for (int x = xs; x < xe; x++) {
           const int avail = fastroute->getAvailableResources(x, gy0, x + 1, gy0, layer);
-          if (avail <= 1) {
+          if (avail <= cfg.risky_avail_threshold) {
             is_risky = true;
             break;
           }
@@ -148,7 +152,7 @@ static void inflate_guides(NetRouteMap& routes,
       } else {  // vertical
         for (int y = ys; y < ye; y++) {
           const int avail = fastroute->getAvailableResources(gx0, y, gx0, y + 1, layer);
-          if (avail <= 1) {
+          if (avail <= cfg.risky_avail_threshold) {
             is_risky = true;
             break;
           }
@@ -367,7 +371,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 = grouter_->fastroute_->getAvailableResources(x, y, x + 1, y, layer);
             if (avail <= 0) {
               saturated++;
-            } else if (avail == 1) {
+            } else if (avail <= 2) {
               near_saturated++;
             }
           }
@@ -380,7 +384,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 = grouter_->fastroute_->getAvailableResources(x, y, x, y + 1, layer);
             if (avail <= 0) {
               saturated++;
-            } else if (avail == 1) {
+            } else if (avail <= 2) {
               near_saturated++;
             }
           }
@@ -399,9 +403,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     // Risk weights are intentionally low to keep wirelength dominant while
     // still biasing away from heavily saturated edges (which often correlate
     // with DRT detours).
-    metrics.risk_cost_dbu = (saturated * tile_size) / 2
-                            + (near_saturated * tile_size) / 64;
-    metrics.via_cost_dbu = metrics.via_count * tile_size / 80;
+    // Empirically, DRT wirelength tends to correlate more with "near-sat"
+    // edges than with small differences in 2D global wirelength. Make risk
+    // large enough to influence candidate choice, but still keep wirelength
+    // as the dominant term.
+    metrics.risk_cost_dbu = (saturated * tile_size) * 4
+                            + (near_saturated * tile_size) / 8;
+    metrics.via_cost_dbu = metrics.via_count * tile_size / 50;
     metrics.overflow_cost_dbu = static_cast<long>(metrics.total_overflow) * tile_size * 200;
   };
 
@@ -636,8 +644,36 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   logger_->info(GNR, 6007, "NEWGR picked {}", chosen_name);
 
+  // Re-run the chosen candidate so `fastroute_` resources match the returned
+  // routes (the multi-candidate loop ends with FastRoute state from the last
+  // explored candidate).
   restore_snapshot(snapshot);
-  return chosen_routes;
+  if (chosen_candidate.override_global_adjustment) {
+    grouter_->adjustment_ = chosen_candidate.global_adjustment;
+  }
+  prepare_fastroute(chosen_candidate);
+  NetRouteMap final_routes
+      = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
+
+  // Post-process: selectively widen guides around risky segments to give DRT
+  // flexibility and reduce detours (primary objective: final wirelength).
+  GuideInflationConfig inflate_cfg;
+  inflate_cfg.radius_tiles = 1;
+  inflate_cfg.min_length_tiles = 3;
+  inflate_cfg.risky_avail_threshold = 2;
+  inflate_cfg.max_layer_inflate = max_routing_layer;
+  inflate_guides(final_routes,
+                 grouter_->grid_,
+                 grouter_->fastroute_,
+                 min_routing_layer,
+                 max_routing_layer,
+                 inflate_cfg);
+
+  // Leave GlobalRouter knobs as they were when entering NEWGR, but do not
+  // rebuild the routing structures again; the returned guides are derived from
+  // `final_routes` and are independent of these settings.
+  restore_snapshot(snapshot);
+  return final_routes;
 }
 
 }  // namespace grt
