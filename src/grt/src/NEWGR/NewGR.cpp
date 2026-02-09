@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "FastRoute.h"
@@ -42,6 +43,157 @@ struct CandidateConfig
   bool override_global_adjustment = false;
   float global_adjustment = 0.0f;
 };
+
+struct GuideInflationConfig
+{
+  // Expand each (non-via) guide by adding parallel segments one tile away.
+  // This is intended to give DRT more local flexibility and reduce detours
+  // that increase final wirelength.
+  int radius_tiles = 1;
+  int min_length_tiles = 3;
+  int max_layer_inflate = std::numeric_limits<int>::max();
+};
+
+static void inflate_guides(NetRouteMap& routes,
+                           const Grid* grid,
+                           int min_routing_layer,
+                           int max_routing_layer,
+                           const GuideInflationConfig& cfg)
+{
+  if (grid == nullptr) {
+    return;
+  }
+  const int tile_size = std::max(grid->getTileSize(), 1);
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+  const int x_grids = std::max(grid->getXGrids(), 1);
+  const int y_grids = std::max(grid->getYGrids(), 1);
+
+  auto to_grid_index = [&](int x_dbu, int y_dbu) -> std::pair<int, int> {
+    const int x_idx = (x_dbu - x_min) / tile_size;
+    const int y_idx = (y_dbu - y_min) / tile_size;
+    return {std::clamp(x_idx, 0, x_grids - 1),
+            std::clamp(y_idx, 0, y_grids - 1)};
+  };
+
+  auto to_dbu = [&](int x_idx, int y_idx) -> std::pair<int, int> {
+    const int x_dbu = x_min + x_idx * tile_size;
+    const int y_dbu = y_min + y_idx * tile_size;
+    return {x_dbu, y_dbu};
+  };
+
+  for (auto& [db_net, route] : routes) {
+    static_cast<void>(db_net);
+
+    std::unordered_set<GSegment, GSegmentHash> uniq;
+    uniq.reserve(route.size() * 3 + 8);
+    std::vector<GSegment> deduped;
+    deduped.reserve(route.size());
+    for (const auto& seg : route) {
+      if (uniq.insert(seg).second) {
+        deduped.push_back(seg);
+      }
+    }
+
+    std::vector<GSegment> extra;
+    extra.reserve(deduped.size() * 2);
+
+    for (const auto& seg : deduped) {
+      if (seg.isVia()) {
+        continue;
+      }
+      if (seg.init_layer != seg.final_layer) {
+        continue;
+      }
+      const int layer = seg.init_layer;
+      if (layer < min_routing_layer || layer > max_routing_layer) {
+        continue;
+      }
+      if (layer > cfg.max_layer_inflate) {
+        continue;
+      }
+
+      const auto [gx0, gy0] = to_grid_index(seg.init_x, seg.init_y);
+      const auto [gx1, gy1] = to_grid_index(seg.final_x, seg.final_y);
+      const int len_tiles = std::abs(gx1 - gx0) + std::abs(gy1 - gy0);
+      if (len_tiles < cfg.min_length_tiles) {
+        continue;
+      }
+
+      const bool is_horizontal = (gy0 == gy1) && (gx0 != gx1);
+      const bool is_vertical = (gx0 == gx1) && (gy0 != gy1);
+      if (!is_horizontal && !is_vertical) {
+        continue;
+      }
+
+      for (int delta = 1; delta <= cfg.radius_tiles; delta++) {
+        if (is_horizontal) {
+          for (int sign : {-1, 1}) {
+            const int gy_off = gy0 + sign * delta;
+            if (gy_off < 0 || gy_off >= y_grids) {
+              continue;
+            }
+            const auto [x0_off_dbu, y_off_dbu] = to_dbu(gx0, gy_off);
+            const auto [x1_off_dbu, y_off_dbu2] = to_dbu(gx1, gy_off);
+            static_cast<void>(y_off_dbu2);
+            const auto [x0_dbu, y0_dbu] = to_dbu(gx0, gy0);
+            const auto [x1_dbu, y1_dbu] = to_dbu(gx1, gy0);
+            static_cast<void>(y1_dbu);
+
+            // Keep the inflated parallel segment connected to the original
+            // route graph by adding 1-tile connectors at both ends. Disjoint
+            // guide components can break downstream incremental GRT checks.
+            GSegment inflated(
+                x0_off_dbu, y_off_dbu, layer, x1_off_dbu, y_off_dbu, layer);
+            if (uniq.insert(inflated).second) {
+              extra.push_back(inflated);
+            }
+
+            GSegment conn0(x0_dbu, y0_dbu, layer, x0_dbu, y_off_dbu, layer);
+            if (uniq.insert(conn0).second) {
+              extra.push_back(conn0);
+            }
+            GSegment conn1(x1_dbu, y0_dbu, layer, x1_dbu, y_off_dbu, layer);
+            if (uniq.insert(conn1).second) {
+              extra.push_back(conn1);
+            }
+          }
+        } else if (is_vertical) {
+          for (int sign : {-1, 1}) {
+            const int gx_off = gx0 + sign * delta;
+            if (gx_off < 0 || gx_off >= x_grids) {
+              continue;
+            }
+            const auto [x_off_dbu, y0_off_dbu] = to_dbu(gx_off, gy0);
+            const auto [x_off_dbu2, y1_off_dbu] = to_dbu(gx_off, gy1);
+            static_cast<void>(x_off_dbu2);
+            const auto [x0_dbu, y0_dbu] = to_dbu(gx0, gy0);
+            const auto [x1_dbu, y1_dbu] = to_dbu(gx0, gy1);
+            static_cast<void>(x1_dbu);
+
+            GSegment inflated(
+                x_off_dbu, y0_off_dbu, layer, x_off_dbu, y1_off_dbu, layer);
+            if (uniq.insert(inflated).second) {
+              extra.push_back(inflated);
+            }
+
+            GSegment conn0(x0_dbu, y0_dbu, layer, x_off_dbu, y0_dbu, layer);
+            if (uniq.insert(conn0).second) {
+              extra.push_back(conn0);
+            }
+            GSegment conn1(x0_dbu, y1_dbu, layer, x_off_dbu, y1_dbu, layer);
+            if (uniq.insert(conn1).second) {
+              extra.push_back(conn1);
+            }
+          }
+        }
+      }
+    }
+
+    route = std::move(deduped);
+    route.insert(route.end(), extra.begin(), extra.end());
+  }
+}
 
 }  // namespace
 
@@ -158,9 +310,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     // Heuristic: near-saturated edges are a proxy for detailed-router detours.
     // Keep wirelength primary, but steer away from routes that hug capacity.
+    // NEWGR adds a post-pass that widens guides; that extra flexibility tends
+    // to make DRT less sensitive to "near-saturated" edges. So keep risk as a
+    // tie-breaker rather than a dominant term.
     metrics.risk_cost_dbu
-        = saturated * tile_size * 12 + near_saturated * tile_size * 4;
-    metrics.via_cost_dbu = metrics.via_count * tile_size / 2;
+        = saturated * tile_size * 6 + near_saturated * tile_size * 2;
+    metrics.via_cost_dbu = metrics.via_count * tile_size / 4;
     metrics.overflow_cost_dbu = static_cast<long>(metrics.total_overflow) * tile_size * 200;
   };
 
@@ -353,6 +508,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   NetRouteMap chosen_routes;
   RouteMetrics chosen_metrics;
   std::string chosen_name;
+  CandidateConfig chosen_candidate;
   bool have_choice = false;
 
   for (const auto& candidate : candidates) {
@@ -384,14 +540,36 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       chosen_routes = std::move(routes);
       chosen_metrics = metrics;
       chosen_name = candidate.name;
+      chosen_candidate = candidate;
       have_choice = true;
     }
   }
 
   logger_->info(GNR, 6007, "NEWGR picked {}", chosen_name);
 
+  // Re-run the chosen candidate once so the router's internal state reflects
+  // the returned guides (useful for congestion reporting and post-processing).
   restore_snapshot(snapshot);
-  return chosen_routes;
+  if (chosen_candidate.override_global_adjustment) {
+    grouter_->adjustment_ = chosen_candidate.global_adjustment;
+  }
+  prepare_fastroute(chosen_candidate);
+  NetRouteMap final_routes
+      = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
+
+  // Post-process: widen guides by adding parallel segments. This does not
+  // change the topology, but expands the allowed search space for DRT.
+  GuideInflationConfig inflation;
+  inflation.radius_tiles = 1;
+  inflation.min_length_tiles = 3;
+  inflation.max_layer_inflate = std::min(max_routing_layer, min_routing_layer + 2);
+  inflate_guides(final_routes,
+                 grouter_->grid_,
+                 min_routing_layer,
+                 max_routing_layer,
+                 inflation);
+
+  return final_routes;
 }
 
 }  // namespace grt
