@@ -1,6 +1,7 @@
 #include "NEWGR/NewGR.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -36,6 +37,8 @@ struct CandidateConfig
   int seed = 0;
   float critical_percentage = 0.0f;
   int congestion_iterations = 0;
+  bool override_global_adjustment = false;
+  float global_adjustment = 0.0f;
 };
 
 }  // namespace
@@ -210,6 +213,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   //   to target wirelength improvements.
   // - Post-process the chosen global route to *widen* guides (add parallel
   //   guide segments) so DRT has more flexibility and is less likely to detour.
+  logger_->info(GNR,
+                6004,
+                "NEWGR snapshot: caps% {:.1f} pert_amt {} seed {} crit% {:.1f} cong_iters {} global_adj {:.2f}",
+                snapshot.caps_percentage,
+                snapshot.perturbation_amount,
+                snapshot.seed,
+                snapshot.critical_percentage,
+                snapshot.congestion_iterations,
+                snapshot.global_adjustment);
 
   std::vector<CandidateConfig> candidates;
   candidates.push_back({"baseline",
@@ -217,7 +229,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                         snapshot.perturbation_amount,
                         snapshot.seed,
                         snapshot.critical_percentage,
-                        snapshot.congestion_iterations});
+                        snapshot.congestion_iterations,
+                        false,
+                        snapshot.global_adjustment});
 
   // Best known configuration for this benchmark so far.
   candidates.push_back({"perturb6-seed11-crit0",
@@ -225,13 +239,77 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                         1,
                         11,
                         0.0f,
-                        snapshot.congestion_iterations});
+                        snapshot.congestion_iterations,
+                        false,
+                        snapshot.global_adjustment});
+  candidates.push_back({"perturb6-seed11-crit5",
+                        6.0f,
+                        1,
+                        11,
+                        5.0f,
+                        snapshot.congestion_iterations,
+                        false,
+                        snapshot.global_adjustment});
+  candidates.push_back({"perturb6-seed17-crit0",
+                        6.0f,
+                        1,
+                        17,
+                        0.0f,
+                        snapshot.congestion_iterations,
+                        false,
+                        snapshot.global_adjustment});
+  candidates.push_back({"perturb6-seed23-crit0",
+                        6.0f,
+                        1,
+                        23,
+                        0.0f,
+                        snapshot.congestion_iterations,
+                        false,
+                        snapshot.global_adjustment});
+  candidates.push_back({"perturb4-seed11-crit0",
+                        4.0f,
+                        1,
+                        11,
+                        0.0f,
+                        snapshot.congestion_iterations,
+                        false,
+                        snapshot.global_adjustment});
 
-  const auto better = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
-    if (lhs.wirelength_dbu != rhs.wirelength_dbu) {
+  // Occasionally, removing the flow-level global adjustment (capacity derate)
+  // yields shorter routes that DRT can still realize with the extra guide
+  // flexibility. Try it when the flow has a non-zero adjustment.
+  if (snapshot.global_adjustment > 0.0f) {
+    candidates.push_back({"perturb6-seed17-crit0-adj0",
+                          6.0f,
+                          1,
+                          17,
+                          0.0f,
+                          snapshot.congestion_iterations,
+                          true,
+                          0.0f});
+  }
+
+  const auto better = [&](const RouteMetrics& lhs, const RouteMetrics& rhs) {
+    // Primary objective: reduce final DRT wirelength.
+    // Proxy: favor lower global wirelength, but avoid overly congested
+    // solutions when wirelength is within a small tolerance, since those
+    // often detour during DRT and end up worse.
+    const long wl_min = std::min(lhs.wirelength_dbu, rhs.wirelength_dbu);
+    const long wl_tol = std::max<long>(wl_min / 1000, 1);  // 0.1%
+    if (std::labs(lhs.wirelength_dbu - rhs.wirelength_dbu) > wl_tol) {
       return lhs.wirelength_dbu < rhs.wirelength_dbu;
     }
-    return lhs.via_count < rhs.via_count;
+
+    if (lhs.pressure_over_90 != rhs.pressure_over_90) {
+      return lhs.pressure_over_90 < rhs.pressure_over_90;
+    }
+    if (lhs.max_utilization != rhs.max_utilization) {
+      return lhs.max_utilization < rhs.max_utilization;
+    }
+    if (lhs.via_count != rhs.via_count) {
+      return lhs.via_count < rhs.via_count;
+    }
+    return false;
   };
 
   NetRouteMap chosen_routes;
@@ -241,6 +319,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   for (const auto& candidate : candidates) {
     restore_snapshot(snapshot);
+    if (candidate.override_global_adjustment) {
+      grouter_->adjustment_ = candidate.global_adjustment;
+    }
     prepare_fastroute(candidate);
 
     NetRouteMap routes
