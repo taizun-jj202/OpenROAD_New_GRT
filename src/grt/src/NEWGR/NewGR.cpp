@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <limits>
 #include <string>
 #include <unordered_set>
@@ -74,13 +73,6 @@ struct GuidePatchingOptions
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
   int rudy_hotspot_prefix = 30;
 
-  // Derived-from-GR congestion hot tiles (based on edge utilization).
-  // These complement Rudy hotspots by reacting to actual GR usage patterns.
-  int cong_layer_count = 2;            // apply to [min_layer, min_layer + N)
-  double cong_util_threshold = 0.93;   // utilization (usage / eff_cap)
-  int cong_edge_prefix = 900;          // keep only top-N hot edges
-  int cong_max_tiles = 2500;           // cap on unique hot tiles tracked
-
   // Patch radius around selected pins, in tiles (1 => +cross neighbors).
   int pin_patch_radius_tiles = 1;
 
@@ -118,6 +110,25 @@ static bool point_in_any_rect(const odb::Point& p,
   return false;
 }
 
+static void maybe_add_via_patch(GRoute& route,
+                                std::unordered_set<GSegment, GSegmentHash>& seen,
+                                int x,
+                                int y,
+                                int layer0,
+                                int layer1)
+{
+  if (layer0 == layer1) {
+    return;
+  }
+  if (std::abs(layer0 - layer1) != 1) {
+    return;
+  }
+  const GSegment seg(x, y, layer0, x, y, layer1, false);
+  if (seen.insert(seg).second) {
+    route.push_back(seg);
+  }
+}
+
 static void maybe_add_wire_patch(GRoute& route,
                                  std::unordered_set<GSegment, GSegmentHash>& seen,
                                  int x0,
@@ -140,60 +151,6 @@ static void maybe_add_wire_patch(GRoute& route,
   }
 }
 
-static void maybe_add_via_patch(GRoute& route,
-                                std::unordered_set<GSegment, GSegmentHash>& seen,
-                                int x,
-                                int y,
-                                int layer0,
-                                int layer1)
-{
-  if (layer0 <= 0 || layer1 <= 0) {
-    return;
-  }
-  if (layer0 == layer1) {
-    return;
-  }
-  // GlobalRouter's GSegment::isVia() is based solely on (x,y) degeneracy, not
-  // on the layer delta. Keep this strict to adjacent-layer vias to avoid
-  // confusing downstream consumers (e.g., RC estimation expects routing-layer
-  // vias to map to a single cut layer).
-  if (std::abs(layer0 - layer1) != 1) {
-    return;
-  }
-  const GSegment seg(x, y, layer0, x, y, layer1, false);
-  if (seen.insert(seg).second) {
-    route.push_back(seg);
-  }
-}
-
-static bool dbu_to_grid_index(const odb::Rect& die_bounds,
-                              int tile,
-                              int x_grids,
-                              int y_grids,
-                              int x_dbu,
-                              int y_dbu,
-                              int& gx,
-                              int& gy)
-{
-  if (tile <= 0 || x_grids <= 0 || y_grids <= 0) {
-    return false;
-  }
-  const int half = tile / 2;
-  const int origin_x = die_bounds.xMin() + half;
-  const int origin_y = die_bounds.yMin() + half;
-  const int dx = x_dbu - origin_x;
-  const int dy = y_dbu - origin_y;
-  if (dx < 0 || dy < 0) {
-    return false;
-  }
-  gx = dx / tile;
-  gy = dy / tile;
-  if (gx < 0 || gx >= x_grids || gy < 0 || gy >= y_grids) {
-    return false;
-  }
-  return true;
-}
-
 static void patch_guides_for_dr_friendliness(
     GlobalRouter* grouter,
     NetRouteMap& routes,
@@ -205,8 +162,6 @@ static void patch_guides_for_dr_friendliness(
   if (grouter == nullptr || grouter->grid() == nullptr) {
     return;
   }
-  odb::dbDatabase* db = grouter->db();
-  odb::dbTech* tech = (db != nullptr) ? db->getTech() : nullptr;
   const int tile = grouter->grid()->getTileSize();
   if (tile <= 0) {
     return;
@@ -214,149 +169,6 @@ static void patch_guides_for_dr_friendliness(
 
   const GuidePatchingOptions opts;
   const odb::Rect die_bounds = grouter->grid()->getGridArea();
-  const int x_grids = grouter->grid()->getXGrids();
-  const int y_grids = grouter->grid()->getYGrids();
-  const int tech_max_routing_layer
-      = (tech != nullptr) ? tech->getRoutingLayerCount() : max_routing_layer;
-  const int min_patch_layer = std::max(1, min_routing_layer);
-  const int max_patch_layer = std::min(max_routing_layer, tech_max_routing_layer);
-  if (min_patch_layer > max_patch_layer) {
-    return;
-  }
-
-  // Build a small, deterministic set of hot tiles based on *actual* GR edge
-  // utilization. This helps guide patching focus on the areas where the
-  // selected candidate is tight, even if Rudy does not perfectly predict it.
-  std::unordered_set<std::uint64_t> cong_tiles;
-  cong_tiles.reserve(static_cast<std::size_t>(opts.cong_max_tiles));
-  FastRouteCore* fr = grouter->fastroute();
-  if (fr != nullptr && opts.cong_layer_count > 0
-      && opts.cong_edge_prefix > 0 && opts.cong_util_threshold > 0.0) {
-    struct HotEdge
-    {
-      double util = 0.0;
-      int layer = 0;  // 1-based routing layer
-      int x = 0;
-      int y = 0;
-      bool horizontal = true;
-    };
-    std::vector<HotEdge> hot_edges;
-    hot_edges.reserve(static_cast<std::size_t>(opts.cong_edge_prefix) * 2);
-
-    const auto consider_edge = [&](int layer_1based,
-                                   int x,
-                                   int y,
-                                   bool horizontal,
-                                   const auto& edge) {
-      const int eff_cap = static_cast<int>(edge.real_cap)
-                          - static_cast<int>(edge.red);
-      if (eff_cap <= 0) {
-        return;
-      }
-      const double util
-          = static_cast<double>(edge.usage) / static_cast<double>(eff_cap);
-      if (util < opts.cong_util_threshold) {
-        return;
-      }
-      hot_edges.push_back({util, layer_1based, x, y, horizontal});
-    };
-
-    const int cong_min_layer = min_patch_layer;
-    const int cong_max_layer
-        = std::min(max_patch_layer, min_patch_layer + opts.cong_layer_count - 1);
-
-    const auto& h_edges = fr->getHorizontalEdges3D();
-    const auto& v_edges = fr->getVerticalEdges3D();
-
-    const int max_layer_idx
-        = static_cast<int>(h_edges.shape()[0]);  // 0-based in FastRouteCore
-    for (int layer = cong_min_layer; layer <= cong_max_layer; layer++) {
-      const int l_idx = layer - 1;
-      if (l_idx < 0 || l_idx >= max_layer_idx) {
-        continue;
-      }
-
-      // Horizontal edges: between (x,y) and (x+1,y).
-      for (int y = 0; y < static_cast<int>(h_edges.shape()[1]); y++) {
-        for (int x = 0; x < static_cast<int>(h_edges.shape()[2]); x++) {
-          consider_edge(layer, x, y, true, h_edges[l_idx][y][x]);
-        }
-      }
-      // Vertical edges: between (x,y) and (x,y+1).
-      for (int y = 0; y < static_cast<int>(v_edges.shape()[1]); y++) {
-        for (int x = 0; x < static_cast<int>(v_edges.shape()[2]); x++) {
-          consider_edge(layer, x, y, false, v_edges[l_idx][y][x]);
-        }
-      }
-    }
-
-    std::sort(hot_edges.begin(),
-              hot_edges.end(),
-              [](const HotEdge& a, const HotEdge& b) {
-                if (a.util != b.util) {
-                  return a.util > b.util;
-                }
-                if (a.layer != b.layer) {
-                  return a.layer < b.layer;
-                }
-                if (a.horizontal != b.horizontal) {
-                  return a.horizontal > b.horizontal;
-                }
-                if (a.y != b.y) {
-                  return a.y < b.y;
-                }
-                return a.x < b.x;
-              });
-
-    const int edge_limit
-        = std::min<int>(opts.cong_edge_prefix, static_cast<int>(hot_edges.size()));
-
-    auto add_tile = [&](int gx, int gy) {
-      if (cong_tiles.size() >= static_cast<std::size_t>(opts.cong_max_tiles)) {
-        return;
-      }
-      if (gx < 0 || gx >= x_grids || gy < 0 || gy >= y_grids) {
-        return;
-      }
-      const std::uint64_t key
-          = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(gx)) << 32)
-            | static_cast<std::uint32_t>(gy);
-      cong_tiles.insert(key);
-    };
-
-    for (int i = 0; i < edge_limit && cong_tiles.size() < static_cast<std::size_t>(opts.cong_max_tiles);
-         i++) {
-      const HotEdge& e = hot_edges[i];
-      add_tile(e.x, e.y);
-      if (e.horizontal) {
-        add_tile(e.x + 1, e.y);
-      } else {
-        add_tile(e.x, e.y + 1);
-      }
-    }
-  }
-
-  auto point_in_cong_tiles = [&](int x_dbu, int y_dbu) -> bool {
-    if (cong_tiles.empty()) {
-      return false;
-    }
-    int gx = 0;
-    int gy = 0;
-    if (!dbu_to_grid_index(die_bounds,
-                           tile,
-                           x_grids,
-                           y_grids,
-                           x_dbu,
-                           y_dbu,
-                           gx,
-                           gy)) {
-      return false;
-    }
-    const std::uint64_t key
-        = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(gx)) << 32)
-          | static_cast<std::uint32_t>(gy);
-    return cong_tiles.find(key) != cong_tiles.end();
-  };
 
   int total_patches = 0;
   int patched_pins = 0;
@@ -401,25 +213,23 @@ static void patch_guides_for_dr_friendliness(
 
         const bool in_hotspot = point_in_any_rect(
             pin_grid, rudy_hotspot_regions, opts.rudy_hotspot_prefix);
-        const bool in_cong = point_in_cong_tiles(pin_grid.x(), pin_grid.y());
-        const bool dr_risky = in_hotspot || in_cong;
         const bool should_patch_pin
             = pin.isPort() || pin.isConnectedToPadOrMacro()
-              || (dr_risky && net->getNumPins() >= 8);
+              || (in_hotspot && net->getNumPins() >= 10);
 
         if (!should_patch_pin) {
           continue;
         }
 
         const int conn_layer = pin.getConnectionLayer();
-        if (conn_layer < min_patch_layer || conn_layer > max_patch_layer) {
+        if (conn_layer < min_routing_layer || conn_layer > max_routing_layer) {
           continue;
         }
 
         const int above = conn_layer + 1;
         const int below = conn_layer - 1;
 
-        const int radius = dr_risky ? opts.pin_patch_radius_tiles : 0;
+        const int radius = in_hotspot ? opts.pin_patch_radius_tiles : 0;
         const int d = radius * tile;
 
         // Center + cross neighbors (radius 1 => +/-1 tile).
@@ -445,10 +255,10 @@ static void patch_guides_for_dr_friendliness(
           }
 
           const int before_total = static_cast<int>(route.size());
-          if (above <= max_patch_layer) {
+          if (above <= max_routing_layer) {
             maybe_add_via_patch(route, seen, x, y, conn_layer, above);
           }
-          if (below >= min_patch_layer) {
+          if (below >= min_routing_layer) {
             maybe_add_via_patch(route, seen, x, y, conn_layer, below);
           }
           const int added = static_cast<int>(route.size()) - before_total;
@@ -481,7 +291,7 @@ static void patch_guides_for_dr_friendliness(
       }
 
       const int layer = seg.init_layer;
-      if (layer < min_patch_layer || layer > max_patch_layer) {
+      if (layer < min_routing_layer || layer > max_routing_layer) {
         continue;
       }
 
@@ -504,8 +314,8 @@ static void patch_guides_for_dr_friendliness(
 
       const int above = layer + 1;
       const int below = layer - 1;
-      const int target_layer = (above <= max_patch_layer) ? above : below;
-      if (target_layer < min_patch_layer || target_layer > max_patch_layer) {
+      const int target_layer = (above <= max_routing_layer) ? above : below;
+      if (target_layer < min_routing_layer || target_layer > max_routing_layer) {
         continue;
       }
 
@@ -535,10 +345,7 @@ static void patch_guides_for_dr_friendliness(
           continue;
         }
         const odb::Point p(x, y);
-        const bool in_rudy
-            = point_in_any_rect(p, rudy_hotspot_regions, opts.rudy_hotspot_prefix);
-        const bool in_cong = point_in_cong_tiles(x, y);
-        if (in_rudy || in_cong) {
+        if (point_in_any_rect(p, rudy_hotspot_regions, opts.rudy_hotspot_prefix)) {
           hot_steps.push_back(step_tiles);
         }
       }
@@ -563,6 +370,18 @@ static void patch_guides_for_dr_friendliness(
           patches_for_net += added;
           total_patches += added;
         }
+      };
+
+      auto add_via_at_step = [&](int step_tiles) {
+        if (step_tiles <= 0 || step_tiles >= tiles) {
+          return;
+        }
+        const int x = horizontal ? (std::min(x0, x1) + step_tiles * tile) : x0;
+        const int y = vertical ? (std::min(y0, y1) + step_tiles * tile) : y0;
+        if (!is_valid_grid_center(die_bounds, tile, x, y)) {
+          return;
+        }
+        try_add_patch([&]() { maybe_add_via_patch(route, seen, x, y, layer, target_layer); });
       };
 
       auto add_local_escape_lane_at_step = [&](int step_tiles) {
@@ -607,25 +426,14 @@ static void patch_guides_for_dr_friendliness(
 
       // Ensure layer connectivity at the hotspot samples.
       for (const int step_tiles : hot_steps) {
-        const int x = horizontal ? (std::min(x0, x1) + step_tiles * tile) : x0;
-        const int y = vertical ? (std::min(y0, y1) + step_tiles * tile) : y0;
-        if (!is_valid_grid_center(die_bounds, tile, x, y)) {
-          continue;
-        }
-        try_add_patch([&]() { maybe_add_via_patch(route, seen, x, y, layer, target_layer); });
+        add_via_at_step(step_tiles);
       }
 
       // For very long segments, ensure we have at least 2 access points if the
       // hotspot sampling only hit a single location (common when congestion is
       // concentrated near one end of a long segment).
       if (tiles >= opts.very_long_segment_tiles && hot_steps.size() == 1) {
-        const int step_tiles = tiles / 2;
-        const int x = horizontal ? (std::min(x0, x1) + step_tiles * tile) : x0;
-        const int y = vertical ? (std::min(y0, y1) + step_tiles * tile) : y0;
-        if (is_valid_grid_center(die_bounds, tile, x, y)) {
-          try_add_patch(
-              [&]() { maybe_add_via_patch(route, seen, x, y, layer, target_layer); });
-        }
+        add_via_at_step(tiles / 2);
       }
     }
 
@@ -1002,14 +810,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 snapshot.global_adjustment);
 
   // NEWGR strategy (wirelength-first, via-second):
-  // - Use a single tuned (deterministic) perturbation/seed configuration.
-  // - Fall back to the snapshot/baseline config only if the tuned config
-  //   fails to produce a routable solution (overflow > 0).
+  // - Explore a small, deterministic set of perturbation/seed/critical-net
+  //   configurations and pick the best by (1) routability, (2) global
+  //   wirelength, and (3) via count.
   //
-  // Rationale: The previous multi-candidate exploration improved DR metrics,
-  // but multiplied runtime by running full GR multiple times. On this
-  // regression, a single stable candidate consistently wins, so we keep the
-  // quality benefits while restoring near-baseline runtime.
+  // Rationale: for our regression, small deterministic perturbations can
+  // improve downstream detailed-routing metrics by nudging congestion away
+  // from hard-to-route pin-access regions, even if global cost differences
+  // are small.
   const CandidateConfig baseline{"baseline",
                                  snapshot.caps_percentage,
                                  snapshot.perturbation_amount,
@@ -1022,57 +830,64 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  1.0f,
                                  0};
 
-  // Candidate set (small + deterministic): keep runtime bounded while still
-  // allowing a DR-aware choice among a few known-good perturbation regimes.
-  //
-  // NOTE: Our objective metric is *detailed* wirelength. In practice, the best
-  // DR outcomes are usually among candidates with near-minimal GR wirelength,
-  // but with slightly looser congestion (more flexibility for the detailed
-  // router). We therefore pick the loosest candidate inside a tight GR-WL
-  // window.
-  const CandidateConfig tuned{"perturb3-seed11-crit0",
-                              3.0f,
-                              /*perturbation_amount=*/1,
-                              /*seed=*/11,
-                              /*critical_percentage=*/0.0f,
-                              snapshot.congestion_iterations,
-                              snapshot.global_adjustment,
-                              /*rudy_hotspots=*/0,
-                              /*rudy_expand_tiles=*/0,
-                              /*rudy_adjustment=*/1.0f,
-                              /*rudy_layers=*/0};
+		  // Candidate set tuned to be:
+		  // - deterministic across runs (fixed seeds),
+		  // - smaller (runtime), while still exploring top-performing regimes,
+		  // - wirelength-first, with via count as a secondary objective.
+		  //
+		  // NOTE: Even though our regression metric is *detailed* wirelength, in
+		  // practice the best candidates are usually among the lowest GR-WL
+		  // solutions once we apply DR-friendly guide patching.
+		  const std::vector<CandidateConfig> candidates = {
+		      baseline,
 
-  const CandidateConfig tuned_crit10{"perturb3-seed11-crit10",
-                                     3.0f,
-                                     /*perturbation_amount=*/1,
-                                     /*seed=*/11,
-                                     /*critical_percentage=*/10.0f,
-                                     snapshot.congestion_iterations,
-                                     snapshot.global_adjustment,
-                                     /*rudy_hotspots=*/0,
-                                     /*rudy_expand_tiles=*/0,
-                                     /*rudy_adjustment=*/1.0f,
-                                     /*rudy_layers=*/0};
+		      // Low perturbation, fixed seeds (historically stable).
+		      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb3-seed11-crit10", 3.0f, 1, 11, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb3-seed17-crit0", 3.0f, 1, 17, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+          {"perturb3-seed23-crit0", 3.0f, 1, 23, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
-  const CandidateConfig tuned_crit10_rudy15{"perturb3-seed11-crit10-rudy15",
-                                           3.0f,
-                                           /*perturbation_amount=*/1,
-                                           /*seed=*/11,
-                                           /*critical_percentage=*/10.0f,
-                                           snapshot.congestion_iterations,
-                                           snapshot.global_adjustment,
-                                           /*rudy_hotspots=*/15,
-                                           /*rudy_expand_tiles=*/1,
-                                           /*rudy_adjustment=*/0.95f,
-                                           /*rudy_layers=*/2};
+		      // Slightly stronger perturbation; keep some nets "critical" to avoid
+		      // excessive detours in the rip-up/reroute stages.
+		      {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb6-seed29-crit10", 6.0f, 1, 29, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb6-seed29-crit20", 6.0f, 1, 29, 20.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
-  const std::vector<CandidateConfig> candidates
-      = {tuned, tuned_crit10, tuned_crit10_rudy15, baseline};
+		      // Alternate seeds for coverage.
+		      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
-		  const auto run_candidate = [&](const CandidateConfig& candidate) {
-		    restore_snapshot(snapshot);
-		    grouter_->setAllowCongestion(snapshot.allow_congestion);
-		    std::vector<Net*> candidate_nets = canonical_nets;
+          // Rudy hotspot "soft-capacity" reservations (gentle). These often
+          // slightly increase GR-WL while improving DR-WL by avoiding pin-access
+          // bottlenecks and near-saturated edges in lower layers.
+          {"perturb3-seed11-crit10-rudy15",
+           3.0f,
+           1,
+           11,
+           10.0f,
+           snapshot.congestion_iterations,
+           snapshot.global_adjustment,
+           15,
+           1,
+           0.95f,
+           2},
+          {"perturb6-seed29-crit10-rudy20",
+           6.0f,
+           1,
+           29,
+           10.0f,
+           snapshot.congestion_iterations,
+           snapshot.global_adjustment,
+           20,
+           1,
+           0.93f,
+           2},
+		  };
+
+	  const auto run_candidate = [&](const CandidateConfig& candidate) {
+	    restore_snapshot(snapshot);
+	    grouter_->setAllowCongestion(snapshot.allow_congestion);
+	    std::vector<Net*> candidate_nets = canonical_nets;
 	    prepare_fastroute(candidate, candidate_nets);
 
 	    NetRouteMap routes = grouter_->findRouting(
@@ -1102,113 +917,124 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                     "NEWGR finished with overflow ({}); enabling allow_congestion to avoid abort.",
                     overflow);
       grouter_->setAllowCongestion(true);
-	    }
-	  };
-
-  struct CandidateEval
-  {
-    CandidateConfig candidate;
-    RouteMetrics metrics;
+    }
   };
-  std::vector<CandidateEval> evals;
-  evals.reserve(candidates.size());
 
-  int best_overflow = -1;
-  for (const auto& candidate : candidates) {
-    auto [routes, metrics] = run_candidate(candidate);
-    evals.push_back({candidate, metrics});
-    if (best_overflow < 0 || metrics.total_overflow < best_overflow) {
-      best_overflow = metrics.total_overflow;
-    }
-  }
+	  CandidateConfig best_candidate = baseline;
+	  RouteMetrics best_metrics;
+	  bool have_best = false;
 
-  // Selection policy (wirelength-first; DR-aware tie-breaks):
-  // 1) Prefer routable solutions (overflow == 0), else minimize overflow.
-  // 2) Primary objective: minimize *global* wirelength (proxy for DR WL).
-  // 3) Tie-breakers (within a tight WL window): looser congestion, then fewer
-  //    vias, then absolute WL.
-  const int target_overflow = (best_overflow == 0) ? 0 : best_overflow;
+	  struct CandidateEval
+	  {
+	    CandidateConfig candidate;
+	    RouteMetrics metrics;
+	  };
+	  std::vector<CandidateEval> evals;
+	  evals.reserve(candidates.size());
 
-  long min_wl_dbu = std::numeric_limits<long>::max();
-  for (const auto& eval : evals) {
-    const RouteMetrics& metrics = eval.metrics;
-    if (metrics.total_overflow != target_overflow) {
-      continue;
-    }
-    min_wl_dbu = std::min(min_wl_dbu, metrics.wirelength_dbu);
-  }
+	  int best_overflow = -1;
+	  for (const auto& candidate : candidates) {
+	    auto candidate_result = run_candidate(candidate);
+	    const RouteMetrics& metrics = candidate_result.second;
 
-  // Keep candidates close to the best global WL, then pick the loosest
-  // (lowest congestion score) within that window.
-  constexpr double wl_slack_ratio = 0.0003;  // 0.03%
-  constexpr long wl_slack_min_dbu = 100000;  // ~100um @ 1000 DBU/um
-  const long wl_slack_dbu = std::max<long>(
-      wl_slack_min_dbu,
-      static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
-  const long wl_limit_dbu = min_wl_dbu + wl_slack_dbu;
+	    evals.push_back({candidate, metrics});
 
-  logger_->info(GNR,
-                6010,
-                "NEWGR selection: overflow {} wl_ref {} dbu wl_limit {} dbu (+{} / {:.2f}%)",
-                target_overflow,
-                min_wl_dbu,
-                wl_limit_dbu,
-                wl_slack_dbu,
-                100.0 * wl_slack_dbu / std::max<double>(1.0, min_wl_dbu));
+	    if (best_overflow < 0 || metrics.total_overflow < best_overflow) {
+	      best_overflow = metrics.total_overflow;
+	    }
+		  }
 
-  CandidateConfig best_candidate = baseline;
-  RouteMetrics best_metrics;
-  bool have_best = false;
+		  // Selection policy (wirelength-first; DR-aware tie-breaks):
+		  // 1) Prefer routable solutions (overflow == 0), else minimize overflow.
+		  // 2) Primary objective: minimize *global* wirelength (proxy for DR WL).
+		  // 3) Tie-breakers (within a tight WL window): looser congestion, then
+		  //    fewer vias, then absolute WL.
+		  //
+		  // Rationale: On this regression, picking the absolute best GR WL can
+		  // produce tighter guides that force DR detours. Constraining selection
+		  // to a very tight WL window, then picking a looser solution, tends to
+		  // reduce detailed wirelength.
+		  const int target_overflow = (best_overflow == 0) ? 0 : best_overflow;
 
-  for (const auto& eval : evals) {
-    const RouteMetrics& metrics = eval.metrics;
-    if (metrics.total_overflow != target_overflow) {
-      continue;
-    }
-    if (metrics.wirelength_dbu > wl_limit_dbu) {
-      continue;
-    }
-
-    if (!have_best) {
-      best_candidate = eval.candidate;
-      best_metrics = metrics;
-      have_best = true;
-      continue;
-    }
-
-    if (metrics.congestion.score != best_metrics.congestion.score) {
-      if (metrics.congestion.score < best_metrics.congestion.score) {
-        best_candidate = eval.candidate;
-        best_metrics = metrics;
+      long min_wl_dbu = std::numeric_limits<long>::max();
+      for (const auto& eval : evals) {
+        const RouteMetrics& metrics = eval.metrics;
+        if (metrics.total_overflow != target_overflow) {
+          continue;
+        }
+        min_wl_dbu = std::min(min_wl_dbu, metrics.wirelength_dbu);
       }
-      continue;
-    }
 
-    if (metrics.via_count != best_metrics.via_count) {
-      if (metrics.via_count < best_metrics.via_count) {
-        best_candidate = eval.candidate;
-        best_metrics = metrics;
+      // Keep candidates very close to the best global WL, then pick the
+      // loosest (lowest congestion score) within that window.
+      // Keep this window tight: otherwise the selector can drift toward a
+      // "looser" but meaningfully longer GR solution that tends to increase
+      // detailed wirelength on this regression.
+      constexpr double wl_slack_ratio = 0.0003;   // 0.03%
+      constexpr long wl_slack_min_dbu = 100000;   // ~100um @ 1000 DBU/um
+      const long wl_slack_dbu = std::max<long>(
+          wl_slack_min_dbu,
+          static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
+      const long wl_limit_dbu = min_wl_dbu + wl_slack_dbu;
+
+      logger_->info(GNR,
+                    6010,
+                    "NEWGR selection: overflow {} wl_ref {} dbu wl_limit {} dbu (+{} / {:.2f}%)",
+                    target_overflow,
+                    min_wl_dbu,
+                    wl_limit_dbu,
+                    wl_slack_dbu,
+                    100.0 * wl_slack_dbu / std::max<double>(1.0, min_wl_dbu));
+
+      for (const auto& eval : evals) {
+        const RouteMetrics& metrics = eval.metrics;
+        if (metrics.total_overflow != target_overflow) {
+          continue;
+        }
+        if (metrics.wirelength_dbu > wl_limit_dbu) {
+          continue;
+        }
+
+        if (!have_best) {
+          best_candidate = eval.candidate;
+          best_metrics = metrics;
+          have_best = true;
+          continue;
+        }
+
+        if (metrics.congestion.score != best_metrics.congestion.score) {
+          if (metrics.congestion.score < best_metrics.congestion.score) {
+            best_candidate = eval.candidate;
+            best_metrics = metrics;
+          }
+          continue;
+        }
+
+        if (metrics.via_count != best_metrics.via_count) {
+          if (metrics.via_count < best_metrics.via_count) {
+            best_candidate = eval.candidate;
+            best_metrics = metrics;
+          }
+          continue;
+        }
+
+        if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
+          if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
+            best_candidate = eval.candidate;
+            best_metrics = metrics;
+          }
+          continue;
+        }
+
+        if (eval.candidate.name < best_candidate.name) {
+          best_candidate = eval.candidate;
+          best_metrics = metrics;
+        }
       }
-      continue;
-    }
 
-    if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
-      if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
-        best_candidate = eval.candidate;
-        best_metrics = metrics;
-      }
-      continue;
-    }
-
-    if (eval.candidate.name < best_candidate.name) {
-      best_candidate = eval.candidate;
-      best_metrics = metrics;
-    }
-  }
-
-  // Re-run the winner so `grouter_->fastroute_` internal state matches the
-  // returned routes.
-  auto [winner_routes, winner_metrics] = run_candidate(best_candidate);
+	  // Re-run the winner so `grouter_->fastroute_` internal state matches the
+	  // returned routes (important for subsequent incremental calls in the flow).
+	  auto [winner_routes, winner_metrics] = run_candidate(best_candidate);
 
     // Post-processing: add conservative DR-friendly "patch" guides in/around
     // the hottest Rudy regions to help reduce downstream detours (wirelength)
