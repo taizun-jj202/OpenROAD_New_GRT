@@ -360,7 +360,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     // perturbations are often tiny. For downstream detailed routing, we use
     // a small tolerance window where we prefer lower "tightness" (peak
     // utilization) and fewer vias as a proxy for DR-friendliness.
-    constexpr double kWirelengthEps = 0.0002;  // 0.02%
+    // Keep the window tight: we only allow tie-breaks (tightness/vias) when
+    // the global wirelength difference is extremely small.
+    constexpr double kWirelengthEps = 0.00008;  // 0.008%
     if (lhs.wirelength_dbu < rhs.wirelength_dbu * (1.0 - kWirelengthEps)) {
       return true;
     }
@@ -411,6 +413,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations},
       {"perturb6-seed31-crit0", 6.0f, 1, 31, 0.0f, snapshot.congestion_iterations},
       {"perturb6-seed37-crit0", 6.0f, 1, 37, 0.0f, snapshot.congestion_iterations},
+      // Keep critical nets enabled while still perturbing capacities. The goal
+      // is to preserve "straight" routes for a small subset of high-slack nets
+      // while nudging congestion away from pin-access hotspots.
+      {"perturb6-seed29-crit10", 6.0f, 1, 29, 10.0f, snapshot.congestion_iterations},
+      // More perturbation magnitude can sometimes help DR escape from local
+      // pin-access deadlocks at the cost of minor global detours.
+      {"perturb6-amt2-seed29", 6.0f, 2, 29, 0.0f, snapshot.congestion_iterations},
+      // Slightly fewer overflow iterations can reduce late-stage detours.
+      {"perturb6-seed29-it40", 6.0f, 1, 29, 0.0f, 40},
       {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
       // A small "soft-capacity" reservation around the hottest Rudy tiles to
       // improve detailed-routability; chosen only if it stays competitive in
