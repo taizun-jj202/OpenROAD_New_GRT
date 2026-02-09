@@ -74,29 +74,29 @@ struct GuidePatchingOptions
   int max_patched_pins = 1500;
 
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
-  int rudy_hotspot_prefix = 55;
+  int rudy_hotspot_prefix = 60;
 
   // Derived-from-GR congestion hot tiles (based on edge utilization).
   // These complement Rudy hotspots by reacting to actual GR usage patterns.
   int cong_layer_count = 3;           // apply to [min_layer, min_layer + N)
-  double cong_util_threshold = 0.88;  // utilization (usage / eff_cap)
-  int cong_edge_prefix = 1400;        // keep only top-N hot edges
+  double cong_util_threshold = 0.86;  // utilization (usage / eff_cap)
+  int cong_edge_prefix = 1600;        // keep only top-N hot edges
   int cong_max_tiles = 2600;          // cap on unique hot tiles tracked
 
   // Patch radius around selected pins, in tiles (1 => +cross neighbors).
   int pin_patch_radius_tiles = 2;
   // Add short wire stubs on the pin connection layer to improve local access
   // without forcing extra layer switching.
-  int pin_wire_stub_tiles = 4;
+  int pin_wire_stub_tiles = 5;
 
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
-  int long_segment_stub_tiles = 3;
+  int long_segment_stub_tiles = 4;
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
   // explicitly encouraging layer switching (vias).
-  int long_segment_side_lane_span_tiles = 14;
+  int long_segment_side_lane_span_tiles = 16;
 };
 
 static bool is_valid_grid_center(const odb::Rect& die_bounds,
@@ -1274,10 +1274,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               0.0f,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
-                              0,
-                              0,
-                              1.0f,
-                              0};
+                              // Reserve a small amount of capacity in a small
+                              // set of the hottest Rudy tiles on the lowest
+                              // routing layers. This tends to reduce DR
+                              // detours (wirelength) and sometimes vias, while
+                              // keeping runtime essentially unchanged.
+                              12,
+                              1,
+                              0.94f,
+                              2};
 
   // Keep candidate exploration minimal to preserve runtime. A second candidate
   // can help when tuned hits local congestion regimes, but on our regression
