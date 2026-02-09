@@ -77,7 +77,7 @@ struct GuidePatchingOptions
   // Derived-from-GR congestion hot tiles (based on edge utilization).
   // These complement Rudy hotspots by reacting to actual GR usage patterns.
   int cong_layer_count = 2;           // apply to [min_layer, min_layer + N)
-  double cong_util_threshold = 0.92;  // utilization (usage / eff_cap)
+  double cong_util_threshold = 0.90;  // utilization (usage / eff_cap)
   int cong_edge_prefix = 700;         // keep only top-N hot edges
   int cong_max_tiles = 2200;          // cap on unique hot tiles tracked
 
@@ -85,15 +85,16 @@ struct GuidePatchingOptions
   int pin_patch_radius_tiles = 1;
   // Add short wire stubs on the pin connection layer to improve local access
   // without forcing extra layer switching.
-  int pin_wire_stub_tiles = 1;
+  int pin_wire_stub_tiles = 2;
 
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 14;
   int very_long_segment_tiles = 30;
+  int long_segment_stub_tiles = 2;
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
   // explicitly encouraging layer switching (vias).
-  int long_segment_side_lane_span_tiles = 8;
+  int long_segment_side_lane_span_tiles = 10;
 };
 
 static bool is_valid_grid_center(const odb::Rect& die_bounds,
@@ -725,7 +726,7 @@ static void patch_guides_for_dr_friendliness(
                                     x,
                                     y,
                                     layer,
-                                    /*stub_tiles=*/1,
+                                    /*stub_tiles=*/opts.long_segment_stub_tiles,
                                     preferred_dir);
         });
       }
@@ -1130,21 +1131,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               0};
 
   // Keep candidate exploration minimal to preserve runtime. A second candidate
-  // enables Rudy-based "soft cap" reservations in the lowest layers, which can
-  // reduce downstream DR detours (wirelength) on dense designs.
-  const CandidateConfig tuned_rudy{"perturb3-seed11-crit0-rudy25L3",
-                                   3.0f,
-                                   1,
-                                   11,
-                                   0.0f,
-                                   snapshot.congestion_iterations,
-                                   snapshot.global_adjustment,
-                                   25,
-                                   1,
-                                   0.95f,
-                                   3};
+  // provides diversity without significantly changing runtime characteristics.
+  const CandidateConfig alt_seed{"perturb2-seed7-crit0",
+                                 2.0f,
+                                 1,
+                                 7,
+                                 0.0f,
+                                 snapshot.congestion_iterations,
+                                 snapshot.global_adjustment,
+                                 0,
+                                 0,
+                                 1.0f,
+                                 0};
 
-  const std::vector<CandidateConfig> candidates = {tuned, tuned_rudy};
+  const std::vector<CandidateConfig> candidates = {tuned, alt_seed};
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
