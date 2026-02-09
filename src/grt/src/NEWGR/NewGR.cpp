@@ -396,9 +396,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     // NEWGR adds a post-pass that widens guides; that extra flexibility tends
     // to make DRT less sensitive to "near-saturated" edges. So keep risk as a
     // tie-breaker rather than a dominant term.
-    metrics.risk_cost_dbu
-        = saturated * tile_size * 6 + near_saturated * tile_size * 2;
-    metrics.via_cost_dbu = metrics.via_count * tile_size / 4;
+    // Risk weights are intentionally low to keep wirelength dominant while
+    // still biasing away from heavily saturated edges (which often correlate
+    // with DRT detours).
+    metrics.risk_cost_dbu = (saturated * tile_size) / 2
+                            + (near_saturated * tile_size) / 64;
+    metrics.via_cost_dbu = metrics.via_count * tile_size / 80;
     metrics.overflow_cost_dbu = static_cast<long>(metrics.total_overflow) * tile_size * 200;
   };
 
@@ -579,13 +582,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   const auto better = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
+    if (lhs.total_overflow != rhs.total_overflow) {
+      return lhs.total_overflow < rhs.total_overflow;
+    }
     if (lhs.score_dbu != rhs.score_dbu) {
       return lhs.score_dbu < rhs.score_dbu;
     }
-    if (lhs.wirelength_dbu != rhs.wirelength_dbu) {
-      return lhs.wirelength_dbu < rhs.wirelength_dbu;
+    if (lhs.via_count != rhs.via_count) {
+      return lhs.via_count < rhs.via_count;
     }
-    return lhs.via_count < rhs.via_count;
+    return lhs.wirelength_dbu < rhs.wirelength_dbu;
   };
 
   NetRouteMap chosen_routes;
@@ -630,30 +636,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   logger_->info(GNR, 6007, "NEWGR picked {}", chosen_name);
 
-  // Re-run the chosen candidate once so the router's internal state reflects
-  // the returned guides (useful for congestion reporting and post-processing).
   restore_snapshot(snapshot);
-  if (chosen_candidate.override_global_adjustment) {
-    grouter_->adjustment_ = chosen_candidate.global_adjustment;
-  }
-  prepare_fastroute(chosen_candidate);
-  NetRouteMap final_routes
-      = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
-
-  // Post-process: widen guides by adding parallel segments. This does not
-  // change the topology, but expands the allowed search space for DRT.
-  GuideInflationConfig inflation;
-  inflation.radius_tiles = 1;
-  inflation.min_length_tiles = 3;
-  inflation.max_layer_inflate = std::min(max_routing_layer, min_routing_layer + 2);
-  inflate_guides(final_routes,
-                 grouter_->grid_,
-                 grouter_->fastroute_,
-                 min_routing_layer,
-                 max_routing_layer,
-                 inflation);
-
-  return final_routes;
+  return chosen_routes;
 }
 
 }  // namespace grt
