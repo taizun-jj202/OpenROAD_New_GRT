@@ -209,12 +209,9 @@ static void patch_guides_for_dr_friendliness(
 
         const bool in_hotspot = point_in_any_rect(
             pin_grid, rudy_hotspot_regions, opts.rudy_hotspot_prefix);
-        // Patch pin-access more aggressively in the hottest Rudy tiles.
-        // Small nets can still trigger large DR detours when pin access is
-        // tight; keep this bounded by the global patch limits.
         const bool should_patch_pin
             = pin.isPort() || pin.isConnectedToPadOrMacro()
-              || (in_hotspot && net->getNumPins() >= 4);
+              || (in_hotspot && net->getNumPins() >= 10);
 
         if (!should_patch_pin) {
           continue;
@@ -774,6 +771,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 		      {"perturb3-seed11-crit10", 3.0f, 1, 11, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 		      {"perturb3-seed17-crit0", 3.0f, 1, 17, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+          {"perturb3-seed23-crit0", 3.0f, 1, 23, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
 		      // Slightly stronger perturbation; keep some nets "critical" to avoid
 		      // excessive detours in the rip-up/reroute stages.
@@ -784,57 +782,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		      // Alternate seeds for coverage.
 		      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 		      {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-
-          // SPRoute/CUGR-inspired "soft capacity" in Rudy hotspots:
-          // reserve some lower-layer resources in the hottest tiles to
-          // reduce pin-access congestion and downstream DR detours.
-          //
-          // NOTE: These candidates may slightly increase GR wirelength, but
-          // can reduce *detailed* wirelength by improving guide quality.
-          {"perturb3-seed11-crit10-rudy25-90",
-           3.0f,
-           1,
-           11,
-           10.0f,
-           snapshot.congestion_iterations,
-           snapshot.global_adjustment,
-           25,
-           1,
-           0.90f,
-           2},
-          {"perturb6-seed29-crit10-rudy25-90",
-           6.0f,
-           1,
-           29,
-           10.0f,
-           snapshot.congestion_iterations,
-           snapshot.global_adjustment,
-           25,
-           1,
-           0.90f,
-           2},
-          {"perturb6-seed29-crit10-rudy40-85",
-           6.0f,
-           1,
-           29,
-           10.0f,
-           snapshot.congestion_iterations,
-           snapshot.global_adjustment,
-           40,
-           1,
-           0.85f,
-           3},
-          {"perturb6-seed23-crit0-rudy25-90",
-           6.0f,
-           1,
-           23,
-           0.0f,
-           snapshot.congestion_iterations,
-           snapshot.global_adjustment,
-           25,
-           1,
-           0.90f,
-           2},
 		  };
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
@@ -920,11 +867,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
       // Keep candidates very close to the best global WL, then pick the
       // loosest (lowest congestion score) within that window.
-      // Allow a small WL slack window to pick "looser" (more DR-friendly)
-      // candidates, especially when soft-capacity reservations reduce DR
-      // detours but marginally increase GR WL.
-      constexpr double wl_slack_ratio = 0.0010;   // 0.10%
-      constexpr long wl_slack_min_dbu = 150000;   // ~150um @ 1000 DBU/um
+      constexpr double wl_slack_ratio = 0.0003;   // 0.03%
+      constexpr long wl_slack_min_dbu = 100000;   // ~100um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
           static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
