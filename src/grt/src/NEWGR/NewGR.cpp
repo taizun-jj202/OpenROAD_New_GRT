@@ -67,8 +67,8 @@ struct CongestionScore
 struct GuidePatchingOptions
 {
   // Hard caps to avoid exploding guide count / runtime.
-  int max_total_patches = 4000;
-  int max_patches_per_net = 16;
+  int max_total_patches = 6000;
+  int max_patches_per_net = 24;
   int max_patched_pins = 1500;
 
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
@@ -212,9 +212,10 @@ static void patch_guides_for_dr_friendliness(
 
         const bool in_hotspot = point_in_any_rect(
             pin_grid, rudy_hotspot_regions, opts.rudy_hotspot_prefix);
+        const bool is_macro_like
+            = pin.isPort() || pin.isConnectedToPadOrMacro();
         const bool should_patch_pin
-            = pin.isPort() || pin.isConnectedToPadOrMacro()
-              || (in_hotspot && net->getNumPins() >= 6);
+            = is_macro_like || (in_hotspot && net->getNumPins() >= 6);
 
         if (!should_patch_pin) {
           continue;
@@ -228,7 +229,12 @@ static void patch_guides_for_dr_friendliness(
         const int above = conn_layer + 1;
         const int below = conn_layer - 1;
 
-        const int radius = in_hotspot ? opts.pin_patch_radius_tiles : 0;
+        // Ports/macros/pads are frequently pin-access constrained and benefit
+        // from a small amount of extra guide flexibility even when they are
+        // not inside the hottest Rudy tiles.
+        const int radius = (in_hotspot || is_macro_like)
+                               ? opts.pin_patch_radius_tiles
+                               : 0;
         const int d = radius * tile;
 
         // Center + cross neighbors (radius 1 => +/-1 tile).
@@ -249,11 +255,24 @@ static void patch_guides_for_dr_friendliness(
 
           const int x = pin_grid.x() + dx;
           const int y = pin_grid.y() + dy;
-          if (!is_valid_grid_center(die_bounds, tile, x, y)) {
+          if (!is_valid_grid_center(die_bounds, tile, x, y)
+              || !is_valid_grid_center(
+                  die_bounds, tile, pin_grid.x(), pin_grid.y())) {
             continue;
           }
 
           const int before_total = static_cast<int>(route.size());
+          // Add a short local guide segment on the pin's connection layer to
+          // widen pin access without forcing extra layer switches.
+          if (dx != 0 || dy != 0) {
+            maybe_add_wire_patch(route,
+                                 seen,
+                                 pin_grid.x(),
+                                 pin_grid.y(),
+                                 conn_layer,
+                                 x,
+                                 y);
+          }
           if (above <= max_routing_layer) {
             maybe_add_via_patch(route, seen, x, y, conn_layer, above);
           }
@@ -815,20 +834,150 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 			  const std::vector<CandidateConfig> candidates = {
 			      baseline,
 
+			      // Very low perturbation, fixed seeds (often DR-friendly).
+			      {"perturb1-seed11-crit0",
+			       1.0f,
+			       1,
+			       11,
+			       0.0f,
+			       snapshot.congestion_iterations,
+			       snapshot.global_adjustment,
+			       0,
+			       0,
+			       1.0f,
+			       0},
+
 			      // Low perturbation, fixed seeds (historically stable).
-			      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-			      {"perturb3-seed11-crit10", 3.0f, 1, 11, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-			      {"perturb3-seed17-crit0", 3.0f, 1, 17, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+			      {"perturb2-seed11-crit0",
+			       2.0f,
+			       1,
+			       11,
+			       0.0f,
+			       snapshot.congestion_iterations,
+			       snapshot.global_adjustment,
+			       0,
+			       0,
+			       1.0f,
+			       0},
+			      {"perturb3-seed11-crit0",
+			       3.0f,
+			       1,
+			       11,
+			       0.0f,
+			       snapshot.congestion_iterations,
+			       snapshot.global_adjustment,
+			       0,
+			       0,
+			       1.0f,
+			       0},
+			      {"perturb3-seed11-crit10",
+			       3.0f,
+			       1,
+			       11,
+			       10.0f,
+			       snapshot.congestion_iterations,
+			       snapshot.global_adjustment,
+			       0,
+			       0,
+			       1.0f,
+			       0},
+			      {"perturb3-seed17-crit0",
+			       3.0f,
+			       1,
+			       17,
+			       0.0f,
+			       snapshot.congestion_iterations,
+			       snapshot.global_adjustment,
+			       0,
+			       0,
+			       1.0f,
+			       0},
+
+			      // Light Rudy-guided soft-capacity around the hottest tiles. This
+			      // nudges the GR away from "pin access pain points" without forcing
+			      // large detours.
+			      {"perturb3-seed11-crit0-softcap",
+			       3.0f,
+			       1,
+			       11,
+			       0.0f,
+			       snapshot.congestion_iterations,
+			       snapshot.global_adjustment,
+			       20,
+			       1,
+			       0.85f,
+			       2},
 
 			      // Slightly stronger perturbation; keep some nets "critical" to avoid
 			      // excessive detours in the rip-up/reroute stages.
-			      {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-			      {"perturb6-seed29-crit10", 6.0f, 1, 29, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-			      {"perturb6-seed29-crit20", 6.0f, 1, 29, 20.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+			      {"perturb4-seed29-crit10",
+			       4.0f,
+			       1,
+			       29,
+			       10.0f,
+			       snapshot.congestion_iterations,
+			       snapshot.global_adjustment,
+			       0,
+			       0,
+			       1.0f,
+			       0},
+			      {"perturb6-seed29-crit0",
+			       6.0f,
+			       1,
+			       29,
+			       0.0f,
+			       snapshot.congestion_iterations,
+			       snapshot.global_adjustment,
+			       0,
+			       0,
+			       1.0f,
+			       0},
+			      {"perturb6-seed29-crit10",
+			       6.0f,
+			       1,
+			       29,
+			       10.0f,
+			       snapshot.congestion_iterations,
+			       snapshot.global_adjustment,
+			       0,
+			       0,
+			       1.0f,
+			       0},
+			      {"perturb6-seed29-crit20",
+			       6.0f,
+			       1,
+			       29,
+			       20.0f,
+			       snapshot.congestion_iterations,
+			       snapshot.global_adjustment,
+			       0,
+			       0,
+			       1.0f,
+			       0},
 
 		      // Alternate seeds for coverage.
-		      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-		      {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+		      {"perturb6-seed23-crit0",
+		       6.0f,
+		       1,
+		       23,
+		       0.0f,
+		       snapshot.congestion_iterations,
+		       snapshot.global_adjustment,
+		       0,
+		       0,
+		       1.0f,
+		       0},
+		      {"perturb6-seed11-crit0",
+		       6.0f,
+		       1,
+		       11,
+		       0.0f,
+		       snapshot.congestion_iterations,
+		       snapshot.global_adjustment,
+		       0,
+		       0,
+		       1.0f,
+		       0},
 		  };
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
@@ -899,8 +1048,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		  //
 		  // Rationale: On this regression, picking the absolute best GR WL can
 		  // produce tighter guides that force DR detours. Constraining selection
-		  // to a very tight WL window, then picking a looser solution, tends to
-		  // reduce detailed wirelength.
+		  // to a very tight WL window, then picking a *looser* solution tends to
+		  // reduce detailed wirelength, even if GR WL is slightly higher.
 		  const int target_overflow = (best_overflow == 0) ? 0 : best_overflow;
 
       long min_wl_dbu = std::numeric_limits<long>::max();
@@ -920,8 +1069,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           wl_slack_min_dbu,
           static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
       const long wl_limit_dbu = min_wl_dbu + wl_slack_dbu;
-      const long wl_tiebreak_dbu
-          = std::max<long>(20000, wl_slack_dbu / 4);  // ~20um minimum
 
       logger_->info(GNR,
                     6010,
@@ -948,22 +1095,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           continue;
         }
 
-        const long long wl_diff
-            = static_cast<long long>(metrics.wirelength_dbu)
-              - static_cast<long long>(best_metrics.wirelength_dbu);
-
-        // Keep wirelength as the primary objective within the WL window. Only
-        // use the congestion proxy as a tie-breaker once wirelength is "very
-        // close". This reduces the chance of picking a meaningfully longer GR
-        // solution just because it is marginally looser.
-        if (std::llabs(wl_diff) > static_cast<long long>(wl_tiebreak_dbu)) {
-          if (wl_diff < 0) {
-            best_candidate = eval.candidate;
-            best_metrics = metrics;
-          }
-          continue;
-        }
-
+        // Within the WL window, prioritize the DR-friendliness proxy first.
+        // In practice this correlates better with *detailed* wirelength than
+        // tiny differences in GR wirelength among already-short solutions.
         if (metrics.congestion.score != best_metrics.congestion.score) {
           if (metrics.congestion.score < best_metrics.congestion.score) {
             best_candidate = eval.candidate;
