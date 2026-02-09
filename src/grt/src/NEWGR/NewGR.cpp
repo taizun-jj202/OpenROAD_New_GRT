@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <limits>
 #include <string>
 #include <unordered_set>
@@ -79,6 +80,8 @@ struct GuidePatchingOptions
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 14;
   int very_long_segment_tiles = 30;
+  int long_segment_patch_span_tiles = 4;
+  int very_long_segment_patch_span_tiles = 8;
 };
 
 static bool is_valid_grid_center(const odb::Rect& die_bounds,
@@ -211,7 +214,7 @@ static void patch_guides_for_dr_friendliness(
             pin_grid, rudy_hotspot_regions, opts.rudy_hotspot_prefix);
         const bool should_patch_pin
             = pin.isPort() || pin.isConnectedToPadOrMacro()
-              || (in_hotspot && net->getNumPins() >= 10);
+              || (in_hotspot && net->getNumPins() >= 6);
 
         if (!should_patch_pin) {
           continue;
@@ -344,31 +347,50 @@ static void patch_guides_for_dr_friendliness(
         }
       };
 
-      auto add_via_at_step = [&](int step_tiles) {
-        if (step_tiles <= 0 || step_tiles >= tiles) {
-          return;
-        }
-        const int x = horizontal ? (std::min(x0, x1) + step_tiles * tile) : x0;
-        const int y = vertical ? (std::min(y0, y1) + step_tiles * tile) : y0;
-        if (!is_valid_grid_center(die_bounds, tile, x, y)) {
-          return;
-        }
-        try_add_patch([&]() { maybe_add_via_patch(route, seen, x, y, layer, target_layer); });
-      };
+      const int seg_min_x = std::min(x0, x1);
+      const int seg_min_y = std::min(y0, y1);
 
-      // Add a parallel guide segment on the adjacent layer. This gives the
-      // detailed router an "escape lane" above/below a long, hotspot-crossing
-      // segment and often avoids large detours (wirelength) in DR.
-      try_add_patch([&]() {
-        maybe_add_wire_patch(route, seen, x0, y0, target_layer, x1, y1);
-      });
+      auto add_local_escape = [&](int step, int span_tiles) {
+        if (step <= 0 || step >= tiles) {
+          return;
+        }
+        if (span_tiles <= 0) {
+          return;
+        }
+        const int half_span = std::max(1, span_tiles / 2);
+        const int start_step = std::max(0, step - half_span);
+        const int end_step = std::min(tiles, step + half_span);
+        if (end_step <= start_step) {
+          return;
+        }
+
+        const int sx = horizontal ? (seg_min_x + start_step * tile) : x0;
+        const int sy = vertical ? (seg_min_y + start_step * tile) : y0;
+        const int ex = horizontal ? (seg_min_x + end_step * tile) : x0;
+        const int ey = vertical ? (seg_min_y + end_step * tile) : y0;
+        if ((sx == ex && sy == ey) || !is_valid_grid_center(die_bounds, tile, sx, sy)
+            || !is_valid_grid_center(die_bounds, tile, ex, ey)) {
+          return;
+        }
+
+        // Add a short "escape lane" on an adjacent layer near the hotspot
+        // crossing. A local patch is less disruptive than mirroring the whole
+        // segment and tends to reduce both DR detours (WL) and via blow-up.
+        try_add_patch([&]() {
+          maybe_add_wire_patch(route, seen, sx, sy, target_layer, ex, ey);
+          maybe_add_via_patch(route, seen, sx, sy, layer, target_layer);
+          maybe_add_via_patch(route, seen, ex, ey, layer, target_layer);
+        });
+      };
 
       // Ensure layer connectivity along the corridor. Keep the number of vias
       // small but deterministic.
-      add_via_at_step(mid_tiles);
+      add_local_escape(mid_tiles, opts.long_segment_patch_span_tiles);
       if (tiles >= opts.very_long_segment_tiles) {
-        add_via_at_step(tiles / 4);
-        add_via_at_step((3 * tiles) / 4);
+        // For very long hotspot crossings, add a second and third local escape
+        // point to avoid concentrating all flexibility at the midpoint.
+        add_local_escape(tiles / 4, opts.very_long_segment_patch_span_tiles);
+        add_local_escape((3 * tiles) / 4, opts.very_long_segment_patch_span_tiles);
       }
     }
 
@@ -764,20 +786,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		  // NOTE: Even though our regression metric is *detailed* wirelength, in
 		  // practice the best candidates are usually among the lowest GR-WL
 		  // solutions once we apply DR-friendly guide patching.
-		  const std::vector<CandidateConfig> candidates = {
-		      baseline,
+			  const std::vector<CandidateConfig> candidates = {
+			      baseline,
 
-		      // Low perturbation, fixed seeds (historically stable).
-		      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-		      {"perturb3-seed11-crit10", 3.0f, 1, 11, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-		      {"perturb3-seed17-crit0", 3.0f, 1, 17, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+			      // Low perturbation, fixed seeds (historically stable).
+			      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+			      {"perturb3-seed11-crit10", 3.0f, 1, 11, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+			      {"perturb3-seed17-crit0", 3.0f, 1, 17, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
           {"perturb3-seed23-crit0", 3.0f, 1, 23, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
-		      // Slightly stronger perturbation; keep some nets "critical" to avoid
-		      // excessive detours in the rip-up/reroute stages.
-		      {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-		      {"perturb6-seed29-crit10", 6.0f, 1, 29, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
-		      {"perturb6-seed29-crit20", 6.0f, 1, 29, 20.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+			      // Mid perturbation for additional exploration between 3% and 6%.
+			      {"perturb4p5-seed17-crit10", 4.5f, 1, 17, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+			      {"perturb4p5-seed29-crit10", 4.5f, 1, 29, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+
+			      // Slightly stronger perturbation; keep some nets "critical" to avoid
+			      // excessive detours in the rip-up/reroute stages.
+			      {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+			      {"perturb6-seed29-crit10", 6.0f, 1, 29, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+			      {"perturb6-seed29-crit20", 6.0f, 1, 29, 20.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
 		      // Alternate seeds for coverage.
 		      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
@@ -873,6 +899,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           wl_slack_min_dbu,
           static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
       const long wl_limit_dbu = min_wl_dbu + wl_slack_dbu;
+      const long wl_tiebreak_dbu
+          = std::max<long>(20000, wl_slack_dbu / 4);  // ~20um minimum
 
       logger_->info(GNR,
                     6010,
@@ -896,6 +924,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           best_candidate = eval.candidate;
           best_metrics = metrics;
           have_best = true;
+          continue;
+        }
+
+        const long long wl_diff
+            = static_cast<long long>(metrics.wirelength_dbu)
+              - static_cast<long long>(best_metrics.wirelength_dbu);
+
+        // Keep wirelength as the primary objective within the WL window. Only
+        // use the congestion proxy as a tie-breaker once wirelength is "very
+        // close". This reduces the chance of picking a meaningfully longer GR
+        // solution just because it is marginally looser.
+        if (std::llabs(wl_diff) > static_cast<long long>(wl_tiebreak_dbu)) {
+          if (wl_diff < 0) {
+            best_candidate = eval.candidate;
+            best_metrics = metrics;
+          }
           continue;
         }
 
