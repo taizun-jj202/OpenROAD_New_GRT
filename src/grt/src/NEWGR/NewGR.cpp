@@ -214,57 +214,39 @@ static void maybe_add_cross_wire_stubs(
     return;
   }
 
-  // Add a longer stub along the preferred direction, plus a small "micro-stub"
-  // in the non-preferred direction. The micro-stub gives the detailed router a
-  // chance to avoid a layer switch (via) for very short jogs near pins/hotspots,
-  // which can reduce both via count and detours.
-  const int preferred_tiles = stub_tiles;
-  const int nonpreferred_tiles = 1;
-
-  const int h_tiles
-      = (preferred_dir == odb::dbTechLayerDir::VERTICAL) ? nonpreferred_tiles
-        : (preferred_dir == odb::dbTechLayerDir::HORIZONTAL)
-            ? preferred_tiles
-            : preferred_tiles;
-  const int v_tiles
-      = (preferred_dir == odb::dbTechLayerDir::HORIZONTAL) ? nonpreferred_tiles
-        : (preferred_dir == odb::dbTechLayerDir::VERTICAL)
-            ? preferred_tiles
-            : preferred_tiles;
-
-  const int d_h = h_tiles * tile;
-  const int d_v = v_tiles * tile;
-  if (d_h <= 0 && d_v <= 0) {
+  const int d = stub_tiles * tile;
+  if (d <= 0) {
     return;
   }
+
+  const bool do_h = (preferred_dir == odb::dbTechLayerDir::HORIZONTAL)
+                    || (preferred_dir == odb::dbTechLayerDir::NONE);
+  const bool do_v = (preferred_dir == odb::dbTechLayerDir::VERTICAL)
+                    || (preferred_dir == odb::dbTechLayerDir::NONE);
 
   auto valid = [&](int xx, int yy) {
     return is_valid_grid_center(die_bounds, tile, xx, yy);
   };
 
-  if (d_h > 0) {
-    if (valid(x - d_h, y) && valid(x + d_h, y)) {
-      maybe_add_wire_patch(route, seen, x - d_h, y, layer, x + d_h, y);
-    } else {
-      if (valid(x - d_h, y) && valid(x, y)) {
-        maybe_add_wire_patch(route, seen, x - d_h, y, layer, x, y);
-      }
-      if (valid(x, y) && valid(x + d_h, y)) {
-        maybe_add_wire_patch(route, seen, x, y, layer, x + d_h, y);
-      }
+  if (do_h && valid(x - d, y) && valid(x + d, y)) {
+    maybe_add_wire_patch(route, seen, x - d, y, layer, x + d, y);
+  } else if (do_h) {
+    if (valid(x - d, y) && valid(x, y)) {
+      maybe_add_wire_patch(route, seen, x - d, y, layer, x, y);
+    }
+    if (valid(x, y) && valid(x + d, y)) {
+      maybe_add_wire_patch(route, seen, x, y, layer, x + d, y);
     }
   }
 
-  if (d_v > 0) {
-    if (valid(x, y - d_v) && valid(x, y + d_v)) {
-      maybe_add_wire_patch(route, seen, x, y - d_v, layer, x, y + d_v);
-    } else {
-      if (valid(x, y - d_v) && valid(x, y)) {
-        maybe_add_wire_patch(route, seen, x, y - d_v, layer, x, y);
-      }
-      if (valid(x, y) && valid(x, y + d_v)) {
-        maybe_add_wire_patch(route, seen, x, y, layer, x, y + d_v);
-      }
+  if (do_v && valid(x, y - d) && valid(x, y + d)) {
+    maybe_add_wire_patch(route, seen, x, y - d, layer, x, y + d);
+  } else if (do_v) {
+    if (valid(x, y - d) && valid(x, y)) {
+      maybe_add_wire_patch(route, seen, x, y - d, layer, x, y);
+    }
+    if (valid(x, y) && valid(x, y + d)) {
+      maybe_add_wire_patch(route, seen, x, y, layer, x, y + d);
     }
   }
 }
@@ -1285,6 +1267,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // improve downstream detailed-routing metrics by nudging congestion away
   // from hard-to-route pin-access regions, even if global cost differences
   // are small.
+  const CandidateConfig alt{"perturb3-seed17-crit0",
+                             3.0f,
+                             1,
+                             17,
+                             0.0f,
+                             snapshot.congestion_iterations,
+                             snapshot.global_adjustment,
+                             0,
+                             0,
+                             1.0f,
+                             0};
+
   const CandidateConfig tuned{"perturb3-seed11-crit0",
                               3.0f,
                               1,
@@ -1297,11 +1291,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               1.0f,
                               0};
 
-  // Keep candidate exploration minimal to preserve runtime. A second candidate
-  // can help when tuned hits local congestion regimes, but on our regression
-  // it consistently regresses detailed wirelength. Stick to a single tuned
-  // candidate to preserve runtime and wirelength stability.
-  const std::vector<CandidateConfig> candidates = {tuned};
+  // Keep candidate exploration small to preserve runtime. We explore exactly
+  // one additional deterministic seed. With the winner-reuse optimization
+  // below, this typically costs ~the same as the previous always-rerun policy,
+  // but can escape local congestion regimes that cause downstream detours.
+  const std::vector<CandidateConfig> candidates = {alt, tuned};
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
@@ -1343,6 +1337,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	  RouteMetrics best_metrics;
 	  bool have_best = false;
 
+    CandidateConfig last_candidate = tuned;
+    RouteMetrics last_metrics;
+    NetRouteMap last_routes;
+    bool have_last = false;
+
 	  struct CandidateEval
 	  {
 	    CandidateConfig candidate;
@@ -1353,11 +1352,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
 	  int best_overflow = std::numeric_limits<int>::max();
 	  for (const auto& candidate : candidates) {
-	    auto candidate_result = run_candidate(candidate);
-	    const RouteMetrics& metrics = candidate_result.second;
+	    auto [routes, metrics] = run_candidate(candidate);
 
 	    evals.push_back({candidate, metrics});
 	    best_overflow = std::min(best_overflow, metrics.total_overflow);
+
+      // Keep the last run's full route so we can avoid a redundant rerun when
+      // the winner ends up being the last candidate (common case).
+      last_candidate = candidate;
+      last_metrics = metrics;
+      last_routes = std::move(routes);
+      have_last = true;
 		  }
 
 		  // Selection policy (runtime-aware, DR-friendly):
@@ -1443,9 +1448,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         }
       }
 
-	  // Re-run the winner so `grouter_->fastroute_` internal state matches the
-	  // returned routes (important for subsequent incremental calls in the flow).
-	  auto [winner_routes, winner_metrics] = run_candidate(best_candidate);
+	  // If the winner is already the last evaluated candidate, reuse its routes
+	  // directly. Otherwise rerun so `grouter_->fastroute_` internal state
+	  // matches the returned routes (important for subsequent incremental calls
+	  // in the flow).
+    NetRouteMap winner_routes;
+    RouteMetrics winner_metrics;
+    if (have_last && last_candidate.name == best_candidate.name) {
+      winner_routes = std::move(last_routes);
+      winner_metrics = last_metrics;
+    } else {
+      std::tie(winner_routes, winner_metrics) = run_candidate(best_candidate);
+    }
 
   // Post-processing: add conservative DR-friendly "patch" guides in/around
   // the hottest Rudy regions to help reduce downstream detours (wirelength)
