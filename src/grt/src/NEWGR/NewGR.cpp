@@ -68,7 +68,7 @@ struct GuidePatchingOptions
 {
   // Hard caps to avoid exploding guide count / runtime.
   int max_total_patches = 6000;
-  int max_patches_per_net = 24;
+  int max_patches_per_net = 32;
   int max_patched_pins = 1500;
 
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
@@ -76,6 +76,7 @@ struct GuidePatchingOptions
 
   // Patch radius around selected pins, in tiles (1 => +cross neighbors).
   int pin_patch_radius_tiles = 1;
+  int hotspot_pin_patch_radius_tiles = 2;
 
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 14;
@@ -231,25 +232,34 @@ static void patch_guides_for_dr_friendliness(
 
         // Ports/macros/pads are frequently pin-access constrained and benefit
         // from a small amount of extra guide flexibility even when they are
-        // not inside the hottest Rudy tiles.
-        const int radius = (in_hotspot || is_macro_like)
-                               ? opts.pin_patch_radius_tiles
-                               : 0;
-        const int d = radius * tile;
+        // not inside the hottest Rudy tiles. In hotspot tiles, we expand the
+        // patch radius slightly to reduce DR detours around pin-access choke
+        // points (wirelength-first, via-second).
+        const int radius_tiles = [&]() -> int {
+          if (in_hotspot) {
+            return opts.hotspot_pin_patch_radius_tiles;
+          }
+          if (is_macro_like) {
+            return opts.pin_patch_radius_tiles;
+          }
+          return 0;
+        }();
 
-        // Center + cross neighbors (radius 1 => +/-1 tile).
-        const std::vector<std::pair<int, int>> offsets = {
-            {0, 0},
-            {d, 0},
-            {-d, 0},
-            {0, d},
-            {0, -d},
-        };
+        std::vector<std::pair<int, int>> offsets;
+        offsets.reserve(1 + 4 * std::max(1, radius_tiles));
+        offsets.push_back({0, 0});
+        for (int r = 1; r <= radius_tiles; r++) {
+          const int d = r * tile;
+          offsets.push_back({d, 0});
+          offsets.push_back({-d, 0});
+          offsets.push_back({0, d});
+          offsets.push_back({0, -d});
+        }
 
         for (const auto& [dx, dy] : offsets) {
           if (dx == 0 && dy == 0) {
             // Always include the center point.
-          } else if (radius == 0) {
+          } else if (radius_tiles == 0) {
             continue;
           }
 
@@ -834,31 +844,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 			  const std::vector<CandidateConfig> candidates = {
 			      baseline,
 
-			      // Very low perturbation, fixed seeds (often DR-friendly).
-			      {"perturb1-seed11-crit0",
-			       1.0f,
-			       1,
-			       11,
-			       0.0f,
-			       snapshot.congestion_iterations,
-			       snapshot.global_adjustment,
-			       0,
-			       0,
-			       1.0f,
-			       0},
-
 			      // Low perturbation, fixed seeds (historically stable).
-			      {"perturb2-seed11-crit0",
-			       2.0f,
-			       1,
-			       11,
-			       0.0f,
-			       snapshot.congestion_iterations,
-			       snapshot.global_adjustment,
-			       0,
-			       0,
-			       1.0f,
-			       0},
 			      {"perturb3-seed11-crit0",
 			       3.0f,
 			       1,
@@ -892,35 +878,43 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 			       0,
 			       1.0f,
 			       0},
-
-			      // Light Rudy-guided soft-capacity around the hottest tiles. This
-			      // nudges the GR away from "pin access pain points" without forcing
-			      // large detours.
-			      {"perturb3-seed11-crit0-softcap",
-			       3.0f,
-			       1,
-			       11,
-			       0.0f,
-			       snapshot.congestion_iterations,
-			       snapshot.global_adjustment,
-			       20,
-			       1,
-			       0.85f,
-			       2},
+            // Alternate seeds (same regime) to escape local minima.
+            {"perturb3-seed7-crit0",
+             3.0f,
+             1,
+             7,
+             0.0f,
+             snapshot.congestion_iterations,
+             snapshot.global_adjustment,
+             0,
+             0,
+             1.0f,
+             0},
+            {"perturb3-seed13-crit0",
+             3.0f,
+             1,
+             13,
+             0.0f,
+             snapshot.congestion_iterations,
+             snapshot.global_adjustment,
+             0,
+             0,
+             1.0f,
+             0},
+            {"perturb3-seed23-crit0",
+             3.0f,
+             1,
+             23,
+             0.0f,
+             snapshot.congestion_iterations,
+             snapshot.global_adjustment,
+             0,
+             0,
+             1.0f,
+             0},
 
 			      // Slightly stronger perturbation; keep some nets "critical" to avoid
 			      // excessive detours in the rip-up/reroute stages.
-			      {"perturb4-seed29-crit10",
-			       4.0f,
-			       1,
-			       29,
-			       10.0f,
-			       snapshot.congestion_iterations,
-			       snapshot.global_adjustment,
-			       0,
-			       0,
-			       1.0f,
-			       0},
 			      {"perturb6-seed29-crit0",
 			       6.0f,
 			       1,
