@@ -5,11 +5,13 @@
 #include <cstddef>
 #include <limits>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "FastRoute.h"
 #include "Grid.h"
+#include "Net.h"
 #include "RoutingTracks.h"
 #include "grt/Rudy.h"
 #include "odb/db.h"
@@ -60,6 +62,286 @@ struct CongestionScore
   double frac_util_90 = 0.0;
   double frac_util_80 = 0.0;
 };
+
+struct GuidePatchingOptions
+{
+  // Hard caps to avoid exploding guide count / runtime.
+  int max_total_patches = 4000;
+  int max_patches_per_net = 16;
+  int max_patched_pins = 1500;
+
+  // How many Rudy hotspot tiles to consider (prefix of sorted list).
+  int rudy_hotspot_prefix = 30;
+
+  // Patch radius around selected pins, in tiles (1 => +cross neighbors).
+  int pin_patch_radius_tiles = 1;
+
+  // Long-segment patching (in tiles along segment).
+  int long_segment_tiles = 14;
+  int very_long_segment_tiles = 30;
+};
+
+static bool is_valid_grid_center(const odb::Rect& die_bounds,
+                                 int tile,
+                                 int x,
+                                 int y)
+{
+  const int half = tile / 2;
+  return x >= die_bounds.xMin() + half && x <= die_bounds.xMax() - half
+         && y >= die_bounds.yMin() + half && y <= die_bounds.yMax() - half;
+}
+
+static bool point_in_any_rect(const odb::Point& p,
+                              const std::vector<odb::Rect>& rects,
+                              int prefix)
+{
+  const int limit = std::min<int>(prefix, static_cast<int>(rects.size()));
+  for (int i = 0; i < limit; i++) {
+    const odb::Rect& r = rects[i];
+    if (p.x() >= r.xMin() && p.x() <= r.xMax() && p.y() >= r.yMin()
+        && p.y() <= r.yMax()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void maybe_add_via_patch(GRoute& route,
+                                std::unordered_set<GSegment, GSegmentHash>& seen,
+                                int x,
+                                int y,
+                                int layer0,
+                                int layer1)
+{
+  if (layer0 == layer1) {
+    return;
+  }
+  if (std::abs(layer0 - layer1) != 1) {
+    return;
+  }
+  const GSegment seg(x, y, layer0, x, y, layer1, false);
+  if (seen.insert(seg).second) {
+    route.push_back(seg);
+  }
+}
+
+static void patch_guides_for_dr_friendliness(
+    GlobalRouter* grouter,
+    NetRouteMap& routes,
+    int min_routing_layer,
+    int max_routing_layer,
+    const std::vector<odb::Rect>& rudy_hotspot_regions,
+    utl::Logger* logger)
+{
+  if (grouter == nullptr || grouter->grid() == nullptr) {
+    return;
+  }
+  const int tile = grouter->grid()->getTileSize();
+  if (tile <= 0) {
+    return;
+  }
+
+  const GuidePatchingOptions opts;
+  const odb::Rect die_bounds = grouter->grid()->getGridArea();
+
+  int total_patches = 0;
+  int patched_pins = 0;
+  int patched_nets = 0;
+
+  for (auto& [db_net, route] : routes) {
+    if (total_patches >= opts.max_total_patches) {
+      break;
+    }
+    if (db_net == nullptr || route.empty()) {
+      continue;
+    }
+
+    Net* net = grouter->getNet(db_net);
+    if (net == nullptr) {
+      continue;
+    }
+
+    int patches_for_net = 0;
+    std::unordered_set<GSegment, GSegmentHash> seen;
+    seen.reserve(route.size() + 32);
+    for (const auto& seg : route) {
+      seen.insert(seg);
+    }
+
+    // (A) Pin-region patching: for a small subset of "risky" pins, add small
+    // via-tile guides around the pin to increase access flexibility (similar
+    // in spirit to CUGR patching) without changing the routed topology.
+    //
+    // We intentionally keep this conservative to avoid blowing up guide count.
+    if (patched_pins < opts.max_patched_pins) {
+      for (Pin& pin : net->getPins()) {
+        if (patched_pins >= opts.max_patched_pins
+            || patches_for_net >= opts.max_patches_per_net
+            || total_patches >= opts.max_total_patches) {
+          break;
+        }
+
+        const odb::Point pin_grid = pin.getOnGridPosition();
+        const odb::Point pin_pos = pin.getPosition();
+        static_cast<void>(pin_pos);
+
+        const bool in_hotspot = point_in_any_rect(
+            pin_grid, rudy_hotspot_regions, opts.rudy_hotspot_prefix);
+        const bool should_patch_pin
+            = pin.isPort() || pin.isConnectedToPadOrMacro()
+              || (in_hotspot && net->getNumPins() >= 10);
+
+        if (!should_patch_pin) {
+          continue;
+        }
+
+        const int conn_layer = pin.getConnectionLayer();
+        if (conn_layer < min_routing_layer || conn_layer > max_routing_layer) {
+          continue;
+        }
+
+        const int above = conn_layer + 1;
+        const int below = conn_layer - 1;
+
+        const int radius = in_hotspot ? opts.pin_patch_radius_tiles : 0;
+        const int d = radius * tile;
+
+        // Center + cross neighbors (radius 1 => +/-1 tile).
+        const std::vector<std::pair<int, int>> offsets = {
+            {0, 0},
+            {d, 0},
+            {-d, 0},
+            {0, d},
+            {0, -d},
+        };
+
+        for (const auto& [dx, dy] : offsets) {
+          if (dx == 0 && dy == 0) {
+            // Always include the center point.
+          } else if (radius == 0) {
+            continue;
+          }
+
+          const int x = pin_grid.x() + dx;
+          const int y = pin_grid.y() + dy;
+          if (!is_valid_grid_center(die_bounds, tile, x, y)) {
+            continue;
+          }
+
+          const int before_total = static_cast<int>(route.size());
+          if (above <= max_routing_layer) {
+            maybe_add_via_patch(route, seen, x, y, conn_layer, above);
+          }
+          if (below >= min_routing_layer) {
+            maybe_add_via_patch(route, seen, x, y, conn_layer, below);
+          }
+          const int added = static_cast<int>(route.size()) - before_total;
+          if (added > 0) {
+            patches_for_net += added;
+            total_patches += added;
+          }
+          if (patches_for_net >= opts.max_patches_per_net
+              || total_patches >= opts.max_total_patches) {
+            break;
+          }
+        }
+
+        if (patches_for_net > 0) {
+          patched_pins++;
+        }
+      }
+    }
+
+    // (B) Long-segment patching: when a net has long straight segments that
+    // pass through the hottest Rudy tiles, add a via-tile patch at one or two
+    // internal points to allow the detailed router an earlier layer switch.
+    for (const GSegment& seg : route) {
+      if (patches_for_net >= opts.max_patches_per_net
+          || total_patches >= opts.max_total_patches) {
+        break;
+      }
+      if (seg.isVia() || seg.init_layer != seg.final_layer) {
+        continue;
+      }
+
+      const int layer = seg.init_layer;
+      if (layer < min_routing_layer || layer > max_routing_layer) {
+        continue;
+      }
+
+      const int dist = seg.length();
+      const int tiles = tile > 0 ? (dist / tile) : 0;
+      if (tiles < opts.long_segment_tiles) {
+        continue;
+      }
+
+      const int x0 = seg.init_x;
+      const int y0 = seg.init_y;
+      const int x1 = seg.final_x;
+      const int y1 = seg.final_y;
+
+      const bool horizontal = (y0 == y1);
+      const bool vertical = (x0 == x1);
+      if (!horizontal && !vertical) {
+        continue;
+      }
+
+      auto patch_at_step = [&](int step_tiles) {
+        if (step_tiles <= 0 || step_tiles >= tiles) {
+          return;
+        }
+        const int x = horizontal
+                          ? (std::min(x0, x1) + step_tiles * tile)
+                          : x0;
+        const int y = vertical ? (std::min(y0, y1) + step_tiles * tile) : y0;
+
+        if (!is_valid_grid_center(die_bounds, tile, x, y)) {
+          return;
+        }
+        const odb::Point p(x, y);
+        if (!point_in_any_rect(p, rudy_hotspot_regions, opts.rudy_hotspot_prefix)) {
+          return;
+        }
+
+        const int above = layer + 1;
+        const int below = layer - 1;
+        const int target_layer
+            = (above <= max_routing_layer) ? above : below;
+        if (target_layer < min_routing_layer || target_layer > max_routing_layer) {
+          return;
+        }
+
+        const int before_total = static_cast<int>(route.size());
+        maybe_add_via_patch(route, seen, x, y, layer, target_layer);
+        const int added = static_cast<int>(route.size()) - before_total;
+        if (added > 0) {
+          patches_for_net += added;
+          total_patches += added;
+        }
+      };
+
+      patch_at_step(tiles / 2);
+      if (tiles >= opts.very_long_segment_tiles) {
+        patch_at_step(tiles / 4);
+        patch_at_step((3 * tiles) / 4);
+      }
+    }
+
+    if (patches_for_net > 0) {
+      patched_nets++;
+    }
+  }
+
+  if (total_patches > 0) {
+    logger->info(GNR,
+                 6011,
+                 "NEWGR patching: added {} via-tile patches across {} nets (patched pins {}, caps per-net {})",
+                 total_patches,
+                 patched_nets,
+                 patched_pins,
+                 opts.max_patches_per_net);
+  }
+}
 
 }  // namespace
 
@@ -622,6 +904,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	  // Re-run the winner so `grouter_->fastroute_` internal state matches the
 	  // returned routes (important for subsequent incremental calls in the flow).
 	  auto [winner_routes, winner_metrics] = run_candidate(best_candidate);
+
+    // Post-processing: add conservative DR-friendly "patch" guides in/around
+    // the hottest Rudy regions to help reduce downstream detours (wirelength)
+    // without materially changing the GR topology.
+    patch_guides_for_dr_friendliness(grouter_,
+                                     winner_routes,
+                                     min_routing_layer,
+                                     max_routing_layer,
+                                     rudy_hotspot_regions,
+                                     logger_);
 
   logger_->info(GNR,
                 6007,
