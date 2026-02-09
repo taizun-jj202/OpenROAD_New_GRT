@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -62,6 +64,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     long via_count = 0;
     double wirelength_um = 0.0;
     int total_overflow = 0;
+    long saturated_edges = 0;
+    long near_saturated_edges = 0;
+    long risk_cost_dbu = 0;
+    long via_cost_dbu = 0;
+    long overflow_cost_dbu = 0;
     long score_dbu = 0;
   };
 
@@ -87,6 +94,74 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
 
     return metrics;
+  };
+
+  auto compute_risk_cost = [&](RouteMetrics& metrics, const NetRouteMap& routes) {
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = std::max(grouter_->grid_->getXGrids(), 1);
+    const int y_grids = std::max(grouter_->grid_->getYGrids(), 1);
+
+    auto to_grid_index = [&](int x_dbu, int y_dbu) -> std::pair<int, int> {
+      const int x_idx = (x_dbu - x_min) / tile_size;
+      const int y_idx = (y_dbu - y_min) / tile_size;
+      return {std::clamp(x_idx, 0, x_grids - 1),
+              std::clamp(y_idx, 0, y_grids - 1)};
+    };
+
+    long saturated = 0;
+    long near_saturated = 0;
+
+    for (const auto& [db_net, segments] : routes) {
+      static_cast<void>(db_net);
+      for (const GSegment& segment : segments) {
+        if (segment.isVia()) {
+          continue;
+        }
+        const int layer = segment.init_layer;
+        const auto [x0, y0] = to_grid_index(segment.init_x, segment.init_y);
+        const auto [x1, y1] = to_grid_index(segment.final_x, segment.final_y);
+
+        if (y0 == y1 && x0 != x1) {
+          const int y = y0;
+          const int xs = std::min(x0, x1);
+          const int xe = std::max(x0, x1);
+          for (int x = xs; x < xe; x++) {
+            const int avail
+                = grouter_->fastroute_->getAvailableResources(x, y, x + 1, y, layer);
+            if (avail <= 0) {
+              saturated++;
+            } else if (avail == 1) {
+              near_saturated++;
+            }
+          }
+        } else if (x0 == x1 && y0 != y1) {
+          const int x = x0;
+          const int ys = std::min(y0, y1);
+          const int ye = std::max(y0, y1);
+          for (int y = ys; y < ye; y++) {
+            const int avail
+                = grouter_->fastroute_->getAvailableResources(x, y, x, y + 1, layer);
+            if (avail <= 0) {
+              saturated++;
+            } else if (avail == 1) {
+              near_saturated++;
+            }
+          }
+        }
+      }
+    }
+
+    metrics.saturated_edges = saturated;
+    metrics.near_saturated_edges = near_saturated;
+
+    // Heuristic: near-saturated edges are a proxy for detailed-router detours.
+    // Keep wirelength primary, but steer away from routes that hug capacity.
+    metrics.risk_cost_dbu
+        = saturated * tile_size * 12 + near_saturated * tile_size * 4;
+    metrics.via_cost_dbu = metrics.via_count * tile_size / 2;
+    metrics.overflow_cost_dbu = static_cast<long>(metrics.total_overflow) * tile_size * 200;
   };
 
   auto capture_snapshot = [&]() -> RouterSnapshot {
@@ -191,7 +266,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                         false,
                         snapshot.global_adjustment});
 
-  // Best known configuration for this benchmark so far.
+  // Candidate pool:
+  // - Keep the "known-good" perturbation profile from earlier iterations.
+  // - Explore a handful of seeds (bounded) and a couple critical-net settings.
   candidates.push_back({"perturb6-seed11-crit0",
                         6.0f,
                         1,
@@ -224,8 +301,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                         snapshot.congestion_iterations,
                         false,
                         snapshot.global_adjustment});
+  candidates.push_back({"perturb6-seed29-crit0",
+                        6.0f,
+                        1,
+                        29,
+                        0.0f,
+                        snapshot.congestion_iterations,
+                        false,
+                        snapshot.global_adjustment});
   candidates.push_back({"perturb4-seed11-crit0",
                         4.0f,
+                        1,
+                        11,
+                        0.0f,
+                        snapshot.congestion_iterations,
+                        false,
+                        snapshot.global_adjustment});
+  candidates.push_back({"perturb8-seed11-crit0",
+                        8.0f,
                         1,
                         11,
                         0.0f,
@@ -273,16 +366,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
     RouteMetrics metrics = compute_metrics(routes);
     metrics.total_overflow = grouter_->fastroute_->totalOverflow();
-    const int tile = std::max(grouter_->grid_->getTileSize(), 1);
-    metrics.score_dbu
-        = metrics.wirelength_dbu + static_cast<long>(metrics.total_overflow) * tile * 5;
+    compute_risk_cost(metrics, routes);
+    metrics.score_dbu = metrics.wirelength_dbu + metrics.via_cost_dbu
+                        + metrics.risk_cost_dbu + metrics.overflow_cost_dbu;
     logger_->info(GNR,
                   6005,
-                  "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}, score {}",
+                  "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}, sat_edges {}, near_sat {}, score {}",
                   candidate.name,
                   metrics.wirelength_um,
                   metrics.via_count,
                   metrics.total_overflow,
+                  metrics.saturated_edges,
+                  metrics.near_saturated_edges,
                   metrics.score_dbu);
 
     if (!have_choice || better(metrics, chosen_metrics)) {
