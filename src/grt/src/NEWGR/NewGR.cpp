@@ -1,10 +1,13 @@
 #include "NEWGR/NewGR.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
 #include "FastRoute.h"
+#include "Grid.h"
+#include "RoutingTracks.h"
 #include "utl/Logger.h"
 
 namespace grt {
@@ -20,6 +23,18 @@ struct RouterSnapshot
   float critical_percentage = 0.0f;
   bool allow_congestion = false;
   int seed = 0;
+  int congestion_iterations = 0;
+  float global_adjustment = 0.0f;
+  std::vector<RegionAdjustment> region_adjustments;
+};
+
+struct CandidateConfig
+{
+  std::string name;
+  float caps_percentage = 0.0f;
+  int perturbation_amount = 0;
+  int seed = 0;
+  float critical_percentage = 0.0f;
   int congestion_iterations = 0;
 };
 
@@ -77,6 +92,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     snapshot.allow_congestion = grouter_->allow_congestion_;
     snapshot.seed = grouter_->seed_;
     snapshot.congestion_iterations = grouter_->congestion_iterations_;
+    snapshot.global_adjustment = grouter_->adjustment_;
+    snapshot.region_adjustments = grouter_->region_adjustments_;
     return snapshot;
   };
 
@@ -88,43 +105,93 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->fastroute_->setCriticalNetsPercentage(
         snapshot.critical_percentage);
     grouter_->setCongestionIterations(snapshot.congestion_iterations);
+    grouter_->adjustment_ = snapshot.global_adjustment;
+    grouter_->region_adjustments_ = snapshot.region_adjustments;
+  };
+
+  const auto prepare_fastroute = [&](const CandidateConfig& config) {
+    // Re-initialize FastRoute state and grid/capacities without rebuilding
+    // Net objects/pins (which is expensive). We reuse the `nets` list built
+    // by the caller's initFastRoute() and only rebuild the FastRoute core
+    // data structures, capacities, and adjustments.
+    //
+    // This keeps multi-candidate exploration affordable while still allowing
+    // capacity perturbations/seed changes to take effect.
+
+    grouter_->pad_pins_connections_.clear();
+
+    grouter_->fastroute_->clear();
+    grouter_->sproute_grid_ready_ = false;
+    grouter_->sproute_nets_ready_ = false;
+    grouter_->sproute_grid_data_ = SprouteGridData();
+    grouter_->sproute_nets_.clear();
+    grouter_->sproute_total_overflow_ = 0;
+    grouter_->h_nets_in_pos_.clear();
+    grouter_->v_nets_in_pos_.clear();
+
+    grouter_->setCongestionIterations(config.congestion_iterations);
+    grouter_->setCapacitiesPerturbationPercentage(config.caps_percentage);
+    grouter_->setPerturbationAmount(config.perturbation_amount);
+    grouter_->setSeed(config.seed);
+    grouter_->fastroute_->setCriticalNetsPercentage(config.critical_percentage);
+
+    grouter_->routing_tracks_.clear();
+    grouter_->routing_layers_.clear();
+    grouter_->grid_->clear();
+    grouter_->vertical_capacities_.clear();
+    grouter_->horizontal_capacities_.clear();
+
+    grouter_->ensureLayerForGuideDimension(max_routing_layer);
+    grouter_->configFastRoute();
+    grouter_->initRoutingLayers(min_routing_layer, max_routing_layer);
+    grouter_->initRoutingTracks(max_routing_layer);
+    grouter_->initCoreGrid(max_routing_layer);
+    grouter_->setCapacities(min_routing_layer, max_routing_layer);
+    grouter_->captureSprouteGridData();
+    grouter_->applyAdjustments(min_routing_layer, max_routing_layer);
+    grouter_->perturbCapacities();
+
+    // Init the data structures to monitor 3D capacity during 2D phases
+    grouter_->fastroute_->initEdgesCapacityPerLayer();
+
+    // Rebuild the FastRoute netlist from the already-created Net objects.
+    grouter_->initFastRouteIncr(nets);
+    grouter_->initialized_ = true;
   };
 
   RouterSnapshot snapshot = capture_snapshot();
   // Strategy:
-  // - Run one baseline pass using the already-initialized FastRoute state.
-  // - Run one additional pass with a fixed perturbation configuration that
-  //   historically improved wirelength for this benchmark (seed 11).
-  // - Pick the best solution by global-route wirelength first, then vias.
-  //
-  // This keeps runtime bounded (~2 passes) while still exploring a better
-  // wirelength/routability tradeoff than pure FastRoute defaults.
+  // - Explore a small set of FastRoute configurations (seed/perturbation/
+  //   critical nets %) and pick the best by (global) wirelength first, then
+  //   by via count.
+  // - Re-initialize FastRoute per candidate without rebuilding Net objects,
+  //   keeping runtime reasonable.
 
-  NetRouteMap baseline_routes
-      = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
-  const RouteMetrics baseline_metrics = compute_metrics(baseline_routes);
-  logger_->info(GNR,
-                6005,
-                "NEWGR baseline: wirelength {:.0f} um, vias {}",
-                baseline_metrics.wirelength_um,
-                baseline_metrics.via_count);
-
-  restore_snapshot(snapshot);
-  grouter_->setCapacitiesPerturbationPercentage(6.0f);
-  grouter_->setPerturbationAmount(1);
-  grouter_->setSeed(11);
-  grouter_->fastroute_->setCriticalNetsPercentage(5.0f);
-
-  std::vector<Net*> perturbed_nets
-      = grouter_->initFastRoute(min_routing_layer, max_routing_layer);
-  NetRouteMap perturbed_routes = grouter_->findRouting(
-      perturbed_nets, min_routing_layer, max_routing_layer);
-  const RouteMetrics perturbed_metrics = compute_metrics(perturbed_routes);
-  logger_->info(GNR,
-                6006,
-                "NEWGR perturb-seed11: wirelength {:.0f} um, vias {}",
-                perturbed_metrics.wirelength_um,
-                perturbed_metrics.via_count);
+  std::vector<CandidateConfig> candidates;
+  candidates.push_back({"baseline",
+                        snapshot.caps_percentage,
+                        snapshot.perturbation_amount,
+                        snapshot.seed,
+                        snapshot.critical_percentage,
+                        snapshot.congestion_iterations});
+  candidates.push_back({"perturb-seed11-crit0",
+                        6.0f,
+                        1,
+                        11,
+                        0.0f,
+                        snapshot.congestion_iterations});
+  candidates.push_back({"perturb-seed11-crit5",
+                        6.0f,
+                        1,
+                        11,
+                        5.0f,
+                        snapshot.congestion_iterations});
+  candidates.push_back({"perturb-seed17-crit0",
+                        6.0f,
+                        1,
+                        17,
+                        0.0f,
+                        snapshot.congestion_iterations});
 
   const auto better = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
     if (lhs.wirelength_dbu != rhs.wirelength_dbu) {
@@ -134,13 +201,33 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   };
 
   NetRouteMap chosen_routes;
-  if (better(perturbed_metrics, baseline_metrics)) {
-    chosen_routes = std::move(perturbed_routes);
-    logger_->info(GNR, 6007, "NEWGR picked perturb-seed11");
-  } else {
-    chosen_routes = std::move(baseline_routes);
-    logger_->info(GNR, 6008, "NEWGR picked baseline");
+  RouteMetrics chosen_metrics;
+  std::string chosen_name;
+  bool have_choice = false;
+
+  for (const auto& candidate : candidates) {
+    restore_snapshot(snapshot);
+    prepare_fastroute(candidate);
+
+    NetRouteMap routes
+        = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
+    const RouteMetrics metrics = compute_metrics(routes);
+    logger_->info(GNR,
+                  6005,
+                  "NEWGR {}: wirelength {:.0f} um, vias {}",
+                  candidate.name,
+                  metrics.wirelength_um,
+                  metrics.via_count);
+
+    if (!have_choice || better(metrics, chosen_metrics)) {
+      chosen_routes = std::move(routes);
+      chosen_metrics = metrics;
+      chosen_name = candidate.name;
+      have_choice = true;
+    }
   }
+
+  logger_->info(GNR, 6007, "NEWGR picked {}", chosen_name);
 
   restore_snapshot(snapshot);
   return chosen_routes;
