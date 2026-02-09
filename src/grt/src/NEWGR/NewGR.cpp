@@ -56,11 +56,12 @@ struct GuideInflationConfig
 
 static void inflate_guides(NetRouteMap& routes,
                            const Grid* grid,
+                           FastRouteCore* fastroute,
                            int min_routing_layer,
                            int max_routing_layer,
                            const GuideInflationConfig& cfg)
 {
-  if (grid == nullptr) {
+  if (grid == nullptr || fastroute == nullptr) {
     return;
   }
   const int tile_size = std::max(grid->getTileSize(), 1);
@@ -77,8 +78,10 @@ static void inflate_guides(NetRouteMap& routes,
   };
 
   auto to_dbu = [&](int x_idx, int y_idx) -> std::pair<int, int> {
-    const int x_dbu = x_min + x_idx * tile_size;
-    const int y_dbu = y_min + y_idx * tile_size;
+    // GSegment coordinates are expected to be at GCELL centers (see
+    // GlobalRouter::globalRoutingToBox()).
+    const int x_dbu = x_min + x_idx * tile_size + (tile_size / 2);
+    const int y_dbu = y_min + y_idx * tile_size + (tile_size / 2);
     return {x_dbu, y_dbu};
   };
 
@@ -126,66 +129,146 @@ static void inflate_guides(NetRouteMap& routes,
         continue;
       }
 
-      for (int delta = 1; delta <= cfg.radius_tiles; delta++) {
-        if (is_horizontal) {
-          for (int sign : {-1, 1}) {
-            const int gy_off = gy0 + sign * delta;
-            if (gy_off < 0 || gy_off >= y_grids) {
-              continue;
-            }
-            const auto [x0_off_dbu, y_off_dbu] = to_dbu(gx0, gy_off);
-            const auto [x1_off_dbu, y_off_dbu2] = to_dbu(gx1, gy_off);
-            static_cast<void>(y_off_dbu2);
-            const auto [x0_dbu, y0_dbu] = to_dbu(gx0, gy0);
-            const auto [x1_dbu, y1_dbu] = to_dbu(gx1, gy0);
-            static_cast<void>(y1_dbu);
+      const int xs = std::min(gx0, gx1);
+      const int xe = std::max(gx0, gx1);
+      const int ys = std::min(gy0, gy1);
+      const int ye = std::max(gy0, gy1);
 
-            // Keep the inflated parallel segment connected to the original
-            // route graph by adding 1-tile connectors at both ends. Disjoint
-            // guide components can break downstream incremental GRT checks.
-            GSegment inflated(
-                x0_off_dbu, y_off_dbu, layer, x1_off_dbu, y_off_dbu, layer);
-            if (uniq.insert(inflated).second) {
-              extra.push_back(inflated);
-            }
-
-            GSegment conn0(x0_dbu, y0_dbu, layer, x0_dbu, y_off_dbu, layer);
-            if (uniq.insert(conn0).second) {
-              extra.push_back(conn0);
-            }
-            GSegment conn1(x1_dbu, y0_dbu, layer, x1_dbu, y_off_dbu, layer);
-            if (uniq.insert(conn1).second) {
-              extra.push_back(conn1);
-            }
+      // Only widen guides when the current segment runs along an edge with low
+      // remaining resources (proxy for DRT detours).
+      bool is_risky = false;
+      if (is_horizontal) {
+        for (int x = xs; x < xe; x++) {
+          const int avail = fastroute->getAvailableResources(x, gy0, x + 1, gy0, layer);
+          if (avail <= 1) {
+            is_risky = true;
+            break;
           }
-        } else if (is_vertical) {
-          for (int sign : {-1, 1}) {
-            const int gx_off = gx0 + sign * delta;
-            if (gx_off < 0 || gx_off >= x_grids) {
-              continue;
-            }
-            const auto [x_off_dbu, y0_off_dbu] = to_dbu(gx_off, gy0);
-            const auto [x_off_dbu2, y1_off_dbu] = to_dbu(gx_off, gy1);
-            static_cast<void>(x_off_dbu2);
-            const auto [x0_dbu, y0_dbu] = to_dbu(gx0, gy0);
-            const auto [x1_dbu, y1_dbu] = to_dbu(gx0, gy1);
-            static_cast<void>(x1_dbu);
-
-            GSegment inflated(
-                x_off_dbu, y0_off_dbu, layer, x_off_dbu, y1_off_dbu, layer);
-            if (uniq.insert(inflated).second) {
-              extra.push_back(inflated);
-            }
-
-            GSegment conn0(x0_dbu, y0_dbu, layer, x_off_dbu, y0_dbu, layer);
-            if (uniq.insert(conn0).second) {
-              extra.push_back(conn0);
-            }
-            GSegment conn1(x0_dbu, y1_dbu, layer, x_off_dbu, y1_dbu, layer);
-            if (uniq.insert(conn1).second) {
-              extra.push_back(conn1);
-            }
+        }
+      } else {  // vertical
+        for (int y = ys; y < ye; y++) {
+          const int avail = fastroute->getAvailableResources(gx0, y, gx0, y + 1, layer);
+          if (avail <= 1) {
+            is_risky = true;
+            break;
           }
+        }
+      }
+      if (!is_risky) {
+        continue;
+      }
+
+      // Pick the "better" side (more remaining resources) and add a single
+      // connected parallel guide there to avoid guide bloat.
+      struct SideScore
+      {
+        bool valid = false;
+        int min_avail = std::numeric_limits<int>::min();
+        long sum_avail = std::numeric_limits<long>::min();
+        int offset_idx = 0;
+      };
+
+      auto score_horizontal = [&](int gy_off) -> SideScore {
+        SideScore s;
+        if (gy_off < 0 || gy_off >= y_grids) {
+          return s;
+        }
+        s.valid = true;
+        s.offset_idx = gy_off;
+        s.min_avail = std::numeric_limits<int>::max();
+        s.sum_avail = 0;
+        for (int x = xs; x < xe; x++) {
+          const int avail = fastroute->getAvailableResources(x, gy_off, x + 1, gy_off, layer);
+          s.min_avail = std::min(s.min_avail, avail);
+          s.sum_avail += avail;
+        }
+        return s;
+      };
+
+      auto score_vertical = [&](int gx_off) -> SideScore {
+        SideScore s;
+        if (gx_off < 0 || gx_off >= x_grids) {
+          return s;
+        }
+        s.valid = true;
+        s.offset_idx = gx_off;
+        s.min_avail = std::numeric_limits<int>::max();
+        s.sum_avail = 0;
+        for (int y = ys; y < ye; y++) {
+          const int avail = fastroute->getAvailableResources(gx_off, y, gx_off, y + 1, layer);
+          s.min_avail = std::min(s.min_avail, avail);
+          s.sum_avail += avail;
+        }
+        return s;
+      };
+
+      SideScore best;
+      if (is_horizontal) {
+        const SideScore down = score_horizontal(gy0 - 1);
+        const SideScore up = score_horizontal(gy0 + 1);
+        best = down;
+        if (!best.valid || (up.valid && (up.min_avail > best.min_avail
+                                         || (up.min_avail == best.min_avail
+                                             && up.sum_avail > best.sum_avail)))) {
+          best = up;
+        }
+        if (!best.valid) {
+          continue;
+        }
+        const int gy_off = best.offset_idx;
+        const auto [x0_off_dbu, y_off_dbu] = to_dbu(gx0, gy_off);
+        const auto [x1_off_dbu, y_off_dbu2] = to_dbu(gx1, gy_off);
+        static_cast<void>(y_off_dbu2);
+        const auto [x0_dbu, y0_dbu] = to_dbu(gx0, gy0);
+        const auto [x1_dbu, y1_dbu] = to_dbu(gx1, gy0);
+        static_cast<void>(y1_dbu);
+
+        GSegment inflated(
+            x0_off_dbu, y_off_dbu, layer, x1_off_dbu, y_off_dbu, layer);
+        if (uniq.insert(inflated).second) {
+          extra.push_back(inflated);
+        }
+        GSegment conn0(x0_dbu, y0_dbu, layer, x0_dbu, y_off_dbu, layer);
+        if (uniq.insert(conn0).second) {
+          extra.push_back(conn0);
+        }
+        GSegment conn1(x1_dbu, y0_dbu, layer, x1_dbu, y_off_dbu, layer);
+        if (uniq.insert(conn1).second) {
+          extra.push_back(conn1);
+        }
+      } else {  // vertical
+        const SideScore left = score_vertical(gx0 - 1);
+        const SideScore right = score_vertical(gx0 + 1);
+        best = left;
+        if (!best.valid || (right.valid && (right.min_avail > best.min_avail
+                                            || (right.min_avail == best.min_avail
+                                                && right.sum_avail
+                                                       > best.sum_avail)))) {
+          best = right;
+        }
+        if (!best.valid) {
+          continue;
+        }
+        const int gx_off = best.offset_idx;
+        const auto [x_off_dbu, y0_off_dbu] = to_dbu(gx_off, gy0);
+        const auto [x_off_dbu2, y1_off_dbu] = to_dbu(gx_off, gy1);
+        static_cast<void>(x_off_dbu2);
+        const auto [x0_dbu, y0_dbu] = to_dbu(gx0, gy0);
+        const auto [x1_dbu, y1_dbu] = to_dbu(gx0, gy1);
+        static_cast<void>(x1_dbu);
+
+        GSegment inflated(
+            x_off_dbu, y0_off_dbu, layer, x_off_dbu, y1_off_dbu, layer);
+        if (uniq.insert(inflated).second) {
+          extra.push_back(inflated);
+        }
+        GSegment conn0(x0_dbu, y0_dbu, layer, x_off_dbu, y0_dbu, layer);
+        if (uniq.insert(conn0).second) {
+          extra.push_back(conn0);
+        }
+        GSegment conn1(x0_dbu, y1_dbu, layer, x_off_dbu, y1_dbu, layer);
+        if (uniq.insert(conn1).second) {
+          extra.push_back(conn1);
         }
       }
     }
@@ -565,6 +648,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   inflation.max_layer_inflate = std::min(max_routing_layer, min_routing_layer + 2);
   inflate_guides(final_routes,
                  grouter_->grid_,
+                 grouter_->fastroute_,
                  min_routing_layer,
                  max_routing_layer,
                  inflation);
