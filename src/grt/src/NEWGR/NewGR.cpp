@@ -140,16 +140,30 @@ static void maybe_add_wire_patch(GRoute& route,
   }
 }
 
-static void maybe_add_tile_patch(GRoute& route,
-                                 std::unordered_set<GSegment, GSegmentHash>& seen,
-                                 int x,
-                                 int y,
-                                 int layer)
+static void maybe_add_via_patch(GRoute& route,
+                                std::unordered_set<GSegment, GSegmentHash>& seen,
+                                int x,
+                                int y,
+                                int layer0,
+                                int layer1)
 {
-  // A degenerate (0-length) segment still produces a 1-tile guide box via
-  // GlobalRouter::globalRoutingToBox(), which is exactly what we want for small
-  // patch guides.
-  maybe_add_wire_patch(route, seen, x, y, layer, x, y, false);
+  if (layer0 <= 0 || layer1 <= 0) {
+    return;
+  }
+  if (layer0 == layer1) {
+    return;
+  }
+  // GlobalRouter's GSegment::isVia() is based solely on (x,y) degeneracy, not
+  // on the layer delta. Keep this strict to adjacent-layer vias to avoid
+  // confusing downstream consumers (e.g., RC estimation expects routing-layer
+  // vias to map to a single cut layer).
+  if (std::abs(layer0 - layer1) != 1) {
+    return;
+  }
+  const GSegment seg(x, y, layer0, x, y, layer1, false);
+  if (seen.insert(seg).second) {
+    route.push_back(seg);
+  }
 }
 
 static bool dbu_to_grid_index(const odb::Rect& die_bounds,
@@ -431,14 +445,11 @@ static void patch_guides_for_dr_friendliness(
           }
 
           const int before_total = static_cast<int>(route.size());
-          // Use small tile patches (not explicit via guides). Overlapping boxes
-          // across layers still allow TritonRoute to place a via if/when needed,
-          // but this avoids over-encouraging via insertion.
           if (above <= max_patch_layer) {
-            maybe_add_tile_patch(route, seen, x, y, above);
+            maybe_add_via_patch(route, seen, x, y, conn_layer, above);
           }
           if (below >= min_patch_layer) {
-            maybe_add_tile_patch(route, seen, x, y, below);
+            maybe_add_via_patch(route, seen, x, y, conn_layer, below);
           }
           const int added = static_cast<int>(route.size()) - before_total;
           if (added > 0) {
@@ -596,16 +607,12 @@ static void patch_guides_for_dr_friendliness(
 
       // Ensure layer connectivity at the hotspot samples.
       for (const int step_tiles : hot_steps) {
-        // Add a small access tile on the escape layer at the sample location.
-        // The base layer already has guide coverage at that point (it's on the
-        // segment), so overlapping guide boxes across layers create a safe
-        // via placement region without emitting explicit via guides.
         const int x = horizontal ? (std::min(x0, x1) + step_tiles * tile) : x0;
         const int y = vertical ? (std::min(y0, y1) + step_tiles * tile) : y0;
         if (!is_valid_grid_center(die_bounds, tile, x, y)) {
           continue;
         }
-        try_add_patch([&]() { maybe_add_tile_patch(route, seen, x, y, target_layer); });
+        try_add_patch([&]() { maybe_add_via_patch(route, seen, x, y, layer, target_layer); });
       }
 
       // For very long segments, ensure we have at least 2 access points if the
@@ -617,48 +624,7 @@ static void patch_guides_for_dr_friendliness(
         const int y = vertical ? (std::min(y0, y1) + step_tiles * tile) : y0;
         if (is_valid_grid_center(die_bounds, tile, x, y)) {
           try_add_patch(
-              [&]() { maybe_add_tile_patch(route, seen, x, y, target_layer); });
-        }
-      }
-    }
-
-    // Sanity filter: keep only valid GSegments. Downstream tools (notably the
-    // global-route RC estimator) assume routing-layer indices in range and vias
-    // between adjacent routing layers.
-    {
-      int removed = 0;
-      int write = 0;
-      for (int read = 0; read < static_cast<int>(route.size()); read++) {
-        const GSegment& s = route[read];
-        const int l0 = s.init_layer;
-        const int l1 = s.final_layer;
-        const bool layer_ok = (l0 >= 1 && l0 <= tech_max_routing_layer
-                               && l1 >= 1 && l1 <= tech_max_routing_layer);
-        if (!layer_ok) {
-          removed++;
-          continue;
-        }
-        if (s.isVia()) {
-          if (std::abs(l0 - l1) != 1) {
-            removed++;
-            continue;
-          }
-        } else {
-          if (l0 != l1) {
-            removed++;
-            continue;
-          }
-        }
-        route[write++] = s;
-      }
-      if (removed > 0) {
-        route.resize(write);
-        if (logger != nullptr) {
-          logger->warn(GNR,
-                       6012,
-                       "NEWGR patching: removed {} invalid guide segments for net {}",
-                       removed,
-                       db_net->getName());
+              [&]() { maybe_add_via_patch(route, seen, x, y, layer, target_layer); });
         }
       }
     }
