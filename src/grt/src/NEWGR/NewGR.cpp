@@ -1258,7 +1258,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       // Keep this window tight: otherwise the selector can drift toward a
       // different routing regime that is meaningfully longer in GR and tends
       // to increase detailed wirelength on this regression.
-      constexpr double wl_slack_ratio = 0.0003;   // 0.03%
+      // Slightly wider window to allow selecting a marginally-longer GR
+      // solution if it is meaningfully looser (often reducing DR detours).
+      constexpr double wl_slack_ratio = 0.0007;   // 0.07%
       constexpr long wl_slack_min_dbu = 100000;   // ~100um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
