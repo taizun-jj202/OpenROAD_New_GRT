@@ -47,20 +47,22 @@ NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
 }
 
 NetRouteMap NewGR::run(std::vector<Net*>& nets,
-                       int min_routing_layer,
-                       int max_routing_layer)
+	                       int min_routing_layer,
+	                       int max_routing_layer)
 {
-  if (nets.empty()) {
-    return {};
-  }
+	  if (nets.empty()) {
+	    return {};
+	  }
 
-  struct RouteMetrics
-  {
-    long wirelength_dbu = 0;
-    long via_count = 0;
-    double wirelength_um = 0.0;
-    int total_overflow = 0;
-  };
+	  const std::vector<Net*> canonical_nets = nets;
+
+	  struct RouteMetrics
+	  {
+	    long wirelength_dbu = 0;
+	    long via_count = 0;
+	    double wirelength_um = 0.0;
+	    int total_overflow = 0;
+	  };
 
   auto compute_metrics = [&](const NetRouteMap& routes) -> RouteMetrics {
     RouteMetrics metrics;
@@ -111,12 +113,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->region_adjustments_ = snapshot.region_adjustments;
   };
 
-  const auto prepare_fastroute = [&](const CandidateConfig& config) {
-    // Re-initialize FastRoute state and grid/capacities without rebuilding
-    // Net objects/pins (which is expensive). We reuse the `nets` list built
-    // by the caller's initFastRoute() and only rebuild the FastRoute core
-    // data structures, capacities, and adjustments.
-    //
+	  const auto prepare_fastroute = [&](const CandidateConfig& config,
+	                                     std::vector<Net*>& candidate_nets) {
+	    // Re-initialize FastRoute state and grid/capacities without rebuilding
+	    // Net objects/pins (which is expensive). We reuse the `nets` list built
+	    // by the caller's initFastRoute() and only rebuild the FastRoute core
+	    // data structures, capacities, and adjustments.
+	    //
     // This keeps multi-candidate exploration affordable while still allowing
     // capacity perturbations/seed changes to take effect.
 
@@ -153,13 +156,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->applyAdjustments(min_routing_layer, max_routing_layer);
     grouter_->perturbCapacities();
 
-    // Init the data structures to monitor 3D capacity during 2D phases
-    grouter_->fastroute_->initEdgesCapacityPerLayer();
+	    // Init the data structures to monitor 3D capacity during 2D phases
+	    grouter_->fastroute_->initEdgesCapacityPerLayer();
 
-    // Rebuild the FastRoute netlist from the already-created Net objects.
-    grouter_->initFastRouteIncr(nets);
-    grouter_->initialized_ = true;
-  };
+	    // Rebuild the FastRoute netlist from the already-created Net objects.
+	    grouter_->initFastRouteIncr(candidate_nets);
+	    grouter_->initialized_ = true;
+	  };
 
   const RouterSnapshot snapshot = capture_snapshot();
 
@@ -232,18 +235,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
   };
 
-  const auto run_candidate = [&](const CandidateConfig& candidate) {
-    restore_snapshot(snapshot);
-    grouter_->setAllowCongestion(snapshot.allow_congestion);
-    prepare_fastroute(candidate);
+	  const auto run_candidate = [&](const CandidateConfig& candidate) {
+	    restore_snapshot(snapshot);
+	    grouter_->setAllowCongestion(snapshot.allow_congestion);
+	    std::vector<Net*> candidate_nets = canonical_nets;
+	    prepare_fastroute(candidate, candidate_nets);
 
-    NetRouteMap routes = grouter_->findRouting(
-        nets, min_routing_layer, max_routing_layer);
-    RouteMetrics metrics = compute_metrics(routes);
-    metrics.total_overflow = grouter_->fastroute_->totalOverflow();
-    logger_->info(GNR,
-                  6005,
-                  "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}",
+	    NetRouteMap routes = grouter_->findRouting(
+	        candidate_nets, min_routing_layer, max_routing_layer);
+	    RouteMetrics metrics = compute_metrics(routes);
+	    metrics.total_overflow = grouter_->fastroute_->totalOverflow();
+	    logger_->info(GNR,
+	                  6005,
+	                  "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}",
                   candidate.name,
                   metrics.wirelength_um,
                   metrics.via_count,
