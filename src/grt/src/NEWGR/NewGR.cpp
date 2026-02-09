@@ -843,29 +843,51 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	    }
 		  }
 
-		  // Selection policy (wirelength-first; vias second):
+		  // Selection policy (wirelength-first; DR-aware tie-breaks):
 		  // 1) Prefer routable solutions (overflow == 0), else minimize overflow.
-		  // 2) Primary objective: minimize global wirelength (proxy for DR WL).
-		  // 3) Secondary objective: minimize vias.
-		  // 4) Tie-breaker: looser congestion, then deterministic name.
+		  // 2) Primary objective: minimize *global* wirelength (proxy for DR WL).
+		  // 3) Tie-breakers (within a tight WL window): looser congestion, then
+		  //    fewer vias, then absolute WL.
+		  //
+		  // Rationale: On this regression, picking the absolute best GR WL can
+		  // produce tighter guides that force DR detours. Constraining selection
+		  // to a very tight WL window, then picking a looser solution, tends to
+		  // reduce detailed wirelength.
 		  const int target_overflow = (best_overflow == 0) ? 0 : best_overflow;
 
       long min_wl_dbu = std::numeric_limits<long>::max();
       for (const auto& eval : evals) {
-        if (eval.metrics.total_overflow != target_overflow) {
+        const RouteMetrics& metrics = eval.metrics;
+        if (metrics.total_overflow != target_overflow) {
           continue;
         }
-        min_wl_dbu = std::min(min_wl_dbu, eval.metrics.wirelength_dbu);
+        min_wl_dbu = std::min(min_wl_dbu, metrics.wirelength_dbu);
       }
+
+      // Keep candidates very close to the best global WL, then pick the
+      // loosest (lowest congestion score) within that window.
+      constexpr double wl_slack_ratio = 0.0003;   // 0.03%
+      constexpr long wl_slack_min_dbu = 100000;   // ~100um @ 1000 DBU/um
+      const long wl_slack_dbu = std::max<long>(
+          wl_slack_min_dbu,
+          static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
+      const long wl_limit_dbu = min_wl_dbu + wl_slack_dbu;
+
       logger_->info(GNR,
                     6010,
-                    "NEWGR selection: overflow {} wl_ref {} dbu",
+                    "NEWGR selection: overflow {} wl_ref {} dbu wl_limit {} dbu (+{} / {:.2f}%)",
                     target_overflow,
-                    min_wl_dbu);
+                    min_wl_dbu,
+                    wl_limit_dbu,
+                    wl_slack_dbu,
+                    100.0 * wl_slack_dbu / std::max<double>(1.0, min_wl_dbu));
 
       for (const auto& eval : evals) {
         const RouteMetrics& metrics = eval.metrics;
         if (metrics.total_overflow != target_overflow) {
+          continue;
+        }
+        if (metrics.wirelength_dbu > wl_limit_dbu) {
           continue;
         }
 
@@ -876,8 +898,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           continue;
         }
 
-        if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
-          if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
+        if (metrics.congestion.score != best_metrics.congestion.score) {
+          if (metrics.congestion.score < best_metrics.congestion.score) {
             best_candidate = eval.candidate;
             best_metrics = metrics;
           }
@@ -892,8 +914,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           continue;
         }
 
-        if (metrics.congestion.score != best_metrics.congestion.score) {
-          if (metrics.congestion.score < best_metrics.congestion.score) {
+        if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
+          if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
             best_candidate = eval.candidate;
             best_metrics = metrics;
           }
