@@ -453,6 +453,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		      {"perturb6-seed29-crit20", 6.0f, 1, 29, 20.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 		      {"perturb3-seed11-crit10", 3.0f, 1, 11, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
+          // Reduced congestion-iteration variants: long rip-up/reroute runs can
+          // over-detour and harm wirelength. Keep these eligible only if they
+          // still meet the overflow target.
+          {"perturb6-seed29-crit10-it35", 6.0f, 1, 29, 10.0f, 35, snapshot.global_adjustment},
+          {"perturb6-seed29-crit10-it25", 6.0f, 1, 29, 10.0f, 25, snapshot.global_adjustment},
+          {"perturb6-seed29-crit0-it35", 6.0f, 1, 29, 0.0f, 35, snapshot.global_adjustment},
+          {"perturb6-seed29-crit0-it25", 6.0f, 1, 29, 0.0f, 25, snapshot.global_adjustment},
+          {"perturb3-seed11-crit0-it35", 3.0f, 1, 11, 0.0f, 35, snapshot.global_adjustment},
+
 		      {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
 	      // Light global soft-capacity (adjustment) sweeps for strong seeds:
@@ -541,9 +550,42 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		  // after detailed routing.
 		  const int target_overflow = (best_overflow == 0) ? 0 : best_overflow;
 
+      long min_wl_dbu = std::numeric_limits<long>::max();
       for (const auto& eval : evals) {
         const RouteMetrics& metrics = eval.metrics;
         if (metrics.total_overflow != target_overflow) {
+          continue;
+        }
+        min_wl_dbu = std::min(min_wl_dbu, metrics.wirelength_dbu);
+      }
+
+      // DR-aware WL window:
+      // Keep candidates "near" the best global WL, then pick the loosest
+      // (lowest congestion score) within that window. This often reduces
+      // downstream detailed-routing detours without allowing large GR WL
+      // regressions.
+      constexpr double wl_slack_ratio = 0.0015;  // 0.15%
+      constexpr long wl_slack_min_dbu = 2000;    // avoid a too-tight window
+      const long wl_slack_dbu = std::max<long>(
+          wl_slack_min_dbu,
+          static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
+      const long wl_limit_dbu = min_wl_dbu + wl_slack_dbu;
+
+      logger_->info(GNR,
+                    6010,
+                    "NEWGR selection: overflow {} wl_ref {} dbu wl_limit {} dbu (+{} / {:.2f}%)",
+                    target_overflow,
+                    min_wl_dbu,
+                    wl_limit_dbu,
+                    wl_slack_dbu,
+                    100.0 * wl_slack_dbu / std::max<double>(1.0, min_wl_dbu));
+
+      for (const auto& eval : evals) {
+        const RouteMetrics& metrics = eval.metrics;
+        if (metrics.total_overflow != target_overflow) {
+          continue;
+        }
+        if (metrics.wirelength_dbu > wl_limit_dbu) {
           continue;
         }
 
@@ -554,8 +596,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           continue;
         }
 
-        if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
-          if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
+        // Prefer looser congestion first, then vias, then absolute WL.
+        if (metrics.congestion.score != best_metrics.congestion.score) {
+          if (metrics.congestion.score < best_metrics.congestion.score) {
             best_candidate = eval.candidate;
             best_metrics = metrics;
           }
@@ -570,12 +613,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           continue;
         }
 
-        if (metrics.congestion.score != best_metrics.congestion.score) {
-          if (metrics.congestion.score < best_metrics.congestion.score) {
+        if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
+          if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
             best_candidate = eval.candidate;
             best_metrics = metrics;
           }
           continue;
+        }
+
+        // Final deterministic tie-breaker.
+        if (eval.candidate.name < best_candidate.name) {
+          best_candidate = eval.candidate;
+          best_metrics = metrics;
         }
       }
 
