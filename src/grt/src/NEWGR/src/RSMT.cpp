@@ -638,9 +638,13 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
     FrNet* net = nets_[netID];
 
     int d = net->getNumPins();
+    // Keep this threshold moderately low: higher FLUTE accuracy can reduce GR
+    // wirelength, but overly-aggressive use may increase congestion and hurt
+    // downstream DR QoR. Empirically, extending the "small-net" window a bit
+    // is a good tradeoff on our regression without measurable runtime impact.
     const int flute_accuracy
-        = (!congestionDriven && d <= 12) ? flute_accuracy_high
-                                        : flute_accuracy_default;
+        = (!congestionDriven && d <= 16) ? flute_accuracy_high
+                                         : flute_accuracy_default;
 
     if (reRoute) {
       if (newType) {

@@ -87,16 +87,16 @@ struct GuidePatchingOptions
   int pin_patch_radius_tiles = 1;
   // Add short wire stubs on the pin connection layer to improve local access
   // without forcing extra layer switching.
-  int pin_wire_stub_tiles = 2;
+  int pin_wire_stub_tiles = 3;
 
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
-  int long_segment_stub_tiles = 1;
+  int long_segment_stub_tiles = 2;
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
   // explicitly encouraging layer switching (vias).
-  int long_segment_side_lane_span_tiles = 10;
+  int long_segment_side_lane_span_tiles = 12;
 };
 
 static bool is_valid_grid_center(const odb::Rect& die_bounds,
