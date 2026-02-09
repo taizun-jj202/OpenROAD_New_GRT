@@ -517,16 +517,18 @@ static void patch_guides_for_dr_friendliness(
                                     opts.pin_wire_stub_tiles,
                                     preferred_dir);
 
-          // Add via tiles only for ports / macro pins (higher risk of access
-          // issues) and only in genuinely risky regions.
-          const bool allow_pin_vias
-              = pin.isPort() || pin.isConnectedToPadOrMacro();
-          if (allow_pin_vias && dr_risky) {
-            if (above <= max_patch_layer) {
-              maybe_add_via_patch(route, seen, x, y, conn_layer, above);
-            }
-            if (below >= min_patch_layer) {
-              maybe_add_via_patch(route, seen, x, y, conn_layer, below);
+          // Be conservative with explicit via guide patches: they can reduce
+          // pin-access failures, but they also tend to inflate via count in DR.
+          //
+          // Only add *one* adjacent-layer via guide for ports, and only when
+          // the pin sits on a tile that is hot based on actual GR utilization.
+          const bool allow_pin_vias = pin.isPort();
+          if (allow_pin_vias && in_cong) {
+            const int target_layer
+                = (above <= max_patch_layer) ? above : below;
+            if (target_layer >= min_patch_layer
+                && target_layer <= max_patch_layer) {
+              maybe_add_via_patch(route, seen, x, y, conn_layer, target_layer);
             }
           }
           const int added = static_cast<int>(route.size()) - before_total;
@@ -1106,91 +1108,43 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 snapshot.global_adjustment);
 
   // NEWGR strategy (wirelength-first, via-second):
-  // - Explore a small, deterministic set of perturbation/seed/critical-net
-  //   configurations and pick the best by (1) routability, (2) global
-  //   wirelength, and (3) via count.
+  // - Explore a *very small* deterministic set of configurations (to keep
+  //   runtime close to a single FastRoute run) and pick the best by:
+  //   (1) routability, (2) global wirelength window, then (3) congestion
+  //   looseness (DR-friendliness) and (4) via count.
   //
   // Rationale: for our regression, small deterministic perturbations can
   // improve downstream detailed-routing metrics by nudging congestion away
   // from hard-to-route pin-access regions, even if global cost differences
   // are small.
-  const CandidateConfig baseline{"baseline",
-                                 snapshot.caps_percentage,
-                                 snapshot.perturbation_amount,
-                                 snapshot.seed,
-                                 snapshot.critical_percentage,
-                                 snapshot.congestion_iterations,
-                                 snapshot.global_adjustment,
-                                 0,
-                                 0,
-                                 1.0f,
-                                 0};
+  const CandidateConfig tuned{"perturb3-seed11-crit0",
+                              3.0f,
+                              1,
+                              11,
+                              0.0f,
+                              snapshot.congestion_iterations,
+                              snapshot.global_adjustment,
+                              0,
+                              0,
+                              1.0f,
+                              0};
 
-		  // Candidate set tuned to be:
-		  // - deterministic across runs (fixed seeds),
-		  // - smaller (runtime), while still exploring top-performing regimes,
-		  // - wirelength-first, with via count as a secondary objective.
-		  //
-		  // NOTE: Even though our regression metric is *detailed* wirelength, in
-		  // practice the best candidates are usually among the lowest GR-WL
-		  // solutions once we apply DR-friendly guide patching.
-      const std::vector<CandidateConfig> candidates = {
-          // Tuned deterministic configuration that usually wins.
-          {"perturb3-seed11-crit0",
-           3.0f,
-           1,
-           11,
-           0.0f,
-           snapshot.congestion_iterations,
-           snapshot.global_adjustment,
-           0,
-           0,
-           1.0f,
-           0},
+  // Keep candidate exploration minimal to preserve runtime. A second candidate
+  // enables Rudy-based "soft cap" reservations in the lowest layers, which can
+  // reduce downstream DR detours (wirelength) on dense designs.
+  const CandidateConfig tuned_rudy{"perturb3-seed11-crit0-rudy25L3",
+                                   3.0f,
+                                   1,
+                                   11,
+                                   0.0f,
+                                   snapshot.congestion_iterations,
+                                   snapshot.global_adjustment,
+                                   25,
+                                   1,
+                                   0.95f,
+                                   3};
 
-          // Alternate seed / smaller perturbation for diversity.
-          {"perturb2-seed7-crit0",
-           2.0f,
-           1,
-           7,
-           0.0f,
-           snapshot.congestion_iterations,
-           snapshot.global_adjustment,
-           0,
-           0,
-           1.0f,
-           0},
-
-          // Gentle Rudy-based soft-capacity reservations in the lowest layers.
-          // This often slightly increases GR-WL while decreasing DR detours.
-          {"perturb3-seed11-crit0-rudy20L3",
-           3.0f,
-           1,
-           11,
-           0.0f,
-           snapshot.congestion_iterations,
-           snapshot.global_adjustment,
-           20,
-           1,
-           0.96f,
-           3},
-
-          // Slightly stronger soft-cap for a broader set of hotspots.
-          {"perturb3-seed11-crit0-rudy35L3",
-           3.0f,
-           1,
-           11,
-           0.0f,
-           snapshot.congestion_iterations,
-           snapshot.global_adjustment,
-           35,
-           1,
-           0.93f,
-           3},
-
-          // Fallback: snapshot/baseline configuration.
-          baseline,
-      };
+  const std::vector<CandidateConfig> candidates = {tuned, tuned_rudy};
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
@@ -1228,7 +1182,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   };
 
-	  CandidateConfig best_candidate = baseline;
+	  CandidateConfig best_candidate = tuned;
 	  RouteMetrics best_metrics;
 	  bool have_best = false;
 
@@ -1240,28 +1194,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	  std::vector<CandidateEval> evals;
 	  evals.reserve(candidates.size());
 
-	  int best_overflow = -1;
+	  int best_overflow = std::numeric_limits<int>::max();
 	  for (const auto& candidate : candidates) {
 	    auto candidate_result = run_candidate(candidate);
 	    const RouteMetrics& metrics = candidate_result.second;
 
 	    evals.push_back({candidate, metrics});
-
-	    if (best_overflow < 0 || metrics.total_overflow < best_overflow) {
-	      best_overflow = metrics.total_overflow;
-	    }
+	    best_overflow = std::min(best_overflow, metrics.total_overflow);
 		  }
 
-		  // Selection policy (wirelength-first; DR-aware tie-breaks):
+		  // Selection policy (runtime-aware, DR-friendly):
 		  // 1) Prefer routable solutions (overflow == 0), else minimize overflow.
-		  // 2) Primary objective: minimize *global* wirelength (proxy for DR WL).
-		  // 3) Tie-breakers (within a tight WL window): fewer vias, then looser
-		  //    congestion (more DR flexibility).
-		  //
-		  // Rationale: On this regression, picking the absolute best GR WL can
-		  // produce tighter guides that force DR detours. Constraining selection
-		  // to a very tight WL window, then picking a looser solution, tends to
-		  // reduce detailed wirelength.
+		  // 2) Keep candidates within a tight global-WL window of the best WL
+		  //    (wirelength-first objective).
+		  // 3) Within that window, prefer looser congestion (often reduces DR
+		  //    detours / DR wirelength), then fewer vias.
 		  const int target_overflow = (best_overflow == 0) ? 0 : best_overflow;
 
       long min_wl_dbu = std::numeric_limits<long>::max();
@@ -1273,15 +1220,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         min_wl_dbu = std::min(min_wl_dbu, metrics.wirelength_dbu);
       }
 
-      // Keep candidates very close to the best global WL, then pick the
-      // absolute smallest WL within that window (wirelength-first objective).
-      // Keep this window tight: otherwise the selector can drift toward a
-      // different routing regime that is meaningfully longer in GR and tends
-      // to increase detailed wirelength on this regression.
-      // Slightly wider window to allow selecting a marginally-longer GR
-      // solution if it is meaningfully looser (often reducing DR detours).
-      constexpr double wl_slack_ratio = 0.0007;   // 0.07%
-      constexpr long wl_slack_min_dbu = 100000;   // ~100um @ 1000 DBU/um
+      // Keep candidates very close to the best global WL. This guards against
+      // drifting into a longer-GR regime while still letting us choose a
+      // slightly "looser" solution for DR if it is essentially WL-equivalent.
+      constexpr double wl_slack_ratio = 0.0006;   // 0.06%
+      constexpr long wl_slack_min_dbu = 80000;    // ~80um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
           static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
@@ -1312,18 +1255,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           continue;
         }
 
-        // Within the WL window, prioritize fewer vias, then looser congestion,
-        // then the smallest wirelength.
-        if (metrics.via_count != best_metrics.via_count) {
-          if (metrics.via_count < best_metrics.via_count) {
+        if (metrics.congestion.score != best_metrics.congestion.score) {
+          if (metrics.congestion.score < best_metrics.congestion.score) {
             best_candidate = eval.candidate;
             best_metrics = metrics;
           }
           continue;
         }
 
-        if (metrics.congestion.score != best_metrics.congestion.score) {
-          if (metrics.congestion.score < best_metrics.congestion.score) {
+        // Within similar congestion, prefer fewer vias (secondary objective).
+        if (metrics.via_count != best_metrics.via_count) {
+          if (metrics.via_count < best_metrics.via_count) {
             best_candidate = eval.candidate;
             best_metrics = metrics;
           }

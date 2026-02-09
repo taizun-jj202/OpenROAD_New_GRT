@@ -679,14 +679,15 @@ void FastRouteCore::assignEdge(const int netID,
     }
     const double from_ratio = localLayerCongestion(from_layer, grid_idx);
     const double to_ratio = localLayerCongestion(to_layer, grid_idx);
-    const double avg_ratio = (from_ratio + to_ratio) * 0.5;
-    if (avg_ratio <= 1.0) {
+    // Penalize switching *into* a more congested layer. Avoid penalizing
+    // "escape" moves away from congestion, which can reduce DR detours and
+    // improve detailed wirelength.
+    if (to_ratio <= 1.0 || to_ratio <= from_ratio) {
       return 0;
     }
-    const double overflow = avg_ratio - 1.0;
+    const double overflow = to_ratio - 1.0;
     const double logistic = 1.0 / (1.0 + std::exp(-4.0 * overflow));
-    const double penalty_scale
-        = 2.0 * (0.4 + logistic) * overflow * phase_scale;
+    const double penalty_scale = (0.35 + logistic) * overflow * phase_scale;
     return static_cast<int>(std::round(reference_cost * penalty_scale));
   };
 
@@ -848,8 +849,13 @@ void FastRouteCore::assignEdge(const int netID,
           const int layer_delta = abs(i - l);
           const int base_via_cost = layer_delta * (k == 0 ? 2 : 3);
           const double phase_scale = iterationPenaltyScale(layer_delta);
-          const int adaptive_via_cost
+          int adaptive_via_cost
               = static_cast<int>(std::round(base_via_cost * phase_scale));
+          // Never let via transitions be "free" even in early phases; free
+          // layer switching tends to inflate via count without helping WL.
+          if (layer_delta > 0) {
+            adaptive_via_cost = std::max(1, adaptive_via_cost);
+          }
           const int congestion_penalty
               = congestionPenalty(l, i, k, base_via_cost, phase_scale);
           int total_via_cost
@@ -888,8 +894,11 @@ void FastRouteCore::assignEdge(const int netID,
         const int layer_delta = abs(i - l);
         const int base_via_cost = layer_delta;
         const double phase_scale = iterationPenaltyScale(layer_delta);
-        const int adaptive_via_cost
+        int adaptive_via_cost
             = static_cast<int>(std::round(base_via_cost * phase_scale));
+        if (layer_delta > 0) {
+          adaptive_via_cost = std::max(1, adaptive_via_cost);
+        }
         const int congestion_penalty
             = congestionPenalty(l, i, routelen, base_via_cost, phase_scale);
         int total_cost
@@ -991,8 +1000,11 @@ void FastRouteCore::assignEdge(const int netID,
           const int layer_delta = abs(i - l);
           const int base_via_cost = layer_delta * (k == routelen ? 2 : 3);
           const double phase_scale = iterationPenaltyScale(layer_delta);
-          const int adaptive_via_cost
+          int adaptive_via_cost
               = static_cast<int>(std::round(base_via_cost * phase_scale));
+          if (layer_delta > 0) {
+            adaptive_via_cost = std::max(1, adaptive_via_cost);
+          }
           const int congestion_penalty
               = congestionPenalty(l, i, k, base_via_cost, phase_scale);
           int total_via_cost
@@ -1031,8 +1043,11 @@ void FastRouteCore::assignEdge(const int netID,
         const int layer_delta = abs(i - l);
         const int base_via_cost = layer_delta;
         const double phase_scale = iterationPenaltyScale(layer_delta);
-        const int adaptive_via_cost
+        int adaptive_via_cost
             = static_cast<int>(std::round(base_via_cost * phase_scale));
+        if (layer_delta > 0) {
+          adaptive_via_cost = std::max(1, adaptive_via_cost);
+        }
         const int congestion_penalty
             = congestionPenalty(l, i, 0, base_via_cost, phase_scale);
         int total_cost
