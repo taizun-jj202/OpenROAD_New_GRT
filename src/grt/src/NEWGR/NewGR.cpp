@@ -445,6 +445,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 		      {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 		      {"perturb6-seed31-crit0", 6.0f, 1, 31, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
+          // Strong perturbation pattern but slightly larger magnitude.
+          {"perturb6-amt2-seed29-crit0", 6.0f, 2, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
 
 		      // Keep a small fraction of "critical" nets less detoured.
 		      {"perturb6-seed29-crit10", 6.0f, 1, 29, 10.0f, snapshot.congestion_iterations, snapshot.global_adjustment},
@@ -463,6 +465,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	      // wirelength within tolerance and reduces tightness/vias.
 	      {"perturb6-seed29-rudy25", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment, 25, 1, 0.85f, 2},
 	      {"perturb6-seed29-rudy40", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment, 40, 1, 0.85f, 2},
+          // Mild Rudy reservations (closer to baseline wirelength) to trade
+          // a smaller GR WL increase for better DR freedom.
+	      {"perturb6-seed29-rudy20-a95", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment, 20, 1, 0.95f, 2},
+	      {"perturb6-seed29-rudy30-a92", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, snapshot.global_adjustment, 30, 1, 0.92f, 2},
 	  };
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
@@ -525,79 +531,53 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	    }
 		  }
 
-		  // Selection policy (wirelength-first, via-second; DR-aware tie-breaks):
+		  // Selection policy (wirelength-first; DR-aware tie-breaks):
 		  // 1) Prefer routable solutions (overflow == 0), else minimize overflow.
-		  // 2) Consider only candidates within a *very small* global-WL window.
-		  // 3) Within that window, pick the DR-friendlier one by:
-		  //      a) fewer vias (often correlates with shorter DR + fewer jogs),
-		  //      b) looser congestion (tighter routes tend to detour in DR),
-		  //      c) then global wirelength.
+		  // 2) Primary objective: minimize *global* wirelength (proxy for DR WL).
+		  // 3) Tie-breakers: fewer vias, then looser congestion.
 		  //
-		  // We keep the WL window tight to avoid selecting materially longer
-		  // global routes that rarely "pay back" during detailed routing.
+		  // We intentionally keep this selection WL-centric: on this regression,
+		  // overly DR-driven choices often increase wirelength without paying back
+		  // after detailed routing.
 		  const int target_overflow = (best_overflow == 0) ? 0 : best_overflow;
 
-		  bool have_wl = false;
-		  long best_wl_dbu = 0;
-		  for (const auto& eval : evals) {
-		    if (eval.metrics.total_overflow != target_overflow) {
-		      continue;
-		    }
-		    if (!have_wl || eval.metrics.wirelength_dbu < best_wl_dbu) {
-		      best_wl_dbu = eval.metrics.wirelength_dbu;
-		      have_wl = true;
-		    }
-		  }
+      for (const auto& eval : evals) {
+        const RouteMetrics& metrics = eval.metrics;
+        if (metrics.total_overflow != target_overflow) {
+          continue;
+        }
 
-		  // Global-WL tolerance window for tie-breaks.
-		  // Keep this tight: candidates outside this window are unlikely to
-		  // recover their WL loss during detailed routing on this design.
-		  constexpr double kWirelengthWindow = 0.0005;  // 0.05%
-		  const double wl_limit = have_wl
-		                              ? static_cast<double>(best_wl_dbu)
-		                                    * (1.0 + kWirelengthWindow)
-		                              : std::numeric_limits<double>::infinity();
+        if (!have_best) {
+          best_candidate = eval.candidate;
+          best_metrics = metrics;
+          have_best = true;
+          continue;
+        }
 
-		  for (const auto& eval : evals) {
-		    const RouteMetrics& metrics = eval.metrics;
-		    if (metrics.total_overflow != target_overflow) {
-		      continue;
-		    }
-		    if (static_cast<double>(metrics.wirelength_dbu) > wl_limit) {
-		      continue;
-		    }
+        if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
+          if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
+            best_candidate = eval.candidate;
+            best_metrics = metrics;
+          }
+          continue;
+        }
 
-		    if (!have_best) {
-		      best_candidate = eval.candidate;
-		      best_metrics = metrics;
-		      have_best = true;
-		      continue;
-		    }
+        if (metrics.via_count != best_metrics.via_count) {
+          if (metrics.via_count < best_metrics.via_count) {
+            best_candidate = eval.candidate;
+            best_metrics = metrics;
+          }
+          continue;
+        }
 
-		    if (metrics.via_count != best_metrics.via_count) {
-		      if (metrics.via_count < best_metrics.via_count) {
-		        best_candidate = eval.candidate;
-		        best_metrics = metrics;
-		      }
-		      continue;
-		    }
-
-		    if (metrics.congestion.score != best_metrics.congestion.score) {
-		      if (metrics.congestion.score < best_metrics.congestion.score) {
-		        best_candidate = eval.candidate;
-		        best_metrics = metrics;
-		      }
-		      continue;
-		    }
-
-		    if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
-		      if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
-		        best_candidate = eval.candidate;
-		        best_metrics = metrics;
-		      }
-		      continue;
-		    }
-		  }
+        if (metrics.congestion.score != best_metrics.congestion.score) {
+          if (metrics.congestion.score < best_metrics.congestion.score) {
+            best_candidate = eval.candidate;
+            best_metrics = metrics;
+          }
+          continue;
+        }
+      }
 
 	  // Re-run the winner so `grouter_->fastroute_` internal state matches the
 	  // returned routes (important for subsequent incremental calls in the flow).
