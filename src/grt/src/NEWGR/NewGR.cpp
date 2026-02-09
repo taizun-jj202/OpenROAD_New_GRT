@@ -525,16 +525,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	    }
 		  }
 
-		  // Selection policy (wirelength-first, via-second):
+		  // Selection policy (wirelength-first, via-second; DR-aware tie-breaks):
 		  // 1) Prefer routable solutions (overflow == 0), else minimize overflow.
 		  // 2) Consider only candidates within a *very small* global-WL window.
-		  // 3) Within that window, minimize global wirelength, then via count.
-		  // 4) Use congestion tightness only as a last tie-breaker.
+		  // 3) Within that window, pick the DR-friendlier one by:
+		  //      a) fewer vias (often correlates with shorter DR + fewer jogs),
+		  //      b) looser congestion (tighter routes tend to detour in DR),
+		  //      c) then global wirelength.
 		  //
-		  // Rationale: downstream DR wirelength tends to correlate strongly with
-		  // global wirelength when comparing near-equivalent candidates. We keep
-		  // the WL window tight to avoid selecting a materially longer global
-		  // route "for safety", which has repeatedly hurt this regression.
+		  // We keep the WL window tight to avoid selecting materially longer
+		  // global routes that rarely "pay back" during detailed routing.
 		  const int target_overflow = (best_overflow == 0) ? 0 : best_overflow;
 
 		  bool have_wl = false;
@@ -574,14 +574,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 		      continue;
 		    }
 
-		    if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
-		      if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
-		        best_candidate = eval.candidate;
-		        best_metrics = metrics;
-		      }
-		      continue;
-		    }
-
 		    if (metrics.via_count != best_metrics.via_count) {
 		      if (metrics.via_count < best_metrics.via_count) {
 		        best_candidate = eval.candidate;
@@ -592,6 +584,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
 		    if (metrics.congestion.score != best_metrics.congestion.score) {
 		      if (metrics.congestion.score < best_metrics.congestion.score) {
+		        best_candidate = eval.candidate;
+		        best_metrics = metrics;
+		      }
+		      continue;
+		    }
+
+		    if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
+		      if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
 		        best_candidate = eval.candidate;
 		        best_metrics = metrics;
 		      }
