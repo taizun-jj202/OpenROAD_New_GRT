@@ -61,6 +61,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     long wirelength_dbu = 0;
     long via_count = 0;
     double wirelength_um = 0.0;
+    int total_overflow = 0;
+    long score_dbu = 0;
   };
 
   auto compute_metrics = [&](const NetRouteMap& routes) -> RouteMetrics {
@@ -246,6 +248,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   const auto better = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
+    if (lhs.score_dbu != rhs.score_dbu) {
+      return lhs.score_dbu < rhs.score_dbu;
+    }
     if (lhs.wirelength_dbu != rhs.wirelength_dbu) {
       return lhs.wirelength_dbu < rhs.wirelength_dbu;
     }
@@ -266,13 +271,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     NetRouteMap routes
         = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
-    const RouteMetrics metrics = compute_metrics(routes);
+    RouteMetrics metrics = compute_metrics(routes);
+    metrics.total_overflow = grouter_->fastroute_->totalOverflow();
+    const int tile = std::max(grouter_->grid_->getTileSize(), 1);
+    metrics.score_dbu
+        = metrics.wirelength_dbu + static_cast<long>(metrics.total_overflow) * tile * 5;
     logger_->info(GNR,
                   6005,
-                  "NEWGR {}: wirelength {:.0f} um, vias {}",
+                  "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}, score {}",
                   candidate.name,
                   metrics.wirelength_um,
-                  metrics.via_count);
+                  metrics.via_count,
+                  metrics.total_overflow,
+                  metrics.score_dbu);
 
     if (!have_choice || better(metrics, chosen_metrics)) {
       chosen_routes = std::move(routes);
