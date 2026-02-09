@@ -182,10 +182,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (!lhs_routable && lhs.total_overflow != rhs.total_overflow) {
       return lhs.total_overflow < rhs.total_overflow;
     }
-    if (lhs.wirelength_dbu != rhs.wirelength_dbu) {
-      return lhs.wirelength_dbu < rhs.wirelength_dbu;
+
+    // Both solutions are routable. Global wirelength deltas across small
+    // perturbations are often tiny; for downstream detailed routing we bias
+    // toward fewer vias when the wirelength difference is within a small
+    // relative tolerance.
+    constexpr double kWirelengthEps = 0.0002;  // 0.02%
+    if (lhs.wirelength_dbu < rhs.wirelength_dbu * (1.0 - kWirelengthEps)) {
+      return true;
     }
-    return lhs.via_count < rhs.via_count;
+    if (rhs.wirelength_dbu < lhs.wirelength_dbu * (1.0 - kWirelengthEps)) {
+      return false;
+    }
+
+    if (lhs.via_count != rhs.via_count) {
+      return lhs.via_count < rhs.via_count;
+    }
+    return lhs.wirelength_dbu < rhs.wirelength_dbu;
   };
 
   // NEWGR strategy (wirelength-first, via-second):
@@ -212,7 +225,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       baseline,
       {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
       {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
-      {"perturb6-seed11-crit5", 6.0f, 1, 11, 5.0f, snapshot.congestion_iterations},
       {"perturb6-seed17-crit0", 6.0f, 1, 17, 0.0f, snapshot.congestion_iterations},
       {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations},
       {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
