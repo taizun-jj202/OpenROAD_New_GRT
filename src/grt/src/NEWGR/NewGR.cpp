@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -346,40 +347,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 snapshot.congestion_iterations,
                 snapshot.global_adjustment);
 
-  const auto better = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
-    const bool lhs_routable = lhs.total_overflow == 0;
-    const bool rhs_routable = rhs.total_overflow == 0;
-    if (lhs_routable != rhs_routable) {
-      return lhs_routable;
-    }
-    if (!lhs_routable && lhs.total_overflow != rhs.total_overflow) {
-      return lhs.total_overflow < rhs.total_overflow;
-    }
-
-    // Both solutions are routable. Global wirelength deltas across small
-    // perturbations are often tiny. For downstream detailed routing, we use
-    // a small tolerance window where we prefer lower "tightness" (peak
-    // utilization) and fewer vias as a proxy for DR-friendliness.
-    // Keep the window tight: we only allow tie-breaks (tightness/vias) when
-    // the global wirelength difference is extremely small.
-    constexpr double kWirelengthEps = 0.00008;  // 0.008%
-    if (lhs.wirelength_dbu < rhs.wirelength_dbu * (1.0 - kWirelengthEps)) {
-      return true;
-    }
-    if (rhs.wirelength_dbu < lhs.wirelength_dbu * (1.0 - kWirelengthEps)) {
-      return false;
-    }
-
-    if (lhs.congestion.score != rhs.congestion.score) {
-      return lhs.congestion.score < rhs.congestion.score;
-    }
-
-    if (lhs.via_count != rhs.via_count) {
-      return lhs.via_count < rhs.via_count;
-    }
-    return lhs.wirelength_dbu < rhs.wirelength_dbu;
-  };
-
   // NEWGR strategy (wirelength-first, via-second):
   // - Explore a small, deterministic set of perturbation/seed/critical-net
   //   configurations and pick the best by (1) routability, (2) global
@@ -404,30 +371,29 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 	  // - deterministic across runs (fixed seeds),
 	  // - reasonably cheap (single-digit candidates),
 	  // - wirelength-first, with DR-friendliness tie-breaks.
-  const std::vector<CandidateConfig> candidates = {
-      baseline,
-      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
-      {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
-      {"perturb6-seed17-crit0", 6.0f, 1, 17, 0.0f, snapshot.congestion_iterations},
-      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations},
-      {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations},
-      {"perturb6-seed31-crit0", 6.0f, 1, 31, 0.0f, snapshot.congestion_iterations},
-      {"perturb6-seed37-crit0", 6.0f, 1, 37, 0.0f, snapshot.congestion_iterations},
-      // Keep critical nets enabled while still perturbing capacities. The goal
-      // is to preserve "straight" routes for a small subset of high-slack nets
-      // while nudging congestion away from pin-access hotspots.
-      {"perturb6-seed29-crit10", 6.0f, 1, 29, 10.0f, snapshot.congestion_iterations},
-      // More perturbation magnitude can sometimes help DR escape from local
-      // pin-access deadlocks at the cost of minor global detours.
-      {"perturb6-amt2-seed29", 6.0f, 2, 29, 0.0f, snapshot.congestion_iterations},
-      // Slightly fewer overflow iterations can reduce late-stage detours.
-      {"perturb6-seed29-it40", 6.0f, 1, 29, 0.0f, 40},
-      {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
-      // A small "soft-capacity" reservation around the hottest Rudy tiles to
-      // improve detailed-routability; chosen only if it stays competitive in
-      // wirelength within tolerance and reduces tightness/vias.
-      {"perturb6-seed29-rudy", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, 25, 1, 0.85f, 2},
-  };
+	  const std::vector<CandidateConfig> candidates = {
+	      baseline,
+	      // Historically best on this regression: low perturbation, fixed seed.
+	      {"perturb3-seed11-crit0", 3.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
+	      {"perturb3-seed17-crit0", 3.0f, 1, 17, 0.0f, snapshot.congestion_iterations},
+	      {"perturb3-seed29-crit0", 3.0f, 1, 29, 0.0f, snapshot.congestion_iterations},
+
+	      {"perturb6-seed11-crit0", 6.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
+	      {"perturb6-seed17-crit0", 6.0f, 1, 17, 0.0f, snapshot.congestion_iterations},
+	      {"perturb6-seed23-crit0", 6.0f, 1, 23, 0.0f, snapshot.congestion_iterations},
+	      {"perturb6-seed29-crit0", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations},
+	      {"perturb6-seed31-crit0", 6.0f, 1, 31, 0.0f, snapshot.congestion_iterations},
+
+	      // Keep a small fraction of "critical" nets less detoured.
+	      {"perturb6-seed29-crit10", 6.0f, 1, 29, 10.0f, snapshot.congestion_iterations},
+
+	      {"perturb9-seed11-crit0", 9.0f, 1, 11, 0.0f, snapshot.congestion_iterations},
+	      // A small "soft-capacity" reservation around the hottest Rudy tiles to
+	      // improve detailed-routability; chosen only if it stays competitive in
+	      // wirelength within tolerance and reduces tightness/vias.
+	      {"perturb6-seed29-rudy25", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, 25, 1, 0.85f, 2},
+	      {"perturb6-seed29-rudy40", 6.0f, 1, 29, 0.0f, snapshot.congestion_iterations, 40, 1, 0.85f, 2},
+	  };
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
@@ -463,23 +429,98 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   };
 
-  CandidateConfig best_candidate = baseline;
-  RouteMetrics best_metrics;
-  bool have_best = false;
+	  CandidateConfig best_candidate = baseline;
+	  RouteMetrics best_metrics;
+	  bool have_best = false;
 
-  for (const auto& candidate : candidates) {
-    auto candidate_result = run_candidate(candidate);
-    const RouteMetrics& metrics = candidate_result.second;
-    if (!have_best || better(metrics, best_metrics)) {
-      best_candidate = candidate;
-      best_metrics = metrics;
-      have_best = true;
-    }
-  }
+	  struct CandidateEval
+	  {
+	    CandidateConfig candidate;
+	    RouteMetrics metrics;
+	  };
+	  std::vector<CandidateEval> evals;
+	  evals.reserve(candidates.size());
 
-  // Re-run the winner so `grouter_->fastroute_` internal state matches the
-  // returned routes (important for subsequent incremental calls in the flow).
-  auto [winner_routes, winner_metrics] = run_candidate(best_candidate);
+	  int best_overflow = -1;
+	  long best_wl_dbu = 0;
+	  for (const auto& candidate : candidates) {
+	    auto candidate_result = run_candidate(candidate);
+	    const RouteMetrics& metrics = candidate_result.second;
+
+	    evals.push_back({candidate, metrics});
+
+	    if (best_overflow < 0 || metrics.total_overflow < best_overflow) {
+	      best_overflow = metrics.total_overflow;
+	    }
+	  }
+
+	  // Selection policy:
+	  // 1) Prefer routable solutions (overflow == 0), else minimize overflow.
+	  // 2) Among those, keep candidates within a tiny global-WL window.
+	  // 3) Pick the DR-friendlier one using congestion tightness, then vias.
+	  //
+	  // This guards against picking a marginally-shorter global route that is
+	  // noticeably tighter and causes longer detours during detailed routing.
+	  const int target_overflow = (best_overflow == 0) ? 0 : best_overflow;
+
+	  bool have_wl = false;
+	  for (const auto& eval : evals) {
+	    if (eval.metrics.total_overflow != target_overflow) {
+	      continue;
+	    }
+	    if (!have_wl || eval.metrics.wirelength_dbu < best_wl_dbu) {
+	      best_wl_dbu = eval.metrics.wirelength_dbu;
+	      have_wl = true;
+	    }
+	  }
+
+	  // Global-WL tolerance window for DR tie-breaks.
+	  constexpr double kWirelengthWindow = 0.0005;  // 0.05%
+	  const double wl_limit
+	      = have_wl ? static_cast<double>(best_wl_dbu) * (1.0 + kWirelengthWindow)
+	                : std::numeric_limits<double>::infinity();
+
+	  for (const auto& eval : evals) {
+	    const RouteMetrics& metrics = eval.metrics;
+	    if (metrics.total_overflow != target_overflow) {
+	      continue;
+	    }
+	    if (static_cast<double>(metrics.wirelength_dbu) > wl_limit) {
+	      continue;
+	    }
+
+	    if (!have_best) {
+	      best_candidate = eval.candidate;
+	      best_metrics = metrics;
+	      have_best = true;
+	      continue;
+	    }
+
+	    if (metrics.congestion.score != best_metrics.congestion.score) {
+	      if (metrics.congestion.score < best_metrics.congestion.score) {
+	        best_candidate = eval.candidate;
+	        best_metrics = metrics;
+	      }
+	      continue;
+	    }
+
+	    if (metrics.via_count != best_metrics.via_count) {
+	      if (metrics.via_count < best_metrics.via_count) {
+	        best_candidate = eval.candidate;
+	        best_metrics = metrics;
+	      }
+	      continue;
+	    }
+
+	    if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
+	      best_candidate = eval.candidate;
+	      best_metrics = metrics;
+	    }
+	  }
+
+	  // Re-run the winner so `grouter_->fastroute_` internal state matches the
+	  // returned routes (important for subsequent incremental calls in the flow).
+	  auto [winner_routes, winner_metrics] = run_candidate(best_candidate);
 
   logger_->info(GNR,
                 6007,
