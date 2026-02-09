@@ -1646,7 +1646,10 @@ NetRouteMap FastRouteCore::run()
   }
 
   costheight_ = 3;
-  via_cost_ = 1;
+  // Favor wirelength over vias in the final 3D refinement by making layer
+  // changes cheaper. This encourages using available resources on higher
+  // layers instead of detouring in x/y.
+  via_cost_ = 0;
 
   if (past_cong == 0) {
     mazeRouteMSMDOrder3D(enlarge_, 0, long_edge_len);

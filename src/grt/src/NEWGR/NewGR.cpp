@@ -36,6 +36,7 @@ struct CandidateConfig
   int seed = 0;
   float critical_percentage = 0.0f;
   int congestion_iterations = 0;
+  bool allow_congestion = false;
   bool override_global_adjustment = false;
   float global_adjustment = 0.0f;
 };
@@ -175,90 +176,95 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 snapshot.global_adjustment);
 
   std::vector<CandidateConfig> candidates;
+  const int explore_iters
+      = std::max(5, static_cast<int>(std::round(snapshot.congestion_iterations
+                                                * 0.5)));
+  const int explore_iters_aggressive
+      = std::max(3, static_cast<int>(std::round(snapshot.congestion_iterations
+                                                * 0.25)));
+
   candidates.push_back({"baseline",
                         snapshot.caps_percentage,
                         snapshot.perturbation_amount,
                         snapshot.seed,
                         snapshot.critical_percentage,
                         snapshot.congestion_iterations,
+                        snapshot.allow_congestion,
                         false,
                         snapshot.global_adjustment});
 
   // Candidate pool:
   // - Keep a small fixed list to bound runtime.
   // - Explore a handful of perturbation seeds and critical-net settings.
-  candidates.push_back({"perturb6-seed11-crit0",
+  // - Also explore fewer congestion iterations, which can reduce detours and
+  //   therefore wirelength while still reaching zero overflow on easy cases.
+  candidates.push_back({"perturb6-seed11-crit0-itersHalf",
                         6.0f,
                         1,
                         11,
                         0.0f,
-                        snapshot.congestion_iterations,
+                        explore_iters,
+                        snapshot.allow_congestion,
                         false,
                         snapshot.global_adjustment});
-  candidates.push_back({"perturb6-seed11-crit5",
+  candidates.push_back({"perturb6-seed11-crit0-itersQuarter",
+                        6.0f,
+                        1,
+                        11,
+                        0.0f,
+                        explore_iters_aggressive,
+                        snapshot.allow_congestion,
+                        false,
+                        snapshot.global_adjustment});
+  candidates.push_back({"perturb6-seed11-crit5-itersHalf",
                         6.0f,
                         1,
                         11,
                         5.0f,
-                        snapshot.congestion_iterations,
+                        explore_iters,
+                        snapshot.allow_congestion,
                         false,
                         snapshot.global_adjustment});
-  candidates.push_back({"perturb6-seed17-crit0",
+  candidates.push_back({"perturb6-seed17-crit0-itersHalf",
                         6.0f,
                         1,
                         17,
                         0.0f,
-                        snapshot.congestion_iterations,
+                        explore_iters,
+                        snapshot.allow_congestion,
                         false,
                         snapshot.global_adjustment});
-  candidates.push_back({"perturb6-seed23-crit0",
-                        6.0f,
-                        1,
-                        23,
-                        0.0f,
-                        snapshot.congestion_iterations,
-                        false,
-                        snapshot.global_adjustment});
-  candidates.push_back({"perturb6-seed29-crit0",
-                        6.0f,
-                        1,
-                        29,
-                        0.0f,
-                        snapshot.congestion_iterations,
-                        false,
-                        snapshot.global_adjustment});
-  candidates.push_back({"perturb4-seed11-crit0",
+  candidates.push_back({"perturb4-seed11-crit0-itersHalf",
                         4.0f,
                         1,
                         11,
                         0.0f,
-                        snapshot.congestion_iterations,
-                        false,
-                        snapshot.global_adjustment});
-  candidates.push_back({"perturb8-seed11-crit0",
-                        8.0f,
-                        1,
-                        11,
-                        0.0f,
-                        snapshot.congestion_iterations,
+                        explore_iters,
+                        snapshot.allow_congestion,
                         false,
                         snapshot.global_adjustment});
 
   // Occasionally, removing the flow-level global adjustment (capacity derate)
   // yields shorter routes without hurting routability.
   if (snapshot.global_adjustment > 0.0f) {
-    candidates.push_back({"perturb6-seed17-crit0-adj0",
+    candidates.push_back({"perturb6-seed17-crit0-adj0-itersHalf",
                           6.0f,
                           1,
                           17,
                           0.0f,
-                          snapshot.congestion_iterations,
+                          explore_iters,
+                          snapshot.allow_congestion,
                           true,
                           0.0f});
   }
 
   const auto better = [](const RouteMetrics& lhs, const RouteMetrics& rhs) {
-    if (lhs.total_overflow != rhs.total_overflow) {
+    const bool lhs_routable = lhs.total_overflow == 0;
+    const bool rhs_routable = rhs.total_overflow == 0;
+    if (lhs_routable != rhs_routable) {
+      return lhs_routable;
+    }
+    if (!lhs_routable && lhs.total_overflow != rhs.total_overflow) {
       return lhs.total_overflow < rhs.total_overflow;
     }
     if (lhs.wirelength_dbu != rhs.wirelength_dbu) {
@@ -267,7 +273,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return lhs.via_count < rhs.via_count;
   };
 
-  NetRouteMap chosen_routes;
+  CandidateConfig chosen_candidate;
   RouteMetrics chosen_metrics;
   std::string chosen_name;
   bool have_choice = false;
@@ -277,10 +283,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (candidate.override_global_adjustment) {
       grouter_->adjustment_ = candidate.global_adjustment;
     }
+    grouter_->setAllowCongestion(candidate.allow_congestion);
     prepare_fastroute(candidate);
 
-    NetRouteMap routes
-        = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
+    NetRouteMap routes = grouter_->findRouting(
+        nets, min_routing_layer, max_routing_layer);
     RouteMetrics metrics = compute_metrics(routes);
     metrics.total_overflow = grouter_->fastroute_->totalOverflow();
     logger_->info(GNR,
@@ -292,16 +299,40 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   metrics.total_overflow);
 
     if (!have_choice || better(metrics, chosen_metrics)) {
-      chosen_routes = std::move(routes);
+      chosen_candidate = candidate;
       chosen_metrics = metrics;
       chosen_name = candidate.name;
       have_choice = true;
     }
   }
 
-  logger_->info(GNR, 6007, "NEWGR picked {}", chosen_name);
+  logger_->info(GNR,
+                6007,
+                "NEWGR picked {} (overflow {}, wl {:.0f} um, vias {})",
+                chosen_name,
+                chosen_metrics.total_overflow,
+                chosen_metrics.wirelength_um,
+                chosen_metrics.via_count);
+
+  // Re-run the chosen candidate once so that `grouter_->fastroute_` internal
+  // state (overflow, congestion report, etc.) matches the routes we return.
+  restore_snapshot(snapshot);
+  if (chosen_candidate.override_global_adjustment) {
+    grouter_->adjustment_ = chosen_candidate.global_adjustment;
+  }
+  grouter_->setAllowCongestion(chosen_candidate.allow_congestion);
+  prepare_fastroute(chosen_candidate);
+  NetRouteMap chosen_routes = grouter_->findRouting(
+      nets, min_routing_layer, max_routing_layer);
 
   restore_snapshot(snapshot);
+  if (chosen_metrics.total_overflow > 0 && !snapshot.allow_congestion) {
+    logger_->warn(GNR,
+                  6008,
+                  "NEWGR selected candidate has overflow ({}); enabling allow_congestion to avoid abort.",
+                  chosen_metrics.total_overflow);
+    grouter_->setAllowCongestion(true);
+  }
   return chosen_routes;
 }
 
