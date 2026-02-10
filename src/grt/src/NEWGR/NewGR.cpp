@@ -1359,17 +1359,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Candidate A: explore an alternate deterministic seed. This often changes
   // local congestion patterns (and downstream DR detours) without materially
   // changing global wirelength or runtime.
-  const CandidateConfig tuned{"perturb3-seed11-crit0",
+  const CandidateConfig tuned{"perturb3-seed11-crit0-rudy25",
                               3.0f,
                               1,
                               11,
                               0.0f,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
-                              0,
-                              0,
-                              1.0f,
-                              0};
+                              // Mild Rudy-driven soft-capacity in top hotspots
+                              // to improve DR friendliness (lower detours/WL)
+                              // while keeping runtime close to baseline.
+                              25,
+                              1,
+                              0.90f,
+                              2};
 
   const std::vector<CandidateConfig> candidates = {tuned};
 
