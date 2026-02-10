@@ -96,9 +96,10 @@ struct GuidePatchingOptions
   // Extremely limited adjacent-layer via patching for very long segments in
   // hot regions. This can reduce downstream detours (wirelength) when the
   // detailed router needs an earlier layer switch, while keeping via inflation
-  // bounded.
-  int very_long_via_patches_total = 220;
-  int very_long_via_patches_per_net = 1;
+  // bounded. Default NEWGR policy is to keep this disabled to avoid inflating
+  // DR via count; we prefer same-layer side-lanes/stubs instead.
+  int very_long_via_patches_total = 0;
+  int very_long_via_patches_per_net = 0;
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
   // explicitly encouraging layer switching (vias).
