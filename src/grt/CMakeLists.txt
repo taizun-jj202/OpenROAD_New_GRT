@@ -12,10 +12,12 @@ option(USE_NEWGR "Build with the new NEWGR router" ON)
 find_package(OpenMP REQUIRED)
 
 add_subdirectory(src/fastroute)
+# Always build the canonical CUGR implementation.
+add_subdirectory(src/cugr)
+# Optionally build NEWGR (and its own CUGR-derived engine) alongside it.
 if(USE_NEWGR)
   add_subdirectory(src/NEWGR)
 endif()
-add_subdirectory(src/cugr)
 
 swig_lib(NAME      grt
          NAMESPACE grt
@@ -52,16 +54,22 @@ if(USE_NEWGR)
       src/NEWGR
       src/NEWGR/include
   )
-  target_sources(grt_lib PRIVATE $<TARGET_OBJECTS:NEWGR_lib> src/NEWGR/NewGR.cpp)
+  target_sources(grt_lib PRIVATE $<TARGET_OBJECTS:NEWGR_lib>)
   target_compile_definitions(grt_lib PUBLIC GRT_ENABLE_NEWGR=1)
 else()
   target_compile_definitions(grt_lib PUBLIC GRT_ENABLE_NEWGR=0)
+endif()
+
+set(GRT_EXTRA_LIBS "")
+if(USE_NEWGR)
+  list(APPEND GRT_EXTRA_LIBS NEWGR_CUGR)
 endif()
 
 target_link_libraries(grt_lib
     utl_lib
     FastRoute4.1
     CUGR
+    ${GRT_EXTRA_LIBS}
     sproute_tool
     ant_lib
     dpl_lib
@@ -92,7 +100,6 @@ target_include_directories(grt
 
 target_sources(grt PRIVATE src/fastroute/src/FastRouteRenderer.cpp)
 if(USE_NEWGR)
-  target_sources(grt PRIVATE src/NEWGR/src/FastRouteRenderer.cpp)
   target_include_directories(grt
     PRIVATE
       src/NEWGR

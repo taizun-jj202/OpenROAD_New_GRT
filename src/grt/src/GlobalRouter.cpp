@@ -59,6 +59,10 @@
 #include "utl/Logger.h"
 #include "utl/algorithms.h"
 
+#if GRT_ENABLE_NEWGR
+#include "newgr/CUGR.h"
+#endif
+
 namespace grt {
 
 using boost::icl::interval;
@@ -78,6 +82,7 @@ GlobalRouter::GlobalRouter(utl::Logger* logger,
       opendp_(opendp),
       fastroute_(nullptr),
       cugr_(nullptr),
+      newgr_cugr_(nullptr),
       router_type_(RouterType::FastRoute),
       grid_origin_(0, 0),
       groute_renderer_(nullptr),
@@ -106,6 +111,9 @@ GlobalRouter::GlobalRouter(utl::Logger* logger,
   fastroute_
       = new FastRouteCore(db_, logger_, callback_handler_, stt_builder_, sta_);
   cugr_ = new CUGR(db_, logger_, stt_builder_);
+#if GRT_ENABLE_NEWGR
+  newgr_cugr_ = new newgr::CUGR(db_, logger_, stt_builder_);
+#endif
   sproute_adapter_ = std::make_unique<SprouteAdapter>(logger_);
 }
 
@@ -145,6 +153,9 @@ GlobalRouter::~GlobalRouter()
 {
   delete fastroute_;
   delete cugr_;
+#if GRT_ENABLE_NEWGR
+  delete newgr_cugr_;
+#endif
   delete grid_;
   for (auto [ignored, net] : db_net_map_) {
     delete net;
@@ -618,7 +629,7 @@ NetRouteMap GlobalRouter::runNewGrRouting(std::vector<Net*>& nets,
                                           int min_routing_layer,
                                           int max_routing_layer)
 {
-  NewGR router(this, cugr_, logger_);
+  NewGR router(this, newgr_cugr_, logger_);
   return router.run(nets, min_routing_layer, max_routing_layer);
 }
 
@@ -838,7 +849,7 @@ void GlobalRouter::setRouterType(const std::string& router_name)
              || normalized == "newgr2" || normalized == "new_gr2") {
     router_type_ = RouterType::NewGR;
     use_cugr_ = false;
-  } else if (normalized == "cugr") {
+  } else if (normalized == "cugr" || normalized == "use_cugr") {
     router_type_ = RouterType::CUGR;
     use_cugr_ = true;
   } else {

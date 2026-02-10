@@ -37,6 +37,9 @@
 if (NOT USE_SYSTEM_ABC)
 
   set(ABC_USE_NAMESPACE "abc")
+  # if (DEFINED ENABLE_TESTS AND NOT ENABLE_TESTS)
+  #   set(ABC_SKIP_TESTS ON)
+  # endif()
 
   # abc does not have "platform" support for macos so force it to use stdint.h
   if (CMAKE_OSX_SYSROOT)
