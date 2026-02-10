@@ -1267,26 +1267,31 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // improve downstream detailed-routing metrics by nudging congestion away
   // from hard-to-route pin-access regions, even if global cost differences
   // are small.
-  // Candidate A: explore an alternate deterministic seed. This often changes
-  // local congestion patterns (and downstream DR detours) without materially
-  // changing global wirelength or runtime.
-  const CandidateConfig alt{"perturb3-seed23-crit0",
+  // Candidate A: explore an alternate deterministic seed + mild Rudy-driven
+  // "soft capacity" reservation on the lowest layers. This often changes local
+  // congestion patterns (and downstream DR detours) without materially changing
+  // global wirelength or runtime.
+  //
+  // We keep the reservation deliberately small so that global WL does not drift
+  // far, but we allow a slightly wider WL selection window (below) so that a
+  // meaningfully looser solution can win when WL is close.
+  const CandidateConfig alt{"perturb3-seed23-critSnap-rudy5",
                             3.0f,
                             1,
                             23,
-                            0.0f,
+                            snapshot.critical_percentage,
                             snapshot.congestion_iterations,
                             snapshot.global_adjustment,
-                            0,
-                            0,
-                            1.0f,
-                            0};
+                            /*rudy_hotspots=*/30,
+                            /*rudy_expand_tiles=*/1,
+                            /*rudy_adjustment=*/0.95f,  // keep 95% capacity
+                            /*rudy_layers=*/2};
 
-  const CandidateConfig tuned{"perturb3-seed11-crit0",
+  const CandidateConfig tuned{"perturb3-seed11-critSnap",
                               3.0f,
                               1,
                               11,
-                              0.0f,
+                              snapshot.critical_percentage,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
                               0,
@@ -1390,8 +1395,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       // looser-congestion solution when it is still close in WL. This tends
       // to correlate better with DR wirelength than picking the absolute best
       // GR WL when candidates are few.
-      constexpr double wl_slack_ratio = 0.0030;   // 0.30%
-      constexpr long wl_slack_min_dbu = 200000;   // ~200um @ 1000 DBU/um
+      // Allow a slightly wider WL window so that a looser-congestion solution
+      // (often better for DR WL) can win even if it pays a small global-WL
+      // premium. We still keep this tight enough to avoid drifting into a
+      // significantly longer GR regime.
+      constexpr double wl_slack_ratio = 0.0060;   // 0.60%
+      constexpr long wl_slack_min_dbu = 400000;   // ~400um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
           static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
