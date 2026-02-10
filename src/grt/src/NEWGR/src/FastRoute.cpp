@@ -25,6 +25,384 @@ namespace grt::newgr {
 
 using utl::GNR;
 
+int FastRouteCore::polish2DRoutesForWirelength()
+{
+  // Post-pass to reduce route fragmentation (bends) and unnecessary detours
+  // without re-introducing 2D overflow.
+  //
+  // We only touch already-maze-routed edges and only when we can legally
+  // replace the current path with a simple Manhattan-minimal L/Z pattern.
+  //
+  // This tends to reduce (1) 2D bend count, which often correlates with
+  // (2) fewer layer switches (vias) after layer assignment, and can also
+  // reduce downstream DR detours by presenting cleaner guides.
+
+  // Keep this bounded to preserve runtime determinism.
+  constexpr int kMaxEdgesTouched = 14000;
+  constexpr int kMaxEdgesChanged = 9000;
+
+  int edges_touched = 0;
+  int edges_changed = 0;
+
+  auto in_grid = [&](int x, int y) -> bool {
+    return x >= 0 && x < x_grid_ && y >= 0 && y < y_grid_;
+  };
+
+  auto count_bends = [&](const Route& route) -> int {
+    if (route.routelen <= 1 || route.grids.size() < 2) {
+      return 0;
+    }
+    int bends = 0;
+    int prev_dir = -1;  // 0 = H, 1 = V
+    for (int i = 0; i < route.routelen; i++) {
+      const auto& a = route.grids[i];
+      const auto& b = route.grids[i + 1];
+      if (a.x == b.x && a.y != b.y) {
+        if (prev_dir != -1 && prev_dir != 1) {
+          bends++;
+        }
+        prev_dir = 1;
+      } else if (a.y == b.y && a.x != b.x) {
+        if (prev_dir != -1 && prev_dir != 0) {
+          bends++;
+        }
+        prev_dir = 0;
+      } else {
+        // Unexpected diagonal/degenerate: do not attempt to polish.
+        return std::numeric_limits<int>::max();
+      }
+    }
+    return bends;
+  };
+
+  auto ripup_maze_usage = [&](const std::vector<GPoint3D>& grids,
+                              int routelen,
+                              FrNet* net,
+                              int delta) {
+    const int8_t edgeCost = net->getEdgeCost();
+    for (int i = 0; i < routelen; i++) {
+      const auto& a = grids[i];
+      const auto& b = grids[i + 1];
+      if (a.x == b.x && a.y != b.y) {
+        const int min_y = std::min(a.y, b.y);
+        graph2d_.updateUsageV(a.x, min_y, net, delta * edgeCost);
+      } else if (a.y == b.y && a.x != b.x) {
+        const int min_x = std::min(a.x, b.x);
+        graph2d_.updateUsageH(min_x, a.y, net, delta * edgeCost);
+      }
+    }
+  };
+
+  auto build_L = [&](int x1, int y1, int x2, int y2, bool x_first) {
+    std::vector<GPoint3D> path;
+    path.reserve(static_cast<std::size_t>(std::abs(x2 - x1) + std::abs(y2 - y1))
+                 + 1);
+    path.push_back({static_cast<int16_t>(x1), static_cast<int16_t>(y1), -1});
+
+    auto step_line = [&](int sx, int sy, int tx, int ty) {
+      if (sx == tx && sy == ty) {
+        return;
+      }
+      const int dx = (tx > sx) ? 1 : (tx < sx) ? -1 : 0;
+      const int dy = (ty > sy) ? 1 : (ty < sy) ? -1 : 0;
+      int x = sx;
+      int y = sy;
+      while (x != tx || y != ty) {
+        x += dx;
+        y += dy;
+        path.push_back(
+            {static_cast<int16_t>(x), static_cast<int16_t>(y), -1});
+      }
+    };
+
+    if (x_first) {
+      step_line(x1, y1, x2, y1);
+      step_line(x2, y1, x2, y2);
+    } else {
+      step_line(x1, y1, x1, y2);
+      step_line(x1, y2, x2, y2);
+    }
+    return path;
+  };
+
+  struct Eval
+  {
+    bool feasible = false;
+    double max_util = 0.0;
+    double sum_util = 0.0;
+    std::vector<GPoint3D> path;
+  };
+
+  auto eval_path = [&](const std::vector<GPoint3D>& path,
+                       FrNet* net) -> Eval {
+    Eval out;
+    out.path = path;
+    const int8_t edgeCost = net->getEdgeCost();
+    if (edgeCost <= 0) {
+      return out;
+    }
+
+    double max_u = 0.0;
+    double sum_u = 0.0;
+    for (std::size_t i = 0; i + 1 < path.size(); i++) {
+      const auto& a = path[i];
+      const auto& b = path[i + 1];
+      if (!in_grid(a.x, a.y) || !in_grid(b.x, b.y)) {
+        return out;
+      }
+      if (a.x == b.x && a.y != b.y) {
+        const int min_y = std::min(a.y, b.y);
+        if (min_y < 0 || min_y >= y_grid_ - 1) {
+          return out;
+        }
+        const int x = a.x;
+        const int cap = graph2d_.getCapV(x, min_y);
+        const int usage = graph2d_.getUsageV(x, min_y);
+        if (cap <= 0 || usage + edgeCost > cap) {
+          return out;
+        }
+        const double util = static_cast<double>(usage + edgeCost)
+                            / static_cast<double>(cap);
+        max_u = std::max(max_u, util);
+        sum_u += util;
+      } else if (a.y == b.y && a.x != b.x) {
+        const int min_x = std::min(a.x, b.x);
+        if (min_x < 0 || min_x >= x_grid_ - 1) {
+          return out;
+        }
+        const int y = a.y;
+        const int cap = graph2d_.getCapH(min_x, y);
+        const int usage = graph2d_.getUsageH(min_x, y);
+        if (cap <= 0 || usage + edgeCost > cap) {
+          return out;
+        }
+        const double util = static_cast<double>(usage + edgeCost)
+                            / static_cast<double>(cap);
+        max_u = std::max(max_u, util);
+        sum_u += util;
+      } else {
+        return out;
+      }
+    }
+
+    out.feasible = true;
+    out.max_util = max_u;
+    out.sum_util = sum_u;
+    return out;
+  };
+
+  auto build_Z = [&](int x1,
+                     int y1,
+                     int x2,
+                     int y2,
+                     bool hvh,
+                     int z) {
+    std::vector<GPoint3D> path;
+    path.reserve(static_cast<std::size_t>(std::abs(x2 - x1) + std::abs(y2 - y1))
+                 + 1);
+    path.push_back({static_cast<int16_t>(x1), static_cast<int16_t>(y1), -1});
+
+    auto step_line = [&](int sx, int sy, int tx, int ty) {
+      if (sx == tx && sy == ty) {
+        return;
+      }
+      const int dx = (tx > sx) ? 1 : (tx < sx) ? -1 : 0;
+      const int dy = (ty > sy) ? 1 : (ty < sy) ? -1 : 0;
+      int x = sx;
+      int y = sy;
+      while (x != tx || y != ty) {
+        x += dx;
+        y += dy;
+        path.push_back(
+            {static_cast<int16_t>(x), static_cast<int16_t>(y), -1});
+      }
+    };
+
+    if (hvh) {
+      step_line(x1, y1, z, y1);
+      step_line(z, y1, z, y2);
+      step_line(z, y2, x2, y2);
+    } else {
+      step_line(x1, y1, x1, z);
+      step_line(x1, z, x2, z);
+      step_line(x2, z, x2, y2);
+    }
+    return path;
+  };
+
+  for (const int netID : net_ids_) {
+    if (edges_changed >= kMaxEdgesChanged || edges_touched >= kMaxEdgesTouched) {
+      break;
+    }
+    FrNet* net = nets_[netID];
+    if (net == nullptr) {
+      continue;
+    }
+    // Skip non-default-cost nets (NDR/soft-NDR/resistance-aware) to avoid
+    // interfering with their specialized capacity model.
+    if (net->getEdgeCost() != 1 || net->isSoftNDR() || net->isResAware()) {
+      continue;
+    }
+
+    auto& treenodes = sttrees_[netID].nodes;
+    auto& treeedges = sttrees_[netID].edges;
+    for (int edgeID = 0; edgeID < sttrees_[netID].num_edges(); edgeID++) {
+      if (edges_changed >= kMaxEdgesChanged
+          || edges_touched >= kMaxEdgesTouched) {
+        break;
+      }
+
+      TreeEdge* treeedge = &(treeedges[edgeID]);
+      if (treeedge->len <= 0) {
+        continue;
+      }
+      Route& route = treeedge->route;
+      if (route.type != RouteType::MazeRoute || route.routelen <= 0
+          || route.grids.size()
+                 < static_cast<std::size_t>(route.routelen + 1)) {
+        continue;
+      }
+
+      const int bends = count_bends(route);
+      if (bends == std::numeric_limits<int>::max()) {
+        continue;
+      }
+      const bool detoured = route.routelen > treeedge->len;
+      const bool fragmented = bends > 2;
+      if (!detoured && !fragmented) {
+        continue;
+      }
+
+      const TreeNode& n1 = treenodes[treeedge->n1];
+      const TreeNode& n2 = treenodes[treeedge->n2];
+      const int x1 = n1.x;
+      const int y1 = n1.y;
+      const int x2 = n2.x;
+      const int y2 = n2.y;
+      if (x1 == x2 || y1 == y2) {
+        continue;
+      }
+      if (!in_grid(x1, y1) || !in_grid(x2, y2)) {
+        continue;
+      }
+
+      edges_touched++;
+
+      // Save and rip-up the existing route usage.
+      std::vector<GPoint3D> old_grids = route.grids;
+      const int old_routelen = route.routelen;
+      ripup_maze_usage(old_grids, old_routelen, net, -1);
+
+      bool changed = false;
+      Eval best;
+
+      // Prefer L-shape (1 bend) when feasible.
+      {
+        Eval a = eval_path(build_L(x1, y1, x2, y2, true), net);
+        Eval b = eval_path(build_L(x1, y1, x2, y2, false), net);
+        if (a.feasible && (!best.feasible || a.max_util < best.max_util
+                           || (a.max_util == best.max_util
+                               && a.sum_util < best.sum_util))) {
+          best = std::move(a);
+        }
+        if (b.feasible && (!best.feasible || b.max_util < best.max_util
+                           || (b.max_util == best.max_util
+                               && b.sum_util < best.sum_util))) {
+          best = std::move(b);
+        }
+      }
+
+      // If L is not feasible, try a small deterministic set of Z-shapes
+      // (2 bends) that are still Manhattan-minimal but can dodge saturated
+      // edges by shifting the vertical/horizontal "spine".
+      if (!best.feasible) {
+        const int xmin = std::min(x1, x2);
+        const int xmax = std::max(x1, x2);
+        const int ymin = std::min(y1, y2);
+        const int ymax = std::max(y1, y2);
+
+        auto sample_positions = [](int lo, int hi) {
+          std::vector<int> out;
+          const int span = hi - lo;
+          if (span <= 0) {
+            out.push_back(lo);
+            return out;
+          }
+          if (span <= 20) {
+            out.reserve(span + 1);
+            for (int v = lo; v <= hi; v++) {
+              out.push_back(v);
+            }
+            return out;
+          }
+          out = {lo,
+                 lo + span / 8,
+                 lo + span / 4,
+                 lo + span / 2,
+                 lo + (3 * span) / 4,
+                 lo + (7 * span) / 8,
+                 hi};
+          std::sort(out.begin(), out.end());
+          out.erase(std::unique(out.begin(), out.end()), out.end());
+          return out;
+        };
+
+        // HVH candidates vary the x spine.
+        for (int z : sample_positions(xmin, xmax)) {
+          Eval e = eval_path(build_Z(x1, y1, x2, y2, /*hvh=*/true, z), net);
+          if (!e.feasible) {
+            continue;
+          }
+          if (!best.feasible || e.max_util < best.max_util
+              || (e.max_util == best.max_util
+                  && e.sum_util < best.sum_util)) {
+            best = std::move(e);
+          }
+        }
+        // VHV candidates vary the y spine.
+        for (int z : sample_positions(ymin, ymax)) {
+          Eval e = eval_path(build_Z(x1, y1, x2, y2, /*hvh=*/false, z), net);
+          if (!e.feasible) {
+            continue;
+          }
+          if (!best.feasible || e.max_util < best.max_util
+              || (e.max_util == best.max_util
+                  && e.sum_util < best.sum_util)) {
+            best = std::move(e);
+          }
+        }
+      }
+
+      if (best.feasible) {
+        // Apply the chosen replacement.
+        ripup_maze_usage(best.path, static_cast<int>(best.path.size()) - 1, net, +1);
+        route.grids = std::move(best.path);
+        route.routelen = static_cast<int>(route.grids.size()) - 1;
+        route.type = RouteType::MazeRoute;
+        edges_changed++;
+        changed = true;
+      }
+
+      if (!changed) {
+        // Restore the original route usage and data.
+        ripup_maze_usage(old_grids, old_routelen, net, +1);
+        route.grids = std::move(old_grids);
+        route.routelen = old_routelen;
+      }
+    }
+  }
+
+  if (edges_changed > 0) {
+    logger_->info(GNR,
+                  115,
+                  "2D polish: replaced {}/{} maze edges with L/Z patterns.",
+                  edges_changed,
+                  edges_touched);
+  }
+
+  return edges_changed;
+}
+
 FastRouteCore::FastRouteCore(odb::dbDatabase* db,
                              utl::Logger* log,
                              utl::CallBackHandler* callback_handler,
@@ -1631,6 +2009,12 @@ NetRouteMap FastRouteCore::run()
   freeRR();
 
   removeLoops();
+
+  // Final 2D post-pass: try to simplify detoured/fragmented maze routes into
+  // Manhattan-minimal patterns without reintroducing 2D overflow.
+  if (!has_2D_overflow_) {
+    polish2DRoutesForWirelength();
+  }
 
   getOverflow2Dmaze(&maxOverflow, &tUsage);
 
