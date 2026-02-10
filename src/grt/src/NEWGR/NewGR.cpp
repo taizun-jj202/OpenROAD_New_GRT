@@ -812,7 +812,9 @@ static void simplify_guides(GlobalRouter* grouter,
     return;
   }
 
-  int merge_gap_dbu = 0;
+  int preferred_merge_gap_dbu = 0;
+  int nonpreferred_merge_gap_dbu = 0;
+  std::vector<odb::dbTechLayerDir> layer_dirs;
   if (grouter != nullptr && grouter->grid() != nullptr) {
     // Many guide endpoints are snapped to the GCell centers spaced by
     // `tile_size`. Allowing a small (<= 1 tile) merge gap can reduce guide
@@ -821,7 +823,25 @@ static void simplify_guides(GlobalRouter* grouter,
     // often reduces DR detours (wirelength) while still keeping guides
     // reasonably constrained.
     const int tile = std::max(0, grouter->grid()->getTileSize());
-    merge_gap_dbu = 3 * tile;
+    preferred_merge_gap_dbu = 3 * tile;
+    // For segments that do *not* match the layer's preferred direction, be
+    // much more conservative about merging. Extending non-preferred-direction
+    // guides can encourage DR to introduce extra layer switches (vias).
+    nonpreferred_merge_gap_dbu = 0;
+
+    if (grouter->db() != nullptr && grouter->db()->getTech() != nullptr) {
+      odb::dbTech* tech = grouter->db()->getTech();
+      const int max_layer = tech->getRoutingLayerCount();
+      if (max_layer > 0) {
+        layer_dirs.assign(max_layer + 1, odb::dbTechLayerDir::NONE);
+        for (int layer = 1; layer <= max_layer; layer++) {
+          odb::dbTechLayer* tech_layer = tech->findRoutingLayer(layer);
+          if (tech_layer != nullptr) {
+            layer_dirs[layer] = tech_layer->getDirection();
+          }
+        }
+      }
+    }
   }
 
   int nets_touched = 0;
@@ -893,6 +913,22 @@ static void simplify_guides(GlobalRouter* grouter,
                   return a.second < b.second;
                 });
 
+      const auto [layer, jumper, horizontal, fixed] = key;
+      static_cast<void>(jumper);
+      static_cast<void>(fixed);
+
+      int merge_gap_dbu = preferred_merge_gap_dbu;
+      if (layer > 0 && layer < static_cast<int>(layer_dirs.size())) {
+        const odb::dbTechLayerDir dir = layer_dirs[layer];
+        const bool preferred
+            = (dir == odb::dbTechLayerDir::NONE)
+              || (dir == odb::dbTechLayerDir::HORIZONTAL && horizontal != 0)
+              || (dir == odb::dbTechLayerDir::VERTICAL && horizontal == 0);
+        if (!preferred) {
+          merge_gap_dbu = nonpreferred_merge_gap_dbu;
+        }
+      }
+
       std::vector<std::pair<int, int>> merged;
       merged.reserve(seg_intervals.size());
       int cur_lo = seg_intervals[0].first;
@@ -910,7 +946,6 @@ static void simplify_guides(GlobalRouter* grouter,
       }
       merged.push_back({cur_lo, cur_hi});
 
-      const auto [layer, jumper, horizontal, fixed] = key;
       for (const auto& [lo, hi] : merged) {
         if (horizontal) {
           rebuilt.emplace_back(lo, fixed, layer, hi, fixed, layer, jumper != 0);
@@ -951,7 +986,7 @@ static void simplify_guides(GlobalRouter* grouter,
                  nets_touched,
                  merged_segments,
                  removed_duplicates,
-                 merge_gap_dbu);
+                 preferred_merge_gap_dbu);
   }
 }
 
