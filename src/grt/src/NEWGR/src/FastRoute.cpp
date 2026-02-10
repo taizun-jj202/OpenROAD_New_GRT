@@ -41,8 +41,8 @@ int FastRouteCore::polish2DRoutesForWirelength()
   // Allow a slightly larger budget: this pass is inexpensive compared to
   // full rip-up/reroute iterations, and cleaning up a few more detours/bends
   // can improve downstream DR wirelength without materially impacting runtime.
-  constexpr int kMaxEdgesTouched = 20000;
-  constexpr int kMaxEdgesChanged = 12000;
+  constexpr int kMaxEdgesTouched = 30000;
+  constexpr int kMaxEdgesChanged = 18000;
 
   int edges_touched = 0;
   int edges_changed = 0;
@@ -419,11 +419,11 @@ int FastRouteCore::polish2DRoutesForWirelength()
         // For aligned endpoints, a direct replacement can concentrate demand on
         // a single edge corridor. Be slightly more conservative about making
         // the solution tighter in those cases.
-        double util_slack = (x1 == x2 || y1 == y2) ? 0.015 : 0.03;
+        double util_slack = (x1 == x2 || y1 == y2) ? 0.018 : 0.035;
         // When the change is purely a bend reduction (same-length), allow a
         // slightly larger utilization delta, but keep headroom to avoid making
         // any corridor fully saturated.
-        const double max_util_limit = bend_only ? 0.985 : 1.0;
+        const double max_util_limit = bend_only ? 0.997 : 1.0;
         if (bend_only && extra_bends_minimal && new_bends == 1) {
           util_slack += 0.04;
         }
@@ -2115,7 +2115,7 @@ NetRouteMap FastRouteCore::run()
   // vias can force longer same-layer detours, which may increase downstream
   // detailed-routing wirelength. Prefer wirelength (primary metric) over
   // via count (secondary).
-  via_cost_ = (past_cong == 0) ? 2 : 1;
+  via_cost_ = (past_cong == 0) ? 3 : 1;
 
   if (past_cong == 0) {
     mazeRouteMSMDOrder3D(enlarge_, 0, long_edge_len);
