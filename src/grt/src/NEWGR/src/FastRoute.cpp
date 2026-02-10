@@ -1675,7 +1675,13 @@ NetRouteMap FastRouteCore::run()
   }
 
   // New rip-up and reroute L via-guided
+  // When 2D routing is already overflow-free at this point, enable a mild
+  // via-guided bias to reduce needless zig-zagging at Steiner nodes. This
+  // does not change Manhattan length directly, but can reduce bends that later
+  // translate into layer switches (vias) after layer assignment.
+  via_cost_ = (maxOverflow == 0) ? 1 : 0;
   newrouteLAll(false, true);
+  via_cost_ = 0;
   getOverflow2D(&maxOverflow);
   if (logger_->debugCheck(GNR, "grtSteps", 1)) {
     logger_->report("After newRouteLAll");
