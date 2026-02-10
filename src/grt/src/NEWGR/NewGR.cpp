@@ -1330,10 +1330,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               0.0f,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
-                              25,
-                              1,
-                              0.94f,
-                              2};
+                              0,
+                              0,
+                              1.0f,
+                              0};
 
   const std::vector<CandidateConfig> candidates = {tuned};
 
