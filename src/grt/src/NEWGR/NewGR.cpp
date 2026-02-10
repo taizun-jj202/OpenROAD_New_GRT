@@ -83,7 +83,7 @@ struct GuidePatchingOptions
   // Derived-from-GR congestion hot tiles (based on edge utilization).
   // These complement Rudy hotspots by reacting to actual GR usage patterns.
   int cong_layer_count = 3;           // apply to [min_layer, min_layer + N)
-  double cong_util_threshold = 0.83;  // utilization (usage / eff_cap)
+  double cong_util_threshold = 0.84;  // utilization (usage / eff_cap)
   int cong_edge_prefix = 1800;        // keep only top-N hot edges
   int cong_max_tiles = 2600;          // cap on unique hot tiles tracked
 
@@ -91,12 +91,12 @@ struct GuidePatchingOptions
   int pin_patch_radius_tiles = 2;
   // Add short wire stubs on the pin connection layer to improve local access
   // without forcing extra layer switching.
-  int pin_wire_stub_tiles = 6;
+  int pin_wire_stub_tiles = 5;
 
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
-  int long_segment_stub_tiles = 6;
+  int long_segment_stub_tiles = 5;
   // Extremely limited adjacent-layer via patching for very long segments in
   // hot regions. This can reduce downstream detours (wirelength) when the
   // detailed router needs an earlier layer switch, while keeping via inflation
@@ -477,7 +477,7 @@ static void patch_guides_for_dr_friendliness(
         // DR detours (wirelength) without materially impacting NEWGR runtime.
         const bool should_patch_pin
             = pin.isPort() || pin.isConnectedToPadOrMacro()
-              || (dr_risky && net->getNumPins() >= 7);
+              || (dr_risky && net->getNumPins() >= 8);
 
         if (!should_patch_pin) {
           continue;
@@ -848,8 +848,11 @@ static void simplify_guides(GlobalRouter* grouter,
     preferred_merge_gap_dbu = 3 * tile;
     // For segments that do *not* match the layer's preferred direction, be
     // much more conservative about merging. Extending non-preferred-direction
-    // guides can encourage DR to introduce extra layer switches (vias).
-    nonpreferred_merge_gap_dbu = 0;
+    // guides can encourage DR to introduce extra layer switches (vias). Allow
+    // a *tiny* merge gap only on higher layers (where via insertion is less
+    // disruptive) to reduce fragmentation without increasing guide area too
+    // aggressively.
+    nonpreferred_merge_gap_dbu = 1 * tile;
 
     if (grouter->db() != nullptr && grouter->db()->getTech() != nullptr) {
       odb::dbTech* tech = grouter->db()->getTech();
@@ -947,7 +950,8 @@ static void simplify_guides(GlobalRouter* grouter,
               || (dir == odb::dbTechLayerDir::HORIZONTAL && horizontal != 0)
               || (dir == odb::dbTechLayerDir::VERTICAL && horizontal == 0);
         if (!preferred) {
-          merge_gap_dbu = nonpreferred_merge_gap_dbu;
+          // Keep M1/M2 conservative; allow a small merge gap above.
+          merge_gap_dbu = (layer >= 3) ? nonpreferred_merge_gap_dbu : 0;
         }
       }
 
