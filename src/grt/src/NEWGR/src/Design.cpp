@@ -1,5 +1,6 @@
 #include "Design.h"
 
+#include <algorithm>
 #include <iostream>
 #include <vector>
 
@@ -279,14 +280,18 @@ void Design::computeGrid()
 void Design::setUnitCosts()
 {
   const int m2_pitch = layers_[1].getPitch();
+  const int m2_width = layers_[1].getWidth();
   unit_length_wire_cost_ = constants_.weight_wire_length / m2_pitch;
   unit_via_cost_ = constants_.weight_via_number;
   unit_length_short_costs_.resize(layers_.size());
   const CostT unit_area_short_cost
       = constants_.weight_short_area / (m2_pitch * m2_pitch);
   for (int layerIndex = 0; layerIndex < layers_.size(); layerIndex++) {
-    unit_length_short_costs_[layerIndex]
-        = unit_area_short_cost * layers_[layerIndex].getWidth();
+    // Avoid overly biasing away from upper layers due to increased width.
+    // This keeps the congestion penalty closer to per-length behavior while
+    // still preserving the min-area intent.
+    const int ref_width = std::min(layers_[layerIndex].getWidth(), m2_width);
+    unit_length_short_costs_[layerIndex] = unit_area_short_cost * ref_width;
   }
 }
 
