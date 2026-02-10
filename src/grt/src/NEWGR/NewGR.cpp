@@ -1278,10 +1278,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                 0.0f,
                                 snapshot.congestion_iterations,
                                 snapshot.global_adjustment,
-                                /*rudy_hotspots=*/36,
-                                /*rudy_expand_tiles=*/1,
-                                /*rudy_adjustment=*/0.93f,
-                                /*rudy_layers=*/3};
+                                // Keep this *very* mild to avoid introducing
+                                // overflow while still nudging routes away
+                                // from the densest Rudy tiles.
+                                /*rudy_hotspots=*/18,
+                                /*rudy_expand_tiles=*/0,
+                                /*rudy_adjustment=*/0.97f,
+                                /*rudy_layers=*/2};
 
   const CandidateConfig tuned{"perturb3-seed11-crit0",
                               3.0f,
