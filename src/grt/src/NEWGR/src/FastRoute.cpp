@@ -38,11 +38,11 @@ int FastRouteCore::polish2DRoutesForWirelength()
   // reduce downstream DR detours by presenting cleaner guides.
 
   // Keep this bounded to preserve runtime determinism.
-  // Allow a slightly larger budget: this pass is inexpensive compared to
-  // full rip-up/reroute iterations, and cleaning up a few more detours/bends
-  // can improve downstream DR wirelength without materially impacting runtime.
-  constexpr int kMaxEdgesTouched = 20000;
-  constexpr int kMaxEdgesChanged = 12000;
+  // This pass is still far cheaper than full rip-up/reroute iterations, and
+  // cleaning up more detours/bends tends to reduce downstream DR detours (WL)
+  // and layer switching (vias).
+  constexpr int kMaxEdgesTouched = 40000;
+  constexpr int kMaxEdgesChanged = 20000;
 
   int edges_touched = 0;
   int edges_changed = 0;
@@ -412,8 +412,8 @@ int FastRouteCore::polish2DRoutesForWirelength()
         const int new_bends = count_bends_path(best.path);
 
         const bool improves_len = new_routelen < old_routelen;
-        const bool improves_bends
-            = (new_bends != std::numeric_limits<int>::max() && new_bends < bends);
+        const bool improves_bends = (new_bends != std::numeric_limits<int>::max()
+                                     && new_bends < bends);
         const bool bend_only = !improves_len && improves_bends;
 
         // For aligned endpoints, a direct replacement can concentrate demand on
@@ -421,11 +421,12 @@ int FastRouteCore::polish2DRoutesForWirelength()
         // the solution tighter in those cases.
         double util_slack = (x1 == x2 || y1 == y2) ? 0.015 : 0.03;
         // When the change is purely a bend reduction (same-length), allow a
-        // slightly larger utilization delta, but keep headroom to avoid making
-        // any corridor fully saturated.
-        const double max_util_limit = bend_only ? 0.985 : 1.0;
+        // slightly larger utilization delta. We still cap just below full
+        // saturation to avoid creating razor-thin corridors that later force
+        // DR detours/vias.
+        const double max_util_limit = bend_only ? 0.995 : 1.0;
         if (bend_only && extra_bends_minimal && new_bends == 1) {
-          util_slack += 0.04;
+          util_slack += 0.05;
         }
         const bool util_ok
             = (!old_eval.feasible)

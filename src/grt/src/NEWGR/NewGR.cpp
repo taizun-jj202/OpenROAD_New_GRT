@@ -104,7 +104,7 @@ struct GuidePatchingOptions
   // detailed router needs an earlier layer switch, while keeping via inflation
   // bounded. Keep this *very* small to avoid inflating overall via count.
   // This is only applied on very-long segments that cross hot tiles.
-  int very_long_via_patches_total = 6;
+  int very_long_via_patches_total = 0;
   int very_long_via_patches_per_net = 1;
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
