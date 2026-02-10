@@ -1363,17 +1363,36 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Candidate A: explore an alternate deterministic seed. This often changes
   // local congestion patterns (and downstream DR detours) without materially
   // changing global wirelength or runtime.
-  const CandidateConfig tuned{"perturb3-seed11-crit0",
+  // Also reserve a small amount of "soft capacity" on the lowest routing
+  // layers in the highest-Rudy tiles (SPRoute-inspired). This tends to move
+  // congestion away from pin-dense hotspots, which often reduces downstream
+  // DR detours (wirelength) and can reduce antenna-driven incremental changes.
+  const CandidateConfig tuned{"perturb3-seed11-crit0-rudy",
                               3.0f,
                               1,
                               11,
                               0.0f,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
-                              0,
-                              0,
-                              1.0f,
-                              0};
+                              /*rudy_hotspots=*/12,
+                              /*rudy_expand_tiles=*/1,
+                              /*rudy_adjustment=*/0.97f,
+                              /*rudy_layers=*/2};
+
+  // Safety fallback: preserve NEWGR's "fast and routable" baseline if a more
+  // aggressive DR-friendly soft-capacity reservation pushes the 2D/3D solver
+  // into overflow (which can cause the flow to abort).
+  const CandidateConfig fallback{"perturb3-seed11-crit0",
+                                 3.0f,
+                                 1,
+                                 11,
+                                 0.0f,
+                                 snapshot.congestion_iterations,
+                                 snapshot.global_adjustment,
+                                 0,
+                                 0,
+                                 1.0f,
+                                 0};
 
   const std::vector<CandidateConfig> candidates = {tuned};
 
@@ -1540,6 +1559,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     } else {
       std::tie(winner_routes, winner_metrics) = run_candidate(best_candidate);
     }
+
+  if (winner_metrics.total_overflow > 0) {
+    logger_->warn(GNR,
+                  6013,
+                  "NEWGR winner has overflow ({}); falling back to {} to keep flow stable.",
+                  winner_metrics.total_overflow,
+                  fallback.name);
+    std::tie(winner_routes, winner_metrics) = run_candidate(fallback);
+  }
 
   // Post-processing: add conservative DR-friendly "patch" guides in/around
   // the hottest Rudy regions to help reduce downstream detours (wirelength)
