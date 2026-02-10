@@ -1061,12 +1061,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
 	  const std::vector<Net*> canonical_nets = nets;
 
-	  struct RouteMetrics
-	  {
-	    long wirelength_dbu = 0;
-	    long via_count = 0;
-	    double wirelength_um = 0.0;
-	    int total_overflow = 0;
+  struct RouteMetrics
+  {
+    long wirelength_dbu = 0;
+    long via_count = 0;
+    long wire_segments = 0;
+    long total_segments = 0;
+    double wirelength_um = 0.0;
+    int total_overflow = 0;
       CongestionScore congestion;
 	  };
 
@@ -1074,10 +1076,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     RouteMetrics metrics;
     for (const auto& [db_net, segments] : routes) {
       static_cast<void>(db_net);
+      metrics.total_segments += static_cast<long>(segments.size());
       for (const GSegment& segment : segments) {
         if (segment.isVia()) {
           metrics.via_count++;
         } else {
+          metrics.wire_segments++;
           metrics.wirelength_dbu += segment.length();
         }
       }
@@ -1105,7 +1109,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     // and via insertion. Scanning only a small layer window keeps NEWGR
     // runtime closer to a single FastRoute run.
     const int scan_start_layer = std::max(1, min_routing_layer);
-    const int scan_end_layer = std::min(max_routing_layer, scan_start_layer + 3);
+    const int scan_end_layer = std::min(max_routing_layer, scan_start_layer + 4);
 
     auto scan_edges = [&](const auto& edges) {
       std::size_t edge_count = 0;
@@ -1448,20 +1452,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               1.0f,
                               0};
 
-  // A second deterministic seed to provide a tiny "search" without
-  // substantially changing runtime. This is intentionally conservative:
-  // it changes congestion patterns more than it changes global WL.
-  const CandidateConfig seed19{"perturb3-seed19-crit0",
-                               3.0f,
-                               1,
-                               19,
-                               0.0f,
-                               snapshot.congestion_iterations,
-                               snapshot.global_adjustment,
-                               0,
-                               0,
-                               1.0f,
-                               0};
+  // Second candidate: SPRoute-inspired "soft capacity" reservation on the
+  // hottest Rudy tiles (low layers only). This can reduce DR detours and via
+  // blow-up by keeping the GR solution away from pin-access hotspots, while
+  // maintaining determinism and keeping runtime close to a single run.
+  const CandidateConfig softcap19{"softcap-seed19-rudy30x1-0.92-L2",
+                                  3.0f,
+                                  1,
+                                  19,
+                                  0.0f,
+                                  snapshot.congestion_iterations,
+                                  snapshot.global_adjustment,
+                                  30,
+                                  1,
+                                  0.92f,
+                                  2};
 
   // Safety fallback: preserve NEWGR's "fast and routable" baseline if a more
   // aggressive DR-friendly soft-capacity reservation pushes the 2D/3D solver
@@ -1478,7 +1483,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  1.0f,
                                  0};
 
-  const std::vector<CandidateConfig> candidates = {tuned, seed19};
+  const std::vector<CandidateConfig> candidates = {tuned, softcap19};
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
@@ -1568,8 +1573,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       // Keep candidates very close to the best global WL. This guards against
       // drifting into a longer-GR regime while still letting us choose a
       // slightly "looser" solution for DR if it is essentially WL-equivalent.
-      constexpr double wl_slack_ratio = 0.0006;   // 0.06%
-      constexpr long wl_slack_min_dbu = 80000;    // ~80um @ 1000 DBU/um
+      constexpr double wl_slack_ratio = 0.0025;   // 0.25%
+      constexpr long wl_slack_min_dbu = 220000;   // ~220um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
           static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
