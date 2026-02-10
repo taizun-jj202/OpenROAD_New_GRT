@@ -87,7 +87,7 @@ struct GuidePatchingOptions
   int pin_patch_radius_tiles = 2;
   // Add short wire stubs on the pin connection layer to improve local access
   // without forcing extra layer switching.
-  int pin_wire_stub_tiles = 6;
+  int pin_wire_stub_tiles = 5;
 
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 11;
@@ -102,7 +102,7 @@ struct GuidePatchingOptions
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
   // explicitly encouraging layer switching (vias).
-  int long_segment_side_lane_span_tiles = 16;
+  int long_segment_side_lane_span_tiles = 14;
 };
 
 static bool is_valid_grid_center(const odb::Rect& die_bounds,
@@ -763,15 +763,6 @@ static void patch_guides_for_dr_friendliness(
                   && target_layer <= max_patch_layer) {
                 const int before = static_cast<int>(route.size());
                 maybe_add_via_patch(route, seen, x, y, layer, target_layer);
-                odb::dbTechLayerDir target_preferred_dir
-                    = odb::dbTechLayerDir::NONE;
-                if (tech != nullptr) {
-                  odb::dbTechLayer* target_tech_layer
-                      = tech->findRoutingLayer(target_layer);
-                  if (target_tech_layer != nullptr) {
-                    target_preferred_dir = target_tech_layer->getDirection();
-                  }
-                }
                 maybe_add_cross_wire_stubs(route,
                                           seen,
                                           die_bounds,
@@ -780,7 +771,7 @@ static void patch_guides_for_dr_friendliness(
                                           y,
                                           target_layer,
                                           /*stub_tiles=*/opts.long_segment_stub_tiles,
-                                          target_preferred_dir);
+                                          odb::dbTechLayerDir::NONE);
                 const int added = static_cast<int>(route.size()) - before;
                 if (added > 0) {
                   patches_for_net += added;
