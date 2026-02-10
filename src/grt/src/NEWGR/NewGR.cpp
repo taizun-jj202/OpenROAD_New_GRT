@@ -264,61 +264,6 @@ static void maybe_add_cross_wire_stubs(
   }
 }
 
-static void maybe_add_perpendicular_wire_stub(
-    GRoute& route,
-    std::unordered_set<GSegment, GSegmentHash>& seen,
-    const odb::Rect& die_bounds,
-    int tile,
-    int x,
-    int y,
-    int layer,
-    int stub_tiles,
-    const odb::dbTechLayerDir& preferred_dir)
-{
-  if (stub_tiles <= 0 || tile <= 0) {
-    return;
-  }
-  if (layer <= 0) {
-    return;
-  }
-  if (preferred_dir == odb::dbTechLayerDir::NONE) {
-    return;
-  }
-
-  const int d = stub_tiles * tile;
-  if (d <= 0) {
-    return;
-  }
-
-  auto valid = [&](int xx, int yy) {
-    return is_valid_grid_center(die_bounds, tile, xx, yy);
-  };
-
-  if (preferred_dir == odb::dbTechLayerDir::HORIZONTAL) {
-    if (valid(x, y - d) && valid(x, y + d)) {
-      maybe_add_wire_patch(route, seen, x, y - d, layer, x, y + d);
-    } else {
-      if (valid(x, y - d) && valid(x, y)) {
-        maybe_add_wire_patch(route, seen, x, y - d, layer, x, y);
-      }
-      if (valid(x, y) && valid(x, y + d)) {
-        maybe_add_wire_patch(route, seen, x, y, layer, x, y + d);
-      }
-    }
-  } else if (preferred_dir == odb::dbTechLayerDir::VERTICAL) {
-    if (valid(x - d, y) && valid(x + d, y)) {
-      maybe_add_wire_patch(route, seen, x - d, y, layer, x + d, y);
-    } else {
-      if (valid(x - d, y) && valid(x, y)) {
-        maybe_add_wire_patch(route, seen, x - d, y, layer, x, y);
-      }
-      if (valid(x, y) && valid(x + d, y)) {
-        maybe_add_wire_patch(route, seen, x, y, layer, x + d, y);
-      }
-    }
-  }
-}
-
 static void patch_guides_for_dr_friendliness(
     GlobalRouter* grouter,
     NetRouteMap& routes,
@@ -621,17 +566,6 @@ static void patch_guides_for_dr_friendliness(
                                     conn_layer,
                                     opts.pin_wire_stub_tiles,
                                     preferred_dir);
-          if (in_cong) {
-            maybe_add_perpendicular_wire_stub(route,
-                                              seen,
-                                              die_bounds,
-                                              tile,
-                                              x,
-                                              y,
-                                              conn_layer,
-                                              /*stub_tiles=*/2,
-                                              preferred_dir);
-          }
 
           // Be conservative with explicit via guide patches: they can reduce
           // pin-access failures, but they also tend to inflate via count in DR.
@@ -838,7 +772,6 @@ static void patch_guides_for_dr_friendliness(
         if (!is_valid_grid_center(die_bounds, tile, x, y)) {
           continue;
         }
-        const bool in_cong = point_in_cong_tiles(x, y);
         try_add_patch([&]() {
           maybe_add_cross_wire_stubs(route,
                                     seen,
@@ -850,19 +783,6 @@ static void patch_guides_for_dr_friendliness(
                                     /*stub_tiles=*/opts.long_segment_stub_tiles,
                                     preferred_dir);
         });
-        if (in_cong) {
-          try_add_patch([&]() {
-            maybe_add_perpendicular_wire_stub(route,
-                                              seen,
-                                              die_bounds,
-                                              tile,
-                                              x,
-                                              y,
-                                              layer,
-                                              /*stub_tiles=*/2,
-                                              preferred_dir);
-          });
-        }
       }
 
       // Avoid explicit via guide patches in general: they tend to inflate
@@ -1543,6 +1463,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                1.0f,
                                0};
 
+  // A conservative Rudy "soft capacity" reservation candidate. This tends to
+  // spread usage away from the highest-density tiles (often improving DR
+  // robustness) while keeping the change bounded so it doesn't dominate
+  // wirelength.
+  const CandidateConfig softcap{"perturb3-seed11-crit0-rudy",
+                                3.0f,
+                                1,
+                                11,
+                                0.0f,
+                                snapshot.congestion_iterations,
+                                snapshot.global_adjustment,
+                                /*rudy_hotspots=*/34,
+                                /*rudy_expand_tiles=*/1,
+                                /*rudy_adjustment=*/0.92f,
+                                /*rudy_layers=*/2};
+
   // Safety fallback: preserve NEWGR's "fast and routable" baseline if a more
   // aggressive DR-friendly soft-capacity reservation pushes the 2D/3D solver
   // into overflow (which can cause the flow to abort).
@@ -1558,7 +1494,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  1.0f,
                                  0};
 
-  const std::vector<CandidateConfig> candidates = {tuned, seed19};
+  const std::vector<CandidateConfig> candidates = {tuned, seed19, softcap};
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
@@ -1648,7 +1584,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       // Keep candidates very close to the best global WL. This guards against
       // drifting into a longer-GR regime while still letting us choose a
       // slightly "looser" solution for DR if it is essentially WL-equivalent.
-      constexpr double wl_slack_ratio = 0.0006;   // 0.06%
+      constexpr double wl_slack_ratio = 0.0010;   // 0.10%
       constexpr long wl_slack_min_dbu = 80000;    // ~80um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
