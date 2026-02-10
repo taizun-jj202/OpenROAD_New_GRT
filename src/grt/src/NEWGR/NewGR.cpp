@@ -1267,17 +1267,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // improve downstream detailed-routing metrics by nudging congestion away
   // from hard-to-route pin-access regions, even if global cost differences
   // are small.
-  const CandidateConfig alt{"perturb3-seed17-crit0",
-                             3.0f,
-                             1,
-                             17,
-                             0.0f,
-                             snapshot.congestion_iterations,
-                             snapshot.global_adjustment,
-                             0,
-                             0,
-                             1.0f,
-                             0};
+  // Candidate A: add a small Rudy-based soft-capacity reservation in the
+  // hottest tiles to reduce near-saturation and downstream DR detours. This
+  // is intentionally mild (few hotspots, small reduction, limited layers) so
+  // global WL doesn't drift much and runtime stays close to baseline.
+  const CandidateConfig softcap{"softcap-rudy-seed17",
+                                3.0f,
+                                1,
+                                17,
+                                0.0f,
+                                snapshot.congestion_iterations,
+                                snapshot.global_adjustment,
+                                /*rudy_hotspots=*/36,
+                                /*rudy_expand_tiles=*/1,
+                                /*rudy_adjustment=*/0.93f,
+                                /*rudy_layers=*/3};
 
   const CandidateConfig tuned{"perturb3-seed11-crit0",
                               3.0f,
@@ -1292,10 +1296,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               0};
 
   // Keep candidate exploration small to preserve runtime. We explore exactly
-  // one additional deterministic seed. With the winner-reuse optimization
-  // below, this typically costs ~the same as the previous always-rerun policy,
-  // but can escape local congestion regimes that cause downstream detours.
-  const std::vector<CandidateConfig> candidates = {alt, tuned};
+  // one additional configuration beyond the baseline tuned candidate.
+  const std::vector<CandidateConfig> candidates = {softcap, tuned};
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
@@ -1385,8 +1387,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       // Keep candidates very close to the best global WL. This guards against
       // drifting into a longer-GR regime while still letting us choose a
       // slightly "looser" solution for DR if it is essentially WL-equivalent.
-      constexpr double wl_slack_ratio = 0.0006;   // 0.06%
-      constexpr long wl_slack_min_dbu = 80000;    // ~80um @ 1000 DBU/um
+      // Allow a slightly wider WL window so we can choose a meaningfully
+      // looser-congestion solution when it is still close in WL. This tends
+      // to correlate better with DR wirelength than picking the absolute best
+      // GR WL when candidates are few.
+      constexpr double wl_slack_ratio = 0.0030;   // 0.30%
+      constexpr long wl_slack_min_dbu = 200000;   // ~200um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
           static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
