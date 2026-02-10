@@ -1450,17 +1450,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Keep the main candidate focused on shortest global paths first. Rudy-based
   // soft-capacity reservation can improve DR robustness on some designs, but
   // it also risks introducing detours that increase total routed wirelength.
-  const CandidateConfig tuned{"perturb3-seed11-crit0",
+  // Iteration 118: enable a *mild* SPRoute-inspired "soft capacity" reservation
+  // around the hottest Rudy tiles on the lowest few routing layers. The intent
+  // is to shift congestion away from pin-access hotspots so the detailed router
+  // needs fewer detours/vias, without materially impacting runtime.
+  const CandidateConfig tuned{"perturb3-seed11-crit0-rudy20x1-0.95L3",
                               3.0f,
                               1,
                               11,
                               0.0f,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
-                              0,
-                              0,
-                              1.0f,
-                              0};
+                              /*rudy_hotspots=*/20,
+                              /*rudy_expand_tiles=*/1,
+                              /*rudy_adjustment=*/0.95f,
+                              /*rudy_layers=*/3};
 
   // Safety fallback: preserve NEWGR's "fast and routable" baseline if a more
   // aggressive DR-friendly soft-capacity reservation pushes the 2D/3D solver
