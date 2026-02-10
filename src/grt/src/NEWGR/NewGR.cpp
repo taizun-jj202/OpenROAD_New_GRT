@@ -1605,7 +1605,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       // Keep candidates very close to the best global WL. This guards against
       // drifting into a longer-GR regime while still letting us choose a
       // slightly "looser" solution for DR if it is essentially WL-equivalent.
-      constexpr double wl_slack_ratio = 0.0025;   // 0.25%
+      constexpr double wl_slack_ratio = 0.0050;   // 0.50%
       constexpr long wl_slack_min_dbu = 220000;   // ~220um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
