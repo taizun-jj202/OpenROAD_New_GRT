@@ -763,6 +763,15 @@ static void patch_guides_for_dr_friendliness(
                   && target_layer <= max_patch_layer) {
                 const int before = static_cast<int>(route.size());
                 maybe_add_via_patch(route, seen, x, y, layer, target_layer);
+                odb::dbTechLayerDir target_preferred_dir
+                    = odb::dbTechLayerDir::NONE;
+                if (tech != nullptr) {
+                  odb::dbTechLayer* target_tech_layer
+                      = tech->findRoutingLayer(target_layer);
+                  if (target_tech_layer != nullptr) {
+                    target_preferred_dir = target_tech_layer->getDirection();
+                  }
+                }
                 maybe_add_cross_wire_stubs(route,
                                           seen,
                                           die_bounds,
@@ -771,7 +780,7 @@ static void patch_guides_for_dr_friendliness(
                                           y,
                                           target_layer,
                                           /*stub_tiles=*/opts.long_segment_stub_tiles,
-                                          odb::dbTechLayerDir::NONE);
+                                          target_preferred_dir);
                 const int added = static_cast<int>(route.size()) - before;
                 if (added > 0) {
                   patches_for_net += added;
