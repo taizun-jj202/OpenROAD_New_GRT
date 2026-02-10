@@ -74,12 +74,12 @@ struct GuidePatchingOptions
   int max_patched_pins = 1500;
 
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
-  int rudy_hotspot_prefix = 65;
+  int rudy_hotspot_prefix = 70;
 
   // Derived-from-GR congestion hot tiles (based on edge utilization).
   // These complement Rudy hotspots by reacting to actual GR usage patterns.
   int cong_layer_count = 3;           // apply to [min_layer, min_layer + N)
-  double cong_util_threshold = 0.88;  // utilization (usage / eff_cap)
+  double cong_util_threshold = 0.86;  // utilization (usage / eff_cap)
   int cong_edge_prefix = 1400;        // keep only top-N hot edges
   int cong_max_tiles = 2600;          // cap on unique hot tiles tracked
 
@@ -87,12 +87,12 @@ struct GuidePatchingOptions
   int pin_patch_radius_tiles = 2;
   // Add short wire stubs on the pin connection layer to improve local access
   // without forcing extra layer switching.
-  int pin_wire_stub_tiles = 4;
+  int pin_wire_stub_tiles = 5;
 
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
-  int long_segment_stub_tiles = 3;
+  int long_segment_stub_tiles = 4;
   // Extremely limited adjacent-layer via patching for very long segments in
   // hot regions. This can reduce downstream detours (wirelength) when the
   // detailed router needs an earlier layer switch, while keeping via inflation
