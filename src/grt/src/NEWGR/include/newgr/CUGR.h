@@ -31,10 +31,10 @@ class BoxT;
 struct Constants
 {
   // Bias cost toward shorter solutions to improve downstream DR wirelength.
-  double weight_wire_length = 0.75;
+  double weight_wire_length = 0.85;
   double weight_via_number = 4.0;
   // Reduce congestion-driven detours to keep guides compact.
-  double weight_short_area = 400.0;
+  double weight_short_area = 350.0;
 
   int min_routing_layer = 1;
 
@@ -58,7 +58,7 @@ struct Constants
   // Heuristic: encourage using upper layers for long segments (trunks) to
   // reduce detours on congested lower layers and better match DR behavior.
   int long_segment_threshold = 8;        // in gcell units
-  double long_segment_layer_bias = 0.08; // multiplicative penalty per layer
+  double long_segment_layer_bias = 0.0; // disabled (no penalty)
 
   bool write_heatmap = false;
 };
