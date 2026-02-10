@@ -38,11 +38,11 @@ int FastRouteCore::polish2DRoutesForWirelength()
   // reduce downstream DR detours by presenting cleaner guides.
 
   // Keep this bounded to preserve runtime determinism.
-  // This pass is still far cheaper than full rip-up/reroute iterations, and
-  // cleaning up more detours/bends tends to reduce downstream DR detours (WL)
-  // and layer switching (vias).
-  constexpr int kMaxEdgesTouched = 40000;
-  constexpr int kMaxEdgesChanged = 20000;
+  // Allow a slightly larger budget: this pass is inexpensive compared to
+  // full rip-up/reroute iterations, and cleaning up a few more detours/bends
+  // can improve downstream DR wirelength without materially impacting runtime.
+  constexpr int kMaxEdgesTouched = 20000;
+  constexpr int kMaxEdgesChanged = 12000;
 
   int edges_touched = 0;
   int edges_changed = 0;
@@ -421,12 +421,11 @@ int FastRouteCore::polish2DRoutesForWirelength()
         // the solution tighter in those cases.
         double util_slack = (x1 == x2 || y1 == y2) ? 0.015 : 0.03;
         // When the change is purely a bend reduction (same-length), allow a
-        // slightly larger utilization delta. We still cap just below full
-        // saturation to avoid creating razor-thin corridors that later force
-        // DR detours/vias.
-        const double max_util_limit = bend_only ? 0.995 : 1.0;
+        // slightly larger utilization delta, but keep headroom to avoid making
+        // any corridor fully saturated.
+        const double max_util_limit = bend_only ? 0.985 : 1.0;
         if (bend_only && extra_bends_minimal && new_bends == 1) {
-          util_slack += 0.05;
+          util_slack += 0.04;
         }
         const bool util_ok
             = (!old_eval.feasible)
@@ -2094,12 +2093,10 @@ NetRouteMap FastRouteCore::run()
   layer_assign_iter_snapshot_ = std::max(1, i - 1);
   layer_assign_total_iters_snapshot_ = std::max(1, overflow_iterations_);
 
-  // Use a *mild* via penalty during layer assignment once the 2D solution is
-  // overflow-free. This tends to reduce unnecessary layer switching while
-  // keeping enough flexibility to avoid detours that can regress DR wirelength.
-  //
-  // When we still have 2D overflow, keep via cost at 0 to preserve flexibility.
-  via_cost_ = (past_cong == 0) ? 1 : 0;
+  // Keep via cost at 0 during layer assignment to preserve flexibility.
+  // Over-penalizing vias here can force detours in the final 3D refinement
+  // and has been observed to slightly regress DR wirelength on our regression.
+  via_cost_ = 0;
   layerAssignment();
 
   if (logger_->debugCheck(GNR, "grtSteps", 1)) {
@@ -2110,11 +2107,15 @@ NetRouteMap FastRouteCore::run()
   }
 
   costheight_ = 3;
+  // Keep a non-zero via cost during the final 3D refinement to avoid
+  // excessive layer switching, which can degrade detailed-routing QoR.
+  // When 2D routing is overflow-free, bias a little harder against vias to
+  // reduce downstream via count without impacting global wirelength.
   // Keep a mild via penalty during the final 3D refinement. Over-penalizing
   // vias can force longer same-layer detours, which may increase downstream
   // detailed-routing wirelength. Prefer wirelength (primary metric) over
   // via count (secondary).
-  via_cost_ = 1;
+  via_cost_ = (past_cong == 0) ? 2 : 1;
 
   if (past_cong == 0) {
     mazeRouteMSMDOrder3D(enlarge_, 0, long_edge_len);

@@ -71,7 +71,7 @@ struct GuidePatchingOptions
 {
   // Hard caps to avoid exploding guide count / runtime.
   int max_total_patches = 7000;
-  int max_patches_per_net = 22;
+  int max_patches_per_net = 18;
   int max_patched_pins = 1500;
 
   // Disable explicit pin via guide patches by default: they can inflate
@@ -79,29 +79,29 @@ struct GuidePatchingOptions
   bool enable_port_via_patch = false;
 
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
-  int rudy_hotspot_prefix = 80;
+  int rudy_hotspot_prefix = 70;
 
   // Derived-from-GR congestion hot tiles (based on edge utilization).
   // These complement Rudy hotspots by reacting to actual GR usage patterns.
   int cong_layer_count = 3;           // apply to [min_layer, min_layer + N)
-  double cong_util_threshold = 0.84;  // utilization (usage / eff_cap)
-  int cong_edge_prefix = 1700;        // keep only top-N hot edges
+  double cong_util_threshold = 0.86;  // utilization (usage / eff_cap)
+  int cong_edge_prefix = 1400;        // keep only top-N hot edges
   int cong_max_tiles = 2600;          // cap on unique hot tiles tracked
 
   // Patch radius around selected pins, in tiles (1 => +cross neighbors).
   int pin_patch_radius_tiles = 2;
-  // For ports/macros outside hotspots, still add a tiny (+/-1 tile) cross
-  // patch to improve access without a large guide explosion.
-  int port_patch_radius_tiles = 1;
+  // Disabled by default: port/macros already create enough guide freedom, and
+  // aggressive non-hotspot patching can inflate guide count / via opportunities.
+  int port_patch_radius_tiles = 0;
   // Add short wire stubs on the pin connection layer to improve local access
   // without forcing extra layer switching.
   int pin_wire_stub_tiles = 5;
 
-  // Medium-segment patching: for segments that are not "long" but still span
-  // multiple tiles, add same-layer stubs at a hot midpoint. This targets
-  // congestion-driven DR detours without encouraging layer switches.
-  int medium_segment_tiles = 6;
-  int medium_segment_stub_tiles = 4;
+  // Medium-segment patching is disabled by default (set threshold == long).
+  // It can be useful, but tends to trade a lot of extra guide fragments for
+  // very small QoR shifts on this regression.
+  int medium_segment_tiles = 11;
+  int medium_segment_stub_tiles = 0;
 
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 11;
@@ -513,7 +513,7 @@ static void patch_guides_for_dr_friendliness(
         // DR detours (wirelength) without materially impacting NEWGR runtime.
         const bool should_patch_pin
             = pin.isPort() || pin.isConnectedToPadOrMacro()
-              || (dr_risky && net->getNumPins() >= 4);
+              || (dr_risky && net->getNumPins() >= 8);
 
         if (!should_patch_pin) {
           continue;

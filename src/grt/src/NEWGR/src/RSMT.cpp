@@ -633,7 +633,6 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
   // runtime in later rip-up/reroute phases.
   constexpr int flute_accuracy_default = 2;
   constexpr int flute_accuracy_high = 3;
-  constexpr int flute_accuracy_very_high = 4;
 
   for (const int& netID : net_ids_) {
     FrNet* net = nets_[netID];
@@ -648,20 +647,11 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
     // without measurable runtime impact on our regression, which can improve
     // downstream detailed-routing wirelength/via count.
     // Expand the "high accuracy" window modestly. On our regression, this
-    // tends to reduce tree length (and bends) with only a small runtime impact,
+    // tends to reduce tree length (and bends) without measurable runtime impact,
     // and can improve downstream DR wirelength.
-    //
-    // Keep this strictly limited to non-congestion-driven tree generation to
-    // avoid inflating runtime during rip-up/reroute phases.
-    //
-    // Heuristic: slightly widen the degrees for which we request higher FLUTE
-    // accuracy. Medium-degree nets are common enough that small per-net tree
-    // savings can add up to measurable total WL improvements, while the
-    // incremental computation at these degrees remains modest.
     const int flute_accuracy
-        = (!congestionDriven && d <= 14) ? flute_accuracy_very_high
-          : (!congestionDriven && d <= 45) ? flute_accuracy_high
-                                           : flute_accuracy_default;
+        = (!congestionDriven && d <= 36) ? flute_accuracy_high
+                                         : flute_accuracy_default;
 
     if (reRoute) {
       if (newType) {
@@ -731,6 +721,12 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
                     flute_accuracy,
                     coeffV,
                     rsmt);
+        // Edge shifting can reduce RSMT length/bends, which often improves the
+        // quality of the initial 2D routing solution. Keep this limited to
+        // small/medium degree nets to avoid inflating runtime.
+        if (d > 3 && d <= 20) {
+          numShift += edgeShiftNew(rsmt, netID);
+        }
       }
     }
     if (debug_->isOn() && debug_->steinerTree
