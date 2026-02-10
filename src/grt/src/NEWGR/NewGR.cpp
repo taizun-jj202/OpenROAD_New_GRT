@@ -83,7 +83,7 @@ struct GuidePatchingOptions
   // Derived-from-GR congestion hot tiles (based on edge utilization).
   // These complement Rudy hotspots by reacting to actual GR usage patterns.
   int cong_layer_count = 3;           // apply to [min_layer, min_layer + N)
-  double cong_util_threshold = 0.84;  // utilization (usage / eff_cap)
+  double cong_util_threshold = 0.83;  // utilization (usage / eff_cap)
   int cong_edge_prefix = 1800;        // keep only top-N hot edges
   int cong_max_tiles = 2600;          // cap on unique hot tiles tracked
 
@@ -91,12 +91,12 @@ struct GuidePatchingOptions
   int pin_patch_radius_tiles = 2;
   // Add short wire stubs on the pin connection layer to improve local access
   // without forcing extra layer switching.
-  int pin_wire_stub_tiles = 5;
+  int pin_wire_stub_tiles = 6;
 
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
-  int long_segment_stub_tiles = 5;
+  int long_segment_stub_tiles = 6;
   // Extremely limited adjacent-layer via patching for very long segments in
   // hot regions. This can reduce downstream detours (wirelength) when the
   // detailed router needs an earlier layer switch, while keeping via inflation
@@ -477,7 +477,7 @@ static void patch_guides_for_dr_friendliness(
         // DR detours (wirelength) without materially impacting NEWGR runtime.
         const bool should_patch_pin
             = pin.isPort() || pin.isConnectedToPadOrMacro()
-              || (dr_risky && net->getNumPins() >= 8);
+              || (dr_risky && net->getNumPins() >= 7);
 
         if (!should_patch_pin) {
           continue;
@@ -1384,10 +1384,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Keep the main candidate focused on shortest global paths first. Rudy-based
   // soft-capacity reservation can improve DR robustness on some designs, but
   // it also risks introducing detours that increase total routed wirelength.
-  const CandidateConfig tuned{"perturb3-seed17-crit0",
+  const CandidateConfig tuned{"perturb3-seed11-crit0",
                               3.0f,
                               1,
-                              17,
+                              11,
                               0.0f,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
@@ -1399,10 +1399,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Safety fallback: preserve NEWGR's "fast and routable" baseline if a more
   // aggressive DR-friendly soft-capacity reservation pushes the 2D/3D solver
   // into overflow (which can cause the flow to abort).
-  const CandidateConfig fallback{"perturb3-seed17-crit0",
+  const CandidateConfig fallback{"perturb3-seed11-crit0",
                                  3.0f,
                                  1,
-                                 17,
+                                 11,
                                  0.0f,
                                  snapshot.congestion_iterations,
                                  snapshot.global_adjustment,
