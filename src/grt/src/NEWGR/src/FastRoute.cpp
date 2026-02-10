@@ -2071,11 +2071,10 @@ NetRouteMap FastRouteCore::run()
   layer_assign_iter_snapshot_ = std::max(1, i - 1);
   layer_assign_total_iters_snapshot_ = std::max(1, overflow_iterations_);
 
-  // Layer assignment can introduce unnecessary layer switches when via cost is
-  // zero, even when 2D is already overflow-free. Add a mild via penalty in
-  // that case to reduce downstream via count while keeping wirelength as the
-  // primary objective.
-  via_cost_ = has_2D_overflow_ ? 0 : 1;
+  // Keep via cost at 0 during layer assignment to preserve flexibility.
+  // Over-penalizing vias here can force detours in the final 3D refinement
+  // and has been observed to slightly regress DR wirelength on our regression.
+  via_cost_ = 0;
   layerAssignment();
 
   if (logger_->debugCheck(GNR, "grtSteps", 1)) {

@@ -650,7 +650,7 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
     // tends to reduce tree length (and bends) without measurable runtime
     // impact, and can improve downstream DR wirelength.
     const int flute_accuracy
-        = (!congestionDriven && d <= 28) ? flute_accuracy_high
+        = (!congestionDriven && d <= 36) ? flute_accuracy_high
                                          : flute_accuracy_default;
 
     if (reRoute) {
