@@ -78,13 +78,13 @@ struct GuidePatchingOptions
   bool enable_port_via_patch = false;
 
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
-  int rudy_hotspot_prefix = 70;
+  int rudy_hotspot_prefix = 80;
 
   // Derived-from-GR congestion hot tiles (based on edge utilization).
   // These complement Rudy hotspots by reacting to actual GR usage patterns.
   int cong_layer_count = 3;           // apply to [min_layer, min_layer + N)
-  double cong_util_threshold = 0.86;  // utilization (usage / eff_cap)
-  int cong_edge_prefix = 1400;        // keep only top-N hot edges
+  double cong_util_threshold = 0.84;  // utilization (usage / eff_cap)
+  int cong_edge_prefix = 1800;        // keep only top-N hot edges
   int cong_max_tiles = 2600;          // cap on unique hot tiles tracked
 
   // Patch radius around selected pins, in tiles (1 => +cross neighbors).
@@ -96,7 +96,7 @@ struct GuidePatchingOptions
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
-  int long_segment_stub_tiles = 4;
+  int long_segment_stub_tiles = 5;
   // Extremely limited adjacent-layer via patching for very long segments in
   // hot regions. This can reduce downstream detours (wirelength) when the
   // detailed router needs an earlier layer switch, while keeping via inflation
@@ -107,7 +107,7 @@ struct GuidePatchingOptions
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
   // explicitly encouraging layer switching (vias).
-  int long_segment_side_lane_span_tiles = 14;
+  int long_segment_side_lane_span_tiles = 18;
 };
 
 static bool is_valid_grid_center(const odb::Rect& die_bounds,
@@ -778,6 +778,14 @@ static void patch_guides_for_dr_friendliness(
                   && target_layer <= max_patch_layer) {
                 const int before = static_cast<int>(route.size());
                 maybe_add_via_patch(route, seen, x, y, layer, target_layer);
+                odb::dbTechLayerDir target_dir = odb::dbTechLayerDir::NONE;
+                if (tech != nullptr) {
+                  odb::dbTechLayer* target_tech_layer
+                      = tech->findRoutingLayer(target_layer);
+                  if (target_tech_layer != nullptr) {
+                    target_dir = target_tech_layer->getDirection();
+                  }
+                }
                 maybe_add_cross_wire_stubs(route,
                                           seen,
                                           die_bounds,
@@ -786,7 +794,7 @@ static void patch_guides_for_dr_friendliness(
                                           y,
                                           target_layer,
                                           /*stub_tiles=*/opts.long_segment_stub_tiles,
-                                          odb::dbTechLayerDir::NONE);
+                                          target_dir);
                 const int added = static_cast<int>(route.size()) - before;
                 if (added > 0) {
                   patches_for_net += added;

@@ -38,8 +38,11 @@ int FastRouteCore::polish2DRoutesForWirelength()
   // reduce downstream DR detours by presenting cleaner guides.
 
   // Keep this bounded to preserve runtime determinism.
-  constexpr int kMaxEdgesTouched = 14000;
-  constexpr int kMaxEdgesChanged = 9000;
+  // Allow a slightly larger budget: this pass is inexpensive compared to
+  // full rip-up/reroute iterations, and cleaning up a few more detours/bends
+  // can improve downstream DR wirelength without materially impacting runtime.
+  constexpr int kMaxEdgesTouched = 20000;
+  constexpr int kMaxEdgesChanged = 12000;
 
   int edges_touched = 0;
   int edges_changed = 0;

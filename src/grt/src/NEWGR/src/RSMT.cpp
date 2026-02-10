@@ -646,8 +646,11 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
     // FLUTE's higher-accuracy mode tends to reduce tree length (and bends)
     // without measurable runtime impact on our regression, which can improve
     // downstream detailed-routing wirelength/via count.
+    // Expand the "high accuracy" window modestly. On our regression, this
+    // tends to reduce tree length (and bends) without measurable runtime
+    // impact, and can improve downstream DR wirelength.
     const int flute_accuracy
-        = (!congestionDriven && d <= 22) ? flute_accuracy_high
+        = (!congestionDriven && d <= 28) ? flute_accuracy_high
                                          : flute_accuracy_default;
 
     if (reRoute) {
