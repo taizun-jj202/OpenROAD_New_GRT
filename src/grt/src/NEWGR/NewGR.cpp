@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <queue>
 #include <string>
 #include <tuple>
 #include <unordered_set>
@@ -96,13 +97,13 @@ struct GuidePatchingOptions
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
-  int long_segment_stub_tiles = 4;
+  int long_segment_stub_tiles = 5;
   // Extremely limited adjacent-layer via patching for very long segments in
   // hot regions. This can reduce downstream detours (wirelength) when the
   // detailed router needs an earlier layer switch, while keeping via inflation
   // bounded. Keep this *very* small to avoid inflating overall via count.
   // This is only applied on very-long segments that cross hot tiles.
-  int very_long_via_patches_total = 80;
+  int very_long_via_patches_total = 0;
   int very_long_via_patches_per_net = 1;
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
@@ -312,8 +313,32 @@ static void patch_guides_for_dr_friendliness(
       int y = 0;
       bool horizontal = true;
     };
-    std::vector<HotEdge> hot_edges;
-    hot_edges.reserve(static_cast<std::size_t>(opts.cong_edge_prefix) * 2);
+    struct HotEdgeBetter
+    {
+      // "Better" means higher util; tie-break to keep determinism.
+      bool operator()(const HotEdge& a, const HotEdge& b) const
+      {
+        if (a.util != b.util) {
+          return a.util > b.util;
+        }
+        if (a.layer != b.layer) {
+          return a.layer < b.layer;
+        }
+        if (a.horizontal != b.horizontal) {
+          // Prefer horizontal edges (stable tie-breaker).
+          return a.horizontal > b.horizontal;
+        }
+        if (a.y != b.y) {
+          return a.y < b.y;
+        }
+        return a.x < b.x;
+      }
+    };
+
+    // Keep only the top-K hottest edges while scanning to avoid sorting a huge
+    // vector and to reduce runtime/memory overhead.
+    const int k = std::max(0, opts.cong_edge_prefix);
+    std::priority_queue<HotEdge, std::vector<HotEdge>, HotEdgeBetter> topk;
 
     const auto consider_edge = [&](int layer_1based,
                                    int x,
@@ -330,7 +355,20 @@ static void patch_guides_for_dr_friendliness(
       if (util < opts.cong_util_threshold) {
         return;
       }
-      hot_edges.push_back({util, layer_1based, x, y, horizontal});
+      if (k <= 0) {
+        return;
+      }
+      const HotEdge e{util, layer_1based, x, y, horizontal};
+      if (static_cast<int>(topk.size()) < k) {
+        topk.push(e);
+      } else {
+        // `topk.top()` is the current *worst* among the kept hot edges (since
+        // the comparator defines "better" ordering).
+        if (HotEdgeBetter{}(e, topk.top())) {
+          topk.pop();
+          topk.push(e);
+        }
+      }
     };
 
     const int cong_min_layer = min_patch_layer;
@@ -359,26 +397,14 @@ static void patch_guides_for_dr_friendliness(
       }
     }
 
-    std::sort(hot_edges.begin(),
-              hot_edges.end(),
-              [](const HotEdge& a, const HotEdge& b) {
-                if (a.util != b.util) {
-                  return a.util > b.util;
-                }
-                if (a.layer != b.layer) {
-                  return a.layer < b.layer;
-                }
-                if (a.horizontal != b.horizontal) {
-                  return a.horizontal > b.horizontal;
-                }
-                if (a.y != b.y) {
-                  return a.y < b.y;
-                }
-                return a.x < b.x;
-              });
-
-    const int edge_limit
-        = std::min<int>(opts.cong_edge_prefix, static_cast<int>(hot_edges.size()));
+    std::vector<HotEdge> hot_edges;
+    hot_edges.reserve(topk.size());
+    while (!topk.empty()) {
+      hot_edges.push_back(topk.top());
+      topk.pop();
+    }
+    std::sort(hot_edges.begin(), hot_edges.end(), HotEdgeBetter{});
+    const int edge_limit = static_cast<int>(hot_edges.size());
 
     auto add_tile = [&](int gx, int gy) {
       if (cong_tiles.size() >= static_cast<std::size_t>(opts.cong_max_tiles)) {
@@ -845,7 +871,7 @@ static void simplify_guides(GlobalRouter* grouter,
     // often reduces DR detours (wirelength) while still keeping guides
     // reasonably constrained.
     const int tile = std::max(0, grouter->grid()->getTileSize());
-    preferred_merge_gap_dbu = 3 * tile;
+    preferred_merge_gap_dbu = 4 * tile;
     // For segments that do *not* match the layer's preferred direction, be
     // much more conservative about merging. Extending non-preferred-direction
     // guides can encourage DR to introduce extra layer switches (vias).
@@ -1067,7 +1093,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const auto& v_edges = grouter_->fastroute_->getVerticalEdges3D();
 
     std::vector<double> utils;
-    utils.reserve(1024);
+    utils.reserve(4096);
+
+    // Congestion on the lowest few routing layers tends to drive DR detours
+    // and via insertion. Scanning only a small layer window keeps NEWGR
+    // runtime closer to a single FastRoute run.
+    const int scan_start_layer = std::max(1, min_routing_layer);
+    const int scan_end_layer = std::min(max_routing_layer, scan_start_layer + 3);
 
     auto scan_edges = [&](const auto& edges) {
       std::size_t edge_count = 0;
@@ -1076,9 +1108,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       double sum_util = 0.0;
       double sum_excess = 0.0;
 
-      for (const auto& layer : edges) {
-        for (const auto& row : layer) {
-          for (const auto& edge : row) {
+      const int layers = static_cast<int>(edges.shape()[0]);
+      if (layers <= 0) {
+        return;
+      }
+      const int y_dim = static_cast<int>(edges.shape()[1]);
+      const int x_dim = static_cast<int>(edges.shape()[2]);
+      if (x_dim <= 0 || y_dim <= 0) {
+        return;
+      }
+
+      const int l0 = std::clamp(scan_start_layer - 1, 0, layers - 1);
+      const int l1 = std::clamp(scan_end_layer - 1, 0, layers - 1);
+
+      for (int l = l0; l <= l1; l++) {
+        for (int y = 0; y < y_dim; y++) {
+          for (int x = 0; x < x_dim; x++) {
+            const auto& edge = edges[l][y][x];
             // Use real_cap to compute a stable utilization proxy. The adjusted
             // cap can be overly pessimistic and tends to saturate the metric.
             const int eff_cap = static_cast<int>(edge.real_cap)
