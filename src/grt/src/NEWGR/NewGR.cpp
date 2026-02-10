@@ -1267,24 +1267,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // improve downstream detailed-routing metrics by nudging congestion away
   // from hard-to-route pin-access regions, even if global cost differences
   // are small.
-  // Candidate A: add a small Rudy-based soft-capacity reservation in the
-  // hottest tiles to reduce near-saturation and downstream DR detours. This
-  // is intentionally mild (few hotspots, small reduction, limited layers) so
-  // global WL doesn't drift much and runtime stays close to baseline.
-  const CandidateConfig softcap{"softcap-rudy-seed17",
-                                3.0f,
-                                1,
-                                17,
-                                0.0f,
-                                snapshot.congestion_iterations,
-                                snapshot.global_adjustment,
-                                // Keep this *very* mild to avoid introducing
-                                // overflow while still nudging routes away
-                                // from the densest Rudy tiles.
-                                /*rudy_hotspots=*/18,
-                                /*rudy_expand_tiles=*/0,
-                                /*rudy_adjustment=*/0.97f,
-                                /*rudy_layers=*/2};
+  // Candidate A: explore an alternate deterministic seed. This often changes
+  // local congestion patterns (and downstream DR detours) without materially
+  // changing global wirelength or runtime.
+  const CandidateConfig alt{"perturb3-seed23-crit0",
+                            3.0f,
+                            1,
+                            23,
+                            0.0f,
+                            snapshot.congestion_iterations,
+                            snapshot.global_adjustment,
+                            0,
+                            0,
+                            1.0f,
+                            0};
 
   const CandidateConfig tuned{"perturb3-seed11-crit0",
                               3.0f,
@@ -1300,7 +1296,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   // Keep candidate exploration small to preserve runtime. We explore exactly
   // one additional configuration beyond the baseline tuned candidate.
-  const std::vector<CandidateConfig> candidates = {softcap, tuned};
+  const std::vector<CandidateConfig> candidates = {alt, tuned};
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
