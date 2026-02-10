@@ -297,8 +297,15 @@ int FastRouteCore::polish2DRoutesForWirelength()
         continue;
       }
       const bool detoured = route.routelen > treeedge->len;
+      const bool minimal_len = route.routelen == treeedge->len;
+      // Maze routing can legally produce Manhattan-minimal Z-shapes (2 bends)
+      // even when a 1-bend L-shape would fit. Those extra bends are "free" in
+      // wirelength but often translate into extra layer switches (vias) after
+      // layer assignment. Try to collapse such Z-shapes back to an L-shape when
+      // it doesn't create new 2D overflow.
+      const bool extra_bends_minimal = minimal_len && bends == 2;
       const bool fragmented = bends > 2;
-      if (!detoured && !fragmented) {
+      if (!detoured && !fragmented && !extra_bends_minimal) {
         continue;
       }
 
@@ -407,14 +414,23 @@ int FastRouteCore::polish2DRoutesForWirelength()
         const bool improves_len = new_routelen < old_routelen;
         const bool improves_bends
             = (new_bends != std::numeric_limits<int>::max() && new_bends < bends);
+        const bool bend_only = !improves_len && improves_bends;
 
         // For aligned endpoints, a direct replacement can concentrate demand on
         // a single edge corridor. Be slightly more conservative about making
         // the solution tighter in those cases.
-        const double util_slack = (x1 == x2 || y1 == y2) ? 0.015 : 0.03;
+        double util_slack = (x1 == x2 || y1 == y2) ? 0.015 : 0.03;
+        // When the change is purely a bend reduction (same-length), allow a
+        // slightly larger utilization delta, but keep headroom to avoid making
+        // any corridor fully saturated.
+        const double max_util_limit = bend_only ? 0.985 : 1.0;
+        if (bend_only && extra_bends_minimal && new_bends == 1) {
+          util_slack += 0.04;
+        }
         const bool util_ok
             = (!old_eval.feasible)
-              || (best.max_util <= old_eval.max_util + util_slack);
+              || (best.max_util <= max_util_limit
+                  && best.max_util <= old_eval.max_util + util_slack);
 
         const bool accept = util_ok && (improves_len || improves_bends);
         if (!accept) {
