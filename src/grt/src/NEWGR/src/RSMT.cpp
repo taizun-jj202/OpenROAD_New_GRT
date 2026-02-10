@@ -648,14 +648,19 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
     // without measurable runtime impact on our regression, which can improve
     // downstream detailed-routing wirelength/via count.
     // Expand the "high accuracy" window modestly. On our regression, this
-    // tends to reduce tree length (and bends) without measurable runtime
-    // impact, and can improve downstream DR wirelength.
-    // Push very small nets one notch higher. These nets are numerous and their
-    // RSMT quality can have an outsized impact on downstream QoR, while FLUTE's
-    // additional work at this degree remains negligible.
+    // tends to reduce tree length (and bends) with only a small runtime impact,
+    // and can improve downstream DR wirelength.
+    //
+    // Keep this strictly limited to non-congestion-driven tree generation to
+    // avoid inflating runtime during rip-up/reroute phases.
+    //
+    // Heuristic: slightly widen the degrees for which we request higher FLUTE
+    // accuracy. Medium-degree nets are common enough that small per-net tree
+    // savings can add up to measurable total WL improvements, while the
+    // incremental computation at these degrees remains modest.
     const int flute_accuracy
-        = (!congestionDriven && d <= 10) ? flute_accuracy_very_high
-          : (!congestionDriven && d <= 36) ? flute_accuracy_high
+        = (!congestionDriven && d <= 14) ? flute_accuracy_very_high
+          : (!congestionDriven && d <= 45) ? flute_accuracy_high
                                            : flute_accuracy_default;
 
     if (reRoute) {
