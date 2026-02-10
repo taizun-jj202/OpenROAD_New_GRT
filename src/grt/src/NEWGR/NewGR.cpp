@@ -1450,21 +1450,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Keep the main candidate focused on shortest global paths first. Rudy-based
   // soft-capacity reservation can improve DR robustness on some designs, but
   // it also risks introducing detours that increase total routed wirelength.
-  // Iteration 118: enable a *mild* SPRoute-inspired "soft capacity" reservation
-  // around the hottest Rudy tiles on the lowest few routing layers. The intent
-  // is to shift congestion away from pin-access hotspots so the detailed router
-  // needs fewer detours/vias, without materially impacting runtime.
-  const CandidateConfig tuned{"perturb3-seed11-crit0-rudy20x1-0.95L3",
+  const CandidateConfig tuned{"perturb3-seed17-crit0",
                               3.0f,
                               1,
-                              11,
+                              17,
                               0.0f,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
-                              /*rudy_hotspots=*/20,
-                              /*rudy_expand_tiles=*/1,
-                              /*rudy_adjustment=*/0.95f,
-                              /*rudy_layers=*/3};
+                              0,
+                              0,
+                              1.0f,
+                              0};
 
   // Safety fallback: preserve NEWGR's "fast and routable" baseline if a more
   // aggressive DR-friendly soft-capacity reservation pushes the 2D/3D solver
@@ -1654,6 +1650,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   winner_metrics.total_overflow,
                   fallback.name);
     std::tie(winner_routes, winner_metrics) = run_candidate(fallback);
+    // Keep logging consistent with the actual routes/state we return after
+    // fallback (otherwise the final "picked" line can be misleading).
+    best_candidate = fallback;
+    best_metrics = winner_metrics;
   }
 
   // Post-processing: add conservative DR-friendly "patch" guides in/around
