@@ -1463,22 +1463,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                1.0f,
                                0};
 
-  // A conservative Rudy "soft capacity" reservation candidate. This tends to
-  // spread usage away from the highest-density tiles (often improving DR
-  // robustness) while keeping the change bounded so it doesn't dominate
-  // wirelength.
-  const CandidateConfig softcap{"perturb3-seed11-crit0-rudy",
-                                3.0f,
-                                1,
-                                11,
-                                0.0f,
-                                snapshot.congestion_iterations,
-                                snapshot.global_adjustment,
-                                /*rudy_hotspots=*/34,
-                                /*rudy_expand_tiles=*/1,
-                                /*rudy_adjustment=*/0.92f,
-                                /*rudy_layers=*/2};
-
   // Safety fallback: preserve NEWGR's "fast and routable" baseline if a more
   // aggressive DR-friendly soft-capacity reservation pushes the 2D/3D solver
   // into overflow (which can cause the flow to abort).
@@ -1494,7 +1478,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  1.0f,
                                  0};
 
-  const std::vector<CandidateConfig> candidates = {tuned, seed19, softcap};
+  const std::vector<CandidateConfig> candidates = {tuned, seed19};
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
@@ -1584,7 +1568,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       // Keep candidates very close to the best global WL. This guards against
       // drifting into a longer-GR regime while still letting us choose a
       // slightly "looser" solution for DR if it is essentially WL-equivalent.
-      constexpr double wl_slack_ratio = 0.0010;   // 0.10%
+      constexpr double wl_slack_ratio = 0.0006;   // 0.06%
       constexpr long wl_slack_min_dbu = 80000;    // ~80um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
