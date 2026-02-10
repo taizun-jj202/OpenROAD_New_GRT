@@ -74,25 +74,25 @@ struct GuidePatchingOptions
   int max_patched_pins = 1500;
 
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
-  int rudy_hotspot_prefix = 70;
+  int rudy_hotspot_prefix = 75;
 
   // Derived-from-GR congestion hot tiles (based on edge utilization).
   // These complement Rudy hotspots by reacting to actual GR usage patterns.
-  int cong_layer_count = 3;           // apply to [min_layer, min_layer + N)
-  double cong_util_threshold = 0.86;  // utilization (usage / eff_cap)
-  int cong_edge_prefix = 1400;        // keep only top-N hot edges
-  int cong_max_tiles = 2600;          // cap on unique hot tiles tracked
+  int cong_layer_count = 4;           // apply to [min_layer, min_layer + N)
+  double cong_util_threshold = 0.84;  // utilization (usage / eff_cap)
+  int cong_edge_prefix = 1600;        // keep only top-N hot edges
+  int cong_max_tiles = 3000;          // cap on unique hot tiles tracked
 
   // Patch radius around selected pins, in tiles (1 => +cross neighbors).
   int pin_patch_radius_tiles = 2;
   // Add short wire stubs on the pin connection layer to improve local access
   // without forcing extra layer switching.
-  int pin_wire_stub_tiles = 5;
+  int pin_wire_stub_tiles = 6;
 
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
-  int long_segment_stub_tiles = 4;
+  int long_segment_stub_tiles = 5;
   // Extremely limited adjacent-layer via patching for very long segments in
   // hot regions. This can reduce downstream detours (wirelength) when the
   // detailed router needs an earlier layer switch, while keeping via inflation
@@ -102,7 +102,7 @@ struct GuidePatchingOptions
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
   // explicitly encouraging layer switching (vias).
-  int long_segment_side_lane_span_tiles = 14;
+  int long_segment_side_lane_span_tiles = 16;
 };
 
 static bool is_valid_grid_center(const odb::Rect& die_bounds,
@@ -751,15 +751,12 @@ static void patch_guides_for_dr_friendliness(
           && long_segment_via_patches < opts.very_long_via_patches_total
           && patches_for_net < opts.max_patches_per_net
           && total_patches < opts.max_total_patches) {
-        const int mid_step = tiles / 2;
+            const int mid_step = tiles / 2;
         if (mid_step > 0 && mid_step < tiles) {
           const auto [x, y] = step_to_xy(mid_step);
           if (is_valid_grid_center(die_bounds, tile, x, y)) {
-            const odb::Point p(x, y);
-            const bool in_rudy = point_in_any_rect(
-                p, rudy_hotspot_regions, opts.rudy_hotspot_prefix);
             const bool in_cong = point_in_cong_tiles(x, y);
-            if (in_rudy || in_cong) {
+            if (in_cong) {
               const int target_layer
                   = (layer + 1 <= max_patch_layer) ? (layer + 1) : (layer - 1);
               if (target_layer >= min_patch_layer
@@ -823,7 +820,7 @@ static void simplify_guides(GlobalRouter* grouter,
     // often reduces DR detours (wirelength) while still keeping guides
     // reasonably constrained.
     const int tile = std::max(0, grouter->grid()->getTileSize());
-    merge_gap_dbu = 2 * tile;
+    merge_gap_dbu = 3 * tile;
   }
 
   int nets_touched = 0;
@@ -1333,10 +1330,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               0.0f,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
-                              0,
-                              0,
-                              1.0f,
-                              0};
+                              25,
+                              1,
+                              0.94f,
+                              2};
 
   const std::vector<CandidateConfig> candidates = {tuned};
 
