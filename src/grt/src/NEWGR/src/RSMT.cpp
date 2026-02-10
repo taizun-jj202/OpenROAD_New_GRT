@@ -633,6 +633,7 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
   // runtime in later rip-up/reroute phases.
   constexpr int flute_accuracy_default = 2;
   constexpr int flute_accuracy_high = 3;
+  constexpr int flute_accuracy_very_high = 4;
 
   for (const int& netID : net_ids_) {
     FrNet* net = nets_[netID];
@@ -649,9 +650,13 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
     // Expand the "high accuracy" window modestly. On our regression, this
     // tends to reduce tree length (and bends) without measurable runtime
     // impact, and can improve downstream DR wirelength.
+    // Push very small nets one notch higher. These nets are numerous and their
+    // RSMT quality can have an outsized impact on downstream QoR, while FLUTE's
+    // additional work at this degree remains negligible.
     const int flute_accuracy
-        = (!congestionDriven && d <= 36) ? flute_accuracy_high
-                                         : flute_accuracy_default;
+        = (!congestionDriven && d <= 12)  ? flute_accuracy_very_high
+          : (!congestionDriven && d <= 40) ? flute_accuracy_high
+                                           : flute_accuracy_default;
 
     if (reRoute) {
       if (newType) {

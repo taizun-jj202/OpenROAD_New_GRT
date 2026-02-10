@@ -97,6 +97,12 @@ struct GuidePatchingOptions
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
+  // Stubs around long-segment hotspot samples. Prefer *perpendicular* stubs:
+  // they provide a local escape hatch on the same layer and often reduce DR
+  // detours/vias more than redundant stubs along the segment direction.
+  int long_segment_escape_stub_tiles = 4;
+  // Stubs used when we add a (rare) adjacent-layer via patch for very long
+  // segments: keep these aligned with the layer's preferred direction.
   int long_segment_stub_tiles = 5;
   // Extremely limited adjacent-layer via patching for very long segments in
   // hot regions. This can reduce downstream detours (wirelength) when the
@@ -769,6 +775,13 @@ static void patch_guides_for_dr_friendliness(
         if (!is_valid_grid_center(die_bounds, tile, x, y)) {
           continue;
         }
+        // Provide a *perpendicular* local escape hatch at tight spots. This
+        // tends to help DR resolve small blockages without switching layers.
+        const odb::dbTechLayerDir escape_dir = horizontal
+                                                  ? odb::dbTechLayerDir::VERTICAL
+                                              : vertical
+                                                  ? odb::dbTechLayerDir::HORIZONTAL
+                                                  : odb::dbTechLayerDir::NONE;
         try_add_patch([&]() {
           maybe_add_cross_wire_stubs(route,
                                     seen,
@@ -777,8 +790,8 @@ static void patch_guides_for_dr_friendliness(
                                     x,
                                     y,
                                     layer,
-                                    /*stub_tiles=*/opts.long_segment_stub_tiles,
-                                    preferred_dir);
+                                    /*stub_tiles=*/opts.long_segment_escape_stub_tiles,
+                                    escape_dir);
         });
       }
 
@@ -792,7 +805,7 @@ static void patch_guides_for_dr_friendliness(
           && long_segment_via_patches < opts.very_long_via_patches_total
           && patches_for_net < opts.max_patches_per_net
           && total_patches < opts.max_total_patches) {
-            const int mid_step = tiles / 2;
+        const int mid_step = tiles / 2;
         if (mid_step > 0 && mid_step < tiles) {
           const auto [x, y] = step_to_xy(mid_step);
           if (is_valid_grid_center(die_bounds, tile, x, y)) {
