@@ -75,7 +75,7 @@ struct GuidePatchingOptions
 
   // Disable explicit pin via guide patches by default: they can inflate
   // downstream DR via count. Keep pin patching focused on same-layer stubs.
-  bool enable_port_via_patch = false;
+  bool enable_port_via_patch = true;
 
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
   int rudy_hotspot_prefix = 70;
@@ -827,7 +827,7 @@ static void simplify_guides(GlobalRouter* grouter,
     // often reduces DR detours (wirelength) while still keeping guides
     // reasonably constrained.
     const int tile = std::max(0, grouter->grid()->getTileSize());
-    preferred_merge_gap_dbu = 4 * tile;
+    preferred_merge_gap_dbu = 3 * tile;
     // For segments that do *not* match the layer's preferred direction, be
     // much more conservative about merging. Extending non-preferred-direction
     // guides can encourage DR to introduce extra layer switches (vias).
