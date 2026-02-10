@@ -1,5 +1,6 @@
 #include "PatternRoute.h"
 
+#include <array>
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -524,6 +525,16 @@ void PatternRoute::calculateRoutingCosts(
   if (!node->getCosts().empty()) {
     return;
   }
+  const int min_layer = constants_.min_routing_layer;
+  std::array<int, 2> top_layer_for_dir{-1, -1};
+  for (int dir = 0; dir < 2; dir++) {
+    for (int l = grid_graph_->getNumLayers() - 1; l >= min_layer; l--) {
+      if (grid_graph_->getLayerDirection(l) == dir) {
+        top_layer_for_dir[dir] = l;
+        break;
+      }
+    }
+  }
   std::vector<std::vector<std::pair<CostT, int>>>
       childCosts;  // child_index -> layerIndex -> (cost, pathIndex)
   // Calculate child costs
@@ -541,14 +552,22 @@ void PatternRoute::calculateRoutingCosts(
       calculateRoutingCosts(path);
       int direction = node->x() == path->x() ? MetalLayer::V : MetalLayer::H;
       assert((*node)[1 - direction] == (*path)[1 - direction]);
+      const int segment_len = std::abs((*node)[direction] - (*path)[direction]);
+      const bool promote_long
+          = segment_len >= constants_.long_segment_threshold;
       for (int layerIndex = constants_.min_routing_layer;
            layerIndex < grid_graph_->getNumLayers();
            layerIndex++) {
         if (grid_graph_->getLayerDirection(layerIndex) != direction) {
           continue;
         }
-        CostT cost = path->getCosts()[layerIndex]
-                     + grid_graph_->getWireCost(layerIndex, *node, *path);
+        CostT wire_cost = grid_graph_->getWireCost(layerIndex, *node, *path);
+        if (promote_long && top_layer_for_dir[direction] != -1
+            && top_layer_for_dir[direction] > layerIndex) {
+          const int diff = top_layer_for_dir[direction] - layerIndex;
+          wire_cost *= (1.0 + constants_.long_segment_layer_bias * diff);
+        }
+        CostT cost = path->getCosts()[layerIndex] + wire_cost;
         if (cost < costs[layerIndex].first) {
           costs[layerIndex] = std::make_pair(cost, pathIndex);
         }

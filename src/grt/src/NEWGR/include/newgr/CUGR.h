@@ -55,6 +55,11 @@ struct Constants
   double wire_patch_threshold = 2.0;
   double wire_patch_inflation_rate = 1.2;
 
+  // Heuristic: encourage using upper layers for long segments (trunks) to
+  // reduce detours on congested lower layers and better match DR behavior.
+  int long_segment_threshold = 8;        // in gcell units
+  double long_segment_layer_bias = 0.08; // multiplicative penalty per layer
+
   bool write_heatmap = false;
 };
 
