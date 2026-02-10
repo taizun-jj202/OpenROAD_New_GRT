@@ -2081,7 +2081,11 @@ NetRouteMap FastRouteCore::run()
   // excessive layer switching, which can degrade detailed-routing QoR.
   // When 2D routing is overflow-free, bias a little harder against vias to
   // reduce downstream via count without impacting global wirelength.
-  via_cost_ = (past_cong == 0) ? 3 : 1;
+  // Keep a mild via penalty during the final 3D refinement. Over-penalizing
+  // vias can force longer same-layer detours, which may increase downstream
+  // detailed-routing wirelength. Prefer wirelength (primary metric) over
+  // via count (secondary).
+  via_cost_ = (past_cong == 0) ? 2 : 1;
 
   if (past_cong == 0) {
     mazeRouteMSMDOrder3D(enlarge_, 0, long_edge_len);

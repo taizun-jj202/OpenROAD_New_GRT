@@ -471,9 +471,13 @@ static void patch_guides_for_dr_friendliness(
         const bool in_cong = point_in_cong_tiles(pin_grid.x(), pin_grid.y());
         const bool dr_risky = in_hotspot || in_cong;
 
+        // Keep pin patching fairly selective (guide explosion can hurt), but
+        // avoid being so strict that we miss many DR-problematic pins in hot
+        // regions. Lowering the multi-pin threshold modestly tends to reduce
+        // DR detours (wirelength) without materially impacting NEWGR runtime.
         const bool should_patch_pin
             = pin.isPort() || pin.isConnectedToPadOrMacro()
-              || (dr_risky && net->getNumPins() >= 10);
+              || (dr_risky && net->getNumPins() >= 8);
 
         if (!should_patch_pin) {
           continue;
@@ -507,6 +511,7 @@ static void patch_guides_for_dr_friendliness(
             {0, -d},
         };
 
+        bool added_for_pin = false;
         for (const auto& [dx, dy] : offsets) {
           if (dx == 0 && dy == 0) {
             // Always include the center point.
@@ -549,6 +554,7 @@ static void patch_guides_for_dr_friendliness(
           }
           const int added = static_cast<int>(route.size()) - before_total;
           if (added > 0) {
+            added_for_pin = true;
             patches_for_net += added;
             total_patches += added;
           }
@@ -558,7 +564,11 @@ static void patch_guides_for_dr_friendliness(
           }
         }
 
-        if (patches_for_net > 0) {
+        // Count only pins for which we actually inserted at least one new
+        // segment. The previous behavior could over-count pins (e.g. when
+        // segments already existed in `seen`), prematurely hitting
+        // `max_patched_pins` and reducing the effectiveness of pin patching.
+        if (added_for_pin) {
           patched_pins++;
         }
       }
