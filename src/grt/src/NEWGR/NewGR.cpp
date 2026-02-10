@@ -458,9 +458,18 @@ static void patch_guides_for_dr_friendliness(
         const bool in_cong = point_in_cong_tiles(pin_grid.x(), pin_grid.y());
         const bool dr_risky = in_hotspot || in_cong;
 
+        // Pin patching trade-off:
+        // - Over-patching pins can bloat guides and slow DR.
+        // - Under-patching leaves DR fewer options near congested pin-access
+        //   regions, which often increases detours (wirelength).
+        //
+        // Prefer reacting to *actual GR* hot tiles (in_cong) and keep Rudy-only
+        // patching more conservative.
+        const int min_pins_for_risky
+            = in_cong ? 4 : 10;  // broaden only for true congestion hot tiles
         const bool should_patch_pin
             = pin.isPort() || pin.isConnectedToPadOrMacro()
-              || (dr_risky && net->getNumPins() >= 10);
+              || (dr_risky && net->getNumPins() >= min_pins_for_risky);
 
         if (!should_patch_pin) {
           continue;
@@ -474,7 +483,9 @@ static void patch_guides_for_dr_friendliness(
         const int above = conn_layer + 1;
         const int below = conn_layer - 1;
 
-        const int radius = dr_risky ? opts.pin_patch_radius_tiles : 0;
+        const int base_radius
+            = dr_risky ? opts.pin_patch_radius_tiles : (pin.isPort() ? 1 : 0);
+        const int radius = in_cong ? (base_radius + 1) : base_radius;
         const int d = radius * tile;
 
         odb::dbTechLayerDir preferred_dir = odb::dbTechLayerDir::NONE;
@@ -517,7 +528,10 @@ static void patch_guides_for_dr_friendliness(
                                     x,
                                     y,
                                     conn_layer,
-                                    opts.pin_wire_stub_tiles,
+                                    dr_risky ? opts.pin_wire_stub_tiles
+                                             : std::max(1,
+                                                        opts.pin_wire_stub_tiles
+                                                            / 2),
                                     preferred_dir);
 
           // Be conservative with explicit via guide patches: they can reduce
@@ -588,11 +602,25 @@ static void patch_guides_for_dr_friendliness(
       // Only patch segments that plausibly intersect the hottest Rudy regions.
       // Midpoint-only sampling can miss hotspots concentrated near an endpoint,
       // so use a small deterministic set of samples.
-      const std::vector<int> sample_steps = {
-          tiles / 4,
-          tiles / 2,
-          (3 * tiles) / 4,
-      };
+      std::vector<int> sample_steps;
+      sample_steps.reserve(5);
+      if (tiles >= opts.very_long_segment_tiles) {
+        // Add a couple of near-endpoint samples to catch hotspots concentrated
+        // near pins/branches.
+        sample_steps = {
+            tiles / 8,
+            tiles / 4,
+            tiles / 2,
+            (3 * tiles) / 4,
+            (7 * tiles) / 8,
+        };
+      } else {
+        sample_steps = {
+            tiles / 4,
+            tiles / 2,
+            (3 * tiles) / 4,
+        };
+      }
 
       auto step_to_xy = [&](int step_tiles) -> std::pair<int, int> {
         const int x = horizontal ? (std::min(x0, x1) + step_tiles * tile) : x0;
@@ -1267,31 +1295,26 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // improve downstream detailed-routing metrics by nudging congestion away
   // from hard-to-route pin-access regions, even if global cost differences
   // are small.
-  // Candidate A: explore an alternate deterministic seed + mild Rudy-driven
-  // "soft capacity" reservation on the lowest layers. This often changes local
-  // congestion patterns (and downstream DR detours) without materially changing
-  // global wirelength or runtime.
-  //
-  // We keep the reservation deliberately small so that global WL does not drift
-  // far, but we allow a slightly wider WL selection window (below) so that a
-  // meaningfully looser solution can win when WL is close.
-  const CandidateConfig alt{"perturb3-seed23-critSnap-rudy5",
+  // Candidate A: explore an alternate deterministic seed. This often changes
+  // local congestion patterns (and downstream DR detours) without materially
+  // changing global wirelength or runtime.
+  const CandidateConfig alt{"perturb3-seed23-crit0",
                             3.0f,
                             1,
                             23,
-                            snapshot.critical_percentage,
+                            0.0f,
                             snapshot.congestion_iterations,
                             snapshot.global_adjustment,
-                            /*rudy_hotspots=*/30,
-                            /*rudy_expand_tiles=*/1,
-                            /*rudy_adjustment=*/0.95f,  // keep 95% capacity
-                            /*rudy_layers=*/2};
+                            0,
+                            0,
+                            1.0f,
+                            0};
 
-  const CandidateConfig tuned{"perturb3-seed11-critSnap",
+  const CandidateConfig tuned{"perturb3-seed11-crit0",
                               3.0f,
                               1,
                               11,
-                              snapshot.critical_percentage,
+                              0.0f,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
                               0,
@@ -1395,12 +1418,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       // looser-congestion solution when it is still close in WL. This tends
       // to correlate better with DR wirelength than picking the absolute best
       // GR WL when candidates are few.
-      // Allow a slightly wider WL window so that a looser-congestion solution
-      // (often better for DR WL) can win even if it pays a small global-WL
-      // premium. We still keep this tight enough to avoid drifting into a
-      // significantly longer GR regime.
-      constexpr double wl_slack_ratio = 0.0060;   // 0.60%
-      constexpr long wl_slack_min_dbu = 400000;   // ~400um @ 1000 DBU/um
+      constexpr double wl_slack_ratio = 0.0030;   // 0.30%
+      constexpr long wl_slack_min_dbu = 200000;   // ~200um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
           static_cast<long>(std::llround(min_wl_dbu * wl_slack_ratio)));
