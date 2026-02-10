@@ -97,12 +97,7 @@ struct GuidePatchingOptions
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
-  // Stubs around long-segment hotspot samples. Prefer *perpendicular* stubs:
-  // they provide a local escape hatch on the same layer and often reduce DR
-  // detours/vias more than redundant stubs along the segment direction.
-  int long_segment_escape_stub_tiles = 2;
-  // Stubs used when we add a (rare) adjacent-layer via patch for very long
-  // segments: keep these aligned with the layer's preferred direction.
+  // Stubs around long-segment hotspot samples.
   int long_segment_stub_tiles = 5;
   // Extremely limited adjacent-layer via patching for very long segments in
   // hot regions. This can reduce downstream detours (wirelength) when the
@@ -557,25 +552,18 @@ static void patch_guides_for_dr_friendliness(
             continue;
           }
 
-        const int before_total = static_cast<int>(route.size());
-        // Always add small same-layer stubs to improve local access without
-        // forcing extra vias.
-        // For risky pins (hot Rudy/congestion tiles), allow a small "cross"
-        // stub even on layers with a preferred direction. This often reduces
-        // the need to switch layers right at the pin (via reduction) without
-        // materially loosening guides elsewhere.
-        const odb::dbTechLayerDir pin_stub_dir
-            = dr_risky ? odb::dbTechLayerDir(odb::dbTechLayerDir::NONE)
-                       : preferred_dir;
-        maybe_add_cross_wire_stubs(route,
-                                  seen,
-                                  die_bounds,
-                                  tile,
-                                  x,
-                                  y,
-                                  conn_layer,
-                                  opts.pin_wire_stub_tiles,
-                                  pin_stub_dir);
+          const int before_total = static_cast<int>(route.size());
+          // Always add small same-layer stubs to improve local access without
+          // forcing extra vias.
+          maybe_add_cross_wire_stubs(route,
+                                    seen,
+                                    die_bounds,
+                                    tile,
+                                    x,
+                                    y,
+                                    conn_layer,
+                                    opts.pin_wire_stub_tiles,
+                                    preferred_dir);
 
           // Be conservative with explicit via guide patches: they can reduce
           // pin-access failures, but they also tend to inflate via count in DR.
@@ -782,13 +770,6 @@ static void patch_guides_for_dr_friendliness(
         if (!is_valid_grid_center(die_bounds, tile, x, y)) {
           continue;
         }
-        // Provide a *perpendicular* local escape hatch at tight spots. This
-        // tends to help DR resolve small blockages without switching layers.
-        const odb::dbTechLayerDir escape_dir = horizontal
-                                                  ? odb::dbTechLayerDir::VERTICAL
-                                              : vertical
-                                                  ? odb::dbTechLayerDir::HORIZONTAL
-                                                  : odb::dbTechLayerDir::NONE;
         try_add_patch([&]() {
           maybe_add_cross_wire_stubs(route,
                                     seen,
@@ -797,8 +778,8 @@ static void patch_guides_for_dr_friendliness(
                                     x,
                                     y,
                                     layer,
-                                    /*stub_tiles=*/opts.long_segment_escape_stub_tiles,
-                                    escape_dir);
+                                    /*stub_tiles=*/opts.long_segment_stub_tiles,
+                                    preferred_dir);
         });
       }
 
@@ -1450,10 +1431,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Keep the main candidate focused on shortest global paths first. Rudy-based
   // soft-capacity reservation can improve DR robustness on some designs, but
   // it also risks introducing detours that increase total routed wirelength.
-  const CandidateConfig tuned{"perturb3-seed17-crit0",
+  const CandidateConfig tuned{"perturb3-seed11-crit0",
                               3.0f,
                               1,
-                              17,
+                              11,
                               0.0f,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
