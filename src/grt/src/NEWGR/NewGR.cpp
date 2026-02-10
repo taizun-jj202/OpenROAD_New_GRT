@@ -73,6 +73,10 @@ struct GuidePatchingOptions
   int max_patches_per_net = 18;
   int max_patched_pins = 1500;
 
+  // Disable explicit pin via guide patches by default: they can inflate
+  // downstream DR via count. Keep pin patching focused on same-layer stubs.
+  bool enable_port_via_patch = false;
+
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
   int rudy_hotspot_prefix = 70;
 
@@ -534,7 +538,7 @@ static void patch_guides_for_dr_friendliness(
           //
           // Only add *one* adjacent-layer via guide for ports, and only when
           // the pin sits on a tile that is hot based on actual GR utilization.
-          const bool allow_pin_vias = pin.isPort();
+          const bool allow_pin_vias = opts.enable_port_via_patch && pin.isPort();
           if (allow_pin_vias && in_cong) {
             const int target_layer
                 = (above <= max_patch_layer) ? above : below;
@@ -823,7 +827,7 @@ static void simplify_guides(GlobalRouter* grouter,
     // often reduces DR detours (wirelength) while still keeping guides
     // reasonably constrained.
     const int tile = std::max(0, grouter->grid()->getTileSize());
-    preferred_merge_gap_dbu = 3 * tile;
+    preferred_merge_gap_dbu = 4 * tile;
     // For segments that do *not* match the layer's preferred direction, be
     // much more conservative about merging. Extending non-preferred-direction
     // guides can encourage DR to introduce extra layer switches (vias).
@@ -1359,20 +1363,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Candidate A: explore an alternate deterministic seed. This often changes
   // local congestion patterns (and downstream DR detours) without materially
   // changing global wirelength or runtime.
-  const CandidateConfig tuned{"perturb3-seed11-crit0-rudy25",
+  const CandidateConfig tuned{"perturb3-seed11-crit0",
                               3.0f,
                               1,
                               11,
                               0.0f,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
-                              // Mild Rudy-driven soft-capacity in top hotspots
-                              // to improve DR friendliness (lower detours/WL)
-                              // while keeping runtime close to baseline.
-                              25,
-                              1,
-                              0.90f,
-                              2};
+                              0,
+                              0,
+                              1.0f,
+                              0};
 
   const std::vector<CandidateConfig> candidates = {tuned};
 
