@@ -75,6 +75,32 @@ int FastRouteCore::polish2DRoutesForWirelength()
     return bends;
   };
 
+  auto count_bends_path = [&](const std::vector<GPoint3D>& grids) -> int {
+    if (grids.size() < 2) {
+      return 0;
+    }
+    int bends = 0;
+    int prev_dir = -1;  // 0 = H, 1 = V
+    for (std::size_t i = 0; i + 1 < grids.size(); i++) {
+      const auto& a = grids[i];
+      const auto& b = grids[i + 1];
+      if (a.x == b.x && a.y != b.y) {
+        if (prev_dir != -1 && prev_dir != 1) {
+          bends++;
+        }
+        prev_dir = 1;
+      } else if (a.y == b.y && a.x != b.x) {
+        if (prev_dir != -1 && prev_dir != 0) {
+          bends++;
+        }
+        prev_dir = 0;
+      } else {
+        return std::numeric_limits<int>::max();
+      }
+    }
+    return bends;
+  };
+
   auto ripup_maze_usage = [&](const std::vector<GPoint3D>& grids,
                               int routelen,
                               FrNet* net,
@@ -279,9 +305,6 @@ int FastRouteCore::polish2DRoutesForWirelength()
       const int y1 = n1.y;
       const int x2 = n2.x;
       const int y2 = n2.y;
-      if (x1 == x2 || y1 == y2) {
-        continue;
-      }
       if (!in_grid(x1, y1) || !in_grid(x2, y2)) {
         continue;
       }
@@ -292,6 +315,7 @@ int FastRouteCore::polish2DRoutesForWirelength()
       std::vector<GPoint3D> old_grids = route.grids;
       const int old_routelen = route.routelen;
       ripup_maze_usage(old_grids, old_routelen, net, -1);
+      const Eval old_eval = eval_path(old_grids, net);
 
       bool changed = false;
       Eval best;
@@ -374,8 +398,31 @@ int FastRouteCore::polish2DRoutesForWirelength()
       }
 
       if (best.feasible) {
+        const int new_routelen = static_cast<int>(best.path.size()) - 1;
+        const int new_bends = count_bends_path(best.path);
+
+        const bool improves_len = new_routelen < old_routelen;
+        const bool improves_bends
+            = (new_bends != std::numeric_limits<int>::max() && new_bends < bends);
+
+        // For aligned endpoints, a direct replacement can concentrate demand on
+        // a single edge corridor. Be slightly more conservative about making
+        // the solution tighter in those cases.
+        const double util_slack = (x1 == x2 || y1 == y2) ? 0.015 : 0.03;
+        const bool util_ok
+            = (!old_eval.feasible)
+              || (best.max_util <= old_eval.max_util + util_slack);
+
+        const bool accept = util_ok && (improves_len || improves_bends);
+        if (!accept) {
+          best.feasible = false;
+        }
+      }
+
+      if (best.feasible) {
         // Apply the chosen replacement.
-        ripup_maze_usage(best.path, static_cast<int>(best.path.size()) - 1, net, +1);
+        ripup_maze_usage(
+            best.path, static_cast<int>(best.path.size()) - 1, net, +1);
         route.grids = std::move(best.path);
         route.routelen = static_cast<int>(route.grids.size()) - 1;
         route.type = RouteType::MazeRoute;
