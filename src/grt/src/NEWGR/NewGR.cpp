@@ -71,7 +71,7 @@ struct GuidePatchingOptions
 {
   // Hard caps to avoid exploding guide count / runtime.
   int max_total_patches = 7000;
-  int max_patches_per_net = 18;
+  int max_patches_per_net = 22;
   int max_patched_pins = 1500;
 
   // Disable explicit pin via guide patches by default: they can inflate
@@ -79,20 +79,29 @@ struct GuidePatchingOptions
   bool enable_port_via_patch = false;
 
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
-  int rudy_hotspot_prefix = 70;
+  int rudy_hotspot_prefix = 80;
 
   // Derived-from-GR congestion hot tiles (based on edge utilization).
   // These complement Rudy hotspots by reacting to actual GR usage patterns.
   int cong_layer_count = 3;           // apply to [min_layer, min_layer + N)
-  double cong_util_threshold = 0.86;  // utilization (usage / eff_cap)
-  int cong_edge_prefix = 1400;        // keep only top-N hot edges
+  double cong_util_threshold = 0.84;  // utilization (usage / eff_cap)
+  int cong_edge_prefix = 1700;        // keep only top-N hot edges
   int cong_max_tiles = 2600;          // cap on unique hot tiles tracked
 
   // Patch radius around selected pins, in tiles (1 => +cross neighbors).
   int pin_patch_radius_tiles = 2;
+  // For ports/macros outside hotspots, still add a tiny (+/-1 tile) cross
+  // patch to improve access without a large guide explosion.
+  int port_patch_radius_tiles = 1;
   // Add short wire stubs on the pin connection layer to improve local access
   // without forcing extra layer switching.
   int pin_wire_stub_tiles = 5;
+
+  // Medium-segment patching: for segments that are not "long" but still span
+  // multiple tiles, add same-layer stubs at a hot midpoint. This targets
+  // congestion-driven DR detours without encouraging layer switches.
+  int medium_segment_tiles = 6;
+  int medium_segment_stub_tiles = 4;
 
   // Long-segment patching (in tiles along segment).
   int long_segment_tiles = 11;
@@ -504,7 +513,7 @@ static void patch_guides_for_dr_friendliness(
         // DR detours (wirelength) without materially impacting NEWGR runtime.
         const bool should_patch_pin
             = pin.isPort() || pin.isConnectedToPadOrMacro()
-              || (dr_risky && net->getNumPins() >= 8);
+              || (dr_risky && net->getNumPins() >= 4);
 
         if (!should_patch_pin) {
           continue;
@@ -518,7 +527,12 @@ static void patch_guides_for_dr_friendliness(
         const int above = conn_layer + 1;
         const int below = conn_layer - 1;
 
-        const int radius = dr_risky ? opts.pin_patch_radius_tiles : 0;
+        int radius = 0;
+        if (dr_risky) {
+          radius = opts.pin_patch_radius_tiles;
+        } else if (pin.isPort() || pin.isConnectedToPadOrMacro()) {
+          radius = opts.port_patch_radius_tiles;
+        }
 
         odb::dbTechLayerDir preferred_dir = odb::dbTechLayerDir::NONE;
         if (tech != nullptr) {
@@ -622,7 +636,10 @@ static void patch_guides_for_dr_friendliness(
 
       const int dist = seg.length();
       const int tiles = tile > 0 ? (dist / tile) : 0;
-      if (tiles < opts.long_segment_tiles) {
+      const bool is_long = tiles >= opts.long_segment_tiles;
+      const bool is_medium
+          = tiles >= opts.medium_segment_tiles && tiles < opts.long_segment_tiles;
+      if (!is_long && !is_medium) {
         continue;
       }
 
@@ -637,14 +654,21 @@ static void patch_guides_for_dr_friendliness(
         continue;
       }
 
-      // Only patch segments that plausibly intersect the hottest Rudy regions.
-      // Midpoint-only sampling can miss hotspots concentrated near an endpoint,
-      // so use a small deterministic set of samples.
-      const std::vector<int> sample_steps = {
-          tiles / 4,
-          tiles / 2,
-          (3 * tiles) / 4,
-      };
+      // Only patch segments that plausibly intersect the hottest Rudy/cong
+      // regions. Midpoint-only sampling can miss hotspots concentrated near an
+      // endpoint; for long segments use a few deterministic samples. For
+      // medium segments, a midpoint-only check keeps runtime and guide count
+      // bounded.
+      std::vector<int> sample_steps;
+      if (is_long) {
+        sample_steps = {
+            tiles / 4,
+            tiles / 2,
+            (3 * tiles) / 4,
+        };
+      } else {
+        sample_steps = {tiles / 2};
+      }
 
       auto step_to_xy = [&](int step_tiles) -> std::pair<int, int> {
         const int x = horizontal ? (std::min(x0, x1) + step_tiles * tile) : x0;
@@ -752,21 +776,26 @@ static void patch_guides_for_dr_friendliness(
         }
       }
 
-      // Add same-layer parallel "side lanes" around hotspot samples. Prefer
-      // this to adjacent-layer escape lanes to avoid inflating via count.
-      if (tiles >= opts.very_long_segment_tiles) {
-        // Very long segments get a couple of side-lane samples to increase
-        // flexibility while keeping guide count bounded.
-        add_local_side_lane_at_step(tiles / 3);
-        add_local_side_lane_at_step((2 * tiles) / 3);
-      } else {
-        for (const int step_tiles : hot_steps) {
-          add_local_side_lane_at_step(step_tiles);
+      // Add same-layer parallel "side lanes" around hotspot samples for long
+      // segments. Prefer this to adjacent-layer escape lanes to avoid inflating
+      // via count.
+      if (is_long) {
+        if (tiles >= opts.very_long_segment_tiles) {
+          // Very long segments get a couple of side-lane samples to increase
+          // flexibility while keeping guide count bounded.
+          add_local_side_lane_at_step(tiles / 3);
+          add_local_side_lane_at_step((2 * tiles) / 3);
+        } else {
+          for (const int step_tiles : hot_steps) {
+            add_local_side_lane_at_step(step_tiles);
+          }
         }
       }
 
       // Add same-layer local flexibility at hotspot samples (helps DR avoid
       // detours without requiring layer switches).
+      const int stub_tiles
+          = is_long ? opts.long_segment_stub_tiles : opts.medium_segment_stub_tiles;
       for (const int step_tiles : hot_steps) {
         const auto [x, y] = step_to_xy(step_tiles);
         if (!is_valid_grid_center(die_bounds, tile, x, y)) {
@@ -780,7 +809,7 @@ static void patch_guides_for_dr_friendliness(
                                     x,
                                     y,
                                     layer,
-                                    /*stub_tiles=*/opts.long_segment_stub_tiles,
+                                    /*stub_tiles=*/stub_tiles,
                                     preferred_dir);
         });
       }
@@ -1483,9 +1512,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  1.0f,
                                  0};
 
-  // Evaluate the baseline candidate first; if the DR-friendly softcap wins we
-  // can usually reuse the last run's routes/state (avoid a redundant rerun).
-  const std::vector<CandidateConfig> candidates = {tuned, softcap19};
+  // Evaluate the "exploration" candidate first, and the expected winner last.
+  // This avoids a redundant rerun in the common case where `tuned` wins
+  // (we can reuse the last run's routes/state), improving runtime.
+  const std::vector<CandidateConfig> candidates = {softcap19, tuned};
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
@@ -1575,7 +1605,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       // Keep candidates very close to the best global WL. This guards against
       // drifting into a longer-GR regime while still letting us choose a
       // slightly "looser" solution for DR if it is essentially WL-equivalent.
-      constexpr double wl_slack_ratio = 0.0100;   // 1.00%
+      constexpr double wl_slack_ratio = 0.0025;   // 0.25%
       constexpr long wl_slack_min_dbu = 220000;   // ~220um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
