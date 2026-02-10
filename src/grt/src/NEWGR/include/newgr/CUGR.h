@@ -31,18 +31,18 @@ class BoxT;
 struct Constants
 {
   // Bias cost toward shorter solutions to improve downstream DR wirelength.
-  double weight_wire_length = 0.85;
+  double weight_wire_length = 1.00;
   double weight_via_number = 4.0;
   // Reduce congestion-driven detours to keep guides compact.
-  double weight_short_area = 350.0;
+  double weight_short_area = 250.0;
 
   int min_routing_layer = 1;
 
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.15;
-  int target_detour_count = 12;
+  double max_detour_ratio = 0.10;
+  int target_detour_count = 8;
 
   // Via modeling impacts congestion estimation; too large can over-penalize
   // layer switches and inflate detours.

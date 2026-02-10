@@ -49,6 +49,7 @@ class GRTreeNode : public GRPoint
       const std::function<void(const std::shared_ptr<GRTreeNode>&)>& visit);
   static void print(const std::shared_ptr<GRTreeNode>& node,
                     utl::Logger* logger);
+  static void simplify(std::shared_ptr<GRTreeNode>& node);
 
  private:
   std::vector<std::shared_ptr<GRTreeNode>> children_;

@@ -516,7 +516,9 @@ void PatternRoute::constructDetours(GridGraphView<bool>& congestion_view)
 void PatternRoute::run()
 {
   calculateRoutingCosts(routing_dag_);
-  net_->setRoutingTree(getRoutingTree(routing_dag_));
+  auto tree = getRoutingTree(routing_dag_);
+  GRTreeNode::simplify(tree);
+  net_->setRoutingTree(std::move(tree));
 }
 
 void PatternRoute::calculateRoutingCosts(

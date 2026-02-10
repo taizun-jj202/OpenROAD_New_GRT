@@ -121,9 +121,19 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
   sortNetIndices(netIndices);
-  SparseGrid grid(10, 10, 0, 0);
+  // Slightly denser sparse grid to improve solution quality for overflow nets
+  // while keeping runtime close to the fast baseline.
+  SparseGrid grid(8, 8, 0, 0);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
+    const int hp = net->getBoundingBox().hp();
+    if (hp >= 80) {
+      grid.reset(6, 6);
+    } else if (hp >= 40) {
+      grid.reset(7, 7);
+    } else {
+      grid.reset(8, 8);
+    }
     MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
     mazeRoute.constructSparsifiedGraph(wireCostView, grid);
     mazeRoute.run();
@@ -138,7 +148,6 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
     grid_graph_->commitTree(net->getRoutingTree());
     grid_graph_->updateWireCostView(wireCostView, net->getRoutingTree());
-    grid.step();
   }
 
   updateOverflowNets(netIndices);
@@ -251,13 +260,20 @@ NetRouteMap CUGR::getRoutes()
 
 void CUGR::sortNetIndices(std::vector<int>& netIndices) const
 {
+  // Route "harder" nets first to reduce later-stage overflows/detours.
+  // In this implementation, bounding-box HPWL is a good proxy for difficulty.
   std::vector<int> halfParameters(gr_nets_.size());
+  std::vector<int> pinCounts(gr_nets_.size());
   for (int netIndex : netIndices) {
     auto& net = gr_nets_[netIndex];
     halfParameters[netIndex] = net->getBoundingBox().hp();
+    pinCounts[netIndex] = net->getNumPins();
   }
   sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
-    return halfParameters[lhs] < halfParameters[rhs];
+    if (halfParameters[lhs] != halfParameters[rhs]) {
+      return halfParameters[lhs] > halfParameters[rhs];
+    }
+    return pinCounts[lhs] > pinCounts[rhs];
   });
 }
 
