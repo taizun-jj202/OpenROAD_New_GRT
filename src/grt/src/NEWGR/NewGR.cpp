@@ -75,7 +75,7 @@ struct GuidePatchingOptions
 
   // Disable explicit pin via guide patches by default: they can inflate
   // downstream DR via count. Keep pin patching focused on same-layer stubs.
-  bool enable_port_via_patch = true;
+  bool enable_port_via_patch = false;
 
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
   int rudy_hotspot_prefix = 70;
