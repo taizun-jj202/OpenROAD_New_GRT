@@ -41,8 +41,8 @@ int FastRouteCore::polish2DRoutesForWirelength()
   // Allow a slightly larger budget: this pass is inexpensive compared to
   // full rip-up/reroute iterations, and cleaning up a few more detours/bends
   // can improve downstream DR wirelength without materially impacting runtime.
-  constexpr int kMaxEdgesTouched = 26000;
-  constexpr int kMaxEdgesChanged = 16000;
+  constexpr int kMaxEdgesTouched = 20000;
+  constexpr int kMaxEdgesChanged = 12000;
 
   int edges_touched = 0;
   int edges_changed = 0;
@@ -2070,6 +2070,12 @@ NetRouteMap FastRouteCore::run()
 
   layer_assign_iter_snapshot_ = std::max(1, i - 1);
   layer_assign_total_iters_snapshot_ = std::max(1, overflow_iterations_);
+
+  // Layer assignment can introduce unnecessary layer switches when via cost is
+  // zero, even when 2D is already overflow-free. Add a mild via penalty in
+  // that case to reduce downstream via count while keeping wirelength as the
+  // primary objective.
+  via_cost_ = has_2D_overflow_ ? 0 : 1;
   layerAssignment();
 
   if (logger_->debugCheck(GNR, "grtSteps", 1)) {
