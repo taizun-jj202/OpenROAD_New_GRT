@@ -1483,7 +1483,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  1.0f,
                                  0};
 
-  const std::vector<CandidateConfig> candidates = {tuned, softcap19};
+  // Evaluate the "exploration" candidate first, and the expected winner last.
+  // This avoids a redundant rerun in the common case where `tuned` wins
+  // (we can reuse the last run's routes/state), improving runtime.
+  const std::vector<CandidateConfig> candidates = {softcap19, tuned};
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
