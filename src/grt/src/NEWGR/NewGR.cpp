@@ -104,7 +104,7 @@ struct GuidePatchingOptions
   // detailed router needs an earlier layer switch, while keeping via inflation
   // bounded. Keep this *very* small to avoid inflating overall via count.
   // This is only applied on very-long segments that cross hot tiles.
-  int very_long_via_patches_total = 0;
+  int very_long_via_patches_total = 6;
   int very_long_via_patches_per_net = 1;
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
@@ -519,7 +519,6 @@ static void patch_guides_for_dr_friendliness(
         const int below = conn_layer - 1;
 
         const int radius = dr_risky ? opts.pin_patch_radius_tiles : 0;
-        const int d = radius * tile;
 
         odb::dbTechLayerDir preferred_dir = odb::dbTechLayerDir::NONE;
         if (tech != nullptr) {
@@ -529,14 +528,17 @@ static void patch_guides_for_dr_friendliness(
           }
         }
 
-        // Center + cross neighbors (radius 1 => +/-1 tile).
-        const std::vector<std::pair<int, int>> offsets = {
-            {0, 0},
-            {d, 0},
-            {-d, 0},
-            {0, d},
-            {0, -d},
-        };
+    // Center + cross neighbors (radius 1 => +/-1 tile).
+        std::vector<std::pair<int, int>> offsets;
+        offsets.reserve(1 + 4 * std::max(0, radius));
+        offsets.emplace_back(0, 0);
+        for (int t = 1; t <= radius; t++) {
+          const int step = t * tile;
+          offsets.emplace_back(step, 0);
+          offsets.emplace_back(-step, 0);
+          offsets.emplace_back(0, step);
+          offsets.emplace_back(0, -step);
+        }
 
         bool added_for_pin = false;
         for (const auto& [dx, dy] : offsets) {
@@ -797,8 +799,11 @@ static void patch_guides_for_dr_friendliness(
         if (mid_step > 0 && mid_step < tiles) {
           const auto [x, y] = step_to_xy(mid_step);
           if (is_valid_grid_center(die_bounds, tile, x, y)) {
+            const odb::Point p(x, y);
+            const bool in_rudy = point_in_any_rect(
+                p, rudy_hotspot_regions, opts.rudy_hotspot_prefix);
             const bool in_cong = point_in_cong_tiles(x, y);
-            if (in_cong) {
+            if (in_rudy || in_cong) {
               const int target_layer
                   = (layer + 1 <= max_patch_layer) ? (layer + 1) : (layer - 1);
               if (target_layer >= min_patch_layer
