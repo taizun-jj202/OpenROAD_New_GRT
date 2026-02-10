@@ -32,9 +32,9 @@ struct Constants
 {
   // Bias cost toward shorter solutions to improve downstream DR wirelength.
   double weight_wire_length = 1.00;
-  double weight_via_number = 4.0;
+  double weight_via_number = 4.5;
   // Reduce congestion-driven detours to keep guides compact.
-  double weight_short_area = 250.0;
+  double weight_short_area = 275.0;
 
   int min_routing_layer = 1;
 
@@ -48,7 +48,7 @@ struct Constants
   // layer switches and inflate detours.
   double via_multiplier = 1.5;
 
-  double maze_logistic_slope = 0.5;
+  double maze_logistic_slope = 0.6;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
