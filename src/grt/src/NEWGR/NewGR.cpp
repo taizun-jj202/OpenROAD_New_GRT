@@ -1485,16 +1485,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // hottest Rudy tiles (low layers only). This can reduce DR detours and via
   // blow-up by keeping the GR solution away from pin-access hotspots, while
   // maintaining determinism and keeping runtime close to a single run.
-  const CandidateConfig softcap19{"softcap-seed19-rudy30x1-0.92-L2",
+  const CandidateConfig softcap19{"softcap-seed19-rudy24x0-0.97-L2",
                                   3.0f,
                                   1,
                                   19,
                                   0.0f,
                                   snapshot.congestion_iterations,
                                   snapshot.global_adjustment,
-                                  30,
-                                  1,
-                                  0.92f,
+                                  24,
+                                  0,
+                                  0.97f,
                                   2};
 
   // Safety fallback: preserve NEWGR's "fast and routable" baseline if a more
