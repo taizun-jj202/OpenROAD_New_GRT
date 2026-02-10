@@ -654,8 +654,8 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
     // RSMT quality can have an outsized impact on downstream QoR, while FLUTE's
     // additional work at this degree remains negligible.
     const int flute_accuracy
-        = (!congestionDriven && d <= 12)  ? flute_accuracy_very_high
-          : (!congestionDriven && d <= 40) ? flute_accuracy_high
+        = (!congestionDriven && d <= 10) ? flute_accuracy_very_high
+          : (!congestionDriven && d <= 36) ? flute_accuracy_high
                                            : flute_accuracy_default;
 
     if (reRoute) {

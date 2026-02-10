@@ -100,7 +100,7 @@ struct GuidePatchingOptions
   // Stubs around long-segment hotspot samples. Prefer *perpendicular* stubs:
   // they provide a local escape hatch on the same layer and often reduce DR
   // detours/vias more than redundant stubs along the segment direction.
-  int long_segment_escape_stub_tiles = 4;
+  int long_segment_escape_stub_tiles = 2;
   // Stubs used when we add a (rare) adjacent-layer via patch for very long
   // segments: keep these aligned with the layer's preferred direction.
   int long_segment_stub_tiles = 5;
@@ -557,18 +557,25 @@ static void patch_guides_for_dr_friendliness(
             continue;
           }
 
-          const int before_total = static_cast<int>(route.size());
-          // Always add small same-layer stubs to improve local access without
-          // forcing extra vias.
-          maybe_add_cross_wire_stubs(route,
-                                    seen,
-                                    die_bounds,
-                                    tile,
-                                    x,
-                                    y,
-                                    conn_layer,
-                                    opts.pin_wire_stub_tiles,
-                                    preferred_dir);
+        const int before_total = static_cast<int>(route.size());
+        // Always add small same-layer stubs to improve local access without
+        // forcing extra vias.
+        // For risky pins (hot Rudy/congestion tiles), allow a small "cross"
+        // stub even on layers with a preferred direction. This often reduces
+        // the need to switch layers right at the pin (via reduction) without
+        // materially loosening guides elsewhere.
+        const odb::dbTechLayerDir pin_stub_dir
+            = dr_risky ? odb::dbTechLayerDir(odb::dbTechLayerDir::NONE)
+                       : preferred_dir;
+        maybe_add_cross_wire_stubs(route,
+                                  seen,
+                                  die_bounds,
+                                  tile,
+                                  x,
+                                  y,
+                                  conn_layer,
+                                  opts.pin_wire_stub_tiles,
+                                  pin_stub_dir);
 
           // Be conservative with explicit via guide patches: they can reduce
           // pin-access failures, but they also tend to inflate via count in DR.
