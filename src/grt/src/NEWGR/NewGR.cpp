@@ -816,11 +816,11 @@ static void simplify_guides(GlobalRouter* grouter,
     // Many guide endpoints are snapped to the GCell centers spaced by
     // `tile_size`. Allowing a small (<= 1 tile) merge gap can reduce guide
     // fragmentation without materially increasing guide area. A slightly
-    // larger (<= 2 tiles) gap tends to reduce guide fragmentation further and
+    // larger (<= 3 tiles) gap tends to reduce guide fragmentation further and
     // often reduces DR detours (wirelength) while still keeping guides
     // reasonably constrained.
     const int tile = std::max(0, grouter->grid()->getTileSize());
-    merge_gap_dbu = 2 * tile;
+    merge_gap_dbu = 3 * tile;
   }
 
   int nets_touched = 0;
