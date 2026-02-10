@@ -69,12 +69,12 @@ struct CongestionScore
 struct GuidePatchingOptions
 {
   // Hard caps to avoid exploding guide count / runtime.
-  int max_total_patches = 6000;
-  int max_patches_per_net = 16;
+  int max_total_patches = 7000;
+  int max_patches_per_net = 18;
   int max_patched_pins = 1500;
 
   // How many Rudy hotspot tiles to consider (prefix of sorted list).
-  int rudy_hotspot_prefix = 55;
+  int rudy_hotspot_prefix = 65;
 
   // Derived-from-GR congestion hot tiles (based on edge utilization).
   // These complement Rudy hotspots by reacting to actual GR usage patterns.
@@ -93,6 +93,12 @@ struct GuidePatchingOptions
   int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
   int long_segment_stub_tiles = 3;
+  // Extremely limited adjacent-layer via patching for very long segments in
+  // hot regions. This can reduce downstream detours (wirelength) when the
+  // detailed router needs an earlier layer switch, while keeping via inflation
+  // bounded.
+  int very_long_via_patches_total = 220;
+  int very_long_via_patches_per_net = 1;
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
   // explicitly encouraging layer switching (vias).
@@ -415,6 +421,7 @@ static void patch_guides_for_dr_friendliness(
   int total_patches = 0;
   int patched_pins = 0;
   int patched_nets = 0;
+  int long_segment_via_patches = 0;
 
   for (auto& [db_net, route] : routes) {
     if (total_patches >= opts.max_total_patches) {
@@ -430,6 +437,7 @@ static void patch_guides_for_dr_friendliness(
     }
 
     int patches_for_net = 0;
+    int via_patches_for_net = 0;
     std::unordered_set<GSegment, GSegmentHash> seen;
     seen.reserve(route.size() + 32);
     for (const auto& seg : route) {
@@ -733,9 +741,52 @@ static void patch_guides_for_dr_friendliness(
         });
       }
 
-      // Intentionally avoid explicit via guide patches here. These tend to
-      // increase downstream via count; the same-layer side lanes + stubs above
-      // usually provide enough flexibility for DR in hotspot regions.
+      // Avoid explicit via guide patches in general: they tend to inflate
+      // downstream via count. However, for *very* long segments that cross hot
+      // tiles, allow an extremely small number of adjacent-layer via patches to
+      // give the detailed router a controlled escape hatch (often reducing DR
+      // detours / wirelength more than the added via).
+      if (tiles >= opts.very_long_segment_tiles
+          && via_patches_for_net < opts.very_long_via_patches_per_net
+          && long_segment_via_patches < opts.very_long_via_patches_total
+          && patches_for_net < opts.max_patches_per_net
+          && total_patches < opts.max_total_patches) {
+        const int mid_step = tiles / 2;
+        if (mid_step > 0 && mid_step < tiles) {
+          const auto [x, y] = step_to_xy(mid_step);
+          if (is_valid_grid_center(die_bounds, tile, x, y)) {
+            const odb::Point p(x, y);
+            const bool in_rudy = point_in_any_rect(
+                p, rudy_hotspot_regions, opts.rudy_hotspot_prefix);
+            const bool in_cong = point_in_cong_tiles(x, y);
+            if (in_rudy || in_cong) {
+              const int target_layer
+                  = (layer + 1 <= max_patch_layer) ? (layer + 1) : (layer - 1);
+              if (target_layer >= min_patch_layer
+                  && target_layer <= max_patch_layer) {
+                const int before = static_cast<int>(route.size());
+                maybe_add_via_patch(route, seen, x, y, layer, target_layer);
+                maybe_add_cross_wire_stubs(route,
+                                          seen,
+                                          die_bounds,
+                                          tile,
+                                          x,
+                                          y,
+                                          target_layer,
+                                          /*stub_tiles=*/opts.long_segment_stub_tiles,
+                                          odb::dbTechLayerDir::NONE);
+                const int added = static_cast<int>(route.size()) - before;
+                if (added > 0) {
+                  patches_for_net += added;
+                  total_patches += added;
+                  via_patches_for_net++;
+                  long_segment_via_patches++;
+                }
+              }
+            }
+          }
+        }
+      }
     }
 
     if (patches_for_net > 0) {
@@ -746,10 +797,11 @@ static void patch_guides_for_dr_friendliness(
   if (total_patches > 0) {
     logger->info(GNR,
                  6011,
-                 "NEWGR patching: added {} guide patches across {} nets (patched pins {}, cap per-net {})",
+                 "NEWGR patching: added {} guide patches across {} nets (patched pins {}, long-via {}, cap per-net {})",
                  total_patches,
                  patched_nets,
                  patched_pins,
+                 long_segment_via_patches,
                  opts.max_patches_per_net);
   }
 }
@@ -766,8 +818,12 @@ static void simplify_guides(GlobalRouter* grouter,
   if (grouter != nullptr && grouter->grid() != nullptr) {
     // Many guide endpoints are snapped to the GCell centers spaced by
     // `tile_size`. Allowing a small (<= 1 tile) merge gap can reduce guide
-    // fragmentation without materially increasing guide area.
-    merge_gap_dbu = std::max(0, grouter->grid()->getTileSize());
+    // fragmentation without materially increasing guide area. A slightly
+    // larger (<= 2 tiles) gap tends to reduce guide fragmentation further and
+    // often reduces DR detours (wirelength) while still keeping guides
+    // reasonably constrained.
+    const int tile = std::max(0, grouter->grid()->getTileSize());
+    merge_gap_dbu = 2 * tile;
   }
 
   int nets_touched = 0;
