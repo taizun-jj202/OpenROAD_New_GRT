@@ -1448,6 +1448,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               1.0f,
                               0};
 
+  // A second deterministic seed to provide a tiny "search" without
+  // substantially changing runtime. This is intentionally conservative:
+  // it changes congestion patterns more than it changes global WL.
+  const CandidateConfig seed19{"perturb3-seed19-crit0",
+                               3.0f,
+                               1,
+                               19,
+                               0.0f,
+                               snapshot.congestion_iterations,
+                               snapshot.global_adjustment,
+                               0,
+                               0,
+                               1.0f,
+                               0};
+
   // Safety fallback: preserve NEWGR's "fast and routable" baseline if a more
   // aggressive DR-friendly soft-capacity reservation pushes the 2D/3D solver
   // into overflow (which can cause the flow to abort).
@@ -1463,7 +1478,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  1.0f,
                                  0};
 
-  const std::vector<CandidateConfig> candidates = {tuned};
+  const std::vector<CandidateConfig> candidates = {tuned, seed19};
 
 	  const auto run_candidate = [&](const CandidateConfig& candidate) {
 	    restore_snapshot(snapshot);
