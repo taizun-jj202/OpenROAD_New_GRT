@@ -1384,10 +1384,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Keep the main candidate focused on shortest global paths first. Rudy-based
   // soft-capacity reservation can improve DR robustness on some designs, but
   // it also risks introducing detours that increase total routed wirelength.
-  const CandidateConfig tuned{"perturb3-seed11-crit0",
+  const CandidateConfig tuned{"perturb3-seed17-crit0",
                               3.0f,
                               1,
-                              11,
+                              17,
                               0.0f,
                               snapshot.congestion_iterations,
                               snapshot.global_adjustment,
@@ -1399,10 +1399,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Safety fallback: preserve NEWGR's "fast and routable" baseline if a more
   // aggressive DR-friendly soft-capacity reservation pushes the 2D/3D solver
   // into overflow (which can cause the flow to abort).
-  const CandidateConfig fallback{"perturb3-seed11-crit0",
+  const CandidateConfig fallback{"perturb3-seed17-crit0",
                                  3.0f,
                                  1,
-                                 11,
+                                 17,
                                  0.0f,
                                  snapshot.congestion_iterations,
                                  snapshot.global_adjustment,
