@@ -33,17 +33,18 @@ struct Constants
   // Bias cost toward shorter solutions to improve downstream DR wirelength.
   // Favor shorter routing (primary metric) while still accounting for vias.
   double weight_wire_length = 1.25;
-  double weight_via_number = 5.5;
+  // Increase via penalty to reduce layer switching and downstream DR vias.
+  double weight_via_number = 8.0;
   // Reduce congestion-driven detours to keep guides compact.
-  double weight_short_area = 180.0;
+  double weight_short_area = 160.0;
 
   int min_routing_layer = 1;
 
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.08;
-  int target_detour_count = 6;
+  double max_detour_ratio = 0.06;
+  int target_detour_count = 5;
 
   // Only rip-up and re-route nets that significantly overflow in the coarse
   // capacity model. This reduces detours/stacking that can inflate DR
@@ -52,7 +53,7 @@ struct Constants
 
   // Via modeling impacts congestion estimation; too large can over-penalize
   // layer switches and inflate detours.
-  double via_multiplier = 1.5;
+  double via_multiplier = 1.6;
 
   double maze_logistic_slope = 0.6;
 
