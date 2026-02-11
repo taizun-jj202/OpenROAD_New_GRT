@@ -1133,6 +1133,19 @@ bool find_slack_shortest_path(const GridPoint& start,
   const int req_h = fastroute->getDbNetLayerEdgeCost(db_net, h_layer);
   const int req_v = fastroute->getDbNetLayerEdgeCost(db_net, v_layer);
 
+  // Radical WL strategy:
+  // Allow the "directness-first" A* to traverse mildly-overused edges (avail < req)
+  // with a steep penalty instead of hard-blocking them. This intentionally
+  // injects shorter rectilinear corridors into the guide set even when the
+  // global congestion DB is pessimistic; the detailed router can still choose
+  // the original (detour) guides if needed.
+  //
+  // Keep true hard blocks (avail <= 0) forbidden to avoid routing through
+  // blocked/absent resources (e.g., macro blockages).
+  constexpr bool kAllowSoftOveruse = true;
+  constexpr int kSoftOveruseBasePenalty = 40;
+  constexpr int kSoftOverusePerTrackPenalty = 6;
+
   auto step_ok_and_penalty = [&](const int gx0,
                                  const int gy0,
                                  const int gx1,
@@ -1157,8 +1170,18 @@ bool find_slack_shortest_path(const GridPoint& start,
       avail += req;
     }
 
-    if (avail < req) {
+    if (avail <= 0) {
       return false;
+    }
+
+    if (avail < req) {
+      if (!kAllowSoftOveruse) {
+        return false;
+      }
+      const int deficit = req - avail;
+      out_penalty += kSoftOveruseBasePenalty
+                     + deficit * kSoftOverusePerTrackPenalty;
+      return true;
     }
 
     const int slack = avail - req;
@@ -1351,12 +1374,14 @@ void add_rsmt_rectilinear_corridors(NetRouteMap& routes,
   const long min_net_wl_dbu = static_cast<long>(tile_size) * 25;
 
   // Only target "detoured" nets: base_wl must exceed RSMT length by a ratio.
-  constexpr double kDetourRatioThreshold = 1.18;  // radical but not too broad
+  // Lower threshold to escape WL local minima: add RSMT corridors for more nets
+  // so DR has more opportunities to realize a shorter path.
+  constexpr double kDetourRatioThreshold = 1.06;
 
   // Keep the corridors "rectilinear": never detour outside the Manhattan
   // rectangle for an RSMT edge; optionally add both L-shapes when both look
   // similarly routable (more options for DR).
-  constexpr int kMaxBlockedEdgesForAlt = 1;
+  constexpr int kMaxBlockedEdgesForAlt = 4;
 
   auto to_grid = [&](const odb::Point& p) -> GridPoint {
     GridPoint gp;
@@ -1770,7 +1795,10 @@ GRoute build_pattern_direct_route(odb::dbNet* db_net,
     //
     // If it fails (too tight / too large search), fall back to the old
     // L-shape chooser.
-    constexpr std::size_t kMaxPinsForSlackMaze = 30;
+    // Raise this threshold to give more large nets a chance to get a direct,
+    // length-driven corridor (even if some edges are soft-overused). This is
+    // intentionally more expensive and may increase GR runtime.
+    constexpr std::size_t kMaxPinsForSlackMaze = 60;
     if (pins_grid.size() <= kMaxPinsForSlackMaze) {
       std::vector<GridPoint> path;
       if (find_slack_shortest_path(
