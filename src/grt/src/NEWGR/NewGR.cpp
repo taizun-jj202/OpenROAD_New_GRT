@@ -164,17 +164,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   baseline.congestion_iterations = snapshot.congestion_iterations;
   baseline.critical_nets_percentage = snapshot.critical_percentage;
 
-  // Wirelength-focused candidate with runtime guardrails:
-  // - Keep congestion iterations bounded (fewer detours + faster runtime).
-  // - Disable critical-net ordering to avoid STA overhead and additional
+  // Wirelength-focused candidate:
+  // - Keep critical-net ordering disabled to avoid STA overhead and additional
   //   ripup/re-route churn on this benchmark.
   // - Use modest capacity perturbation to avoid pathological tie-breaking.
+  // - Keep the user's default congestion iteration budget to preserve
+  //   routability-driven improvements that can reduce DR detours.
   CandidateSettings wl_lean = baseline;
-  wl_lean.name = "wl-lean";
+  wl_lean.name = "wl-balanced";
   wl_lean.seed = 29;
-  wl_lean.caps_perturbation_percentage = std::max(1.0f, snapshot.caps_percentage);
+  wl_lean.caps_perturbation_percentage = std::max(1.5f, snapshot.caps_percentage);
   wl_lean.perturbation_amount = 1;
-  wl_lean.congestion_iterations = std::min(30, snapshot.congestion_iterations);
+  wl_lean.congestion_iterations = snapshot.congestion_iterations;
   wl_lean.critical_nets_percentage = 0.0f;
 
   auto is_better = [&](const CandidateResult& current,
