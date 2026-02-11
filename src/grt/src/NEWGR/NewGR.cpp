@@ -67,6 +67,14 @@ void add_congestion_patches(NetRouteMap& routes,
     return;
   }
 
+  // Keep congestion patching opt-in; extra guide points can increase the
+  // detailed router's solution space and may hurt wirelength on already
+  // routable designs. Enable with:
+  //   `utl::set_debug_level(GNR, "newgrCongestionPatches", 1)`
+  if (!logger->debugCheck(GNR, "newgrCongestionPatches", 1)) {
+    return;
+  }
+
   // Keep conservative defaults; can be tuned via debug if needed.
   constexpr int kMaxTotalPatches = 120000;  // guardrail
   constexpr int kMaxPatchesPerNet = 24;
@@ -712,13 +720,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = std::min(22, snapshot.congestion_iterations);
   wl_lean.critical_nets_percentage = 0.0f;
 
-  // A second, cheap WL retry with a different seed. This is only run when the
-  // first WL attempt is "noticeably" worse than expected (design-specific
-  // threshold) to avoid paying a 2x runtime cost in the common case.
-  CandidateSettings wl_retry = wl_lean;
-  wl_retry.name = "wl-retry";
-  wl_retry.seed = 0;  // disables net shuffling in GlobalRouter::initNetlist
-
   auto is_better = [&](const CandidateResult& current,
                        const CandidateResult& best) -> bool {
     const bool current_ok = current.overflow == 0;
@@ -739,20 +740,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // One-pass default: run the WL-lean configuration and only fall back if
   // overflow remains.
   CandidateResult primary = run_candidate(wl_lean, /*keep_routes=*/true);
-
-  // If we're already at/near the best known WL band for this design, don't pay
-  // for another full routing run.
-  //
-  // NOTE: `compute_metrics()` measures *global-route guide* WL, not the final
-  // detailed-route WL reported in the DRT logs. The guide WL is consistently
-  // lower, so keep the threshold in the same units/band as the guide metric.
-  //
-  // This early-exit threshold is primarily a *runtime guardrail*; when the
-  // first attempt is already good, avoid running additional full global-route
-  // passes just to sweep seeds.
-  constexpr double kGoodEnoughWirelengthUm = 624080.0;
-  if (primary.overflow == 0
-      && primary.metrics.wirelength_um <= kGoodEnoughWirelengthUm) {
+  if (primary.overflow == 0) {
     logger_->info(GNR,
                   6005,
                   "NEWGR selected {}: wl {:.0f} um, vias {}, overflow {}",
@@ -761,46 +749,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   primary.metrics.via_count,
                   primary.overflow);
     NetRouteMap routes = std::move(primary.routes);
-    add_congestion_patches(
-        routes,
-        grouter_->fastroute_,
-        grouter_->grid_,
-        grouter_->db_->getTech(),
-        logger_,
-        min_routing_layer,
-        max_routing_layer);
-    add_lane_patches(
-        routes, grouter_, logger_, min_routing_layer, max_routing_layer);
-    return routes;
-  }
-
-  CandidateResult retry;
-  bool have_retry = false;
-  if (primary.overflow == 0) {
-    retry = run_candidate(wl_retry, /*keep_routes=*/true);
-    have_retry = true;
-  }
-
-  if (primary.overflow == 0 && (!have_retry || retry.overflow == 0)) {
-    const bool retry_is_best = have_retry && is_better(retry, primary);
-
-    // Keep GlobalRouter/FastRoute internal state consistent with the returned
-    // routes. The last run_candidate call wins for internal state, so only
-    // rerun when primary wins after running retry.
-    CandidateResult best = retry_is_best ? std::move(retry) : std::move(primary);
-    if (!retry_is_best && have_retry) {
-      best = run_candidate(best.settings, /*keep_routes=*/true);
-    }
-
-    logger_->info(GNR,
-                  6010,
-                  "NEWGR selected {}: wl {:.0f} um, vias {}, overflow {}",
-                  best.settings.name,
-                  best.metrics.wirelength_um,
-                  best.metrics.via_count,
-                  best.overflow);
-
-    NetRouteMap routes = std::move(best.routes);
     add_congestion_patches(
         routes,
         grouter_->fastroute_,
