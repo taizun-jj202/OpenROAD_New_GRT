@@ -1088,7 +1088,11 @@ bool find_slack_shortest_path(const GridPoint& start,
   const int dy = std::abs(start.gy - goal.gy);
   const int manhattan = dx + dy;
 
-  const int margin = std::max(6, std::min(32, manhattan / 3));
+  // Radical WL strategy (Iteration 38):
+  // Keep the search corridor *tight* around the Manhattan box so the produced
+  // direct-candidate guides stay close to shortest paths. Allow only limited
+  // expansion to bypass hard blocks (avail<=0) and severe bottlenecks.
+  const int margin = std::max(3, std::min(18, manhattan / 4));
   const int xmin = std::max(0, std::min(start.gx, goal.gx) - margin);
   const int xmax = std::min(x_grids - 1, std::max(start.gx, goal.gx) + margin);
   const int ymin = std::max(0, std::min(start.gy, goal.gy) - margin);
@@ -1143,8 +1147,12 @@ bool find_slack_shortest_path(const GridPoint& start,
   // Keep true hard blocks (avail <= 0) forbidden to avoid routing through
   // blocked/absent resources (e.g., macro blockages).
   constexpr bool kAllowSoftOveruse = true;
-  constexpr int kSoftOveruseBasePenalty = 40;
-  constexpr int kSoftOverusePerTrackPenalty = 6;
+  // Lower penalties than previous iterations to strongly bias toward shorter
+  // (more-direct) corridors even when the congestion DB is pessimistic. These
+  // are only *additional* guides (or replacements when capacity looks OK),
+  // so DR still retains fallback options via remaining guides/patches.
+  constexpr int kSoftOveruseBasePenalty = 8;
+  constexpr int kSoftOverusePerTrackPenalty = 2;
 
   auto step_ok_and_penalty = [&](const int gx0,
                                  const int gy0,
@@ -1371,12 +1379,12 @@ void add_rsmt_rectilinear_corridors(NetRouteMap& routes,
   // Guardrails.
   constexpr int kMaxTotalAddedSegments = 220000;
   constexpr int kMaxAddedSegmentsPerNet = 220;
-  const long min_net_wl_dbu = static_cast<long>(tile_size) * 25;
+  const long min_net_wl_dbu = static_cast<long>(tile_size) * 10;
 
   // Only target "detoured" nets: base_wl must exceed RSMT length by a ratio.
   // Lower threshold to escape WL local minima: add RSMT corridors for more nets
   // so DR has more opportunities to realize a shorter path.
-  constexpr double kDetourRatioThreshold = 1.06;
+  constexpr double kDetourRatioThreshold = 1.02;
 
   // Keep the corridors "rectilinear": never detour outside the Manhattan
   // rectangle for an RSMT edge; optionally add both L-shapes when both look
@@ -2020,8 +2028,11 @@ void union_shorter_guides(NetRouteMap& base_routes,
   // More radical than "union": if the direct candidate is significantly
   // shorter and appears capacity-feasible on the current congestion DB,
   // replace the base guide topology for that net.
-  constexpr double kReplaceMinRelativeImprovement = 0.003;  // 0.3% shorter
-  constexpr int kReplaceMaxBlockedEdges = 0;
+  constexpr double kReplaceMinRelativeImprovement = 0.001;  // 0.1% shorter
+  // Allow a small amount of (soft) blocking in the congestion DB: these are
+  // guides, not a final detailed route. The intent is to bias DR toward
+  // shorter topologies and break out of detour-heavy local minima.
+  constexpr int kReplaceMaxBlockedEdges = 6;
 
   const int tile_size = grouter->getTileSize();
   const long min_net_wl_dbu = std::max<long>(0, static_cast<long>(tile_size) * 20);
@@ -2542,7 +2553,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   auto build_direct_candidate = [&](const NetRouteMap& base_routes) -> NetRouteMap {
     NetRouteMap direct_routes;
     const int tile = (grouter_ != nullptr) ? grouter_->getTileSize() : 0;
-    const long min_net_wl_dbu = std::max<long>(0, static_cast<long>(tile) * 20);
+    // Expand coverage: attempt direct-candidate guide generation for more nets
+    // (including medium-sized nets), enabling more opportunities for guide
+    // replacement/union to reduce detours and DR wirelength.
+    const long min_net_wl_dbu = std::max<long>(0, static_cast<long>(tile) * 8);
 
     for (const auto& [db_net, base_segments] : base_routes) {
       const auto it_fast = direct_fastroute.routes.find(db_net);
