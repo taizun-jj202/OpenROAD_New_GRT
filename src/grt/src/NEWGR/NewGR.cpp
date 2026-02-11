@@ -1,6 +1,7 @@
 #include "NEWGR/NewGR.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <string>
@@ -12,6 +13,7 @@
 #include "FastRoute.h"
 #include "Grid.h"
 #include "grt/GRoute.h"
+#include "stt/SteinerTreeBuilder.h"
 #include "utl/Logger.h"
 
 namespace grt {
@@ -831,6 +833,7 @@ struct GuideUnionStats
 {
   int nets_checked = 0;
   int nets_merged = 0;
+  int nets_replaced = 0;
   int nets_reverted_disconnected = 0;
   int nets_skipped_small = 0;
   int nets_skipped_no_improvement = 0;
@@ -991,6 +994,7 @@ void add_via(GRoute& route,
 
 GRoute build_pattern_direct_route(odb::dbNet* db_net,
                                   GlobalRouter* grouter,
+                                  stt::SteinerTreeBuilder* stt_builder,
                                   odb::dbTech* tech,
                                   const int min_routing_layer,
                                   const int max_routing_layer)
@@ -1058,43 +1062,35 @@ GRoute build_pattern_direct_route(odb::dbNet* db_net,
     return route;
   }
 
-  const int n = static_cast<int>(pins_grid.size());
-
-  std::vector<int> parent(n, -1);
-  std::vector<int> best_dist(n, std::numeric_limits<int>::max());
-  std::vector<bool> in_tree(n, false);
-  best_dist[0] = 0;
-
-  for (int iter = 0; iter < n; iter++) {
-    int u = -1;
-    int u_best = std::numeric_limits<int>::max();
-    for (int i = 0; i < n; i++) {
-      if (!in_tree[i] && best_dist[i] < u_best) {
-        u_best = best_dist[i];
-        u = i;
-      }
+  // Build a *direct* per-net candidate with a different topology generator
+  // than FastRoute's congestion-driven tree:
+  // - Prefer a FLUTE RSMT (in grid units) when available to reduce raw
+  //   topology wirelength for multi-pin nets.
+  // - Fall back to the previous MST topology if FLUTE isn't available.
+  //
+  // This is intentionally "radical": it can produce a very different guide
+  // graph than the base routes, giving the detailed router a stronger chance
+  // to realize shorter wiring.
+  stt::Tree rsmt;
+  bool use_flute = false;
+  if (stt_builder != nullptr) {
+    std::vector<int> xs;
+    std::vector<int> ys;
+    xs.reserve(pins_grid.size());
+    ys.reserve(pins_grid.size());
+    for (const auto& gp : pins_grid) {
+      xs.push_back(gp.gx);
+      ys.push_back(gp.gy);
     }
-    if (u == -1) {
-      break;
-    }
-    in_tree[u] = true;
 
-    const GridPoint pu = pins_grid[u];
-    for (int v = 0; v < n; v++) {
-      if (in_tree[v]) {
-        continue;
-      }
-      const GridPoint pv = pins_grid[v];
-      const int dist = std::abs(pu.gx - pv.gx) + std::abs(pu.gy - pv.gy);
-      if (dist < best_dist[v]) {
-        best_dist[v] = dist;
-        parent[v] = u;
-      }
-    }
+    // Accuracy 3 is the OpenROAD default and is usually a good WL/CPU tradeoff.
+    constexpr int kFluteAccuracy = 3;
+    rsmt = stt_builder->flute(xs, ys, kFluteAccuracy);
+    use_flute = rsmt.branchCount() > 0;
   }
 
   std::unordered_map<long long, uint8_t> endpoint_layer_mask;
-  endpoint_layer_mask.reserve(static_cast<size_t>(n) * 8);
+  endpoint_layer_mask.reserve(static_cast<size_t>(pins_grid.size()) * 8);
 
   auto add_endpoint_layer = [&](const odb::Point& p, const int layer) {
     const long long key
@@ -1119,22 +1115,17 @@ GRoute build_pattern_direct_route(odb::dbNet* db_net,
     return false;
   };
 
-  for (int v = 1; v < n; v++) {
-    const int u = parent[v];
-    if (u < 0 || u >= n) {
-      continue;
-    }
-
-    const GridPoint a = pins_grid[u];
-    const GridPoint b = pins_grid[v];
+  auto emit_edge = [&](const GridPoint& a, const GridPoint& b) {
     if (a == b) {
-      continue;
+      return;
     }
 
     const GridPoint turn1{a.gx, b.gy};
     const GridPoint turn2{b.gx, a.gy};
-    const LShapeScore s1 = score_lshape(a, b, turn1, h_layer, v_layer, db_net, grouter);
-    const LShapeScore s2 = score_lshape(a, b, turn2, h_layer, v_layer, db_net, grouter);
+    const LShapeScore s1
+        = score_lshape(a, b, turn1, h_layer, v_layer, db_net, grouter);
+    const LShapeScore s2
+        = score_lshape(a, b, turn2, h_layer, v_layer, db_net, grouter);
     const GridPoint turn = is_better_score(s1, s2) ? turn1 : turn2;
 
     const odb::Point p_a = to_dbu(a);
@@ -1163,6 +1154,78 @@ GRoute build_pattern_direct_route(odb::dbNet* db_net,
 
     if (h_layer != v_layer && a.gx != b.gx && a.gy != b.gy) {
       add_via(route, p_t, h_layer, v_layer);
+    }
+  };
+
+  if (use_flute) {
+    std::unordered_set<std::uint64_t> seen_edges;
+    seen_edges.reserve(static_cast<std::size_t>(rsmt.branchCount()) * 2);
+
+    for (int i = 0; i < rsmt.branchCount(); i++) {
+      const int j = rsmt.branch[i].n;
+      if (j < 0 || j >= rsmt.branchCount() || j == i) {
+        continue;
+      }
+
+      int a = i;
+      int b = j;
+      if (a > b) {
+        std::swap(a, b);
+      }
+      const std::uint64_t key
+          = (static_cast<std::uint64_t>(a) << 32) | static_cast<std::uint32_t>(b);
+      if (!seen_edges.insert(key).second) {
+        continue;
+      }
+
+      const GridPoint p0{std::max(0, std::min(x_grids - 1, rsmt.branch[a].x)),
+                         std::max(0, std::min(y_grids - 1, rsmt.branch[a].y))};
+      const GridPoint p1{std::max(0, std::min(x_grids - 1, rsmt.branch[b].x)),
+                         std::max(0, std::min(y_grids - 1, rsmt.branch[b].y))};
+      emit_edge(p0, p1);
+    }
+  } else {
+    const int n = static_cast<int>(pins_grid.size());
+
+    std::vector<int> parent(n, -1);
+    std::vector<int> best_dist(n, std::numeric_limits<int>::max());
+    std::vector<bool> in_tree(n, false);
+    best_dist[0] = 0;
+
+    for (int iter = 0; iter < n; iter++) {
+      int u = -1;
+      int u_best = std::numeric_limits<int>::max();
+      for (int i = 0; i < n; i++) {
+        if (!in_tree[i] && best_dist[i] < u_best) {
+          u_best = best_dist[i];
+          u = i;
+        }
+      }
+      if (u == -1) {
+        break;
+      }
+      in_tree[u] = true;
+
+      const GridPoint pu = pins_grid[u];
+      for (int v = 0; v < n; v++) {
+        if (in_tree[v]) {
+          continue;
+        }
+        const GridPoint pv = pins_grid[v];
+        const int dist = std::abs(pu.gx - pv.gx) + std::abs(pu.gy - pv.gy);
+        if (dist < best_dist[v]) {
+          best_dist[v] = dist;
+          parent[v] = u;
+        }
+      }
+    }
+
+    for (int v = 1; v < n; v++) {
+      const int u = parent[v];
+      if (u < 0 || u >= n) {
+        continue;
+      }
+      emit_edge(pins_grid[u], pins_grid[v]);
     }
   }
 
@@ -1222,6 +1285,12 @@ void union_shorter_guides(NetRouteMap& base_routes,
   // Via count is secondary for this phase; allow some extra vias to escape
   // DR-wirelength local minima.
   constexpr int kMaxExtraViasPerNet = 40;
+
+  // More radical than "union": if the direct candidate is significantly
+  // shorter and appears capacity-feasible on the current congestion DB,
+  // replace the base guide topology for that net.
+  constexpr double kReplaceMinRelativeImprovement = 0.003;  // 0.3% shorter
+  constexpr int kReplaceMaxBlockedEdges = 0;
 
   const int tile_size = grouter->getTileSize();
   const long min_net_wl_dbu = std::max<long>(0, static_cast<long>(tile_size) * 20);
@@ -1312,6 +1381,74 @@ void union_shorter_guides(NetRouteMap& base_routes,
     return groups == 1;
   };
 
+  auto count_blocked_edges = [&](odb::dbNet* db_net,
+                                 const GRoute& route) -> int {
+    FastRouteCore* fastroute = (grouter != nullptr) ? grouter->fastroute() : nullptr;
+    const Grid* grid = (grouter != nullptr) ? grouter->grid() : nullptr;
+    if (fastroute == nullptr || grid == nullptr || db_net == nullptr) {
+      return std::numeric_limits<int>::max();
+    }
+
+    const int tile = grid->getTileSize();
+    if (tile <= 0) {
+      return std::numeric_limits<int>::max();
+    }
+
+    const int x0_corner = grid->getXMin();
+    const int y0_corner = grid->getYMin();
+    const int x_grids = grid->getXGrids();
+    const int y_grids = grid->getYGrids();
+
+    auto to_grid_idx = [&](const int x_dbu, const int y_dbu) -> std::pair<int, int> {
+      int gx = (x_dbu - x0_corner) / tile;
+      int gy = (y_dbu - y0_corner) / tile;
+      gx = std::max(0, std::min(x_grids - 1, gx));
+      gy = std::max(0, std::min(y_grids - 1, gy));
+      return {gx, gy};
+    };
+
+    int blocked = 0;
+    for (const auto& seg : route) {
+      if (seg.isVia()) {
+        continue;
+      }
+
+      const int layer = seg.init_layer;
+      const int req = fastroute->getDbNetLayerEdgeCost(db_net, layer);
+
+      auto [gx0, gy0] = to_grid_idx(seg.init_x, seg.init_y);
+      auto [gx1, gy1] = to_grid_idx(seg.final_x, seg.final_y);
+      if (gx0 == gx1 && gy0 == gy1) {
+        continue;
+      }
+
+      if (gy0 == gy1) {
+        const int y = gy0;
+        const int x_min = std::min(gx0, gx1);
+        const int x_max = std::max(gx0, gx1);
+        for (int x = x_min; x < x_max; x++) {
+          const int avail
+              = fastroute->getAvailableResources(x, y, x + 1, y, layer);
+          if (avail < req) {
+            blocked++;
+          }
+        }
+      } else if (gx0 == gx1) {
+        const int x = gx0;
+        const int y_min = std::min(gy0, gy1);
+        const int y_max = std::max(gy0, gy1);
+        for (int y = y_min; y < y_max; y++) {
+          const int avail
+              = fastroute->getAvailableResources(x, y, x, y + 1, layer);
+          if (avail < req) {
+            blocked++;
+          }
+        }
+      }
+    }
+    return blocked;
+  };
+
   for (auto& [db_net, base] : base_routes) {
     stats.nets_checked++;
 
@@ -1345,6 +1482,21 @@ void union_shorter_guides(NetRouteMap& base_routes,
     const int direct_vias = static_cast<int>(direct_m.via_count);
     if (direct_vias > base_vias + kMaxExtraViasPerNet) {
       continue;
+    }
+
+    const long min_abs_gain_dbu = static_cast<long>(tile_size) * 4;
+    const bool can_replace
+        = (base_wl - direct_wl) >= min_abs_gain_dbu
+          && direct_wl
+                 < static_cast<long>(base_wl * (1.0 - kReplaceMinRelativeImprovement))
+          && route_is_connected(direct);
+    if (can_replace) {
+      const int blocked_edges = count_blocked_edges(db_net, direct);
+      if (blocked_edges <= kReplaceMaxBlockedEdges) {
+        base = direct;
+        stats.nets_replaced++;
+        continue;
+      }
     }
 
     std::unordered_set<GSegment, GSegmentHash> existing;
@@ -1456,12 +1608,13 @@ void union_shorter_guides(NetRouteMap& base_routes,
     }
   }
 
-  if (stats.segments_added > 0) {
+  if (stats.segments_added > 0 || stats.nets_replaced > 0) {
     logger->info(
         GNR,
         6012,
-        "NEWGR guide union: nets merged {}, reverted {}, added segs {} (wires {}, vias {}), budget {}",
+        "NEWGR guide union/replace: unioned {}, replaced {}, reverted {}, added segs {} (wires {}, vias {}), budget {}",
         stats.nets_merged,
+        stats.nets_replaced,
         stats.nets_reverted_disconnected,
         stats.segments_added,
         stats.wires_added,
@@ -1644,6 +1797,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   odb::dbTech* tech = (grouter_->db_ != nullptr) ? grouter_->db_->getTech()
                                                  : nullptr;
+  stt::SteinerTreeBuilder* stt_builder = grouter_->stt_builder_;
   auto build_direct_candidate = [&](const NetRouteMap& base_routes) -> NetRouteMap {
     NetRouteMap direct_routes;
     for (const auto& [db_net, _] : base_routes) {
@@ -1652,8 +1806,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = (it_fast != direct_fastroute.routes.end()) ? &it_fast->second
                                                        : nullptr;
 
-      GRoute pattern_route = build_pattern_direct_route(
-          db_net, grouter_, tech, min_routing_layer, max_routing_layer);
+      GRoute pattern_route = build_pattern_direct_route(db_net,
+                                                        grouter_,
+                                                        stt_builder,
+                                                        tech,
+                                                        min_routing_layer,
+                                                        max_routing_layer);
 
       const RouteMetrics pattern_m = compute_route_metrics(pattern_route, tech);
       RouteMetrics fast_m;
