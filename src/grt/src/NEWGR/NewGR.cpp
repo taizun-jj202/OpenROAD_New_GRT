@@ -703,7 +703,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Seed affects tie-breaking in routing and can meaningfully change final WL.
   // Keep a deterministic seed that has historically produced shorter solutions
   // in this flow.
-  wl_lean.seed = 29;
+  wl_lean.seed = 7;
   wl_lean.caps_perturbation_percentage = 0.0f;
   wl_lean.perturbation_amount = 1;
   wl_lean.congestion_iterations
