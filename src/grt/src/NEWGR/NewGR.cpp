@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "FastRoute.h"
+#include "Grid.h"
 #include "grt/GRoute.h"
 #include "utl/Logger.h"
 
@@ -34,6 +35,334 @@ int pick_adjacent_layer(const int layer,
     return layer - 1;
   }
   return -1;
+}
+
+struct CongestionPatchStats
+{
+  int nets_patched = 0;
+  int points_added = 0;
+};
+
+// Adds "standalone" 1-GCell guide patches as *degenerate* (zero-length) wire
+// segments on adjacent layers at congested positions along long guides.
+//
+// This follows the spirit of the CUGR post-processing patching:
+// provide extra escape points / track switching opportunities in places where
+// edge spare resources are low, without forcing the global route topology to
+// detour (and thus without directly increasing global wirelength).
+//
+// Important note: these patches are not required to be connected. Detailed
+// routing can still exploit them because guides are treated as *allowed
+// regions* per layer, and vias are legal at overlapping guide areas.
+void add_congestion_patches(NetRouteMap& routes,
+                            FastRouteCore* fastroute,
+                            const Grid* grid,
+                            odb::dbTech* tech,
+                            utl::Logger* logger,
+                            const int min_routing_layer,
+                            const int max_routing_layer)
+{
+  if (fastroute == nullptr || grid == nullptr || tech == nullptr
+      || logger == nullptr) {
+    return;
+  }
+
+  // Keep conservative defaults; can be tuned via debug if needed.
+  constexpr int kMaxTotalPatches = 120000;  // guardrail
+  constexpr int kMaxPatchesPerNet = 24;
+  constexpr int kMinSegmentLenTiles = 8;
+  constexpr int kEndMarginTiles = 1;
+  constexpr int kSampleStepTiles = 2;
+  constexpr int kMinPatchSpacingTiles = 4;
+
+  // In FastRoute-style flows, pin-access issues usually dominate on the
+  // bottom layers. Keep patching focused to avoid bloating guides.
+  const int max_patch_layer
+      = std::min(max_routing_layer, min_routing_layer + 2);
+
+  // Threshold is expressed in "spare tracks" on the edge.
+  constexpr int kWirePatchSpareThreshold = 2;
+  constexpr int kAdjLayerMinSpare = 1;
+
+  const int tile_size = grid->getTileSize();
+  if (tile_size <= 0) {
+    return;
+  }
+
+  const int grid_xmin = grid->getXMin();
+  const int grid_ymin = grid->getYMin();
+  const int x_grids = grid->getXGrids();
+  const int y_grids = grid->getYGrids();
+
+  auto to_grid = [&](const int x_dbu, const int y_dbu) -> std::pair<int, int> {
+    const int gx = (x_dbu - grid_xmin) / tile_size;
+    const int gy = (y_dbu - grid_ymin) / tile_size;
+    return {gx, gy};
+  };
+
+  auto to_dbu = [&](const int gx, const int gy) -> std::pair<int, int> {
+    // FastRoute represents each GCell as a node at the tile center:
+    //   x = x_corner + tile_size * (gx + 0.5)
+    // Use the same convention to keep patches on-grid.
+    const int x_dbu = grid_xmin + gx * tile_size + tile_size / 2;
+    const int y_dbu = grid_ymin + gy * tile_size + tile_size / 2;
+    return {x_dbu, y_dbu};
+  };
+
+  auto in_grid = [&](const int gx, const int gy) -> bool {
+    return gx >= 0 && gx < x_grids && gy >= 0 && gy < y_grids;
+  };
+
+  auto min_spare_at_point_preferred_dir
+      = [&](const int layer, const int gx, const int gy) -> int {
+    if (layer < min_routing_layer || layer > max_routing_layer) {
+      return 0;
+    }
+    if (!in_grid(gx, gy)) {
+      return 0;
+    }
+
+    odb::dbTechLayer* tech_layer = tech->findRoutingLayer(layer);
+    if (tech_layer == nullptr) {
+      return 0;
+    }
+
+    int spare = std::numeric_limits<int>::max();
+    const auto dir = tech_layer->getDirection();
+    if (dir == odb::dbTechLayerDir::HORIZONTAL) {
+      // Edge arrays have size (x_grids-1) in X for horizontal edges.
+      if (gx + 1 < x_grids) {
+        spare = std::min(
+            spare, fastroute->getAvailableResources(gx, gy, gx + 1, gy, layer));
+      }
+      if (gx - 1 >= 0) {
+        spare = std::min(
+            spare, fastroute->getAvailableResources(gx - 1, gy, gx, gy, layer));
+      }
+    } else if (dir == odb::dbTechLayerDir::VERTICAL) {
+      if (gy + 1 < y_grids) {
+        spare = std::min(
+            spare, fastroute->getAvailableResources(gx, gy, gx, gy + 1, layer));
+      }
+      if (gy - 1 >= 0) {
+        spare = std::min(
+            spare, fastroute->getAvailableResources(gx, gy - 1, gx, gy, layer));
+      }
+    }
+
+    if (spare == std::numeric_limits<int>::max()) {
+      return 0;
+    }
+    return spare;
+  };
+
+  auto min_spare_on_segment_dir
+      = [&](const int layer,
+            const int gx,
+            const int gy,
+            const bool horizontal) -> int {
+    if (layer < min_routing_layer || layer > max_routing_layer) {
+      return 0;
+    }
+    if (!in_grid(gx, gy)) {
+      return 0;
+    }
+
+    int spare = std::numeric_limits<int>::max();
+    if (horizontal) {
+      if (gx + 1 < x_grids) {
+        spare = std::min(
+            spare, fastroute->getAvailableResources(gx, gy, gx + 1, gy, layer));
+      }
+      if (gx - 1 >= 0) {
+        spare = std::min(
+            spare, fastroute->getAvailableResources(gx - 1, gy, gx, gy, layer));
+      }
+    } else {
+      if (gy + 1 < y_grids) {
+        spare = std::min(
+            spare, fastroute->getAvailableResources(gx, gy, gx, gy + 1, layer));
+      }
+      if (gy - 1 >= 0) {
+        spare = std::min(
+            spare, fastroute->getAvailableResources(gx, gy - 1, gx, gy, layer));
+      }
+    }
+
+    if (spare == std::numeric_limits<int>::max()) {
+      return 0;
+    }
+    return spare;
+  };
+
+  CongestionPatchStats stats;
+  int total_patches = 0;
+
+  for (auto& [db_net, route] : routes) {
+    static_cast<void>(db_net);
+    if (route.empty() || total_patches >= kMaxTotalPatches) {
+      continue;
+    }
+
+    std::unordered_set<GSegment, GSegmentHash> existing;
+    existing.reserve(route.size() * 2 + 64);
+    for (const auto& seg : route) {
+      existing.insert(seg);
+    }
+
+    const std::vector<GSegment> original = route;
+
+    int net_patches = 0;
+    int net_last_patch_gx = std::numeric_limits<int>::min();
+    int net_last_patch_gy = std::numeric_limits<int>::min();
+    bool net_counted = false;
+
+    for (const auto& seg : original) {
+      if (total_patches >= kMaxTotalPatches
+          || net_patches >= kMaxPatchesPerNet) {
+        break;
+      }
+
+      if (seg.isVia() || seg.isJumper()) {
+        continue;
+      }
+      if (seg.init_layer != seg.final_layer) {
+        continue;
+      }
+
+      const int layer = seg.init_layer;
+      if (layer < min_routing_layer || layer > max_patch_layer) {
+        continue;
+      }
+
+      const int len_dbu = seg.length();
+      if (len_dbu <= 0 || (len_dbu % tile_size) != 0) {
+        continue;
+      }
+
+      const int len_tiles = len_dbu / tile_size;
+      if (len_tiles < kMinSegmentLenTiles) {
+        continue;
+      }
+
+      const bool horizontal
+          = (seg.init_y == seg.final_y && seg.init_x != seg.final_x);
+      const bool vertical
+          = (seg.init_x == seg.final_x && seg.init_y != seg.final_y);
+      if (!horizontal && !vertical) {
+        continue;
+      }
+
+      const int margin = kEndMarginTiles * tile_size;
+      const int x_start
+          = std::min(seg.init_x, seg.final_x) + (horizontal ? margin : 0);
+      const int x_end
+          = std::max(seg.init_x, seg.final_x) - (horizontal ? margin : 0);
+      const int y_start
+          = std::min(seg.init_y, seg.final_y) + (vertical ? margin : 0);
+      const int y_end
+          = std::max(seg.init_y, seg.final_y) - (vertical ? margin : 0);
+
+      if (horizontal && x_end <= x_start) {
+        continue;
+      }
+      if (vertical && y_end <= y_start) {
+        continue;
+      }
+
+      auto [gx0, gy0] = to_grid(horizontal ? x_start : seg.init_x,
+                                vertical ? y_start : seg.init_y);
+      auto [gx1, gy1] = to_grid(horizontal ? x_end : seg.final_x,
+                                vertical ? y_end : seg.final_y);
+
+      if (!in_grid(gx0, gy0) || !in_grid(gx1, gy1)) {
+        continue;
+      }
+
+      if (horizontal && gy0 != gy1) {
+        continue;
+      }
+      if (vertical && gx0 != gx1) {
+        continue;
+      }
+
+      if (horizontal && gx1 < gx0) {
+        std::swap(gx0, gx1);
+      }
+      if (vertical && gy1 < gy0) {
+        std::swap(gy0, gy1);
+      }
+
+      int last_patch_along = std::numeric_limits<int>::min();
+      const int begin = horizontal ? gx0 : gy0;
+      const int end = horizontal ? gx1 : gy1;
+      const int fixed = horizontal ? gy0 : gx0;
+
+      for (int c = begin; c <= end; c += kSampleStepTiles) {
+        if (total_patches >= kMaxTotalPatches
+            || net_patches >= kMaxPatchesPerNet) {
+          break;
+        }
+
+        if (c - last_patch_along < kMinPatchSpacingTiles) {
+          continue;
+        }
+
+        const int gx = horizontal ? c : fixed;
+        const int gy = horizontal ? fixed : c;
+
+        const int spare = min_spare_on_segment_dir(layer, gx, gy, horizontal);
+        if (spare >= kWirePatchSpareThreshold) {
+          continue;
+        }
+
+        // Also apply a per-net spacing constraint in 2D to avoid clustering.
+        if (std::abs(gx - net_last_patch_gx) + std::abs(gy - net_last_patch_gy)
+            < kMinPatchSpacingTiles) {
+          continue;
+        }
+
+        bool added = false;
+        for (int adj = layer - 1; adj <= layer + 1; adj += 2) {
+          if (adj < min_routing_layer || adj > max_routing_layer) {
+            continue;
+          }
+          if (min_spare_at_point_preferred_dir(adj, gx, gy)
+              < kAdjLayerMinSpare) {
+            continue;
+          }
+
+          const auto [x_dbu, y_dbu] = to_dbu(gx, gy);
+          const GSegment point(x_dbu, y_dbu, adj, x_dbu, y_dbu, adj);
+          if (existing.insert(point).second) {
+            route.push_back(point);
+            stats.points_added++;
+            added = true;
+          }
+        }
+
+        if (added) {
+          last_patch_along = c;
+          net_last_patch_gx = gx;
+          net_last_patch_gy = gy;
+          net_patches++;
+          total_patches++;
+          if (!net_counted) {
+            stats.nets_patched++;
+            net_counted = true;
+          }
+        }
+      }
+    }
+  }
+
+  if (stats.points_added > 0) {
+    logger->info(GNR,
+                 6009,
+                 "NEWGR congestion patches: nets {}, added points {}",
+                 stats.nets_patched,
+                 stats.points_added);
+  }
 }
 
 // Add small, optional "lane" patches (via-up, short parallel segment, via-down)
@@ -372,8 +701,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   CandidateSettings wl_lean = baseline;
   wl_lean.name = "wl-lean";
   // Seed affects tie-breaking in routing and can meaningfully change final WL.
-  // Prefer a deterministic seed that historically produces shorter solutions.
-  wl_lean.seed = 11;
+  // Keep a deterministic seed that has historically produced shorter solutions
+  // in this flow.
+  wl_lean.seed = 29;
   wl_lean.caps_perturbation_percentage = 0.0f;
   wl_lean.perturbation_amount = 1;
   wl_lean.congestion_iterations
@@ -409,6 +739,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   primary.metrics.via_count,
                   primary.overflow);
     NetRouteMap routes = std::move(primary.routes);
+    add_congestion_patches(
+        routes,
+        grouter_->fastroute_,
+        grouter_->grid_,
+        grouter_->db_->getTech(),
+        logger_,
+        min_routing_layer,
+        max_routing_layer);
     add_lane_patches(
         routes, grouter_, logger_, min_routing_layer, max_routing_layer);
     return routes;
@@ -416,7 +754,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   CandidateResult recovery = run_candidate(baseline, /*keep_routes=*/true);
   const bool primary_is_best = is_better(primary, recovery);
-  const CandidateResult& best = primary_is_best ? primary : recovery;
+  CandidateResult best = primary_is_best ? std::move(primary)
+                                        : std::move(recovery);
+
+  // Ensure GlobalRouter/FastRoute internal state (congestion DB, etc.) matches
+  // the returned routes. This only triggers when the "primary" candidate wins
+  // despite running the recovery candidate after it.
+  if (primary_is_best) {
+    best = run_candidate(best.settings, /*keep_routes=*/true);
+  }
+
   logger_->info(GNR,
                 6007,
                 "NEWGR selected {}: wl {:.0f} um, vias {}, overflow {}",
@@ -425,8 +772,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 best.metrics.via_count,
                 best.overflow);
 
-  NetRouteMap routes = primary_is_best ? std::move(primary.routes)
-                                      : std::move(recovery.routes);
+  NetRouteMap routes = std::move(best.routes);
+  add_congestion_patches(
+      routes,
+      grouter_->fastroute_,
+      grouter_->grid_,
+      grouter_->db_->getTech(),
+      logger_,
+      min_routing_layer,
+      max_routing_layer);
   add_lane_patches(
       routes, grouter_, logger_, min_routing_layer, max_routing_layer);
   return routes;
