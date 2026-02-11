@@ -95,7 +95,7 @@ struct GuidePatchingOptions
   int port_patch_radius_tiles = 0;
   // Add short wire stubs on the pin connection layer to improve local access
   // without forcing extra layer switching.
-  int pin_wire_stub_tiles = 5;
+  int pin_wire_stub_tiles = 6;
 
   // Medium-segment patching is disabled by default (set threshold == long).
   // It can be useful, but tends to trade a lot of extra guide fragments for
@@ -107,13 +107,13 @@ struct GuidePatchingOptions
   int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
   // Stubs around long-segment hotspot samples.
-  int long_segment_stub_tiles = 5;
+  int long_segment_stub_tiles = 6;
   // Extremely limited adjacent-layer via patching for very long segments in
   // hot regions. This can reduce downstream detours (wirelength) when the
   // detailed router needs an earlier layer switch, while keeping via inflation
   // bounded. Keep this *very* small to avoid inflating overall via count.
   // This is only applied on very-long segments that cross hot tiles.
-  int very_long_via_patches_total = 0;
+  int very_long_via_patches_total = 40;
   int very_long_via_patches_per_net = 1;
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
@@ -1605,7 +1605,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       // Keep candidates very close to the best global WL. This guards against
       // drifting into a longer-GR regime while still letting us choose a
       // slightly "looser" solution for DR if it is essentially WL-equivalent.
-      constexpr double wl_slack_ratio = 0.0050;   // 0.50%
+      constexpr double wl_slack_ratio = 0.0020;   // 0.20%
       constexpr long wl_slack_min_dbu = 220000;   // ~220um @ 1000 DBU/um
       const long wl_slack_dbu = std::max<long>(
           wl_slack_min_dbu,
@@ -1637,6 +1637,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           continue;
         }
 
+        // Primary objective: minimize (global) routed wirelength. We keep a
+        // small WL window (`wl_limit_dbu`) to avoid tie-break jitter, but
+        // within that window we still pick the shortest candidate first.
+        if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
+          if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
+            best_candidate = eval.candidate;
+            best_metrics = metrics;
+          }
+          continue;
+        }
+
+        // Secondary objective: prefer looser congestion (often reduces DR
+        // detours / DR wirelength) when WL is tied.
         if (metrics.congestion.score != best_metrics.congestion.score) {
           if (metrics.congestion.score < best_metrics.congestion.score) {
             best_candidate = eval.candidate;
@@ -1645,17 +1658,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           continue;
         }
 
-        // Within similar congestion, prefer fewer vias (secondary objective).
+        // Tertiary objective: fewer vias (mostly impacts DR via count).
         if (metrics.via_count != best_metrics.via_count) {
           if (metrics.via_count < best_metrics.via_count) {
-            best_candidate = eval.candidate;
-            best_metrics = metrics;
-          }
-          continue;
-        }
-
-        if (metrics.wirelength_dbu != best_metrics.wirelength_dbu) {
-          if (metrics.wirelength_dbu < best_metrics.wirelength_dbu) {
             best_candidate = eval.candidate;
             best_metrics = metrics;
           }
