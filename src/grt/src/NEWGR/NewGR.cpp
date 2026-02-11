@@ -158,13 +158,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   baseline.perturbation_amount = snapshot.perturbation_amount;
   baseline.critical_nets_percentage = snapshot.critical_percentage;
 
-  CandidateSettings perturb_11;
-  perturb_11.name = "perturb-s11";
-  perturb_11.seed = 11;
-  perturb_11.caps_perturbation_percentage = 1.5f;
-  perturb_11.perturbation_amount = 1;
-  perturb_11.critical_nets_percentage = snapshot.critical_percentage;
-
   CandidateSettings perturb_29;
   perturb_29.name = "perturb-s29";
   perturb_29.seed = 29;
@@ -172,40 +165,46 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   perturb_29.perturbation_amount = 1;
   perturb_29.critical_nets_percentage = snapshot.critical_percentage;
 
-  std::vector<CandidateSettings> candidates;
-  candidates.push_back(baseline);
-  candidates.push_back(perturb_11);
-  candidates.push_back(perturb_29);
-
-  CandidateResult best;
-  for (const CandidateSettings& candidate : candidates) {
-    CandidateResult current = run_candidate(candidate, /*keep_routes=*/false);
+  auto is_better = [&](const CandidateResult& current,
+                       const CandidateResult& best) -> bool {
     const bool current_ok = current.overflow == 0;
     const bool best_ok = best.overflow == 0;
 
-    const bool better = [&]() {
-      if (current_ok != best_ok) {
-        return current_ok;  // prefer overflow-free
-      }
-      if (!current_ok && current.overflow != best.overflow) {
-        return current.overflow < best.overflow;
-      }
-      if (current.metrics.wirelength_dbu != best.metrics.wirelength_dbu) {
-        return current.metrics.wirelength_dbu < best.metrics.wirelength_dbu;
-      }
-      return current.metrics.via_count < best.metrics.via_count;
-    }();
-
-    if (best.settings.name.empty() || better) {
-      best = std::move(current);
+    if (current_ok != best_ok) {
+      return current_ok;  // prefer overflow-free
     }
+    if (!current_ok && current.overflow != best.overflow) {
+      return current.overflow < best.overflow;
+    }
+    if (current.metrics.wirelength_dbu != best.metrics.wirelength_dbu) {
+      return current.metrics.wirelength_dbu < best.metrics.wirelength_dbu;
+    }
+    return current.metrics.via_count < best.metrics.via_count;
+  };
+
+  // Runtime-focused candidate evaluation:
+  // - Always run baseline once (no need to keep routes unless it wins).
+  // - Run one perturbation candidate and keep its routes (typical winner).
+  // - Only "replay" baseline if it actually wins.
+  CandidateResult baseline_result
+      = run_candidate(baseline, /*keep_routes=*/false);
+  CandidateResult perturb_result
+      = run_candidate(perturb_29, /*keep_routes=*/true);
+
+  if (is_better(perturb_result, baseline_result)) {
+    logger_->info(GNR,
+                  6005,
+                  "NEWGR selected {}: wl {:.0f} um, vias {}, overflow {}",
+                  perturb_result.settings.name,
+                  perturb_result.metrics.wirelength_um,
+                  perturb_result.metrics.via_count,
+                  perturb_result.overflow);
+    return std::move(perturb_result.routes);
   }
 
-  // Replay the winner so GlobalRouter state (congestion DB, etc.) matches the
-  // returned routes.
-  CandidateResult replay = run_candidate(best.settings, /*keep_routes=*/true);
+  CandidateResult replay = run_candidate(baseline, /*keep_routes=*/true);
   logger_->info(GNR,
-                6005,
+                6007,
                 "NEWGR selected {}: wl {:.0f} um, vias {}, overflow {}",
                 replay.settings.name,
                 replay.metrics.wirelength_um,

@@ -1632,6 +1632,251 @@ NetRouteMap FastRouteCore::run()
 
   removeLoops();
 
+  // Wirelength recovery pass:
+  // Try to replace detoured maze routes with 1-bend L-shapes when the L-shape
+  // fits in the remaining capacity. This is a low-overhead "polish" that can
+  // reduce total wirelength and often reduces bend/via opportunities later.
+  //
+  // Notes:
+  // - Only safe when we already have an overflow-free solution.
+  // - Skip NDR nets, as Graph2D has special accounting for them (large overflow
+  //   multiplier + per-layer NDR capacity tracking).
+  if (total_overflow_ == 0) {
+    constexpr int kMinDetourToOptimize = 4;
+    constexpr int kMaxEdgesToOptimize = 50000;
+
+    int optimized_edges = 0;
+    int total_len_saved = 0;
+
+    auto update_usage_for_route = [&](const std::vector<GPoint3D>& grids,
+                                      const int routelen,
+                                      FrNet* net,
+                                      const int delta) {
+      for (int i = 0; i < routelen; i++) {
+        const auto& a = grids[i];
+        const auto& b = grids[i + 1];
+        if (a.x == b.x) {
+          const int y = std::min(a.y, b.y);
+          graph2d_.updateUsageV(a.x, y, net, delta);
+        } else if (a.y == b.y) {
+          const int x = std::min(a.x, b.x);
+          graph2d_.updateUsageH(x, a.y, net, delta);
+        } else {
+          logger_->error(GNR, 5001, "Non-Manhattan segment found in 2D route.");
+        }
+      }
+    };
+
+    auto build_l_route = [&](const int x1,
+                             const int y1,
+                             const int x2,
+                             const int y2,
+                             const bool x_first) -> std::vector<GPoint3D> {
+      std::vector<GPoint3D> grids;
+      grids.reserve(std::abs(x1 - x2) + std::abs(y1 - y2) + 1);
+      int cx = x1;
+      int cy = y1;
+      grids.push_back({static_cast<int16_t>(cx),
+                       static_cast<int16_t>(cy),
+                       static_cast<int16_t>(-1)});
+
+      auto step_x_to = [&](const int tx) {
+        while (cx != tx) {
+          cx += (cx < tx) ? 1 : -1;
+          grids.push_back({static_cast<int16_t>(cx),
+                           static_cast<int16_t>(cy),
+                           static_cast<int16_t>(-1)});
+        }
+      };
+      auto step_y_to = [&](const int ty) {
+        while (cy != ty) {
+          cy += (cy < ty) ? 1 : -1;
+          grids.push_back({static_cast<int16_t>(cx),
+                           static_cast<int16_t>(cy),
+                           static_cast<int16_t>(-1)});
+        }
+      };
+
+      if (x_first) {
+        step_x_to(x2);
+        step_y_to(y2);
+      } else {
+        step_y_to(y2);
+        step_x_to(x2);
+      }
+      return grids;
+    };
+
+    auto evaluate_l_route = [&](FrNet* net,
+                                const std::vector<GPoint3D>& grids,
+                                double& max_util,
+                                double& sum_util) -> bool {
+      const int edge_cost = net->getEdgeCost();
+      max_util = 0.0;
+      sum_util = 0.0;
+
+      if (edge_cost != 1) {
+        return false;
+      }
+
+      for (int i = 0; i < static_cast<int>(grids.size()) - 1; i++) {
+        const auto& a = grids[i];
+        const auto& b = grids[i + 1];
+
+        if (a.x == b.x) {
+          const int y = std::min(a.y, b.y);
+          const int cap = getEdgeCapacity(net, a.x, y, EdgeDirection::Vertical);
+          if (cap <= 0) {
+            return false;
+          }
+          const int usage = graph2d_.getUsageV(a.x, y);
+          if (usage + edge_cost > cap) {
+            return false;
+          }
+          const double util = static_cast<double>(usage + edge_cost) / cap;
+          max_util = std::max(max_util, util);
+          sum_util += util;
+        } else if (a.y == b.y) {
+          const int x = std::min(a.x, b.x);
+          const int cap
+              = getEdgeCapacity(net, x, a.y, EdgeDirection::Horizontal);
+          if (cap <= 0) {
+            return false;
+          }
+          const int usage = graph2d_.getUsageH(x, a.y);
+          if (usage + edge_cost > cap) {
+            return false;
+          }
+          const double util = static_cast<double>(usage + edge_cost) / cap;
+          max_util = std::max(max_util, util);
+          sum_util += util;
+        } else {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    for (const int netID : net_ids_) {
+      if (optimized_edges >= kMaxEdgesToOptimize) {
+        break;
+      }
+      FrNet* net = nets_[netID];
+      if (net == nullptr) {
+        continue;
+      }
+      if (net->getEdgeCost() != 1) {
+        continue;
+      }
+      if (net->isSoftNDR()
+          || (net->getDbNet() && net->getDbNet()->getNonDefaultRule())) {
+        continue;
+      }
+
+      bool net_changed = false;
+
+      auto& treeedges = sttrees_[netID].edges;
+      const auto& treenodes = sttrees_[netID].nodes;
+      const int num_edges = sttrees_[netID].num_edges();
+
+      for (int edgeID = 0; edgeID < num_edges; edgeID++) {
+        if (optimized_edges >= kMaxEdgesToOptimize) {
+          break;
+        }
+        TreeEdge* treeedge = &(treeedges[edgeID]);
+        if (treeedge->len <= 0) {
+          continue;
+        }
+        if (treeedge->route.type != RouteType::MazeRoute) {
+          continue;
+        }
+
+        const int n1 = treeedge->n1;
+        const int n2 = treeedge->n2;
+        const int x1 = treenodes[n1].x;
+        const int y1 = treenodes[n1].y;
+        const int x2 = treenodes[n2].x;
+        const int y2 = treenodes[n2].y;
+
+        const int manhattan = std::abs(x1 - x2) + std::abs(y1 - y2);
+        const int old_len = treeedge->route.routelen;
+        if (manhattan <= 0 || old_len <= manhattan + kMinDetourToOptimize) {
+          continue;
+        }
+
+        const auto& old_grids = treeedge->route.grids;
+        if (static_cast<int>(old_grids.size()) != old_len + 1) {
+          continue;
+        }
+
+        // Rip-up old route usage, try a capacity-feasible L-shape, otherwise
+        // restore old usage.
+        update_usage_for_route(old_grids, old_len, net, -net->getEdgeCost());
+
+        const std::vector<GPoint3D> l_x_first
+            = build_l_route(x1, y1, x2, y2, /*x_first=*/true);
+        const std::vector<GPoint3D> l_y_first
+            = build_l_route(x1, y1, x2, y2, /*x_first=*/false);
+
+        double max_util_x = 0.0;
+        double sum_util_x = 0.0;
+        const bool ok_x = evaluate_l_route(net, l_x_first, max_util_x, sum_util_x);
+
+        double max_util_y = 0.0;
+        double sum_util_y = 0.0;
+        const bool ok_y = evaluate_l_route(net, l_y_first, max_util_y, sum_util_y);
+
+        const bool choose_x = [&]() -> bool {
+          if (ok_x != ok_y) {
+            return ok_x;
+          }
+          if (!ok_x && !ok_y) {
+            return false;
+          }
+          if (max_util_x != max_util_y) {
+            return max_util_x < max_util_y;
+          }
+          return sum_util_x < sum_util_y;
+        }();
+
+        const bool choose_y = ok_y && !choose_x;
+
+        if (choose_x || choose_y) {
+          const auto& new_grids = choose_x ? l_x_first : l_y_first;
+          const int new_len = static_cast<int>(new_grids.size()) - 1;
+          update_usage_for_route(
+              new_grids, new_len, net, net->getEdgeCost());
+
+          treeedge->route.grids = new_grids;
+          treeedge->route.routelen = new_len;
+          treeedge->route.type = RouteType::MazeRoute;
+
+          optimized_edges++;
+          total_len_saved += (old_len - new_len);
+          net_changed = true;
+        } else {
+          update_usage_for_route(old_grids, old_len, net, net->getEdgeCost());
+        }
+      }
+
+      if (net_changed) {
+        // The L-shape replacement can introduce self-crossings where edges
+        // overlap without sharing a Steiner node; patch the worst offender.
+        checkAndFixEmbeddedTree(netID);
+      }
+    }
+
+    if (optimized_edges > 0) {
+      debugPrint(logger_,
+                 GNR,
+                 "congestionIterations",
+                 1,
+                 "Wirelength recovery: optimized {} edges, saved {} 2D steps.",
+                 optimized_edges,
+                 total_len_saved);
+    }
+  }
+
   getOverflow2Dmaze(&maxOverflow, &tUsage);
 
   layer_assign_iter_snapshot_ = std::max(1, i - 1);
