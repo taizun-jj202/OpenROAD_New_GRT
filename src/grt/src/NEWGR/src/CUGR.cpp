@@ -128,11 +128,11 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     GRNet* net = gr_nets_[netIndex].get();
     const int hp = net->getBoundingBox().hp();
     if (hp >= 80) {
-      grid.reset(6, 6);
+      grid.reset(5, 5);
     } else if (hp >= 40) {
-      grid.reset(7, 7);
+      grid.reset(6, 6);
     } else {
-      grid.reset(8, 8);
+      grid.reset(7, 7);
     }
     MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
     mazeRoute.constructSparsifiedGraph(wireCostView, grid);
