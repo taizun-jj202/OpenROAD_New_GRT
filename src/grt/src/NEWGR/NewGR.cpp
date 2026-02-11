@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <limits>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "FastRoute.h"
+#include "grt/GRoute.h"
 #include "utl/Logger.h"
 
 namespace grt {
@@ -13,6 +15,197 @@ namespace grt {
 using utl::GNR;
 
 namespace {
+
+struct GuidePatchStats
+{
+  int nets_patched = 0;
+  int vias_added = 0;
+  int wires_added = 0;
+};
+
+int pick_adjacent_layer(const int layer,
+                        const int min_routing_layer,
+                        const int max_routing_layer)
+{
+  if (layer + 1 <= max_routing_layer) {
+    return layer + 1;
+  }
+  if (layer - 1 >= min_routing_layer) {
+    return layer - 1;
+  }
+  return -1;
+}
+
+// Add small, optional "lane" patches (via-up, short parallel segment, via-down)
+// along long guides. This intentionally increases guide flexibility for the
+// detailed router without forcing a longer global route topology.
+//
+// Inspired by CUGR "patching" concepts: provide extra escape points / track
+// switching opportunities for long segments, especially on lower layers where
+// pin-access constraints are tighter.
+void add_lane_patches(NetRouteMap& routes,
+                      GlobalRouter* grouter,
+                      utl::Logger* logger,
+                      const int min_routing_layer,
+                      const int max_routing_layer)
+{
+  if (grouter == nullptr || logger == nullptr) {
+    return;
+  }
+
+  const int tile_size = grouter->getTileSize();
+  if (tile_size <= 0) {
+    return;
+  }
+
+  constexpr int kMinSegmentLenTiles = 8;   // only long segments
+  constexpr int kEndMarginTiles = 2;       // keep away from endpoints/pins
+  constexpr int kMinLaneSpanTiles = 3;     // ensure the lane has meaningful span
+  constexpr int kMaxPatchesPerNet = 6;     // runtime guardrail
+  constexpr int kMaxTotalPatchedSegs = 25000;
+
+  // Focus patches on the lower routing layers where DR often struggles most.
+  const int max_patch_layer
+      = std::min(max_routing_layer, min_routing_layer + 2);
+
+  GuidePatchStats stats;
+  int total_patched = 0;
+
+  for (auto& [db_net, route] : routes) {
+    static_cast<void>(db_net);
+    if (route.empty()) {
+      continue;
+    }
+    if (total_patched >= kMaxTotalPatchedSegs) {
+      break;
+    }
+
+    // Iterate over a snapshot to avoid patching patches.
+    const std::vector<GSegment> original = route;
+
+    std::unordered_set<GSegment, GSegmentHash> existing;
+    existing.reserve(route.size() * 2 + 32);
+    for (const auto& seg : route) {
+      existing.insert(seg);
+    }
+
+    int net_patches = 0;
+    bool net_counted = false;
+
+    for (const auto& seg : original) {
+      if (total_patched >= kMaxTotalPatchedSegs
+          || net_patches >= kMaxPatchesPerNet) {
+        break;
+      }
+
+      if (seg.isVia() || seg.isJumper()) {
+        continue;
+      }
+      if (seg.init_layer != seg.final_layer) {
+        continue;
+      }
+
+      const int layer = seg.init_layer;
+      if (layer < min_routing_layer || layer > max_patch_layer) {
+        continue;
+      }
+
+      const int adj_layer
+          = pick_adjacent_layer(layer, min_routing_layer, max_routing_layer);
+      if (adj_layer < 0 || adj_layer == layer) {
+        continue;
+      }
+
+      const int len_dbu = seg.length();
+      if (len_dbu <= 0 || len_dbu % tile_size != 0) {
+        continue;  // off-grid or degenerate
+      }
+
+      const int len_tiles = len_dbu / tile_size;
+      if (len_tiles < kMinSegmentLenTiles) {
+        continue;
+      }
+
+      const bool horizontal
+          = (seg.init_y == seg.final_y && seg.init_x != seg.final_x);
+      const bool vertical
+          = (seg.init_x == seg.final_x && seg.init_y != seg.final_y);
+      if (!horizontal && !vertical) {
+        continue;
+      }
+
+      const int margin = kEndMarginTiles * tile_size;
+      if (len_dbu <= (2 * margin + kMinLaneSpanTiles * tile_size)) {
+        continue;
+      }
+
+      int x1 = seg.init_x;
+      int y1 = seg.init_y;
+      int x2 = seg.final_x;
+      int y2 = seg.final_y;
+      if (horizontal) {
+        x1 = seg.init_x + margin;
+        x2 = seg.final_x - margin;
+      } else {
+        y1 = seg.init_y + margin;
+        y2 = seg.final_y - margin;
+      }
+
+      const int span_dbu = std::abs(x1 - x2) + std::abs(y1 - y2);
+      if (span_dbu <= 0 || span_dbu % tile_size != 0) {
+        continue;
+      }
+      const int span_tiles = span_dbu / tile_size;
+      if (span_tiles < kMinLaneSpanTiles) {
+        continue;
+      }
+
+      const int via_lo = std::min(layer, adj_layer);
+      const int via_hi = std::max(layer, adj_layer);
+
+      // Create a parallel lane on the adjacent layer spanning between two
+      // internal points, with vias to allow DR to hop up/down.
+      const GSegment via_a(x1, y1, via_lo, x1, y1, via_hi);
+      const GSegment lane(x1, y1, adj_layer, x2, y2, adj_layer);
+      const GSegment via_b(x2, y2, via_lo, x2, y2, via_hi);
+
+      int added_here = 0;
+      if (existing.insert(via_a).second) {
+        route.push_back(via_a);
+        stats.vias_added++;
+        added_here++;
+      }
+      if (existing.insert(lane).second) {
+        route.push_back(lane);
+        stats.wires_added++;
+        added_here++;
+      }
+      if (existing.insert(via_b).second) {
+        route.push_back(via_b);
+        stats.vias_added++;
+        added_here++;
+      }
+
+      if (added_here > 0) {
+        net_patches++;
+        total_patched++;
+        if (!net_counted) {
+          stats.nets_patched++;
+          net_counted = true;
+        }
+      }
+    }
+  }
+
+  if (stats.vias_added > 0 || stats.wires_added > 0) {
+    logger->info(GNR,
+                 6008,
+                 "NEWGR guide patches: nets {}, added vias {}, added segs {}",
+                 stats.nets_patched,
+                 stats.vias_added,
+                 stats.wires_added);
+  }
+}
 
 struct RouteMetrics
 {
@@ -207,7 +400,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   primary.metrics.wirelength_um,
                   primary.metrics.via_count,
                   primary.overflow);
-    return std::move(primary.routes);
+    NetRouteMap routes = std::move(primary.routes);
+    add_lane_patches(
+        routes, grouter_, logger_, min_routing_layer, max_routing_layer);
+    return routes;
   }
 
   CandidateResult recovery = run_candidate(baseline, /*keep_routes=*/true);
@@ -221,8 +417,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 best.metrics.via_count,
                 best.overflow);
 
-  return primary_is_best ? std::move(primary.routes)
-                         : std::move(recovery.routes);
+  NetRouteMap routes = primary_is_best ? std::move(primary.routes)
+                                      : std::move(recovery.routes);
+  add_lane_patches(
+      routes, grouter_, logger_, min_routing_layer, max_routing_layer);
+  return routes;
 }
 
 }  // namespace grt
