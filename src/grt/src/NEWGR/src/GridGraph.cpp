@@ -406,14 +406,14 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     if (bestAccessDist.first == 0) {
       logger_->warn(utl::GRT, 6274, "pin is hard to access.");
     }
-    const PointT selectedPoint = accessPoints[bestIndex];
-    const AccessPoint ap{selectedPoint, {}};
-    auto it = selected_access_points.emplace(ap).first;
+    const GRPoint& selectedPoint = accessPoints[bestIndex];
+    const AccessPoint ap{{selectedPoint.x(), selectedPoint.y()}, {}};
+    auto [it, inserted] = selected_access_points.emplace(ap);
     IntervalT& fixedLayerInterval = it->layers;
-    for (const auto& point : accessPoints) {
-      if (point.x() == selectedPoint.x() && point.y() == selectedPoint.y()) {
-        fixedLayerInterval.Update(point.getLayerIdx());
-      }
+    if (!fixedLayerInterval.IsValid()) {
+      fixedLayerInterval.Set(selectedPoint.getLayerIdx());
+    } else {
+      fixedLayerInterval.Update(selectedPoint.getLayerIdx());
     }
   }
   return selected_access_points;
