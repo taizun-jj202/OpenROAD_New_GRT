@@ -1687,14 +1687,14 @@ NetRouteMap FastRouteCore::run()
       int cy = y1;
       grids.push_back({static_cast<int16_t>(cx),
                        static_cast<int16_t>(cy),
-                       static_cast<int16_t>(-1)});
+                       static_cast<int16_t>(0)});
 
       auto step_x_to = [&](const int tx) {
         while (cx != tx) {
           cx += (cx < tx) ? 1 : -1;
           grids.push_back({static_cast<int16_t>(cx),
                            static_cast<int16_t>(cy),
-                           static_cast<int16_t>(-1)});
+                           static_cast<int16_t>(0)});
         }
       };
       auto step_y_to = [&](const int ty) {
@@ -1702,7 +1702,7 @@ NetRouteMap FastRouteCore::run()
           cy += (cy < ty) ? 1 : -1;
           grids.push_back({static_cast<int16_t>(cx),
                            static_cast<int16_t>(cy),
-                           static_cast<int16_t>(-1)});
+                           static_cast<int16_t>(0)});
         }
       };
 
@@ -1728,14 +1728,14 @@ NetRouteMap FastRouteCore::run()
       int cy = y1;
       grids.push_back({static_cast<int16_t>(cx),
                        static_cast<int16_t>(cy),
-                       static_cast<int16_t>(-1)});
+                       static_cast<int16_t>(0)});
 
       auto step_x_to = [&](const int tx) {
         while (cx != tx) {
           cx += (cx < tx) ? 1 : -1;
           grids.push_back({static_cast<int16_t>(cx),
                            static_cast<int16_t>(cy),
-                           static_cast<int16_t>(-1)});
+                           static_cast<int16_t>(0)});
         }
       };
       auto step_y_to = [&](const int ty) {
@@ -1743,7 +1743,7 @@ NetRouteMap FastRouteCore::run()
           cy += (cy < ty) ? 1 : -1;
           grids.push_back({static_cast<int16_t>(cx),
                            static_cast<int16_t>(cy),
-                           static_cast<int16_t>(-1)});
+                           static_cast<int16_t>(0)});
         }
       };
 
@@ -1765,14 +1765,14 @@ NetRouteMap FastRouteCore::run()
       int cy = y1;
       grids.push_back({static_cast<int16_t>(cx),
                        static_cast<int16_t>(cy),
-                       static_cast<int16_t>(-1)});
+                       static_cast<int16_t>(0)});
 
       auto step_x_to = [&](const int tx) {
         while (cx != tx) {
           cx += (cx < tx) ? 1 : -1;
           grids.push_back({static_cast<int16_t>(cx),
                            static_cast<int16_t>(cy),
-                           static_cast<int16_t>(-1)});
+                           static_cast<int16_t>(0)});
         }
       };
       auto step_y_to = [&](const int ty) {
@@ -1780,7 +1780,7 @@ NetRouteMap FastRouteCore::run()
           cy += (cy < ty) ? 1 : -1;
           grids.push_back({static_cast<int16_t>(cx),
                            static_cast<int16_t>(cy),
-                           static_cast<int16_t>(-1)});
+                           static_cast<int16_t>(0)});
         }
       };
 
@@ -2043,7 +2043,7 @@ NetRouteMap FastRouteCore::run()
         const auto [x, y] = from_idx(idx);
         out_grids.push_back({static_cast<int16_t>(x),
                              static_cast<int16_t>(y),
-                             static_cast<int16_t>(-1)});
+                             static_cast<int16_t>(0)});
       }
 
       return true;
@@ -2347,6 +2347,441 @@ NetRouteMap FastRouteCore::run()
                  total_len_saved,
                  astar_success,
                  astar_attempts);
+    }
+
+    // Steiner-topology recovery pass:
+    // The congestion-driven RSMT step can leave multi-pin nets with a longer
+    // topology even after we reach an overflow-free solution. Try rebuilding a
+    // minimal RSMT (fluteNormal) for a small number of "most promising" nets
+    // and re-embed each tree edge with the same capacity-feasible short-path
+    // heuristic used above. Keep only if it reduces total 2D steps.
+    constexpr int kMinPinsForRetopo = 4;
+    constexpr int kMaxNetsToRetopologize = 200;
+    constexpr int kMinPotentialGain = 12;  // 2D steps vs flute length
+    constexpr int kMinNetLenSaved = 4;     // avoid churn for tiny gains
+    constexpr int kTopoAstarExtraBudget = 6;
+
+    struct RetopoCandidate
+    {
+      int netID = -1;
+      int old_len = 0;
+      int flute_len = 0;
+      int gain = 0;
+    };
+
+    auto compute_net_len_2d = [&](const StTree& tree) -> int {
+      int sum = 0;
+      for (const auto& e : tree.edges) {
+        if (e.route.routelen > 0) {
+          sum += e.route.routelen;
+        }
+      }
+      return sum;
+    };
+
+    auto remove_tree_usage_2d = [&](const StTree& tree, FrNet* net) {
+      const int8_t edge_cost = net->getEdgeCost();
+      for (const auto& e : tree.edges) {
+        if (e.route.routelen <= 0) {
+          continue;
+        }
+        const auto& grids = e.route.grids;
+        if (static_cast<int>(grids.size()) != e.route.routelen + 1) {
+          continue;
+        }
+        update_usage_for_route(grids, e.route.routelen, net, -edge_cost);
+      }
+    };
+
+    auto add_tree_usage_2d = [&](const StTree& tree, FrNet* net) {
+      const int8_t edge_cost = net->getEdgeCost();
+      for (const auto& e : tree.edges) {
+        if (e.route.routelen <= 0) {
+          continue;
+        }
+        const auto& grids = e.route.grids;
+        if (static_cast<int>(grids.size()) != e.route.routelen + 1) {
+          continue;
+        }
+        update_usage_for_route(grids, e.route.routelen, net, edge_cost);
+      }
+    };
+
+    auto embed_two_pin_short = [&](FrNet* net,
+                                  const int x1,
+                                  const int y1,
+                                  const int x2,
+                                  const int y2,
+                                  std::vector<GPoint3D>& out_grids) -> bool {
+      out_grids.clear();
+
+      // Fast path: direct L (both orders).
+      const std::vector<GPoint3D> l_x_first
+          = build_l_route(x1, y1, x2, y2, /*x_first=*/true);
+      const std::vector<GPoint3D> l_y_first
+          = build_l_route(x1, y1, x2, y2, /*x_first=*/false);
+
+      double max_util_x = 0.0;
+      double sum_util_x = 0.0;
+      const bool ok_x = evaluate_l_route(net, l_x_first, max_util_x, sum_util_x);
+
+      double max_util_y = 0.0;
+      double sum_util_y = 0.0;
+      const bool ok_y = evaluate_l_route(net, l_y_first, max_util_y, sum_util_y);
+
+      struct Candidate
+      {
+        std::vector<GPoint3D> grids;
+        int len = std::numeric_limits<int>::max();
+        double max_util = 0.0;
+        double sum_util = 0.0;
+        int bends = 0;
+        bool ok = false;
+      };
+
+      auto candidate_better = [&](const Candidate& a,
+                                  const Candidate& b) -> bool {
+        if (a.ok != b.ok) {
+          return a.ok;
+        }
+        if (!a.ok) {
+          return false;
+        }
+        if (a.len != b.len) {
+          return a.len < b.len;
+        }
+        if (a.max_util != b.max_util) {
+          return a.max_util < b.max_util;
+        }
+        if (a.sum_util != b.sum_util) {
+          return a.sum_util < b.sum_util;
+        }
+        return a.bends < b.bends;
+      };
+
+      auto make_l_candidate = [&](const std::vector<GPoint3D>& grids,
+                                  const bool ok,
+                                  const double max_util,
+                                  const double sum_util) -> Candidate {
+        Candidate c;
+        c.ok = ok;
+        c.max_util = max_util;
+        c.sum_util = sum_util;
+        c.bends = (x1 == x2 || y1 == y2) ? 0 : 1;
+        if (ok) {
+          c.grids = grids;
+          c.len = static_cast<int>(grids.size()) - 1;
+        }
+        return c;
+      };
+
+      Candidate best = make_l_candidate(l_x_first, ok_x, max_util_x, sum_util_x);
+      const Candidate l_y = make_l_candidate(l_y_first, ok_y, max_util_y, sum_util_y);
+      if (candidate_better(l_y, best)) {
+        best = l_y;
+      }
+
+      // If L is blocked (or very close to saturation), try 2-bend alternatives.
+      if (!best.ok || (best.max_util >= kAltSearchUtilThreshold)) {
+        const int xmin = std::min(x1, x2);
+        const int xmax = std::max(x1, x2);
+        const int ymin = std::min(y1, y2);
+        const int ymax = std::max(y1, y2);
+
+        std::vector<int> x_turns;
+        std::vector<int> y_turns;
+        const int x_mid = (x1 + x2) / 2;
+        const int y_mid = (y1 + y2) / 2;
+
+        const int x_lo = std::max(0, xmin - kTurnOutsideBoxLimit);
+        const int x_hi = std::min(x_grid_ - 1, xmax + kTurnOutsideBoxLimit);
+        const int y_lo = std::max(0, ymin - kTurnOutsideBoxLimit);
+        const int y_hi = std::min(y_grid_ - 1, ymax + kTurnOutsideBoxLimit);
+
+        auto add_turn = [](std::vector<int>& turns,
+                           const int value,
+                           const int lo,
+                           const int hi) {
+          if (value >= lo && value <= hi) {
+            turns.push_back(value);
+          }
+        };
+
+        const int x_q1 = xmin + (xmax - xmin) / 3;
+        const int x_q3 = xmin + 2 * (xmax - xmin) / 3;
+        const int y_q1 = ymin + (ymax - ymin) / 3;
+        const int y_q3 = ymin + 2 * (ymax - ymin) / 3;
+
+        for (const int xt : {x1,
+                             x2,
+                             x_mid,
+                             x_mid - 1,
+                             x_mid + 1,
+                             xmin,
+                             xmin - 1,
+                             xmin - 2,
+                             xmin + 1,
+                             xmax,
+                             xmax + 1,
+                             xmax + 2,
+                             xmax - 1,
+                             x_q1,
+                             x_q3}) {
+          add_turn(x_turns, xt, x_lo, x_hi);
+        }
+        for (const int yt : {y1,
+                             y2,
+                             y_mid,
+                             y_mid - 1,
+                             y_mid + 1,
+                             ymin,
+                             ymin - 1,
+                             ymin - 2,
+                             ymin + 1,
+                             ymax,
+                             ymax + 1,
+                             ymax + 2,
+                             ymax - 1,
+                             y_q1,
+                             y_q3}) {
+          add_turn(y_turns, yt, y_lo, y_hi);
+        }
+
+        std::sort(x_turns.begin(), x_turns.end());
+        x_turns.erase(std::unique(x_turns.begin(), x_turns.end()),
+                      x_turns.end());
+        std::sort(y_turns.begin(), y_turns.end());
+        y_turns.erase(std::unique(y_turns.begin(), y_turns.end()),
+                      y_turns.end());
+
+        auto try_candidate = [&](std::vector<GPoint3D> grids,
+                                 const int bends) {
+          Candidate c;
+          c.bends = bends;
+          c.len = static_cast<int>(grids.size()) - 1;
+          c.ok = evaluate_l_route(net, grids, c.max_util, c.sum_util);
+          if (c.ok) {
+            c.grids = std::move(grids);
+            if (candidate_better(c, best)) {
+              best = std::move(c);
+            }
+          }
+        };
+
+        for (const int xt : x_turns) {
+          if (xt == x1 || xt == x2) {
+            continue;
+          }
+          try_candidate(build_hvh_route(x1, y1, x2, y2, xt), /*bends=*/2);
+        }
+        for (const int yt : y_turns) {
+          if (yt == y1 || yt == y2) {
+            continue;
+          }
+          try_candidate(build_vhv_route(x1, y1, x2, y2, yt), /*bends=*/2);
+        }
+      }
+
+      if (best.ok) {
+        out_grids = std::move(best.grids);
+        return true;
+      }
+
+      // Final fallback: bounded A* to find a short capacity-feasible path.
+      const int manhattan = std::abs(x1 - x2) + std::abs(y1 - y2);
+      const int target_budget = std::max(1, manhattan + kTopoAstarExtraBudget);
+      return find_capacity_path_astar(
+          net, x1, y1, x2, y2, target_budget, out_grids);
+    };
+
+    // Candidate selection is intentionally two-stage to keep runtime in check:
+    // 1) Pick the largest nets by current 2D length (cheap).
+    // 2) For only those nets, compute fluteNormal length and prioritize by gain.
+    constexpr int kPreselectNets = 600;
+    struct Preselect
+    {
+      int netID = -1;
+      int old_len = 0;
+    };
+
+    std::vector<Preselect> preselect;
+    preselect.reserve(net_ids_.size());
+    for (const int netID : net_ids_) {
+      FrNet* net = nets_[netID];
+      if (net == nullptr) {
+        continue;
+      }
+      if (net->getEdgeCost() != 1) {
+        continue;
+      }
+      if (net->getNumPins() < kMinPinsForRetopo) {
+        continue;
+      }
+      if (net->isSoftNDR()
+          || (net->getDbNet() && net->getDbNet()->getNonDefaultRule())) {
+        continue;
+      }
+
+      const int old_len = compute_net_len_2d(sttrees_[netID]);
+      if (old_len <= 0) {
+        continue;
+      }
+      preselect.push_back({netID, old_len});
+    }
+
+    std::sort(preselect.begin(),
+              preselect.end(),
+              [](const Preselect& a, const Preselect& b) {
+                if (a.old_len != b.old_len) {
+                  return a.old_len > b.old_len;
+                }
+                return a.netID < b.netID;
+              });
+    if (static_cast<int>(preselect.size()) > kPreselectNets) {
+      preselect.resize(kPreselectNets);
+    }
+
+    std::vector<RetopoCandidate> candidates;
+    candidates.reserve(preselect.size());
+    for (const auto& ps : preselect) {
+      const int netID = ps.netID;
+      FrNet* net = nets_[netID];
+      if (net == nullptr) {
+        continue;
+      }
+
+      Tree rsmt;
+      fluteNormal(netID, net->getPinX(), net->getPinY(), 2, 1.2, rsmt);
+      if (net->getNumPins() > 3) {
+        edgeShiftNew(rsmt, netID);
+      }
+
+      const int flute_len = rsmt.length;
+      const int gain = ps.old_len - flute_len;
+      if (gain < kMinPotentialGain) {
+        continue;
+      }
+
+      candidates.push_back({netID, ps.old_len, flute_len, gain});
+    }
+
+    std::sort(candidates.begin(),
+              candidates.end(),
+              [](const RetopoCandidate& a, const RetopoCandidate& b) {
+                if (a.gain != b.gain) {
+                  return a.gain > b.gain;
+                }
+                return a.netID < b.netID;
+              });
+
+    const int try_nets
+        = std::min<int>(kMaxNetsToRetopologize, candidates.size());
+
+    int retopo_attempted = 0;
+    int retopo_applied = 0;
+    int retopo_saved = 0;
+
+    for (int idx = 0; idx < try_nets; idx++) {
+      const int netID = candidates[idx].netID;
+      FrNet* net = nets_[netID];
+      if (net == nullptr) {
+        continue;
+      }
+
+      retopo_attempted++;
+
+      // Backup current tree and remove its 2D usage.
+      StTree old_tree = sttrees_[netID];
+      remove_tree_usage_2d(old_tree, net);
+
+      // Build a new minimal RSMT topology.
+      Tree rsmt;
+      fluteNormal(netID, net->getPinX(), net->getPinY(), 2, 1.2, rsmt);
+      if (net->getNumPins() > 3) {
+        edgeShiftNew(rsmt, netID);
+      }
+
+      sttrees_[netID].nodes.clear();
+      sttrees_[netID].edges.clear();
+      sttrees_[netID].node_to_pin_idx.clear();
+      copyStTree(netID, rsmt);
+      for (auto& e : sttrees_[netID].edges) {
+        e.route.grids.clear();
+        e.route.routelen = 0;
+        e.route.type = RouteType::NoRoute;
+      }
+
+      bool ok = true;
+      auto& treeedges = sttrees_[netID].edges;
+      const auto& treenodes = sttrees_[netID].nodes;
+      const int num_edges = sttrees_[netID].num_edges();
+
+      for (int edgeID = 0; edgeID < num_edges; edgeID++) {
+        TreeEdge* treeedge = &(treeedges[edgeID]);
+        const int n1 = treeedge->n1;
+        const int n2 = treeedge->n2;
+        const int x1 = treenodes[n1].x;
+        const int y1 = treenodes[n1].y;
+        const int x2 = treenodes[n2].x;
+        const int y2 = treenodes[n2].y;
+
+        treeedge->len = std::abs(x1 - x2) + std::abs(y1 - y2);
+        if (treeedge->len <= 0) {
+          treeedge->route.grids.clear();
+          treeedge->route.routelen = 0;
+          treeedge->route.type = RouteType::NoRoute;
+          continue;
+        }
+
+        std::vector<GPoint3D> grids;
+        if (!embed_two_pin_short(net, x1, y1, x2, y2, grids)) {
+          ok = false;
+          break;
+        }
+
+        const int new_len = static_cast<int>(grids.size()) - 1;
+        if (new_len <= 0) {
+          ok = false;
+          break;
+        }
+
+        update_usage_for_route(grids, new_len, net, net->getEdgeCost());
+        treeedge->route.grids = std::move(grids);
+        treeedge->route.routelen = new_len;
+        treeedge->route.type = RouteType::MazeRoute;
+      }
+
+      int new_len = 0;
+      if (ok) {
+        new_len = compute_net_len_2d(sttrees_[netID]);
+        ok = (new_len + kMinNetLenSaved) < candidates[idx].old_len;
+      }
+
+      if (!ok) {
+        // Revert: remove any partial usage from the tentative tree, restore
+        // the old tree and its usage.
+        remove_tree_usage_2d(sttrees_[netID], net);
+        sttrees_[netID] = std::move(old_tree);
+        add_tree_usage_2d(sttrees_[netID], net);
+        continue;
+      }
+
+      retopo_applied++;
+      retopo_saved += (candidates[idx].old_len - new_len);
+
+      // Repair potential self-crossings due to independent edge embedding.
+      checkAndFixEmbeddedTree(netID);
+    }
+
+    if (retopo_applied > 0) {
+      debugPrint(logger_,
+                 GNR,
+                 "congestionIterations",
+                 1,
+                 "Steiner recovery: applied {}/{} nets, saved {} 2D steps.",
+                 retopo_applied,
+                 retopo_attempted,
+                 retopo_saved);
     }
   }
 
