@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <queue>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
@@ -464,6 +465,286 @@ int FastRouteCore::polish2DRoutesForWirelength()
                   "2D polish: replaced {}/{} maze edges with L/Z patterns.",
                   edges_changed,
                   edges_touched);
+  }
+
+  return edges_changed;
+}
+
+int FastRouteCore::shorten2DRoutesByLocalMaze()
+{
+  // Stronger (but still bounded) 2D post-pass that attempts to shorten
+  // detoured maze routes by re-running a *wirelength-only* shortest path
+  // search under hard capacity constraints.
+  //
+  // Motivation: FastRoute's congestion-aware edge costs can create paths that
+  // are longer than necessary even after overflow is resolved. A final, local,
+  // hard-cap shortest path pass can reclaim wirelength without reintroducing
+  // overflow. This can also improve downstream DR wirelength by presenting
+  // more direct guides.
+
+  constexpr int kMaxEdgesTouched = 3500;
+  constexpr int kMaxEdgesChanged = 1200;
+  constexpr int kBBoxMargin = 6;  // tiles
+
+  int edges_touched = 0;
+  int edges_changed = 0;
+
+  auto in_grid = [&](int x, int y) -> bool {
+    return x >= 0 && x < x_grid_ && y >= 0 && y < y_grid_;
+  };
+
+  auto ripup_usage = [&](const std::vector<GPoint3D>& grids,
+                         int routelen,
+                         FrNet* net,
+                         int delta) {
+    const int8_t edgeCost = net->getEdgeCost();
+    for (int i = 0; i < routelen; i++) {
+      const auto& a = grids[i];
+      const auto& b = grids[i + 1];
+      if (a.x == b.x && a.y != b.y) {
+        const int min_y = std::min(a.y, b.y);
+        graph2d_.updateUsageV(a.x, min_y, net, delta * edgeCost);
+      } else if (a.y == b.y && a.x != b.x) {
+        const int min_x = std::min(a.x, b.x);
+        graph2d_.updateUsageH(min_x, a.y, net, delta * edgeCost);
+      }
+    }
+  };
+
+  struct Node
+  {
+    int x = 0;
+    int y = 0;
+    int g = 0;
+    int f = 0;
+  };
+  struct NodeBetter
+  {
+    // Min-heap by (f, g, y, x) for determinism.
+    bool operator()(const Node& a, const Node& b) const
+    {
+      if (a.f != b.f) {
+        return a.f > b.f;
+      }
+      if (a.g != b.g) {
+        return a.g > b.g;
+      }
+      if (a.y != b.y) {
+        return a.y > b.y;
+      }
+      return a.x > b.x;
+    }
+  };
+
+  for (const int netID : net_ids_) {
+    if (edges_changed >= kMaxEdgesChanged || edges_touched >= kMaxEdgesTouched) {
+      break;
+    }
+    FrNet* net = nets_[netID];
+    if (net == nullptr) {
+      continue;
+    }
+    // Keep this pass conservative: only apply to default-cost nets so the
+    // hard-cap feasibility checks match the common capacity model.
+    if (net->getEdgeCost() != 1 || net->isSoftNDR() || net->isResAware()) {
+      continue;
+    }
+
+    auto& treenodes = sttrees_[netID].nodes;
+    auto& treeedges = sttrees_[netID].edges;
+    for (int edgeID = 0; edgeID < sttrees_[netID].num_edges(); edgeID++) {
+      if (edges_changed >= kMaxEdgesChanged
+          || edges_touched >= kMaxEdgesTouched) {
+        break;
+      }
+
+      TreeEdge* treeedge = &(treeedges[edgeID]);
+      if (treeedge->len <= 0) {
+        continue;
+      }
+
+      Route& route = treeedge->route;
+      if (route.type != RouteType::MazeRoute || route.routelen <= 0
+          || route.grids.size()
+                 < static_cast<std::size_t>(route.routelen + 1)) {
+        continue;
+      }
+
+      const int old_len = route.routelen;
+      const int manhattan = treeedge->len;
+      // Only try to shorten meaningful detours.
+      if (old_len <= manhattan + 2) {
+        continue;
+      }
+
+      const TreeNode& n1 = treenodes[treeedge->n1];
+      const TreeNode& n2 = treenodes[treeedge->n2];
+      const int sx = n1.x;
+      const int sy = n1.y;
+      const int tx = n2.x;
+      const int ty = n2.y;
+      if (!in_grid(sx, sy) || !in_grid(tx, ty)) {
+        continue;
+      }
+
+      edges_touched++;
+
+      // Local search region (expanded bounding box).
+      const int rx0 = std::max(0, std::min(sx, tx) - kBBoxMargin);
+      const int rx1 = std::min(x_grid_ - 1, std::max(sx, tx) + kBBoxMargin);
+      const int ry0 = std::max(0, std::min(sy, ty) - kBBoxMargin);
+      const int ry1 = std::min(y_grid_ - 1, std::max(sy, ty) + kBBoxMargin);
+      const int w = rx1 - rx0 + 1;
+      const int h = ry1 - ry0 + 1;
+      if (w <= 0 || h <= 0) {
+        continue;
+      }
+      // Avoid large regions (can hurt runtime); this is only a local polish.
+      if (w * h > 6500) {
+        continue;
+      }
+
+      auto idx = [&](int x, int y) {
+        return (y - ry0) * w + (x - rx0);
+      };
+
+      // Rip-up old usage so we can legally reuse those edges.
+      const std::vector<GPoint3D> old_grids = route.grids;
+      ripup_usage(old_grids, old_len, net, -1);
+
+      const int INF = std::numeric_limits<int>::max() / 4;
+      std::vector<int> dist(static_cast<std::size_t>(w * h), INF);
+      std::vector<uint8_t> parent(static_cast<std::size_t>(w * h), 255);
+      // parent encoding: 0=from left,1=from right,2=from down,3=from up.
+
+      auto heuristic = [&](int x, int y) -> int {
+        return std::abs(x - tx) + std::abs(y - ty);
+      };
+
+      std::priority_queue<Node, std::vector<Node>, NodeBetter> pq;
+      dist[idx(sx, sy)] = 0;
+      pq.push(Node{sx, sy, 0, heuristic(sx, sy)});
+
+      auto can_step = [&](int x0, int y0, int x1, int y1) -> bool {
+        if (!in_grid(x1, y1)) {
+          return false;
+        }
+        if (x1 < rx0 || x1 > rx1 || y1 < ry0 || y1 > ry1) {
+          return false;
+        }
+        const int8_t edgeCost = net->getEdgeCost();
+        if (edgeCost <= 0) {
+          return false;
+        }
+        if (x0 == x1 && y0 != y1) {
+          const int y = std::min(y0, y1);
+          if (y < 0 || y >= y_grid_ - 1) {
+            return false;
+          }
+          const int cap = getEdgeCapacity(net, x0, y, EdgeDirection::Vertical);
+          const int usage = graph2d_.getUsageV(x0, y);
+          return cap > 0 && usage + edgeCost <= cap;
+        }
+        if (y0 == y1 && x0 != x1) {
+          const int x = std::min(x0, x1);
+          if (x < 0 || x >= x_grid_ - 1) {
+            return false;
+          }
+          const int cap
+              = getEdgeCapacity(net, x, y0, EdgeDirection::Horizontal);
+          const int usage = graph2d_.getUsageH(x, y0);
+          return cap > 0 && usage + edgeCost <= cap;
+        }
+        return false;
+      };
+
+      bool found = false;
+      while (!pq.empty()) {
+        const Node cur = pq.top();
+        pq.pop();
+        if (cur.x == tx && cur.y == ty) {
+          found = true;
+          break;
+        }
+        const int cur_i = idx(cur.x, cur.y);
+        if (cur.g != dist[cur_i]) {
+          continue;
+        }
+
+        // Expand in deterministic order: L, R, D, U.
+        const int nx[4] = {cur.x - 1, cur.x + 1, cur.x, cur.x};
+        const int ny[4] = {cur.y, cur.y, cur.y - 1, cur.y + 1};
+        for (int d = 0; d < 4; d++) {
+          const int ax = nx[d];
+          const int ay = ny[d];
+          if (ax < rx0 || ax > rx1 || ay < ry0 || ay > ry1) {
+            continue;
+          }
+          if (!can_step(cur.x, cur.y, ax, ay)) {
+            continue;
+          }
+          const int ni = idx(ax, ay);
+          const int ng = cur.g + 1;
+          if (ng >= dist[ni]) {
+            continue;
+          }
+          dist[ni] = ng;
+          parent[ni] = static_cast<uint8_t>(d);
+          pq.push(Node{ax, ay, ng, ng + heuristic(ax, ay)});
+        }
+      }
+
+      bool changed = false;
+      if (found) {
+        const int new_len = dist[idx(tx, ty)];
+        if (new_len < old_len) {
+          // Reconstruct path.
+          std::vector<GPoint3D> new_grids;
+          new_grids.reserve(static_cast<std::size_t>(new_len) + 1);
+          int x = tx;
+          int y = ty;
+          new_grids.push_back(
+              {static_cast<int16_t>(x), static_cast<int16_t>(y), -1});
+          while (x != sx || y != sy) {
+            const int pi = idx(x, y);
+            const uint8_t pd = parent[pi];
+            if (pd == 255) {
+              break;
+            }
+            // pd describes where we came from relative to (x,y).
+            if (pd == 0) {  // from left => prev x+1
+              x += 1;
+            } else if (pd == 1) {  // from right => prev x-1
+              x -= 1;
+            } else if (pd == 2) {  // from down => prev y+1
+              y += 1;
+            } else if (pd == 3) {  // from up => prev y-1
+              y -= 1;
+            } else {
+              break;
+            }
+            new_grids.push_back(
+                {static_cast<int16_t>(x), static_cast<int16_t>(y), -1});
+          }
+          if (x == sx && y == sy
+              && static_cast<int>(new_grids.size()) == new_len + 1) {
+            std::reverse(new_grids.begin(), new_grids.end());
+            // Commit: add usage for new route.
+            ripup_usage(new_grids, new_len, net, +1);
+            route.grids = std::move(new_grids);
+            route.routelen = new_len;
+            changed = true;
+          }
+        }
+      }
+
+      if (!changed) {
+        // Restore original route usage.
+        ripup_usage(old_grids, old_len, net, +1);
+      } else {
+        edges_changed++;
+      }
+    }
   }
 
   return edges_changed;
@@ -2086,6 +2367,7 @@ NetRouteMap FastRouteCore::run()
   // Manhattan-minimal patterns without reintroducing 2D overflow.
   if (!has_2D_overflow_) {
     polish2DRoutesForWirelength();
+    shorten2DRoutesByLocalMaze();
   }
 
   getOverflow2Dmaze(&maxOverflow, &tUsage);

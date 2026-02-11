@@ -275,6 +275,7 @@ class FastRouteCore
  private:
   int getEdgeCapacity(FrNet* net, int x1, int y1, EdgeDirection direction);
   int polish2DRoutesForWirelength();
+  int shorten2DRoutesByLocalMaze();
   void getNetId(odb::dbNet* db_net, int& net_id, bool& exists);
   void clearNetRoute(int netID);
   void clearNets();

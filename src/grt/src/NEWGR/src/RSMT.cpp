@@ -690,9 +690,24 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
       if (congestionDriven) {
         // call congestion driven flute to generate RSMT
         bool cong;
-        coeffV = noADJ ? 1.2 : coeffADJ(netID);
+        // Wirelength-first tuning:
+        // The congestion-driven coordinate scaling in `fluteCongest()` can
+        // inflate RSMT length to avoid estimated hotspots. That can help
+        // overflow, but it may also increase both GR and downstream DR
+        // wirelength due to longer topologies and extra bends.
+        //
+        // Clamp the congestion coefficient aggressively toward 1.0 to keep
+        // the RSMT closer to the true rectilinear Steiner minimum tree while
+        // still allowing a small congestion hint when needed.
+        coeffV = noADJ ? 1.0f : std::min(1.0f, coeffADJ(netID));
         cong = netCongestion(netID);
-        if (cong) {
+        // If a net is congested, FastRoute traditionally switches to a
+        // congestion-distorted FLUTE call. For this experiment, we only do
+        // that for larger-degree nets (which have more opportunity to create
+        // severe local congestion). For small/medium nets, prefer the pure
+        // wirelength-driven RSMT to reduce total routed wirelength.
+        const bool use_congest_tree = cong && d >= 25;
+        if (use_congest_tree) {
           fluteCongest(netID,
                        net->getPinX(),
                        net->getPinY(),
@@ -724,7 +739,10 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
         // Edge shifting can reduce RSMT length/bends, which often improves the
         // quality of the initial 2D routing solution. Keep this limited to
         // small/medium degree nets to avoid inflating runtime.
-        if (d > 3 && d <= 20) {
+        // Wirelength-first: allow edge shifting on a wider range of net
+        // degrees. This can reduce tree length/bends and tends to produce more
+        // direct guides, at the cost of some additional runtime.
+        if (d > 3 && d <= 40) {
           numShift += edgeShiftNew(rsmt, netID);
         }
       }

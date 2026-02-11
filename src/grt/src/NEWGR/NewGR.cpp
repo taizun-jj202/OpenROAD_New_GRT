@@ -70,8 +70,8 @@ struct CongestionScore
 struct GuidePatchingOptions
 {
   // Hard caps to avoid exploding guide count / runtime.
-  int max_total_patches = 7000;
-  int max_patches_per_net = 18;
+  int max_total_patches = 18000;
+  int max_patches_per_net = 30;
   int max_patched_pins = 1500;
 
   // Disable explicit pin via guide patches by default: they can inflate
@@ -84,18 +84,18 @@ struct GuidePatchingOptions
   // Derived-from-GR congestion hot tiles (based on edge utilization).
   // These complement Rudy hotspots by reacting to actual GR usage patterns.
   int cong_layer_count = 3;           // apply to [min_layer, min_layer + N)
-  double cong_util_threshold = 0.86;  // utilization (usage / eff_cap)
-  int cong_edge_prefix = 1400;        // keep only top-N hot edges
-  int cong_max_tiles = 2600;          // cap on unique hot tiles tracked
+  double cong_util_threshold = 0.80;  // utilization (usage / eff_cap)
+  int cong_edge_prefix = 4200;        // keep only top-N hot edges
+  int cong_max_tiles = 6000;          // cap on unique hot tiles tracked
 
   // Patch radius around selected pins, in tiles (1 => +cross neighbors).
-  int pin_patch_radius_tiles = 2;
+  int pin_patch_radius_tiles = 3;
   // Disabled by default: port/macros already create enough guide freedom, and
   // aggressive non-hotspot patching can inflate guide count / via opportunities.
   int port_patch_radius_tiles = 0;
   // Add short wire stubs on the pin connection layer to improve local access
   // without forcing extra layer switching.
-  int pin_wire_stub_tiles = 6;
+  int pin_wire_stub_tiles = 7;
 
   // Medium-segment patching is disabled by default (set threshold == long).
   // It can be useful, but tends to trade a lot of extra guide fragments for
@@ -107,18 +107,18 @@ struct GuidePatchingOptions
   int long_segment_tiles = 11;
   int very_long_segment_tiles = 30;
   // Stubs around long-segment hotspot samples.
-  int long_segment_stub_tiles = 6;
+  int long_segment_stub_tiles = 7;
   // Extremely limited adjacent-layer via patching for very long segments in
   // hot regions. This can reduce downstream detours (wirelength) when the
   // detailed router needs an earlier layer switch, while keeping via inflation
   // bounded. Keep this *very* small to avoid inflating overall via count.
   // This is only applied on very-long segments that cross hot tiles.
-  int very_long_via_patches_total = 40;
-  int very_long_via_patches_per_net = 1;
+  int very_long_via_patches_total = 400;
+  int very_long_via_patches_per_net = 2;
   // When patching a long segment, add a short *same-layer* parallel "side lane"
   // around hotspot samples. This tends to improve DR flexibility without
   // explicitly encouraging layer switching (vias).
-  int long_segment_side_lane_span_tiles = 14;
+  int long_segment_side_lane_span_tiles = 22;
 };
 
 static bool is_valid_grid_center(const odb::Rect& die_bounds,
@@ -906,7 +906,7 @@ static void simplify_guides(GlobalRouter* grouter,
     // often reduces DR detours (wirelength) while still keeping guides
     // reasonably constrained.
     const int tile = std::max(0, grouter->grid()->getTileSize());
-    preferred_merge_gap_dbu = 4 * tile;
+    preferred_merge_gap_dbu = 7 * tile;
     // For segments that do *not* match the layer's preferred direction, be
     // much more conservative about merging. Extending non-preferred-direction
     // guides can encourage DR to introduce extra layer switches (vias).
