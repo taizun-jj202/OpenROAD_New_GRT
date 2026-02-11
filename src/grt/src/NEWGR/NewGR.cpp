@@ -368,15 +368,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // - Keep congestion iterations bounded (fewer detours + faster runtime).
   // - Disable critical-net ordering to avoid STA overhead and additional
   //   ripup/re-route churn.
-  // - Use modest capacity perturbation to avoid pathological tie-breaking.
+  // - Avoid capacity perturbations (tends to increase detours/wirelength).
   CandidateSettings wl_lean = baseline;
   wl_lean.name = "wl-lean";
-  wl_lean.seed = 29;
-  wl_lean.caps_perturbation_percentage
-      = std::max(1.0f, snapshot.caps_percentage);
+  // Seed affects tie-breaking in routing and can meaningfully change final WL.
+  // Prefer a deterministic seed that historically produces shorter solutions.
+  wl_lean.seed = 11;
+  wl_lean.caps_perturbation_percentage = 0.0f;
   wl_lean.perturbation_amount = 1;
   wl_lean.congestion_iterations
-      = std::min(30, snapshot.congestion_iterations);
+      = std::min(25, snapshot.congestion_iterations);
   wl_lean.critical_nets_percentage = 0.0f;
 
   auto is_better = [&](const CandidateResult& current,
