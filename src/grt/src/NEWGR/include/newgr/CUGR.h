@@ -31,10 +31,10 @@ class BoxT;
 struct Constants
 {
   // Bias cost toward shorter solutions to improve downstream DR wirelength.
-  double weight_wire_length = 1.00;
-  double weight_via_number = 4.5;
+  double weight_wire_length = 1.05;
+  double weight_via_number = 5.0;
   // Reduce congestion-driven detours to keep guides compact.
-  double weight_short_area = 275.0;
+  double weight_short_area = 260.0;
 
   int min_routing_layer = 1;
 
