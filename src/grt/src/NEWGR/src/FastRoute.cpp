@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <queue>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
@@ -1644,11 +1645,17 @@ NetRouteMap FastRouteCore::run()
   if (total_overflow_ == 0) {
     constexpr int kMinDetourToOptimize = 2;
     constexpr int kMaxEdgesToOptimize = 50000;
-    constexpr int kTurnOutsideBoxLimit = 2;
+    constexpr int kTurnOutsideBoxLimit = 3;
     constexpr double kAltSearchUtilThreshold = 0.85;
+    constexpr int kAstarMinDetourToOptimize = 8;
+    constexpr int kAstarMaxAttempts = 2500;
+    constexpr int kAstarMargin = 4;
+    constexpr int kAstarMaxExpansions = 12000;
 
     int optimized_edges = 0;
     int total_len_saved = 0;
+    int astar_attempts = 0;
+    int astar_success = 0;
 
     auto update_usage_for_route = [&](const std::vector<GPoint3D>& grids,
                                       const int routelen,
@@ -1830,6 +1837,215 @@ NetRouteMap FastRouteCore::run()
           return false;
         }
       }
+      return true;
+    };
+
+    auto find_capacity_path_astar
+        = [&](FrNet* net,
+              const int x1,
+              const int y1,
+              const int x2,
+              const int y2,
+              const int old_len,
+              std::vector<GPoint3D>& out_grids) -> bool {
+      out_grids.clear();
+
+      const int edge_cost = net->getEdgeCost();
+      if (edge_cost != 1) {
+        return false;
+      }
+
+      const int xmin = std::min(x1, x2);
+      const int xmax = std::max(x1, x2);
+      const int ymin = std::min(y1, y2);
+      const int ymax = std::max(y1, y2);
+
+      const int x_lo = std::max(0, xmin - kAstarMargin);
+      const int x_hi = std::min(x_grid_ - 1, xmax + kAstarMargin);
+      const int y_lo = std::max(0, ymin - kAstarMargin);
+      const int y_hi = std::min(y_grid_ - 1, ymax + kAstarMargin);
+
+      const int width = x_hi - x_lo + 1;
+      const int height = y_hi - y_lo + 1;
+      if (width <= 0 || height <= 0) {
+        return false;
+      }
+
+      const int64_t area64 = static_cast<int64_t>(width) * height;
+      if (area64 > 20000) {
+        return false;
+      }
+      const int area = static_cast<int>(area64);
+
+      auto to_idx = [&](const int x, const int y) -> int {
+        return (x - x_lo) + (y - y_lo) * width;
+      };
+      auto from_idx = [&](const int idx) -> std::pair<int, int> {
+        const int rx = idx % width;
+        const int ry = idx / width;
+        return {x_lo + rx, y_lo + ry};
+      };
+
+      const int start = to_idx(x1, y1);
+      const int goal = to_idx(x2, y2);
+
+      constexpr int kInf = std::numeric_limits<int>::max() / 4;
+      std::vector<int> g_cost(area, kInf);
+      std::vector<double> sum_util(area,
+                                   std::numeric_limits<double>::infinity());
+      std::vector<int> parent(area, -1);
+
+      struct OpenNode
+      {
+        int idx = -1;
+        int f = 0;
+        int g = 0;
+        double sum = 0.0;
+      };
+
+      struct OpenCmp
+      {
+        bool operator()(const OpenNode& a, const OpenNode& b) const
+        {
+          if (a.f != b.f) {
+            return a.f > b.f;  // min-heap on f
+          }
+          if (a.g != b.g) {
+            return a.g > b.g;
+          }
+          return a.sum > b.sum;
+        }
+      };
+
+      auto h = [&](const int x, const int y) -> int {
+        return std::abs(x - x2) + std::abs(y - y2);
+      };
+
+      const int target_budget = old_len - 1;
+      if (target_budget <= 0) {
+        return false;
+      }
+
+      std::priority_queue<OpenNode, std::vector<OpenNode>, OpenCmp> open;
+      g_cost[start] = 0;
+      sum_util[start] = 0.0;
+      open.push({start, h(x1, y1), 0, 0.0});
+
+      int expansions = 0;
+
+      auto edge_ok_and_util = [&](const int x,
+                                  const int y,
+                                  const int nx,
+                                  const int ny,
+                                  double& util_out) -> bool {
+        util_out = 0.0;
+        if (x == nx && y == ny) {
+          return false;
+        }
+        if (x == nx) {
+          const int y_edge = std::min(y, ny);
+          const int cap
+              = getEdgeCapacity(net, x, y_edge, EdgeDirection::Vertical);
+          if (cap <= 0) {
+            return false;
+          }
+          const int usage = graph2d_.getUsageV(x, y_edge);
+          if (usage + edge_cost > cap) {
+            return false;
+          }
+          util_out = static_cast<double>(usage + edge_cost) / cap;
+          return true;
+        }
+        if (y == ny) {
+          const int x_edge = std::min(x, nx);
+          const int cap
+              = getEdgeCapacity(net, x_edge, y, EdgeDirection::Horizontal);
+          if (cap <= 0) {
+            return false;
+          }
+          const int usage = graph2d_.getUsageH(x_edge, y);
+          if (usage + edge_cost > cap) {
+            return false;
+          }
+          util_out = static_cast<double>(usage + edge_cost) / cap;
+          return true;
+        }
+        return false;
+      };
+
+      while (!open.empty() && expansions < kAstarMaxExpansions) {
+        OpenNode cur = open.top();
+        open.pop();
+        expansions++;
+
+        if (cur.g != g_cost[cur.idx] || cur.sum != sum_util[cur.idx]) {
+          continue;  // stale
+        }
+
+        if (cur.idx == goal) {
+          break;
+        }
+
+        const auto [x, y] = from_idx(cur.idx);
+        const int cur_h = h(x, y);
+        if (cur.g + cur_h > target_budget) {
+          continue;
+        }
+
+        const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (const auto& dxy : dirs) {
+          const int nx = x + dxy[0];
+          const int ny = y + dxy[1];
+          if (nx < x_lo || nx > x_hi || ny < y_lo || ny > y_hi) {
+            continue;
+          }
+
+          const int ng = cur.g + 1;
+          const int nh = h(nx, ny);
+          if (ng + nh > target_budget) {
+            continue;
+          }
+
+          double util = 0.0;
+          if (!edge_ok_and_util(x, y, nx, ny, util)) {
+            continue;
+          }
+
+          const int nidx = to_idx(nx, ny);
+          const double nsum = cur.sum + util;
+          if (ng < g_cost[nidx]
+              || (ng == g_cost[nidx] && nsum < sum_util[nidx])) {
+            g_cost[nidx] = ng;
+            sum_util[nidx] = nsum;
+            parent[nidx] = cur.idx;
+            open.push({nidx, ng + nh, ng, nsum});
+          }
+        }
+      }
+
+      if (g_cost[goal] == kInf) {
+        return false;
+      }
+
+      // Reconstruct
+      std::vector<int> path;
+      path.reserve(g_cost[goal] + 1);
+      for (int at = goal; at != -1; at = parent[at]) {
+        path.push_back(at);
+      }
+      std::reverse(path.begin(), path.end());
+      if (path.empty() || path.front() != start || path.back() != goal) {
+        return false;
+      }
+
+      out_grids.reserve(path.size());
+      for (const int idx : path) {
+        const auto [x, y] = from_idx(idx);
+        out_grids.push_back({static_cast<int16_t>(x),
+                             static_cast<int16_t>(y),
+                             static_cast<int16_t>(-1)});
+      }
+
       return true;
     };
 
@@ -2058,19 +2274,58 @@ NetRouteMap FastRouteCore::run()
           }
         }
 
+        bool applied = false;
+
         if (best.ok) {
           const auto& new_grids = best.grids;
           const int new_len = static_cast<int>(new_grids.size()) - 1;
-          update_usage_for_route(new_grids, new_len, net, net->getEdgeCost());
+          if (new_len < old_len) {
+            update_usage_for_route(new_grids, new_len, net, net->getEdgeCost());
 
-          treeedge->route.grids = new_grids;
-          treeedge->route.routelen = new_len;
-          treeedge->route.type = RouteType::MazeRoute;
+            treeedge->route.grids = new_grids;
+            treeedge->route.routelen = new_len;
+            treeedge->route.type = RouteType::MazeRoute;
 
-          optimized_edges++;
-          total_len_saved += (old_len - new_len);
-          net_changed = true;
-        } else {
+            optimized_edges++;
+            total_len_saved += (old_len - new_len);
+            net_changed = true;
+            applied = true;
+          }
+        }
+
+        // If we didn't find a direct L/HVH/VHV candidate, try a bounded A*
+        // inside a small expanded box. This can recover a "nearly-shortest"
+        // path for large detours caused by a handful of saturated edges,
+        // without paying the full maze-routing cost.
+        if (!applied && (old_len - manhattan) >= kAstarMinDetourToOptimize
+            && astar_attempts < kAstarMaxAttempts) {
+          astar_attempts++;
+          std::vector<GPoint3D> astar_grids;
+          if (find_capacity_path_astar(
+                  net, x1, y1, x2, y2, old_len, astar_grids)) {
+            const int new_len = static_cast<int>(astar_grids.size()) - 1;
+            if (new_len < old_len) {
+              double max_util = 0.0;
+              double sum_util = 0.0;
+              if (evaluate_l_route(net, astar_grids, max_util, sum_util)) {
+                update_usage_for_route(
+                    astar_grids, new_len, net, net->getEdgeCost());
+
+                treeedge->route.grids = std::move(astar_grids);
+                treeedge->route.routelen = new_len;
+                treeedge->route.type = RouteType::MazeRoute;
+
+                optimized_edges++;
+                total_len_saved += (old_len - new_len);
+                net_changed = true;
+                applied = true;
+                astar_success++;
+              }
+            }
+          }
+        }
+
+        if (!applied) {
           update_usage_for_route(old_grids, old_len, net, net->getEdgeCost());
         }
       }
@@ -2087,9 +2342,11 @@ NetRouteMap FastRouteCore::run()
                  GNR,
                  "congestionIterations",
                  1,
-                 "Wirelength recovery: optimized {} edges, saved {} 2D steps.",
+                 "Wirelength recovery: optimized {} edges, saved {} 2D steps (A* {}/{}).",
                  optimized_edges,
-                 total_len_saved);
+                 total_len_saved,
+                 astar_success,
+                 astar_attempts);
     }
   }
 
