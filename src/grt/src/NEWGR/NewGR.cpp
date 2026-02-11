@@ -4,7 +4,9 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <queue>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -970,6 +972,302 @@ LShapeScore score_lshape(const GridPoint& a,
   return score;
 }
 
+std::uint64_t encode_unit_edge_key(int gx0,
+                                   int gy0,
+                                   int gx1,
+                                   int gy1,
+                                   int layer)
+{
+  if (gx0 > gx1 || (gx0 == gx1 && gy0 > gy1)) {
+    std::swap(gx0, gx1);
+    std::swap(gy0, gy1);
+  }
+
+  constexpr std::uint64_t kCoordMask = (1u << 14) - 1u;
+  const std::uint64_t l = static_cast<std::uint64_t>(layer & 0xff);
+  const std::uint64_t x0 = static_cast<std::uint64_t>(gx0) & kCoordMask;
+  const std::uint64_t y0 = static_cast<std::uint64_t>(gy0) & kCoordMask;
+  const std::uint64_t x1 = static_cast<std::uint64_t>(gx1) & kCoordMask;
+  const std::uint64_t y1 = static_cast<std::uint64_t>(gy1) & kCoordMask;
+
+  return (l << 56) | (x0 << 42) | (y0 << 28) | (x1 << 14) | y1;
+}
+
+std::unordered_set<std::uint64_t> collect_unit_grid_edges(const GRoute& route,
+                                                          const Grid* grid)
+{
+  std::unordered_set<std::uint64_t> edges;
+  if (grid == nullptr) {
+    return edges;
+  }
+
+  const int tile = grid->getTileSize();
+  if (tile <= 0) {
+    return edges;
+  }
+
+  const int x0_corner = grid->getXMin();
+  const int y0_corner = grid->getYMin();
+  const int x_grids = grid->getXGrids();
+  const int y_grids = grid->getYGrids();
+  if (x_grids <= 0 || y_grids <= 0) {
+    return edges;
+  }
+
+  auto to_grid_idx = [&](const int x_dbu, const int y_dbu) -> std::pair<int, int> {
+    int gx = (x_dbu - x0_corner) / tile;
+    int gy = (y_dbu - y0_corner) / tile;
+    gx = std::max(0, std::min(x_grids - 1, gx));
+    gy = std::max(0, std::min(y_grids - 1, gy));
+    return {gx, gy};
+  };
+
+  edges.reserve(route.size() * 6 + 64);
+  for (const auto& seg : route) {
+    if (seg.isVia()) {
+      continue;
+    }
+    const int layer = seg.init_layer;
+
+    auto [gx0, gy0] = to_grid_idx(seg.init_x, seg.init_y);
+    auto [gx1, gy1] = to_grid_idx(seg.final_x, seg.final_y);
+    if (gx0 == gx1 && gy0 == gy1) {
+      continue;
+    }
+
+    if (gy0 == gy1) {
+      const int y = gy0;
+      const int x_min = std::min(gx0, gx1);
+      const int x_max = std::max(gx0, gx1);
+      for (int x = x_min; x < x_max; x++) {
+        edges.insert(encode_unit_edge_key(x, y, x + 1, y, layer));
+      }
+    } else if (gx0 == gx1) {
+      const int x = gx0;
+      const int y_min = std::min(gy0, gy1);
+      const int y_max = std::max(gy0, gy1);
+      for (int y = y_min; y < y_max; y++) {
+        edges.insert(encode_unit_edge_key(x, y, x, y + 1, layer));
+      }
+    }
+  }
+
+  return edges;
+}
+
+bool find_slack_shortest_path(const GridPoint& start,
+                              const GridPoint& goal,
+                              const int h_layer,
+                              const int v_layer,
+                              odb::dbNet* db_net,
+                              GlobalRouter* grouter,
+                              const std::unordered_set<std::uint64_t>& base_edges,
+                              std::vector<GridPoint>& out_path)
+{
+  out_path.clear();
+  if (grouter == nullptr || db_net == nullptr) {
+    return false;
+  }
+  FastRouteCore* fastroute = grouter->fastroute();
+  const Grid* grid = grouter->grid();
+  if (fastroute == nullptr || grid == nullptr) {
+    return false;
+  }
+
+  const int x_grids = grid->getXGrids();
+  const int y_grids = grid->getYGrids();
+  if (x_grids <= 0 || y_grids <= 0) {
+    return false;
+  }
+
+  const int dx = std::abs(start.gx - goal.gx);
+  const int dy = std::abs(start.gy - goal.gy);
+  const int manhattan = dx + dy;
+
+  const int margin = std::max(6, std::min(32, manhattan / 3));
+  const int xmin = std::max(0, std::min(start.gx, goal.gx) - margin);
+  const int xmax = std::min(x_grids - 1, std::max(start.gx, goal.gx) + margin);
+  const int ymin = std::max(0, std::min(start.gy, goal.gy) - margin);
+  const int ymax = std::min(y_grids - 1, std::max(start.gy, goal.gy) + margin);
+
+  const int width = xmax - xmin + 1;
+  const int height = ymax - ymin + 1;
+  if (width <= 0 || height <= 0) {
+    return false;
+  }
+
+  constexpr int kMaxStates = 160000;  // width*height*3
+  if (width * height * 3 > kMaxStates) {
+    return false;
+  }
+
+  enum Dir : uint8_t
+  {
+    kNone = 0,
+    kH = 1,
+    kV = 2
+  };
+
+  auto state_index = [&](const int gx, const int gy, const int dir) -> int {
+    const int lx = gx - xmin;
+    const int ly = gy - ymin;
+    return ((ly * width + lx) * 3) + dir;
+  };
+
+  auto decode_state = [&](const int idx) -> std::tuple<int, int, int> {
+    const int cell = idx / 3;
+    const int dir = idx % 3;
+    const int ly = cell / width;
+    const int lx = cell % width;
+    return {xmin + lx, ymin + ly, dir};
+  };
+
+  auto heuristic = [&](const int gx, const int gy) -> int {
+    return std::abs(gx - goal.gx) + std::abs(gy - goal.gy);
+  };
+
+  const int req_h = fastroute->getDbNetLayerEdgeCost(db_net, h_layer);
+  const int req_v = fastroute->getDbNetLayerEdgeCost(db_net, v_layer);
+
+  auto step_ok_and_penalty = [&](const int gx0,
+                                 const int gy0,
+                                 const int gx1,
+                                 const int gy1,
+                                 const int layer,
+                                 const int req,
+                                 int& out_penalty) -> bool {
+    out_penalty = 0;
+    if (req <= 0) {
+      return true;
+    }
+
+    const int x0 = std::min(gx0, gx1);
+    const int y0 = std::min(gy0, gy1);
+    const int x1 = std::max(gx0, gx1);
+    const int y1 = std::max(gy0, gy1);
+
+    int avail = fastroute->getAvailableResources(x0, y0, x1, y1, layer);
+    const std::uint64_t key = encode_unit_edge_key(gx0, gy0, gx1, gy1, layer);
+    if (base_edges.find(key) != base_edges.end()) {
+      // Credit this edge with the net's own demand, approximating a rip-up.
+      avail += req;
+    }
+
+    if (avail < req) {
+      return false;
+    }
+
+    const int slack = avail - req;
+    constexpr int kSoftSlackThreshold = 1;
+    if (slack < kSoftSlackThreshold) {
+      out_penalty += (kSoftSlackThreshold - slack);
+    }
+
+    return true;
+  };
+
+  constexpr int kStepCost = 1;
+  constexpr int kTurnPenalty = 2;
+
+  struct Node
+  {
+    int f = 0;
+    int g = 0;
+    int idx = 0;
+  };
+
+  struct NodeCmp
+  {
+    bool operator()(const Node& a, const Node& b) const { return a.f > b.f; }
+  };
+
+  const int nstates = width * height * 3;
+  constexpr int kInf = std::numeric_limits<int>::max() / 4;
+  std::vector<int> gscore(nstates, kInf);
+  std::vector<int> parent(nstates, -1);
+
+  std::priority_queue<Node, std::vector<Node>, NodeCmp> pq;
+
+  const int start_idx = state_index(start.gx, start.gy, kNone);
+  gscore[start_idx] = 0;
+  pq.push(Node{heuristic(start.gx, start.gy), 0, start_idx});
+
+  int goal_idx = -1;
+
+  while (!pq.empty()) {
+    const Node cur = pq.top();
+    pq.pop();
+
+    if (cur.g != gscore[cur.idx]) {
+      continue;
+    }
+
+    auto [gx, gy, dir] = decode_state(cur.idx);
+    if (gx == goal.gx && gy == goal.gy) {
+      goal_idx = cur.idx;
+      break;
+    }
+
+    auto try_relax = [&](const int ngx, const int ngy, const int ndir) {
+      if (ngx < xmin || ngx > xmax || ngy < ymin || ngy > ymax) {
+        return;
+      }
+
+      const bool is_h = (ngy == gy) && (ngx != gx);
+      const bool is_v = (ngx == gx) && (ngy != gy);
+      if (!is_h && !is_v) {
+        return;
+      }
+
+      const int layer = is_h ? h_layer : v_layer;
+      const int req = is_h ? req_h : req_v;
+
+      int slack_penalty = 0;
+      if (!step_ok_and_penalty(gx, gy, ngx, ngy, layer, req, slack_penalty)) {
+        return;
+      }
+
+      int step_cost = kStepCost + slack_penalty;
+      if (dir != kNone && dir != ndir) {
+        step_cost += kTurnPenalty;
+      }
+
+      const int next_idx = state_index(ngx, ngy, ndir);
+      const int tentative_g = cur.g + step_cost;
+      if (tentative_g < gscore[next_idx]) {
+        gscore[next_idx] = tentative_g;
+        parent[next_idx] = cur.idx;
+        const int f = tentative_g + heuristic(ngx, ngy);
+        pq.push(Node{f, tentative_g, next_idx});
+      }
+    };
+
+    try_relax(gx + 1, gy, kH);
+    try_relax(gx - 1, gy, kH);
+    try_relax(gx, gy + 1, kV);
+    try_relax(gx, gy - 1, kV);
+  }
+
+  if (goal_idx < 0) {
+    return false;
+  }
+
+  std::vector<GridPoint> rev;
+  rev.reserve(static_cast<std::size_t>(manhattan) + 8);
+  int cur = goal_idx;
+  while (cur >= 0) {
+    auto [gx, gy, _dir] = decode_state(cur);
+    rev.push_back(GridPoint{gx, gy});
+    cur = parent[cur];
+  }
+
+  if (rev.empty()) {
+    return false;
+  }
+  out_path.assign(rev.rbegin(), rev.rend());
+  return out_path.size() >= 1;
+}
+
 void add_wire(GRoute& route,
               const odb::Point& p0,
               const odb::Point& p1,
@@ -997,7 +1295,8 @@ GRoute build_pattern_direct_route(odb::dbNet* db_net,
                                   stt::SteinerTreeBuilder* stt_builder,
                                   odb::dbTech* tech,
                                   const int min_routing_layer,
-                                  const int max_routing_layer)
+                                  const int max_routing_layer,
+                                  const GRoute* base_route_for_slack)
 {
   GRoute route;
   if (db_net == nullptr || grouter == nullptr) {
@@ -1092,6 +1391,40 @@ GRoute build_pattern_direct_route(odb::dbNet* db_net,
   std::unordered_map<long long, uint8_t> endpoint_layer_mask;
   endpoint_layer_mask.reserve(static_cast<size_t>(pins_grid.size()) * 8);
 
+  const std::unordered_set<std::uint64_t> base_edges
+      = (base_route_for_slack != nullptr)
+            ? collect_unit_grid_edges(*base_route_for_slack, grid)
+            : std::unordered_set<std::uint64_t>{};
+
+  std::unordered_set<GSegment, GSegmentHash> existing;
+  existing.reserve(256);
+
+  auto add_wire_unique = [&](const odb::Point& p0,
+                             const odb::Point& p1,
+                             const int layer) {
+    if (p0 == p1) {
+      return;
+    }
+    const GSegment seg(p0.x(), p0.y(), layer, p1.x(), p1.y(), layer);
+    if (existing.insert(seg).second) {
+      route.push_back(seg);
+    }
+  };
+
+  auto add_via_unique = [&](const odb::Point& p,
+                            const int layer0,
+                            const int layer1) {
+    if (layer0 == layer1) {
+      return;
+    }
+    const int via_lo = std::min(layer0, layer1);
+    const int via_hi = std::max(layer0, layer1);
+    const GSegment via(p.x(), p.y(), via_lo, p.x(), p.y(), via_hi);
+    if (existing.insert(via).second) {
+      route.push_back(via);
+    }
+  };
+
   auto add_endpoint_layer = [&](const odb::Point& p, const int layer) {
     const long long key
         = (static_cast<long long>(p.x()) << 32) ^ static_cast<unsigned>(p.y());
@@ -1120,6 +1453,65 @@ GRoute build_pattern_direct_route(odb::dbNet* db_net,
       return;
     }
 
+    // Radical directness-first alternative: route with an A* that optimizes
+    // for shortest length under a *hard* capacity-feasibility constraint on
+    // the current congestion DB (crediting the base route for this net).
+    //
+    // If it fails (too tight / too large search), fall back to the old
+    // L-shape chooser.
+    constexpr std::size_t kMaxPinsForSlackMaze = 30;
+    if (pins_grid.size() <= kMaxPinsForSlackMaze) {
+      std::vector<GridPoint> path;
+      if (find_slack_shortest_path(
+              a, b, h_layer, v_layer, db_net, grouter, base_edges, path)
+          && path.size() >= 2) {
+        auto step_dir = [&](const GridPoint& p0, const GridPoint& p1) -> int {
+          if (p0.gy == p1.gy && p0.gx != p1.gx) {
+            return 1;  // H
+          }
+          if (p0.gx == p1.gx && p0.gy != p1.gy) {
+            return 2;  // V
+          }
+          return 0;
+        };
+
+        int cur_dir = step_dir(path[0], path[1]);
+        if (cur_dir != 0) {
+          int cur_layer = (cur_dir == 1) ? h_layer : v_layer;
+          GridPoint seg_start = path[0];
+          for (std::size_t i = 1; i < path.size(); i++) {
+            const GridPoint prev = path[i - 1];
+            const GridPoint cur = path[i];
+            const int d = step_dir(prev, cur);
+            if (d == 0) {
+              break;
+            }
+            if (d != cur_dir) {
+              const odb::Point p0 = to_dbu(seg_start);
+              const odb::Point p1 = to_dbu(prev);
+              add_wire_unique(p0, p1, cur_layer);
+              add_endpoint_layer(p0, cur_layer);
+              add_endpoint_layer(p1, cur_layer);
+
+              const odb::Point p_turn = to_dbu(prev);
+              add_via_unique(p_turn, h_layer, v_layer);
+
+              seg_start = prev;
+              cur_dir = d;
+              cur_layer = (cur_dir == 1) ? h_layer : v_layer;
+            }
+          }
+
+          const odb::Point p0 = to_dbu(seg_start);
+          const odb::Point p1 = to_dbu(path.back());
+          add_wire_unique(p0, p1, cur_layer);
+          add_endpoint_layer(p0, cur_layer);
+          add_endpoint_layer(p1, cur_layer);
+          return;
+        }
+      }
+    }
+
     const GridPoint turn1{a.gx, b.gy};
     const GridPoint turn2{b.gx, a.gy};
     const LShapeScore s1
@@ -1133,27 +1525,27 @@ GRoute build_pattern_direct_route(odb::dbNet* db_net,
     const odb::Point p_t = to_dbu(turn);
 
     if (a.gy == turn.gy) {
-      add_wire(route, p_a, p_t, h_layer);
+      add_wire_unique(p_a, p_t, h_layer);
       add_endpoint_layer(p_a, h_layer);
       add_endpoint_layer(p_t, h_layer);
     } else if (a.gx == turn.gx) {
-      add_wire(route, p_a, p_t, v_layer);
+      add_wire_unique(p_a, p_t, v_layer);
       add_endpoint_layer(p_a, v_layer);
       add_endpoint_layer(p_t, v_layer);
     }
 
     if (turn.gy == b.gy) {
-      add_wire(route, p_t, p_b, h_layer);
+      add_wire_unique(p_t, p_b, h_layer);
       add_endpoint_layer(p_t, h_layer);
       add_endpoint_layer(p_b, h_layer);
     } else if (turn.gx == b.gx) {
-      add_wire(route, p_t, p_b, v_layer);
+      add_wire_unique(p_t, p_b, v_layer);
       add_endpoint_layer(p_t, v_layer);
       add_endpoint_layer(p_b, v_layer);
     }
 
     if (h_layer != v_layer && a.gx != b.gx && a.gy != b.gy) {
-      add_via(route, p_t, h_layer, v_layer);
+      add_via_unique(p_t, h_layer, v_layer);
     }
   };
 
@@ -1236,7 +1628,7 @@ GRoute build_pattern_direct_route(odb::dbNet* db_net,
       }
       const int x = static_cast<int>(key >> 32);
       const int y = static_cast<int>(key & 0xffffffffLL);
-      add_via(route, odb::Point(x, y), h_layer, v_layer);
+      add_via_unique(odb::Point(x, y), h_layer, v_layer);
     }
   }
 
@@ -1382,6 +1774,7 @@ void union_shorter_guides(NetRouteMap& base_routes,
   };
 
   auto count_blocked_edges = [&](odb::dbNet* db_net,
+                                 const std::unordered_set<std::uint64_t>& credit_edges,
                                  const GRoute& route) -> int {
     FastRouteCore* fastroute = (grouter != nullptr) ? grouter->fastroute() : nullptr;
     const Grid* grid = (grouter != nullptr) ? grouter->grid() : nullptr;
@@ -1427,8 +1820,11 @@ void union_shorter_guides(NetRouteMap& base_routes,
         const int x_min = std::min(gx0, gx1);
         const int x_max = std::max(gx0, gx1);
         for (int x = x_min; x < x_max; x++) {
-          const int avail
-              = fastroute->getAvailableResources(x, y, x + 1, y, layer);
+          int avail = fastroute->getAvailableResources(x, y, x + 1, y, layer);
+          if (credit_edges.find(encode_unit_edge_key(x, y, x + 1, y, layer))
+              != credit_edges.end()) {
+            avail += req;
+          }
           if (avail < req) {
             blocked++;
           }
@@ -1438,8 +1834,11 @@ void union_shorter_guides(NetRouteMap& base_routes,
         const int y_min = std::min(gy0, gy1);
         const int y_max = std::max(gy0, gy1);
         for (int y = y_min; y < y_max; y++) {
-          const int avail
-              = fastroute->getAvailableResources(x, y, x, y + 1, layer);
+          int avail = fastroute->getAvailableResources(x, y, x, y + 1, layer);
+          if (credit_edges.find(encode_unit_edge_key(x, y, x, y + 1, layer))
+              != credit_edges.end()) {
+            avail += req;
+          }
           if (avail < req) {
             blocked++;
           }
@@ -1491,7 +1890,10 @@ void union_shorter_guides(NetRouteMap& base_routes,
                  < static_cast<long>(base_wl * (1.0 - kReplaceMinRelativeImprovement))
           && route_is_connected(direct);
     if (can_replace) {
-      const int blocked_edges = count_blocked_edges(db_net, direct);
+      const std::unordered_set<std::uint64_t> credit_edges
+          = collect_unit_grid_edges(base, (grouter != nullptr) ? grouter->grid()
+                                                               : nullptr);
+      const int blocked_edges = count_blocked_edges(db_net, credit_edges, direct);
       if (blocked_edges <= kReplaceMaxBlockedEdges) {
         base = direct;
         stats.nets_replaced++;
@@ -1800,42 +2202,37 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   stt::SteinerTreeBuilder* stt_builder = grouter_->stt_builder_;
   auto build_direct_candidate = [&](const NetRouteMap& base_routes) -> NetRouteMap {
     NetRouteMap direct_routes;
-    for (const auto& [db_net, _] : base_routes) {
+    const int tile = (grouter_ != nullptr) ? grouter_->getTileSize() : 0;
+    const long min_net_wl_dbu = std::max<long>(0, static_cast<long>(tile) * 20);
+
+    for (const auto& [db_net, base_segments] : base_routes) {
       const auto it_fast = direct_fastroute.routes.find(db_net);
       const GRoute* fast_route
           = (it_fast != direct_fastroute.routes.end()) ? &it_fast->second
                                                        : nullptr;
 
+      const RouteMetrics base_m = compute_route_metrics(base_segments, tech);
+      if (base_m.wirelength_dbu < min_net_wl_dbu) {
+        continue;
+      }
+
+      // Prefer the "slack-shortest" per-net candidate (capacity-feasible,
+      // directness-first). Fall back to the overflow-tolerant FastRoute run if
+      // needed (keeps prior behavior for pathological nets).
       GRoute pattern_route = build_pattern_direct_route(db_net,
                                                         grouter_,
                                                         stt_builder,
                                                         tech,
                                                         min_routing_layer,
-                                                        max_routing_layer);
-
-      const RouteMetrics pattern_m = compute_route_metrics(pattern_route, tech);
-      RouteMetrics fast_m;
-      if (fast_route != nullptr) {
-        fast_m = compute_route_metrics(*fast_route, tech);
+                                                        max_routing_layer,
+                                                        &base_segments);
+      if (!pattern_route.empty()) {
+        direct_routes[db_net] = std::move(pattern_route);
+        continue;
       }
 
-      const bool fast_valid = (fast_route != nullptr) && !fast_route->empty();
-      const bool pattern_valid = !pattern_route.empty();
-
-      // Pick the most direct candidate per net to maximize the chance that the
-      // union pass finds a shorter alternative. Tie-break by via count.
-      if (fast_valid && pattern_valid) {
-        if (fast_m.wirelength_dbu < pattern_m.wirelength_dbu
-            || (fast_m.wirelength_dbu == pattern_m.wirelength_dbu
-                && fast_m.via_count <= pattern_m.via_count)) {
-          direct_routes[db_net] = *fast_route;
-        } else {
-          direct_routes[db_net] = std::move(pattern_route);
-        }
-      } else if (fast_valid) {
+      if (fast_route != nullptr && !fast_route->empty()) {
         direct_routes[db_net] = *fast_route;
-      } else if (pattern_valid) {
-        direct_routes[db_net] = std::move(pattern_route);
       }
     }
     return direct_routes;
