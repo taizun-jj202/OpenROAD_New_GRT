@@ -416,13 +416,6 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       }
     }
   }
-  // Extend the fixed layers one layer higher to facilitate limited track
-  // switching without overly increasing via opportunities.
-  for (auto& accessPoint : selected_access_points) {
-    IntervalT& fixedLayers = accessPoint.layers;
-    fixedLayers.SetHigh(
-        std::min(fixedLayers.high() + 1, (int) getNumLayers() - 1));
-  }
   return selected_access_points;
 }
 

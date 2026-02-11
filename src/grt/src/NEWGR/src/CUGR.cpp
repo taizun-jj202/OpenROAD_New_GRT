@@ -55,12 +55,16 @@ void CUGR::updateOverflowNets(std::vector<int>& netIndices)
 {
   netIndices.clear();
   for (const auto& net : gr_nets_) {
-    if (grid_graph_->checkOverflow(net->getRoutingTree()) > 0) {
+    const int overflow_edges = grid_graph_->checkOverflow(net->getRoutingTree());
+    if (overflow_edges >= constants_.reroute_overflow_edge_threshold) {
       netIndices.push_back(net->getIndex());
     }
   }
   const int num_nets = gr_nets_.size();
-  logger_->report("{} / {} nets have overflow.", netIndices.size(), num_nets);
+  logger_->report("{} / {} nets have overflow (threshold >= {}).",
+                  netIndices.size(),
+                  num_nets,
+                  constants_.reroute_overflow_edge_threshold);
 }
 
 void CUGR::patternRoute(std::vector<int>& netIndices)
@@ -163,9 +167,13 @@ void CUGR::route()
 
   patternRoute(netIndices);
 
-  patternRouteWithDetours(netIndices);
+  if (constants_.enable_detours) {
+    patternRouteWithDetours(netIndices);
+  }
 
-  mazeRoute(netIndices);
+  if (constants_.enable_maze) {
+    mazeRoute(netIndices);
+  }
 
   printStatistics();
   if (constants_.write_heatmap) {
@@ -253,6 +261,31 @@ NetRouteMap CUGR::getRoutes()
             }
           }
         });
+
+    // `check_antennas` requires that every multi-term net has at least one
+    // guide. Some nets can collapse to a single routing point at this coarse
+    // gcell granularity, resulting in no edges (and thus no guides) unless we
+    // emit a degenerate segment.
+    if (route.empty()) {
+      const auto& pin_aps = net->getPinAccessPoints();
+      GRPoint anchor(constants_.min_routing_layer, 0, 0);
+      bool found_anchor = false;
+      for (const auto& aps : pin_aps) {
+        if (!aps.empty()) {
+          anchor = aps.front();
+          found_anchor = true;
+          break;
+        }
+      }
+      if (found_anchor) {
+        int layer_idx = std::max(constants_.min_routing_layer,
+                                 anchor.getLayerIdx());
+        layer_idx = std::min(layer_idx, grid_graph_->getNumLayers() - 1);
+        const int x = grid_graph_->getGridline(0, anchor.x()) + half_gcell;
+        const int y = grid_graph_->getGridline(1, anchor.y()) + half_gcell;
+        route.emplace_back(x, y, layer_idx + 1, x, y, layer_idx + 1, false);
+      }
+    }
   }
 
   return routes;

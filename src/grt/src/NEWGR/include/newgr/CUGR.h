@@ -31,18 +31,24 @@ class BoxT;
 struct Constants
 {
   // Bias cost toward shorter solutions to improve downstream DR wirelength.
-  double weight_wire_length = 1.05;
-  double weight_via_number = 5.0;
+  // Favor shorter routing (primary metric) while still accounting for vias.
+  double weight_wire_length = 1.25;
+  double weight_via_number = 5.5;
   // Reduce congestion-driven detours to keep guides compact.
-  double weight_short_area = 260.0;
+  double weight_short_area = 180.0;
 
   int min_routing_layer = 1;
 
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.10;
-  int target_detour_count = 8;
+  double max_detour_ratio = 0.08;
+  int target_detour_count = 6;
+
+  // Only rip-up and re-route nets that significantly overflow in the coarse
+  // capacity model. This reduces detours/stacking that can inflate DR
+  // wirelength/via count on designs that are still DR-routable.
+  int reroute_overflow_edge_threshold = 20;
 
   // Via modeling impacts congestion estimation; too large can over-penalize
   // layer switches and inflate detours.
@@ -59,6 +65,10 @@ struct Constants
   // reduce detours on congested lower layers and better match DR behavior.
   int long_segment_threshold = 8;        // in gcell units
   double long_segment_layer_bias = 0.0; // disabled (no penalty)
+
+  // Stage gating (quality vs runtime vs overflow trade-off).
+  bool enable_detours = true;
+  bool enable_maze = false;
 
   bool write_heatmap = false;
 };
