@@ -581,7 +581,7 @@ void PatternRoute::calculateRoutingCosts(
                           std::numeric_limits<CostT>::max());
   node->getBestPaths().resize(grid_graph_->getNumLayers());
   if (!node->getPaths().empty()) {
-    for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
+    for (int layerIndex = 0; layerIndex < grid_graph_->getNumLayers();
          layerIndex++) {
       node->getBestPaths()[layerIndex].assign(node->getPaths().size(),
                                               {-1, -1});

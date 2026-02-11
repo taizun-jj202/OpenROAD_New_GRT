@@ -38,7 +38,9 @@ struct Constants
   // Reduce congestion-driven detours to keep guides compact.
   double weight_short_area = 160.0;
 
-  int min_routing_layer = 1;
+  // Allow routing on M1 to reduce the number of required M1<->M2 transitions
+  // for short/local connections (primary lever for DR via count).
+  int min_routing_layer = 0;
 
   double cost_logistic_slope = 1.0;
 
