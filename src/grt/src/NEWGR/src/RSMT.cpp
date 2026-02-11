@@ -657,7 +657,13 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
   int wl1 = 0;
   int totalNumSeg = 0;
 
-  const int flute_accuracy = 2;
+  // FLUTE "accuracy" is a quality/speed knob. NEWGR is targeting lower
+  // wirelength, so spend a bit more effort on larger / congested nets where
+  // Steiner quality has outsized impact on final routed wirelength.
+  //
+  // Keep the default for small nets to avoid inflating runtime.
+  constexpr int kFluteAccuracySmall = 2;
+  constexpr int kFluteAccuracyLarge = 3;
 
   auto tree_wirelength = [](const Tree& t) -> int {
     int wl = 0;
@@ -769,6 +775,8 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
     FrNet* net = nets_[netID];
 
     int d = net->getNumPins();
+    const int flute_accuracy
+        = (d >= 10) ? kFluteAccuracyLarge : kFluteAccuracySmall;
 
     if (reRoute) {
       if (newType) {
