@@ -1642,8 +1642,10 @@ NetRouteMap FastRouteCore::run()
   // - Skip NDR nets, as Graph2D has special accounting for them (large overflow
   //   multiplier + per-layer NDR capacity tracking).
   if (total_overflow_ == 0) {
-    constexpr int kMinDetourToOptimize = 4;
+    constexpr int kMinDetourToOptimize = 2;
     constexpr int kMaxEdgesToOptimize = 50000;
+    constexpr int kTurnOutsideBoxLimit = 2;
+    constexpr double kAltSearchUtilThreshold = 0.85;
 
     int optimized_edges = 0;
     int total_len_saved = 0;
@@ -1903,6 +1905,7 @@ NetRouteMap FastRouteCore::run()
         struct Candidate
         {
           std::vector<GPoint3D> grids;
+          int len = std::numeric_limits<int>::max();
           double max_util = 0.0;
           double sum_util = 0.0;
           int bends = 0;
@@ -1916,6 +1919,9 @@ NetRouteMap FastRouteCore::run()
           }
           if (!a.ok) {
             return false;
+          }
+          if (a.len != b.len) {
+            return a.len < b.len;
           }
           if (a.max_util != b.max_util) {
             return a.max_util < b.max_util;
@@ -1937,6 +1943,7 @@ NetRouteMap FastRouteCore::run()
           c.bends = (x1 == x2 || y1 == y2) ? 0 : 1;
           if (ok) {
             c.grids = grids;
+            c.len = static_cast<int>(grids.size()) - 1;
           }
           return c;
         };
@@ -1947,41 +1954,75 @@ NetRouteMap FastRouteCore::run()
           best = l_y;
         }
 
-        // If neither direct L-shape fits in the remaining capacity, try a
-        // small set of monotonic 2-bend alternatives that preserve Manhattan
-        // length (HVH/VHV). These often avoid a single saturated edge without
-        // requiring a long maze detour.
-        if (!best.ok) {
+        // If neither direct L-shape fits (or if the best L-shape is very close
+        // to saturation), try a small set of 2-bend alternatives (HVH/VHV),
+        // including a limited "outside-the-box" turn. These often avoid a
+        // single saturated edge without requiring a long maze detour, and can
+        // also improve detailed-routability by reducing peak utilization.
+        if (!best.ok || (best.max_util >= kAltSearchUtilThreshold)) {
           const int xmin = std::min(x1, x2);
           const int xmax = std::max(x1, x2);
           const int ymin = std::min(y1, y2);
           const int ymax = std::max(y1, y2);
-
-          auto clamp = [](const int v, const int lo, const int hi) {
-            return std::max(lo, std::min(hi, v));
-          };
 
           std::vector<int> x_turns;
           std::vector<int> y_turns;
           const int x_mid = (x1 + x2) / 2;
           const int y_mid = (y1 + y2) / 2;
 
-          x_turns.push_back(x_mid);
-          x_turns.push_back(x_mid - 1);
-          x_turns.push_back(x_mid + 1);
-          x_turns.push_back(xmin);
-          x_turns.push_back(xmax);
-          y_turns.push_back(y_mid);
-          y_turns.push_back(y_mid - 1);
-          y_turns.push_back(y_mid + 1);
-          y_turns.push_back(ymin);
-          y_turns.push_back(ymax);
+          const int x_lo = std::max(0, xmin - kTurnOutsideBoxLimit);
+          const int x_hi = std::min(x_grid_ - 1, xmax + kTurnOutsideBoxLimit);
+          const int y_lo = std::max(0, ymin - kTurnOutsideBoxLimit);
+          const int y_hi = std::min(y_grid_ - 1, ymax + kTurnOutsideBoxLimit);
 
-          for (int& xt : x_turns) {
-            xt = clamp(xt, xmin, xmax);
+          auto add_turn = [](std::vector<int>& turns,
+                             const int value,
+                             const int lo,
+                             const int hi) {
+            if (value >= lo && value <= hi) {
+              turns.push_back(value);
+            }
+          };
+
+          const int x_q1 = xmin + (xmax - xmin) / 3;
+          const int x_q3 = xmin + 2 * (xmax - xmin) / 3;
+          const int y_q1 = ymin + (ymax - ymin) / 3;
+          const int y_q3 = ymin + 2 * (ymax - ymin) / 3;
+
+          // Prefer deterministic, small candidate sets.
+          for (const int xt : {x1,
+                               x2,
+                               x_mid,
+                               x_mid - 1,
+                               x_mid + 1,
+                               xmin,
+                               xmin - 1,
+                               xmin - 2,
+                               xmin + 1,
+                               xmax,
+                               xmax + 1,
+                               xmax + 2,
+                               xmax - 1,
+                               x_q1,
+                               x_q3}) {
+            add_turn(x_turns, xt, x_lo, x_hi);
           }
-          for (int& yt : y_turns) {
-            yt = clamp(yt, ymin, ymax);
+          for (const int yt : {y1,
+                               y2,
+                               y_mid,
+                               y_mid - 1,
+                               y_mid + 1,
+                               ymin,
+                               ymin - 1,
+                               ymin - 2,
+                               ymin + 1,
+                               ymax,
+                               ymax + 1,
+                               ymax + 2,
+                               ymax - 1,
+                               y_q1,
+                               y_q3}) {
+            add_turn(y_turns, yt, y_lo, y_hi);
           }
 
           std::sort(x_turns.begin(), x_turns.end());
@@ -1995,6 +2036,7 @@ NetRouteMap FastRouteCore::run()
                                    const int bends) {
             Candidate c;
             c.bends = bends;
+            c.len = static_cast<int>(grids.size()) - 1;
             c.ok = evaluate_l_route(net, grids, c.max_util, c.sum_util);
             if (candidate_better(c, best)) {
               if (c.ok) {
