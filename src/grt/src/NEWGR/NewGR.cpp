@@ -164,41 +164,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   baseline.congestion_iterations = snapshot.congestion_iterations;
   baseline.critical_nets_percentage = snapshot.critical_percentage;
 
-  // Wirelength-focused approach:
-  // For this benchmark, the solution quality is sensitive to tie-breaking in
-  // the 2D maze stage. A small amount of randomized capacity perturbation can
-  // improve wirelength by avoiding "unlucky" detours, but running a full extra
-  // global route pass is expensive.
-  //
-  // Strategy:
-  // - Run two *half-budget* candidates with different seeds and modest
-  //   perturbation.
-  // - Pick the best overflow-free result.
-  // - Only fall back to the user's baseline (full budget) if both candidates
-  //   still have overflow.
-  //
-  // This keeps runtime close to a single full run while improving the odds of
-  // finding a lower-WL route.
-  const int half_budget
-      = std::max(10, (snapshot.congestion_iterations + 1) / 2);
-
-  CandidateSettings wl_sweep_a = baseline;
-  wl_sweep_a.name = "wl-sweep-a";
-  wl_sweep_a.seed = 29;
-  wl_sweep_a.caps_perturbation_percentage
-      = std::max(0.8f, snapshot.caps_percentage);
-  wl_sweep_a.perturbation_amount = 1;
-  wl_sweep_a.congestion_iterations = half_budget;
-  wl_sweep_a.critical_nets_percentage = 0.0f;
-
-  CandidateSettings wl_sweep_b = baseline;
-  wl_sweep_b.name = "wl-sweep-b";
-  wl_sweep_b.seed = 97;
-  wl_sweep_b.caps_perturbation_percentage
-      = wl_sweep_a.caps_perturbation_percentage;
-  wl_sweep_b.perturbation_amount = 1;
-  wl_sweep_b.congestion_iterations = half_budget;
-  wl_sweep_b.critical_nets_percentage = 0.0f;
+  // Wirelength-focused candidate with runtime guardrails:
+  // - Keep congestion iterations bounded (fewer detours + faster runtime).
+  // - Disable critical-net ordering to avoid STA overhead and additional
+  //   ripup/re-route churn.
+  // - Use modest capacity perturbation to avoid pathological tie-breaking.
+  CandidateSettings wl_lean = baseline;
+  wl_lean.name = "wl-lean";
+  wl_lean.seed = 29;
+  wl_lean.caps_perturbation_percentage
+      = std::max(1.0f, snapshot.caps_percentage);
+  wl_lean.perturbation_amount = 1;
+  wl_lean.congestion_iterations
+      = std::min(30, snapshot.congestion_iterations);
+  wl_lean.critical_nets_percentage = 0.0f;
 
   auto is_better = [&](const CandidateResult& current,
                        const CandidateResult& best) -> bool {
@@ -217,24 +196,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return current.metrics.via_count < best.metrics.via_count;
   };
 
-  CandidateResult cand_a = run_candidate(wl_sweep_a, /*keep_routes=*/true);
-  CandidateResult cand_b = run_candidate(wl_sweep_b, /*keep_routes=*/true);
-
-  CandidateResult best_cand = is_better(cand_b, cand_a) ? cand_b : cand_a;
-  if (best_cand.overflow == 0) {
+  // One-pass default: run the WL-lean configuration and only fall back if
+  // overflow remains.
+  CandidateResult primary = run_candidate(wl_lean, /*keep_routes=*/true);
+  if (primary.overflow == 0) {
     logger_->info(GNR,
                   6005,
                   "NEWGR selected {}: wl {:.0f} um, vias {}, overflow {}",
-                  best_cand.settings.name,
-                  best_cand.metrics.wirelength_um,
-                  best_cand.metrics.via_count,
-                  best_cand.overflow);
-    return std::move(best_cand.routes);
+                  primary.settings.name,
+                  primary.metrics.wirelength_um,
+                  primary.metrics.via_count,
+                  primary.overflow);
+    return std::move(primary.routes);
   }
 
   CandidateResult recovery = run_candidate(baseline, /*keep_routes=*/true);
-  const bool best_cand_is_best = is_better(best_cand, recovery);
-  const CandidateResult& best = best_cand_is_best ? best_cand : recovery;
+  const bool primary_is_best = is_better(primary, recovery);
+  const CandidateResult& best = primary_is_best ? primary : recovery;
   logger_->info(GNR,
                 6007,
                 "NEWGR selected {}: wl {:.0f} um, vias {}, overflow {}",
@@ -243,8 +221,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 best.metrics.via_count,
                 best.overflow);
 
-  return best_cand_is_best ? std::move(best_cand.routes)
-                           : std::move(recovery.routes);
+  return primary_is_best ? std::move(primary.routes)
+                         : std::move(recovery.routes);
 }
 
 }  // namespace grt
