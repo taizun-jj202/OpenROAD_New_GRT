@@ -53,6 +53,13 @@ void add_lane_patches(NetRouteMap& routes,
     return;
   }
 
+  // Keep patches opt-in to avoid perturbing baseline metrics. Enable with:
+  //   `utl::set_debug_level(GNR, "newgrGuidePatches", 1)` (or equivalent)
+  // in the calling environment.
+  if (!logger->debugCheck(GNR, "newgrGuidePatches", 1)) {
+    return;
+  }
+
   const int tile_size = grouter->getTileSize();
   if (tile_size <= 0) {
     return;
