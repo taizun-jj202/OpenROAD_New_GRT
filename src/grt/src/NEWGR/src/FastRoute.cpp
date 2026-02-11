@@ -1643,14 +1643,19 @@ NetRouteMap FastRouteCore::run()
   // - Skip NDR nets, as Graph2D has special accounting for them (large overflow
   //   multiplier + per-layer NDR capacity tracking).
   if (total_overflow_ == 0) {
-    constexpr int kMinDetourToOptimize = 2;
-    constexpr int kMaxEdgesToOptimize = 50000;
-    constexpr int kTurnOutsideBoxLimit = 3;
-    constexpr double kAltSearchUtilThreshold = 0.85;
-    constexpr int kAstarMinDetourToOptimize = 8;
-    constexpr int kAstarMaxAttempts = 2500;
-    constexpr int kAstarMargin = 4;
-    constexpr int kAstarMaxExpansions = 12000;
+    // Aggressive-but-bounded "polish" tuning for wirelength:
+    // - Allow optimizing small detours (still overflow-safe due to capacity
+    //   checks).
+    // - Search a slightly larger neighborhood for capacity-feasible shortcuts.
+    // - Consider more edges/nets, while keeping hard caps to protect runtime.
+    constexpr int kMinDetourToOptimize = 1;
+    constexpr int kMaxEdgesToOptimize = 65000;
+    constexpr int kTurnOutsideBoxLimit = 4;
+    constexpr double kAltSearchUtilThreshold = 0.82;
+    constexpr int kAstarMinDetourToOptimize = 7;
+    constexpr int kAstarMaxAttempts = 4000;
+    constexpr int kAstarMargin = 5;
+    constexpr int kAstarMaxExpansions = 15000;
 
     int optimized_edges = 0;
     int total_len_saved = 0;
@@ -2356,10 +2361,10 @@ NetRouteMap FastRouteCore::run()
     // and re-embed each tree edge with the same capacity-feasible short-path
     // heuristic used above. Keep only if it reduces total 2D steps.
     constexpr int kMinPinsForRetopo = 4;
-    constexpr int kMaxNetsToRetopologize = 200;
-    constexpr int kMinPotentialGain = 12;  // 2D steps vs flute length
-    constexpr int kMinNetLenSaved = 4;     // avoid churn for tiny gains
-    constexpr int kTopoAstarExtraBudget = 6;
+    constexpr int kMaxNetsToRetopologize = 250;
+    constexpr int kMinPotentialGain = 8;  // 2D steps vs flute length
+    constexpr int kMinNetLenSaved = 2;    // avoid churn for tiny gains
+    constexpr int kTopoAstarExtraBudget = 8;
 
     struct RetopoCandidate
     {
