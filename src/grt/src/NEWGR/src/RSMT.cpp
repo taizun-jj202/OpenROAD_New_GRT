@@ -849,16 +849,18 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
           const double pen_wl = tree_overflow_penalty(rsmt_wl, net);
           const double pen_cong = tree_overflow_penalty(rsmt_cong, net);
 
-          // Weight overflow modestly: the global router still has rip-up and
-          // reroute stages. The goal here is primarily to reduce detours.
-          constexpr double k_overflow_wt = 3.0;
+          // Weight overflow lightly: NEWGR is primarily wirelength-driven and
+          // already has multiple downstream rip-up/reroute + WL recovery
+          // passes. Prefer the minimal-wirelength Steiner topology unless it
+          // is predicted to be *dramatically* worse for overflow.
+          constexpr double k_overflow_wt = 0.8;
           const double cost_wl = wl_wl + k_overflow_wt * pen_wl;
           const double cost_cong = wl_cong + k_overflow_wt * pen_cong;
 
           // Safety clamp: don't pick the WL tree if it is predicted to be far
           // more overflowing than the congestion tree.
           const bool wl_tree_is_risky
-              = (pen_wl > pen_cong * 4.0) && (pen_wl - pen_cong > 50.0);
+              = (pen_wl > pen_cong * 8.0) && (pen_wl - pen_cong > 150.0);
 
           rsmt = (!wl_tree_is_risky && cost_wl <= cost_cong) ? rsmt_wl
                                                             : rsmt_cong;

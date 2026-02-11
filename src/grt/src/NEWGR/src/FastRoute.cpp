@@ -1649,12 +1649,12 @@ NetRouteMap FastRouteCore::run()
     // - Search a slightly larger neighborhood for capacity-feasible shortcuts.
     // - Consider more edges/nets, while keeping hard caps to protect runtime.
     constexpr int kMinDetourToOptimize = 1;
-    constexpr int kMaxEdgesToOptimize = 65000;
+    constexpr int kMaxEdgesToOptimize = 140000;
     constexpr int kTurnOutsideBoxLimit = 4;
     constexpr int kAstarMinDetourToOptimize = 7;
-    constexpr int kAstarMaxAttempts = 4000;
-    constexpr int kAstarMargin = 6;
-    constexpr int kAstarMaxExpansions = 15000;
+    constexpr int kAstarMaxAttempts = 8000;
+    constexpr int kAstarMargin = 8;
+    constexpr int kAstarMaxExpansions = 20000;
 
     int optimized_edges = 0;
     int total_len_saved = 0;
@@ -2365,11 +2365,11 @@ NetRouteMap FastRouteCore::run()
     // minimal RSMT (fluteNormal) for a small number of "most promising" nets
     // and re-embed each tree edge with the same capacity-feasible short-path
     // heuristic used above. Keep only if it reduces total 2D steps.
-    constexpr int kMinPinsForRetopo = 4;
-    constexpr int kMaxNetsToRetopologize = 400;
-    constexpr int kMinPotentialGain = 6;  // 2D steps vs flute length
-    constexpr int kMinNetLenSaved = 2;    // avoid churn for tiny gains
-    constexpr int kTopoAstarExtraBudget = 12;
+    constexpr int kMinPinsForRetopo = 3;
+    constexpr int kMaxNetsToRetopologize = 1400;
+    constexpr int kMinPotentialGain = 3;  // 2D steps vs flute length
+    constexpr int kMinNetLenSaved = 1;    // avoid churn for tiny gains
+    constexpr int kTopoAstarExtraBudget = 16;
 
     // For the final topology-recovery pass, bias towards minimal wirelength:
     // - Use a slightly higher FLUTE accuracy on a bounded subset of nets.
@@ -2616,7 +2616,7 @@ NetRouteMap FastRouteCore::run()
     // Candidate selection is intentionally two-stage to keep runtime in check:
     // 1) Pick the largest nets by current 2D length (cheap).
     // 2) For only those nets, compute fluteNormal length and prioritize by gain.
-    constexpr int kPreselectNets = 900;
+    constexpr int kPreselectNets = 2600;
     struct Preselect
     {
       int netID = -1;
