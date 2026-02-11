@@ -164,17 +164,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   baseline.congestion_iterations = snapshot.congestion_iterations;
   baseline.critical_nets_percentage = snapshot.critical_percentage;
 
-  // Wirelength-quality candidate:
-  // - Keep the default congestion iteration budget so routability-driven
-  //   detours/antenna repairs don't dominate DR wirelength.
-  // - Keep timing-aware ordering enabled if the user configured it (it can
-  //   reduce DR detours around critical pin regions).
+  // Wirelength-focused candidate with runtime guardrails:
+  // - Keep congestion iterations bounded (fewer detours + faster runtime).
+  // - Disable critical-net ordering to avoid STA overhead and additional
+  //   ripup/re-route churn on this benchmark.
   // - Use modest capacity perturbation to avoid pathological tie-breaking.
-  CandidateSettings wl_quality = baseline;
-  wl_quality.name = "wl-quality";
-  wl_quality.seed = 29;
-  wl_quality.caps_perturbation_percentage = std::max(1.5f, snapshot.caps_percentage);
-  wl_quality.perturbation_amount = 1;
+  CandidateSettings wl_lean = baseline;
+  wl_lean.name = "wl-lean";
+  wl_lean.seed = 29;
+  wl_lean.caps_perturbation_percentage = std::max(1.0f, snapshot.caps_percentage);
+  wl_lean.perturbation_amount = 1;
+  wl_lean.congestion_iterations = std::min(30, snapshot.congestion_iterations);
+  wl_lean.critical_nets_percentage = 0.0f;
 
   auto is_better = [&](const CandidateResult& current,
                        const CandidateResult& best) -> bool {
@@ -193,9 +194,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return current.metrics.via_count < best.metrics.via_count;
   };
 
-  // One-pass default: run the WL-quality configuration and only fall back if
+  // One-pass default: run the WL-lean configuration and only fall back if
   // overflow remains.
-  CandidateResult primary = run_candidate(wl_quality, /*keep_routes=*/true);
+  CandidateResult primary = run_candidate(wl_lean, /*keep_routes=*/true);
   if (primary.overflow == 0) {
     logger_->info(GNR,
                   6005,

@@ -1707,6 +1707,80 @@ NetRouteMap FastRouteCore::run()
       return grids;
     };
 
+    auto build_hvh_route = [&](const int x1,
+                               const int y1,
+                               const int x2,
+                               const int y2,
+                               const int x_turn) -> std::vector<GPoint3D> {
+      // Horizontal (y1) -> Vertical (x_turn) -> Horizontal (y2)
+      std::vector<GPoint3D> grids;
+      grids.reserve(std::abs(x1 - x2) + std::abs(y1 - y2) + 1);
+      int cx = x1;
+      int cy = y1;
+      grids.push_back({static_cast<int16_t>(cx),
+                       static_cast<int16_t>(cy),
+                       static_cast<int16_t>(-1)});
+
+      auto step_x_to = [&](const int tx) {
+        while (cx != tx) {
+          cx += (cx < tx) ? 1 : -1;
+          grids.push_back({static_cast<int16_t>(cx),
+                           static_cast<int16_t>(cy),
+                           static_cast<int16_t>(-1)});
+        }
+      };
+      auto step_y_to = [&](const int ty) {
+        while (cy != ty) {
+          cy += (cy < ty) ? 1 : -1;
+          grids.push_back({static_cast<int16_t>(cx),
+                           static_cast<int16_t>(cy),
+                           static_cast<int16_t>(-1)});
+        }
+      };
+
+      step_x_to(x_turn);
+      step_y_to(y2);
+      step_x_to(x2);
+      return grids;
+    };
+
+    auto build_vhv_route = [&](const int x1,
+                               const int y1,
+                               const int x2,
+                               const int y2,
+                               const int y_turn) -> std::vector<GPoint3D> {
+      // Vertical (x1) -> Horizontal (y_turn) -> Vertical (x2)
+      std::vector<GPoint3D> grids;
+      grids.reserve(std::abs(x1 - x2) + std::abs(y1 - y2) + 1);
+      int cx = x1;
+      int cy = y1;
+      grids.push_back({static_cast<int16_t>(cx),
+                       static_cast<int16_t>(cy),
+                       static_cast<int16_t>(-1)});
+
+      auto step_x_to = [&](const int tx) {
+        while (cx != tx) {
+          cx += (cx < tx) ? 1 : -1;
+          grids.push_back({static_cast<int16_t>(cx),
+                           static_cast<int16_t>(cy),
+                           static_cast<int16_t>(-1)});
+        }
+      };
+      auto step_y_to = [&](const int ty) {
+        while (cy != ty) {
+          cy += (cy < ty) ? 1 : -1;
+          grids.push_back({static_cast<int16_t>(cx),
+                           static_cast<int16_t>(cy),
+                           static_cast<int16_t>(-1)});
+        }
+      };
+
+      step_y_to(y_turn);
+      step_x_to(x2);
+      step_y_to(y2);
+      return grids;
+    };
+
     auto evaluate_l_route = [&](FrNet* net,
                                 const std::vector<GPoint3D>& grids,
                                 double& max_util,
@@ -1826,26 +1900,126 @@ NetRouteMap FastRouteCore::run()
         double sum_util_y = 0.0;
         const bool ok_y = evaluate_l_route(net, l_y_first, max_util_y, sum_util_y);
 
-        const bool choose_x = [&]() -> bool {
-          if (ok_x != ok_y) {
-            return ok_x;
+        struct Candidate
+        {
+          std::vector<GPoint3D> grids;
+          double max_util = 0.0;
+          double sum_util = 0.0;
+          int bends = 0;
+          bool ok = false;
+        };
+
+        auto candidate_better = [&](const Candidate& a,
+                                    const Candidate& b) -> bool {
+          if (a.ok != b.ok) {
+            return a.ok;
           }
-          if (!ok_x && !ok_y) {
+          if (!a.ok) {
             return false;
           }
-          if (max_util_x != max_util_y) {
-            return max_util_x < max_util_y;
+          if (a.max_util != b.max_util) {
+            return a.max_util < b.max_util;
           }
-          return sum_util_x < sum_util_y;
-        }();
+          if (a.sum_util != b.sum_util) {
+            return a.sum_util < b.sum_util;
+          }
+          return a.bends < b.bends;
+        };
 
-        const bool choose_y = ok_y && !choose_x;
+        auto make_l_candidate = [&](const std::vector<GPoint3D>& grids,
+                                    const bool ok,
+                                    const double max_util,
+                                    const double sum_util) -> Candidate {
+          Candidate c;
+          c.ok = ok;
+          c.max_util = max_util;
+          c.sum_util = sum_util;
+          c.bends = (x1 == x2 || y1 == y2) ? 0 : 1;
+          if (ok) {
+            c.grids = grids;
+          }
+          return c;
+        };
 
-        if (choose_x || choose_y) {
-          const auto& new_grids = choose_x ? l_x_first : l_y_first;
+        Candidate best = make_l_candidate(l_x_first, ok_x, max_util_x, sum_util_x);
+        const Candidate l_y = make_l_candidate(l_y_first, ok_y, max_util_y, sum_util_y);
+        if (candidate_better(l_y, best)) {
+          best = l_y;
+        }
+
+        // If neither direct L-shape fits in the remaining capacity, try a
+        // small set of monotonic 2-bend alternatives that preserve Manhattan
+        // length (HVH/VHV). These often avoid a single saturated edge without
+        // requiring a long maze detour.
+        if (!best.ok) {
+          const int xmin = std::min(x1, x2);
+          const int xmax = std::max(x1, x2);
+          const int ymin = std::min(y1, y2);
+          const int ymax = std::max(y1, y2);
+
+          auto clamp = [](const int v, const int lo, const int hi) {
+            return std::max(lo, std::min(hi, v));
+          };
+
+          std::vector<int> x_turns;
+          std::vector<int> y_turns;
+          const int x_mid = (x1 + x2) / 2;
+          const int y_mid = (y1 + y2) / 2;
+
+          x_turns.push_back(x_mid);
+          x_turns.push_back(x_mid - 1);
+          x_turns.push_back(x_mid + 1);
+          x_turns.push_back(xmin);
+          x_turns.push_back(xmax);
+          y_turns.push_back(y_mid);
+          y_turns.push_back(y_mid - 1);
+          y_turns.push_back(y_mid + 1);
+          y_turns.push_back(ymin);
+          y_turns.push_back(ymax);
+
+          for (int& xt : x_turns) {
+            xt = clamp(xt, xmin, xmax);
+          }
+          for (int& yt : y_turns) {
+            yt = clamp(yt, ymin, ymax);
+          }
+
+          std::sort(x_turns.begin(), x_turns.end());
+          x_turns.erase(std::unique(x_turns.begin(), x_turns.end()),
+                        x_turns.end());
+          std::sort(y_turns.begin(), y_turns.end());
+          y_turns.erase(std::unique(y_turns.begin(), y_turns.end()),
+                        y_turns.end());
+
+          auto try_candidate = [&](std::vector<GPoint3D> grids,
+                                   const int bends) {
+            Candidate c;
+            c.bends = bends;
+            c.ok = evaluate_l_route(net, grids, c.max_util, c.sum_util);
+            if (candidate_better(c, best)) {
+              if (c.ok) {
+                c.grids = std::move(grids);
+              }
+              best = std::move(c);
+            }
+          };
+
+          if (x1 != x2 && y1 != y2) {
+            for (const int xt : x_turns) {
+              const int bends = (xt == x1 || xt == x2) ? 1 : 2;
+              try_candidate(build_hvh_route(x1, y1, x2, y2, xt), bends);
+            }
+            for (const int yt : y_turns) {
+              const int bends = (yt == y1 || yt == y2) ? 1 : 2;
+              try_candidate(build_vhv_route(x1, y1, x2, y2, yt), bends);
+            }
+          }
+        }
+
+        if (best.ok) {
+          const auto& new_grids = best.grids;
           const int new_len = static_cast<int>(new_grids.size()) - 1;
-          update_usage_for_route(
-              new_grids, new_len, net, net->getEdgeCost());
+          update_usage_for_route(new_grids, new_len, net, net->getEdgeCost());
 
           treeedge->route.grids = new_grids;
           treeedge->route.routelen = new_len;
