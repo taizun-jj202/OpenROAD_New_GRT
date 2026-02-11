@@ -1802,7 +1802,10 @@ NetRouteMap FastRouteCore::run()
       max_util = 0.0;
       sum_util = 0.0;
 
-      if (edge_cost != 1) {
+      // `edge_cost` models how much routing resource this net consumes per
+      // edge (e.g., wider wires / NDR-like behavior). The WL recovery pass is
+      // still valid for any positive edge cost as long as we respect capacity.
+      if (edge_cost <= 0) {
         return false;
       }
 
@@ -1855,7 +1858,7 @@ NetRouteMap FastRouteCore::run()
       out_grids.clear();
 
       const int edge_cost = net->getEdgeCost();
-      if (edge_cost != 1) {
+      if (edge_cost <= 0) {
         return false;
       }
 
@@ -2061,7 +2064,7 @@ NetRouteMap FastRouteCore::run()
       if (net == nullptr) {
         continue;
       }
-      if (net->getEdgeCost() != 1) {
+      if (net->getEdgeCost() <= 0) {
         continue;
       }
       if (net->isSoftNDR()
@@ -2627,7 +2630,7 @@ NetRouteMap FastRouteCore::run()
       if (net == nullptr) {
         continue;
       }
-      if (net->getEdgeCost() != 1) {
+      if (net->getEdgeCost() <= 0) {
         continue;
       }
       if (net->getNumPins() < kMinPinsForRetopo) {
