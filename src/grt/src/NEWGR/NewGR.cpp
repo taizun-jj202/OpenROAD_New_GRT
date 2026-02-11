@@ -712,7 +712,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Keep a deterministic seed. Empirically, small changes here can shift the
   // rip-up/reroute tie-breaking enough to reduce DR wirelength without adding
   // extra global-routing passes.
-  wl_lean.seed = 11;
+  wl_lean.seed = 29;
   // Use a small, fixed perturbation (instead of inheriting the flow default)
   // to avoid pathological ties while keeping runtime predictable.
   wl_lean.caps_perturbation_percentage = 1.5f;
