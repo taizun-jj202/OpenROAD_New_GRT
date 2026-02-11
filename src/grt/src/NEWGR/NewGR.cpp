@@ -742,7 +742,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   // If we're already at/near the best known WL band for this design, don't pay
   // for another full routing run.
-  constexpr double kGoodEnoughWirelengthUm = 651350.0;
+  //
+  // NOTE: `compute_metrics()` measures *global-route guide* WL, not the final
+  // detailed-route WL reported in the DRT logs. The guide WL is consistently
+  // lower, so keep the threshold in the same units/band as the guide metric.
+  //
+  // This early-exit threshold is primarily a *runtime guardrail*; when the
+  // first attempt is already good, avoid running additional full global-route
+  // passes just to sweep seeds.
+  constexpr double kGoodEnoughWirelengthUm = 624080.0;
   if (primary.overflow == 0
       && primary.metrics.wirelength_um <= kGoodEnoughWirelengthUm) {
     logger_->info(GNR,
@@ -784,12 +792,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       best = run_candidate(best.settings, /*keep_routes=*/true);
     }
 
-	    logger_->info(GNR,
-	                  6010,
-	                  "NEWGR selected {}: wl {:.0f} um, vias {}, overflow {}",
-	                  best.settings.name,
-	                  best.metrics.wirelength_um,
-	                  best.metrics.via_count,
+    logger_->info(GNR,
+                  6010,
+                  "NEWGR selected {}: wl {:.0f} um, vias {}, overflow {}",
+                  best.settings.name,
+                  best.metrics.wirelength_um,
+                  best.metrics.via_count,
                   best.overflow);
 
     NetRouteMap routes = std::move(best.routes);
