@@ -27,6 +27,7 @@ struct CandidateSettings
   int seed = 0;
   float caps_perturbation_percentage = 0.0f;
   int perturbation_amount = 1;
+  int congestion_iterations = 50;
   float critical_nets_percentage = 10.0f;
 };
 
@@ -42,6 +43,7 @@ struct RouterSnapshot
 {
   float caps_percentage = 0.0f;
   int perturbation_amount = 0;
+  int congestion_iterations = 50;
   float critical_percentage = 0.0f;
   bool allow_congestion = false;
   int seed = 0;
@@ -92,6 +94,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     RouterSnapshot snapshot;
     snapshot.caps_percentage = grouter_->caps_perturbation_percentage_;
     snapshot.perturbation_amount = grouter_->perturbation_amount_;
+    snapshot.congestion_iterations = grouter_->congestion_iterations_;
     snapshot.critical_percentage
         = grouter_->fastroute_->getCriticalNetsPercentage();
     snapshot.allow_congestion = grouter_->allow_congestion_;
@@ -102,6 +105,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   auto restore_snapshot = [&](const RouterSnapshot& snapshot) {
     grouter_->setCapacitiesPerturbationPercentage(snapshot.caps_percentage);
     grouter_->setPerturbationAmount(snapshot.perturbation_amount);
+    grouter_->setCongestionIterations(snapshot.congestion_iterations);
     grouter_->setAllowCongestion(snapshot.allow_congestion);
     grouter_->setSeed(snapshot.seed);
     grouter_->fastroute_->setCriticalNetsPercentage(
@@ -120,6 +124,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->setCapacitiesPerturbationPercentage(
         settings.caps_perturbation_percentage);
     grouter_->setPerturbationAmount(settings.perturbation_amount);
+    grouter_->setCongestionIterations(settings.congestion_iterations);
     grouter_->setSeed(settings.seed);
     grouter_->fastroute_->setCriticalNetsPercentage(
         settings.critical_nets_percentage);
@@ -156,14 +161,28 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   baseline.seed = snapshot.seed;
   baseline.caps_perturbation_percentage = snapshot.caps_percentage;
   baseline.perturbation_amount = snapshot.perturbation_amount;
+  baseline.congestion_iterations = snapshot.congestion_iterations;
   baseline.critical_nets_percentage = snapshot.critical_percentage;
 
-  CandidateSettings perturb_29;
-  perturb_29.name = "perturb-s29";
-  perturb_29.seed = 29;
-  perturb_29.caps_perturbation_percentage = 1.5f;
-  perturb_29.perturbation_amount = 1;
-  perturb_29.critical_nets_percentage = snapshot.critical_percentage;
+  // Wirelength-focused candidate:
+  // - Disable critical-net ripup (STA calls + extra detours) for a cleaner WL.
+  // - Use fewer overflow iterations to avoid over-penalizing congestion, which
+  //   often increases detours/wirelength even when the design is routable.
+  // - Keep a small capacity perturbation to break routing ties deterministically
+  //   without paying the cost of a full multi-candidate search.
+  CandidateSettings wl_lean;
+  wl_lean.name = "wl-lean";
+  wl_lean.seed = 29;
+  wl_lean.caps_perturbation_percentage = 0.5f;
+  wl_lean.perturbation_amount = 1;
+  wl_lean.congestion_iterations = std::min(25, snapshot.congestion_iterations);
+  wl_lean.critical_nets_percentage = 0.0f;
+
+  // Recovery candidate (only used if wl_lean fails to close overflow).
+  CandidateSettings recover = baseline;
+  recover.name = "recover";
+  recover.seed = 29;
+  recover.caps_perturbation_percentage = std::max(1.5f, snapshot.caps_percentage);
 
   auto is_better = [&](const CandidateResult& current,
                        const CandidateResult& best) -> bool {
@@ -182,36 +201,32 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return current.metrics.via_count < best.metrics.via_count;
   };
 
-  // Runtime-focused candidate evaluation:
-  // - Always run baseline once (no need to keep routes unless it wins).
-  // - Run one perturbation candidate and keep its routes (typical winner).
-  // - Only "replay" baseline if it actually wins.
-  CandidateResult baseline_result
-      = run_candidate(baseline, /*keep_routes=*/false);
-  CandidateResult perturb_result
-      = run_candidate(perturb_29, /*keep_routes=*/true);
-
-  if (is_better(perturb_result, baseline_result)) {
+  // One-pass default (runtime): try the WL-focused configuration first and
+  // only fall back to a more conservative run if overflow remains.
+  CandidateResult wl_result = run_candidate(wl_lean, /*keep_routes=*/true);
+  if (wl_result.overflow == 0) {
     logger_->info(GNR,
                   6005,
                   "NEWGR selected {}: wl {:.0f} um, vias {}, overflow {}",
-                  perturb_result.settings.name,
-                  perturb_result.metrics.wirelength_um,
-                  perturb_result.metrics.via_count,
-                  perturb_result.overflow);
-    return std::move(perturb_result.routes);
+                  wl_result.settings.name,
+                  wl_result.metrics.wirelength_um,
+                  wl_result.metrics.via_count,
+                  wl_result.overflow);
+    return std::move(wl_result.routes);
   }
 
-  CandidateResult replay = run_candidate(baseline, /*keep_routes=*/true);
+  CandidateResult recovery = run_candidate(recover, /*keep_routes=*/true);
+  const bool wl_is_best = is_better(wl_result, recovery);
+  const CandidateResult& best = wl_is_best ? wl_result : recovery;
   logger_->info(GNR,
                 6007,
                 "NEWGR selected {}: wl {:.0f} um, vias {}, overflow {}",
-                replay.settings.name,
-                replay.metrics.wirelength_um,
-                replay.metrics.via_count,
-                replay.overflow);
+                best.settings.name,
+                best.metrics.wirelength_um,
+                best.metrics.via_count,
+                best.overflow);
 
-  return std::move(replay.routes);
+  return wl_is_best ? std::move(wl_result.routes) : std::move(recovery.routes);
 }
 
 }  // namespace grt
