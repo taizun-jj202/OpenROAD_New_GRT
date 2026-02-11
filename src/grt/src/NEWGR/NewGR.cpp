@@ -1,11 +1,14 @@
 #include "NEWGR/NewGR.h"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
+#include "boost/functional/hash.hpp"
 #include "FastRoute.h"
 #include "Grid.h"
 #include "grt/GRoute.h"
@@ -43,6 +46,13 @@ struct CongestionPatchStats
   int points_added = 0;
 };
 
+struct EndpointAccessPatchStats
+{
+  int nets_patched = 0;
+  int endpoints_patched = 0;
+  int vias_added = 0;
+};
+
 // Adds "standalone" 1-GCell guide patches as *degenerate* (zero-length) wire
 // segments on adjacent layers at congested positions along long guides.
 //
@@ -67,13 +77,11 @@ void add_congestion_patches(NetRouteMap& routes,
     return;
   }
 
-  // Keep congestion patching opt-in; extra guide points can increase the
-  // detailed router's solution space and may hurt wirelength on already
-  // routable designs. Enable with:
-  //   `utl::set_debug_level(GNR, "newgrCongestionPatches", 1)`
-  if (!logger->debugCheck(GNR, "newgrCongestionPatches", 1)) {
-    return;
-  }
+  // Congestion patching is enabled by default in NEWGR. The segments added
+  // here are *degenerate points* (0-length wires) and add neither wirelength
+  // nor vias by construction. The intent is to give the detailed router extra
+  // layer-escape opportunities in congested/low-resource areas without
+  // perturbing the global route topology.
 
   // Keep conservative defaults; can be tuned via debug if needed.
   constexpr int kMaxTotalPatches = 120000;  // guardrail
@@ -341,9 +349,11 @@ void add_congestion_patches(NetRouteMap& routes,
           }
 
           const auto [x_dbu, y_dbu] = to_dbu(gx, gy);
-          const GSegment point(x_dbu, y_dbu, adj, x_dbu, y_dbu, adj);
-          if (existing.insert(point).second) {
-            route.push_back(point);
+          const int via_lo = std::min(layer, adj);
+          const int via_hi = std::max(layer, adj);
+          const GSegment escape_via(x_dbu, y_dbu, via_lo, x_dbu, y_dbu, via_hi);
+          if (existing.insert(escape_via).second) {
+            route.push_back(escape_via);
             stats.points_added++;
             added = true;
           }
@@ -367,9 +377,249 @@ void add_congestion_patches(NetRouteMap& routes,
   if (stats.points_added > 0) {
     logger->info(GNR,
                  6009,
-                 "NEWGR congestion patches: nets {}, added points {}",
+                 "NEWGR congestion patches: nets {}, added escape vias {}",
                  stats.nets_patched,
                  stats.points_added);
+  }
+}
+
+// Add small 3x3 "pin-access" point guides (degenerate segments) around
+// non-core pins (macros/pads/ports) when local spare resources are low.
+//
+// Motivation: detailed routing often introduces wirelength detours (and extra
+// vias) near macros/pads due to restricted pin access. Adding a few extra guide
+// points near those pins gives the detailed router more flexibility to connect
+// without forcing a global-route detour.
+//
+// This is intentionally conservative to avoid bloating guides across the whole
+// design: it only targets non-core pins and only triggers when local spare
+// resources are below a threshold.
+void add_endpoint_access_patches(NetRouteMap& routes,
+                            FastRouteCore* fastroute,
+                            const Grid* grid,
+                            odb::dbTech* tech,
+                            utl::Logger* logger,
+                            const int min_routing_layer,
+                            const int max_routing_layer)
+{
+  if (routes.empty() || fastroute == nullptr || grid == nullptr
+      || tech == nullptr || logger == nullptr) {
+    return;
+  }
+
+  const int tile_size = grid->getTileSize();
+  if (tile_size <= 0) {
+    return;
+  }
+
+  // Guardrails: keep patching bounded and focused.
+  constexpr int kMaxTotalVias = 45000;
+  constexpr int kMaxViasPerNet = 36;
+  constexpr int kMaxEndpointsPerNet = 8;
+  constexpr int kPatchRadiusTiles = 1;  // 3x3 around the pin
+
+  // Threshold is expressed in "spare tracks" on the edge.
+  constexpr int kPinSpareThreshold = 1;
+
+  // Focus on the lowest layers where pin-access is usually the bottleneck.
+  const int max_patch_layer
+      = std::min(max_routing_layer, min_routing_layer + 1);
+
+  const int grid_xmin = grid->getXMin();
+  const int grid_ymin = grid->getYMin();
+  const int x_grids = grid->getXGrids();
+  const int y_grids = grid->getYGrids();
+
+  auto to_grid = [&](const int x_dbu, const int y_dbu) -> std::pair<int, int> {
+    const int gx = (x_dbu - grid_xmin) / tile_size;
+    const int gy = (y_dbu - grid_ymin) / tile_size;
+    return {gx, gy};
+  };
+
+  auto to_dbu = [&](const int gx, const int gy) -> std::pair<int, int> {
+    const int x_dbu = grid_xmin + gx * tile_size + tile_size / 2;
+    const int y_dbu = grid_ymin + gy * tile_size + tile_size / 2;
+    return {x_dbu, y_dbu};
+  };
+
+  auto in_grid = [&](const int gx, const int gy) -> bool {
+    return gx >= 0 && gx < x_grids && gy >= 0 && gy < y_grids;
+  };
+
+  auto min_spare_around_cell = [&](const int layer,
+                                   const int gx,
+                                   const int gy) -> int {
+    if (layer < min_routing_layer || layer > max_routing_layer) {
+      return 0;
+    }
+    if (!in_grid(gx, gy)) {
+      return 0;
+    }
+
+    int spare = std::numeric_limits<int>::max();
+    if (gx + 1 < x_grids) {
+      spare = std::min(
+          spare, fastroute->getAvailableResources(gx, gy, gx + 1, gy, layer));
+    }
+    if (gx - 1 >= 0) {
+      spare = std::min(
+          spare, fastroute->getAvailableResources(gx - 1, gy, gx, gy, layer));
+    }
+    if (gy + 1 < y_grids) {
+      spare = std::min(
+          spare, fastroute->getAvailableResources(gx, gy, gx, gy + 1, layer));
+    }
+    if (gy - 1 >= 0) {
+      spare = std::min(
+          spare, fastroute->getAvailableResources(gx, gy - 1, gx, gy, layer));
+    }
+
+    if (spare == std::numeric_limits<int>::max()) {
+      return 0;
+    }
+    return spare;
+  };
+
+  struct NodeKey
+  {
+    int x = 0;
+    int y = 0;
+    int layer = 0;
+
+    bool operator==(const NodeKey& other) const
+    {
+      return x == other.x && y == other.y && layer == other.layer;
+    }
+  };
+
+  struct NodeKeyHash
+  {
+    size_t operator()(const NodeKey& k) const noexcept
+    {
+      size_t h = 0;
+      // Cheap combination; coordinates are DBU values and routing levels.
+      h ^= std::hash<int>{}(k.x) + 0x9e3779b9 + (h << 6) + (h >> 2);
+      h ^= std::hash<int>{}(k.y) + 0x9e3779b9 + (h << 6) + (h >> 2);
+      h ^= std::hash<int>{}(k.layer) + 0x9e3779b9 + (h << 6) + (h >> 2);
+      return h;
+    }
+  };
+
+  EndpointAccessPatchStats stats;
+  int total_vias = 0;
+
+  for (auto& [db_net, route] : routes) {
+    static_cast<void>(db_net);
+    if (route.empty() || total_vias >= kMaxTotalVias) {
+      continue;
+    }
+
+    std::unordered_set<GSegment, GSegmentHash> existing;
+    existing.reserve(route.size() * 2 + 64);
+    for (const auto& seg : route) {
+      existing.insert(seg);
+    }
+
+    int net_vias = 0;
+    int net_endpoints = 0;
+    bool net_counted = false;
+
+    // Identify leaf endpoints (degree==1) in the guide graph. These are a good
+    // proxy for pins without depending on Net/Pin object lifetimes.
+    std::unordered_map<NodeKey, int, NodeKeyHash> degree;
+    degree.reserve(route.size() * 2 + 64);
+
+    for (const auto& seg : route) {
+      if (seg.length() == 0) {
+        continue;
+      }
+
+      const NodeKey a{seg.init_x, seg.init_y, seg.init_layer};
+      const NodeKey b{seg.final_x, seg.final_y, seg.final_layer};
+      degree[a]++;
+      degree[b]++;
+    }
+
+    // Iterate over leaf nodes and add small patches near them on constrained
+    // regions of the lowest layers.
+    for (const auto& [node, deg] : degree) {
+      if (total_vias >= kMaxTotalVias || net_vias >= kMaxViasPerNet
+          || net_endpoints >= kMaxEndpointsPerNet) {
+        break;
+      }
+
+      if (deg != 1) {
+        continue;
+      }
+      if (node.layer < min_routing_layer || node.layer > max_patch_layer) {
+        continue;
+      }
+
+      auto [gx, gy] = to_grid(node.x, node.y);
+      if (!in_grid(gx, gy)) {
+        continue;
+      }
+
+      // Only patch if this endpoint's neighborhood is locally constrained.
+      if (min_spare_around_cell(node.layer, gx, gy) > kPinSpareThreshold) {
+        continue;
+      }
+
+      stats.endpoints_patched++;
+      net_endpoints++;
+
+      for (int dl : {-1, 1}) {
+        const int adj = node.layer + dl;
+        if (adj < min_routing_layer || adj > max_routing_layer) {
+          continue;
+        }
+        if (tech->findRoutingLayer(adj) == nullptr) {
+          continue;
+        }
+
+        const int via_lo = std::min(node.layer, adj);
+        const int via_hi = std::max(node.layer, adj);
+
+        for (int dx = -kPatchRadiusTiles; dx <= kPatchRadiusTiles; dx++) {
+          for (int dy = -kPatchRadiusTiles; dy <= kPatchRadiusTiles; dy++) {
+            if (total_vias >= kMaxTotalVias || net_vias >= kMaxViasPerNet) {
+              break;
+            }
+
+            const int px = gx + dx;
+            const int py = gy + dy;
+            if (!in_grid(px, py)) {
+              continue;
+            }
+
+            const auto [x_dbu, y_dbu] = to_dbu(px, py);
+            const GSegment escape_via(x_dbu, y_dbu, via_lo, x_dbu, y_dbu, via_hi);
+            if (!existing.insert(escape_via).second) {
+              continue;
+            }
+
+            route.push_back(escape_via);
+            stats.vias_added++;
+            total_vias++;
+            net_vias++;
+
+            if (!net_counted) {
+              stats.nets_patched++;
+              net_counted = true;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (stats.vias_added > 0) {
+    logger->info(GNR,
+                 6010,
+                 "NEWGR endpoint-access patches: nets {}, endpoints {}, added escape vias {}",
+                 stats.nets_patched,
+                 stats.endpoints_patched,
+                 stats.vias_added);
   }
 }
 
@@ -566,6 +816,7 @@ struct CandidateSettings
   int perturbation_amount = 1;
   int congestion_iterations = 50;
   float critical_nets_percentage = 10.0f;
+  bool allow_congestion = false;
 };
 
 struct CandidateResult
@@ -574,6 +825,19 @@ struct CandidateResult
   RouteMetrics metrics;
   int overflow = std::numeric_limits<int>::max();
   NetRouteMap routes;
+};
+
+struct GuideUnionStats
+{
+  int nets_checked = 0;
+  int nets_merged = 0;
+  int nets_reverted_disconnected = 0;
+  int nets_skipped_small = 0;
+  int nets_skipped_no_improvement = 0;
+  int nets_skipped_over_budget = 0;
+  int segments_added = 0;
+  int wires_added = 0;
+  int vias_added = 0;
 };
 
 struct RouterSnapshot
@@ -585,6 +849,292 @@ struct RouterSnapshot
   bool allow_congestion = false;
   int seed = 0;
 };
+
+RouteMetrics compute_route_metrics(const GRoute& segments,
+                                  odb::dbTech* tech)
+{
+  RouteMetrics metrics;
+  for (const GSegment& segment : segments) {
+    if (segment.isVia()) {
+      metrics.via_count++;
+    } else {
+      metrics.wirelength_dbu += std::abs(segment.final_x - segment.init_x)
+                                + std::abs(segment.final_y - segment.init_y);
+    }
+  }
+
+  if (metrics.wirelength_dbu > 0 && tech != nullptr) {
+    metrics.wirelength_um
+        = metrics.wirelength_dbu
+          / static_cast<double>(tech->getDbUnitsPerMicron());
+  }
+  return metrics;
+}
+
+void union_shorter_guides(NetRouteMap& base_routes,
+                          const NetRouteMap& direct_routes,
+                          odb::dbTech* tech,
+                          GlobalRouter* grouter,
+                          utl::Logger* logger)
+{
+  if (grouter == nullptr || logger == nullptr) {
+    return;
+  }
+
+  // Budget guardrails: guide union can balloon the DR search space.
+  constexpr int kMaxTotalAddedSegments = 160000;
+  constexpr int kMaxAddedSegmentsPerNet = 280;
+  constexpr double kMinRelativeImprovement = 0.004;  // 0.4%
+  constexpr int kMaxExtraViasPerNet = 10;
+
+  const int tile_size = grouter->getTileSize();
+  const long min_net_wl_dbu = std::max<long>(0, static_cast<long>(tile_size) * 20);
+
+  GuideUnionStats stats;
+  int total_added = 0;
+
+  auto segment_is_line = [](const GSegment& segment) -> bool {
+    const int dimensionality = (segment.init_x != segment.final_x)
+                               + (segment.init_y != segment.final_y)
+                               + (segment.init_layer != segment.final_layer);
+    return dimensionality == 1;
+  };
+
+  auto segments_connect = [](const GSegment& segment1,
+                             const GSegment& segment2) -> bool {
+    auto [s1_min_x, s1_max_x]
+        = std::minmax(segment1.init_x, segment1.final_x);
+    auto [s1_min_y, s1_max_y]
+        = std::minmax(segment1.init_y, segment1.final_y);
+    auto [s1_min_z, s1_max_z]
+        = std::minmax(segment1.init_layer, segment1.final_layer);
+    auto [s2_min_x, s2_max_x]
+        = std::minmax(segment2.init_x, segment2.final_x);
+    auto [s2_min_y, s2_max_y]
+        = std::minmax(segment2.init_y, segment2.final_y);
+    auto [s2_min_z, s2_max_z]
+        = std::minmax(segment2.init_layer, segment2.final_layer);
+    return (s1_max_x >= s2_min_x && s1_min_x <= s2_max_x)
+           && (s1_max_y >= s2_min_y && s1_min_y <= s2_max_y)
+           && (s1_max_z >= s2_min_z && s1_min_z <= s2_max_z);
+  };
+
+  auto route_is_connected = [&](const GRoute& route) -> bool {
+    const int total_segments = static_cast<int>(route.size());
+    if (total_segments <= 1) {
+      return true;
+    }
+    if (!segment_is_line(route[0])) {
+      return false;
+    }
+
+    std::vector<int> parent(total_segments);
+    std::vector<int> rank(total_segments, 0);
+    for (int i = 0; i < total_segments; i++) {
+      parent[i] = i;
+    }
+    int groups = 1;
+
+    std::function<int(int)> find = [&](int x) -> int {
+      if (parent[x] != x) {
+        parent[x] = find(parent[x]);
+      }
+      return parent[x];
+    };
+
+    std::function<void(int, int)> unite = [&](int u, int v) {
+      int root_u = find(u);
+      int root_v = find(v);
+      if (root_u == root_v) {
+        return;
+      }
+      if (rank[root_u] > rank[root_v]) {
+        parent[root_v] = root_u;
+      } else if (rank[root_u] < rank[root_v]) {
+        parent[root_u] = root_v;
+      } else {
+        parent[root_v] = root_u;
+        rank[root_u]++;
+      }
+      groups--;
+    };
+
+    for (int i = 1; i < total_segments; i++) {
+      if (!segment_is_line(route[i])) {
+        return false;
+      }
+      groups++;
+      for (int j = i - 1; j >= 0 && groups > 1; --j) {
+        if (segments_connect(route[i], route[j])) {
+          unite(i, j);
+          if (groups == 1) {
+            break;
+          }
+        }
+      }
+    }
+    return groups == 1;
+  };
+
+  for (auto& [db_net, base] : base_routes) {
+    stats.nets_checked++;
+
+    if (total_added >= kMaxTotalAddedSegments) {
+      stats.nets_skipped_over_budget++;
+      break;
+    }
+
+    const auto it = direct_routes.find(db_net);
+    if (it == direct_routes.end()) {
+      continue;
+    }
+    const GRoute& direct = it->second;
+
+    const RouteMetrics base_m = compute_route_metrics(base, tech);
+    const RouteMetrics direct_m = compute_route_metrics(direct, tech);
+
+    if (base_m.wirelength_dbu < min_net_wl_dbu) {
+      stats.nets_skipped_small++;
+      continue;
+    }
+
+    const long base_wl = base_m.wirelength_dbu;
+    const long direct_wl = direct_m.wirelength_dbu;
+    if (direct_wl >= static_cast<long>(base_wl * (1.0 - kMinRelativeImprovement))) {
+      stats.nets_skipped_no_improvement++;
+      continue;
+    }
+
+    const int base_vias = static_cast<int>(base_m.via_count);
+    const int direct_vias = static_cast<int>(direct_m.via_count);
+    if (direct_vias > base_vias + kMaxExtraViasPerNet) {
+      continue;
+    }
+
+    std::unordered_set<GSegment, GSegmentHash> existing;
+    existing.reserve(base.size() * 2 + 64);
+    for (const auto& seg : base) {
+      existing.insert(seg);
+    }
+
+    const std::size_t original_size = base.size();
+
+    // Ensure we never introduce disconnected components:
+    // grow a connected component starting from existing base endpoints.
+    struct RouteNodeKey
+    {
+      int x = 0;
+      int y = 0;
+      int layer = 0;
+
+      bool operator==(const RouteNodeKey& other) const
+      {
+        return x == other.x && y == other.y && layer == other.layer;
+      }
+    };
+
+    struct RouteNodeKeyHash
+    {
+      std::size_t operator()(const RouteNodeKey& k) const
+      {
+        std::size_t seed = 0;
+        boost::hash_combine(seed, k.x);
+        boost::hash_combine(seed, k.y);
+        boost::hash_combine(seed, k.layer);
+        return seed;
+      }
+    };
+
+    auto endpoint_a = [](const GSegment& s) -> RouteNodeKey {
+      return RouteNodeKey{static_cast<int>(s.init_x),
+                          static_cast<int>(s.init_y),
+                          static_cast<int>(s.init_layer)};
+    };
+    auto endpoint_b = [](const GSegment& s) -> RouteNodeKey {
+      return RouteNodeKey{static_cast<int>(s.final_x),
+                          static_cast<int>(s.final_y),
+                          static_cast<int>(s.final_layer)};
+    };
+
+    std::unordered_set<RouteNodeKey, RouteNodeKeyHash> connected_nodes;
+    connected_nodes.reserve(base.size() * 2 + 64);
+    for (const auto& seg : base) {
+      connected_nodes.insert(endpoint_a(seg));
+      connected_nodes.insert(endpoint_b(seg));
+    }
+
+    int added_for_net = 0;
+    int wires_added_for_net = 0;
+    int vias_added_for_net = 0;
+    bool progressed = true;
+    // Multiple passes to allow adding a chain of segments where only the first
+    // one touches the base.
+    while (progressed && added_for_net < kMaxAddedSegmentsPerNet
+           && (total_added + added_for_net) < kMaxTotalAddedSegments) {
+      progressed = false;
+      for (const auto& seg : direct) {
+        if (added_for_net >= kMaxAddedSegmentsPerNet
+            || (total_added + added_for_net) >= kMaxTotalAddedSegments) {
+          break;
+        }
+        if (existing.find(seg) != existing.end()) {
+          continue;
+        }
+
+        const RouteNodeKey a = endpoint_a(seg);
+        const RouteNodeKey b = endpoint_b(seg);
+        if (connected_nodes.find(a) == connected_nodes.end()
+            && connected_nodes.find(b) == connected_nodes.end()) {
+          continue;  // would create a disconnected component
+        }
+
+        if (existing.insert(seg).second) {
+          base.push_back(seg);
+          connected_nodes.insert(a);
+          connected_nodes.insert(b);
+          added_for_net++;
+          if (seg.isVia()) {
+            vias_added_for_net++;
+          } else {
+            wires_added_for_net++;
+          }
+          progressed = true;
+        }
+      }
+    }
+
+    if (added_for_net > 0) {
+      // GlobalRouter enforces connectedness for *every* net route. If our
+      // additions break this invariant, drop them.
+      if (!route_is_connected(base)) {
+        base.resize(original_size);
+        stats.nets_reverted_disconnected++;
+        continue;
+      }
+
+      stats.nets_merged++;
+      total_added += added_for_net;
+      stats.segments_added += added_for_net;
+      stats.wires_added += wires_added_for_net;
+      stats.vias_added += vias_added_for_net;
+    }
+  }
+
+  if (stats.segments_added > 0) {
+    logger->info(
+        GNR,
+        6012,
+        "NEWGR guide union: nets merged {}, reverted {}, added segs {} (wires {}, vias {}), budget {}",
+        stats.nets_merged,
+        stats.nets_reverted_disconnected,
+        stats.segments_added,
+        stats.wires_added,
+        stats.vias_added,
+        kMaxTotalAddedSegments);
+  } else {
+    logger->info(GNR, 6013, "NEWGR guide union: no nets met merge criteria");
+  }
+}
 
 }  // namespace
 
@@ -600,7 +1150,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   if (nets.empty()) {
     return {};
   }
-  static_cast<void>(nets);
 
   auto compute_metrics = [&](const NetRouteMap& routes) -> RouteMetrics {
     RouteMetrics metrics;
@@ -657,7 +1206,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     result.settings = settings;
 
     restore_snapshot(snapshot);
-    grouter_->setAllowCongestion(false);
+    grouter_->setAllowCongestion(settings.allow_congestion);
     grouter_->setCapacitiesPerturbationPercentage(
         settings.caps_perturbation_percentage);
     grouter_->setPerturbationAmount(settings.perturbation_amount);
@@ -700,6 +1249,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   baseline.perturbation_amount = snapshot.perturbation_amount;
   baseline.congestion_iterations = snapshot.congestion_iterations;
   baseline.critical_nets_percentage = snapshot.critical_percentage;
+  baseline.allow_congestion = false;
 
   // Wirelength-focused candidate with runtime guardrails:
   // - Keep congestion iterations bounded (fewer detours + faster runtime).
@@ -721,6 +1271,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   wl_lean.congestion_iterations
       = std::min(30, snapshot.congestion_iterations);
   wl_lean.critical_nets_percentage = 0.0f;
+  wl_lean.allow_congestion = false;
+
+  // Directness-first candidate used only to provide an alternative guide tree
+  // to the detailed router (via guide union). This run is allowed to end with
+  // overflow; the overflow-free base candidate is still selected and returned.
+  CandidateSettings wl_short = wl_lean;
+  wl_short.name = "wl-short";
+  wl_short.allow_congestion = true;
+  wl_short.congestion_iterations = std::min(10, wl_lean.congestion_iterations);
+  wl_short.caps_perturbation_percentage = 0.0f;
+  wl_short.critical_nets_percentage = 0.0f;
+  wl_short.seed = 11;
 
   auto is_better = [&](const CandidateResult& current,
                        const CandidateResult& best) -> bool {
@@ -741,6 +1303,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   // One-pass default: run the WL-lean configuration and only fall back if
   // overflow remains.
+  CandidateResult direct = run_candidate(wl_short, /*keep_routes=*/true);
   CandidateResult primary = run_candidate(wl_lean, /*keep_routes=*/true);
   if (primary.overflow == 0) {
     logger_->info(GNR,
@@ -751,14 +1314,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   primary.metrics.via_count,
                   primary.overflow);
     NetRouteMap routes = std::move(primary.routes);
-    add_congestion_patches(
-        routes,
-        grouter_->fastroute_,
-        grouter_->grid_,
-        grouter_->db_->getTech(),
-        logger_,
-        min_routing_layer,
-        max_routing_layer);
+    union_shorter_guides(
+        routes, direct.routes, grouter_->db_->getTech(), grouter_, logger_);
     add_lane_patches(
         routes, grouter_, logger_, min_routing_layer, max_routing_layer);
     return routes;
@@ -785,14 +1342,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 best.overflow);
 
   NetRouteMap routes = std::move(best.routes);
-  add_congestion_patches(
-      routes,
-      grouter_->fastroute_,
-      grouter_->grid_,
-      grouter_->db_->getTech(),
-      logger_,
-      min_routing_layer,
-      max_routing_layer);
+  union_shorter_guides(
+      routes, direct.routes, grouter_->db_->getTech(), grouter_, logger_);
   add_lane_patches(
       routes, grouter_, logger_, min_routing_layer, max_routing_layer);
   return routes;
