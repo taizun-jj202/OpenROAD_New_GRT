@@ -1651,10 +1651,9 @@ NetRouteMap FastRouteCore::run()
     constexpr int kMinDetourToOptimize = 1;
     constexpr int kMaxEdgesToOptimize = 65000;
     constexpr int kTurnOutsideBoxLimit = 4;
-    constexpr double kAltSearchUtilThreshold = 0.82;
     constexpr int kAstarMinDetourToOptimize = 7;
     constexpr int kAstarMaxAttempts = 4000;
-    constexpr int kAstarMargin = 5;
+    constexpr int kAstarMargin = 6;
     constexpr int kAstarMaxExpansions = 15000;
 
     int optimized_edges = 0;
@@ -2180,7 +2179,10 @@ NetRouteMap FastRouteCore::run()
         // including a limited "outside-the-box" turn. These often avoid a
         // single saturated edge without requiring a long maze detour, and can
         // also improve detailed-routability by reducing peak utilization.
-        if (!best.ok || (best.max_util >= kAltSearchUtilThreshold)) {
+        // Only explore longer 2-bend alternatives when the direct L-shapes
+        // don't fit; for a feasible L-shape, any HVH/VHV path is strictly
+        // longer (and thus never wins our WL-first candidate ranking).
+        if (!best.ok) {
           const int xmin = std::min(x1, x2);
           const int xmax = std::max(x1, x2);
           const int ymin = std::min(y1, y2);
@@ -2361,10 +2363,18 @@ NetRouteMap FastRouteCore::run()
     // and re-embed each tree edge with the same capacity-feasible short-path
     // heuristic used above. Keep only if it reduces total 2D steps.
     constexpr int kMinPinsForRetopo = 4;
-    constexpr int kMaxNetsToRetopologize = 250;
-    constexpr int kMinPotentialGain = 8;  // 2D steps vs flute length
+    constexpr int kMaxNetsToRetopologize = 400;
+    constexpr int kMinPotentialGain = 6;  // 2D steps vs flute length
     constexpr int kMinNetLenSaved = 2;    // avoid churn for tiny gains
-    constexpr int kTopoAstarExtraBudget = 8;
+    constexpr int kTopoAstarExtraBudget = 12;
+
+    // For the final topology-recovery pass, bias towards minimal wirelength:
+    // - Use a slightly higher FLUTE accuracy on a bounded subset of nets.
+    // - Disable the historical "V-coefficient" warping used for congestion
+    //   (coeffV>1.0), since we are already overflow-free and re-embedding is
+    //   capacity-checked.
+    constexpr int kRetopoFluteAccuracy = 3;
+    constexpr float kRetopoCoeffV = 1.0f;
 
     struct RetopoCandidate
     {
@@ -2486,8 +2496,9 @@ NetRouteMap FastRouteCore::run()
         best = l_y;
       }
 
-      // If L is blocked (or very close to saturation), try 2-bend alternatives.
-      if (!best.ok || (best.max_util >= kAltSearchUtilThreshold)) {
+      // Only try longer 2-bend alternatives when L is blocked; if an L-shape
+      // is feasible, it is strictly shortest and wins the WL-first ranking.
+      if (!best.ok) {
         const int xmin = std::min(x1, x2);
         const int xmax = std::max(x1, x2);
         const int ymin = std::min(y1, y2);
@@ -2602,7 +2613,7 @@ NetRouteMap FastRouteCore::run()
     // Candidate selection is intentionally two-stage to keep runtime in check:
     // 1) Pick the largest nets by current 2D length (cheap).
     // 2) For only those nets, compute fluteNormal length and prioritize by gain.
-    constexpr int kPreselectNets = 600;
+    constexpr int kPreselectNets = 900;
     struct Preselect
     {
       int netID = -1;
@@ -2656,7 +2667,12 @@ NetRouteMap FastRouteCore::run()
       }
 
       Tree rsmt;
-      fluteNormal(netID, net->getPinX(), net->getPinY(), 2, 1.2, rsmt);
+      fluteNormal(netID,
+                  net->getPinX(),
+                  net->getPinY(),
+                  kRetopoFluteAccuracy,
+                  kRetopoCoeffV,
+                  rsmt);
       if (net->getNumPins() > 3) {
         edgeShiftNew(rsmt, netID);
       }
@@ -2701,7 +2717,12 @@ NetRouteMap FastRouteCore::run()
 
       // Build a new minimal RSMT topology.
       Tree rsmt;
-      fluteNormal(netID, net->getPinX(), net->getPinY(), 2, 1.2, rsmt);
+      fluteNormal(netID,
+                  net->getPinX(),
+                  net->getPinY(),
+                  kRetopoFluteAccuracy,
+                  kRetopoCoeffV,
+                  rsmt);
       if (net->getNumPins() > 3) {
         edgeShiftNew(rsmt, netID);
       }
