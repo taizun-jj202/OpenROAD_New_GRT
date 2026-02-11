@@ -164,25 +164,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   baseline.congestion_iterations = snapshot.congestion_iterations;
   baseline.critical_nets_percentage = snapshot.critical_percentage;
 
-  // Wirelength-focused candidate:
-  // - Disable critical-net ripup (STA calls + extra detours) for a cleaner WL.
-  // - Use fewer overflow iterations to avoid over-penalizing congestion, which
-  //   often increases detours/wirelength even when the design is routable.
-  // - Keep a small capacity perturbation to break routing ties deterministically
-  //   without paying the cost of a full multi-candidate search.
-  CandidateSettings wl_lean;
-  wl_lean.name = "wl-lean";
-  wl_lean.seed = 29;
-  wl_lean.caps_perturbation_percentage = 0.5f;
-  wl_lean.perturbation_amount = 1;
-  wl_lean.congestion_iterations = std::min(25, snapshot.congestion_iterations);
-  wl_lean.critical_nets_percentage = 0.0f;
-
-  // Recovery candidate (only used if wl_lean fails to close overflow).
-  CandidateSettings recover = baseline;
-  recover.name = "recover";
-  recover.seed = 29;
-  recover.caps_perturbation_percentage = std::max(1.5f, snapshot.caps_percentage);
+  // Wirelength-quality candidate:
+  // - Keep the default congestion iteration budget so routability-driven
+  //   detours/antenna repairs don't dominate DR wirelength.
+  // - Keep timing-aware ordering enabled if the user configured it (it can
+  //   reduce DR detours around critical pin regions).
+  // - Use modest capacity perturbation to avoid pathological tie-breaking.
+  CandidateSettings wl_quality = baseline;
+  wl_quality.name = "wl-quality";
+  wl_quality.seed = 29;
+  wl_quality.caps_perturbation_percentage = std::max(1.5f, snapshot.caps_percentage);
+  wl_quality.perturbation_amount = 1;
 
   auto is_better = [&](const CandidateResult& current,
                        const CandidateResult& best) -> bool {
@@ -201,23 +193,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return current.metrics.via_count < best.metrics.via_count;
   };
 
-  // One-pass default (runtime): try the WL-focused configuration first and
-  // only fall back to a more conservative run if overflow remains.
-  CandidateResult wl_result = run_candidate(wl_lean, /*keep_routes=*/true);
-  if (wl_result.overflow == 0) {
+  // One-pass default: run the WL-quality configuration and only fall back if
+  // overflow remains.
+  CandidateResult primary = run_candidate(wl_quality, /*keep_routes=*/true);
+  if (primary.overflow == 0) {
     logger_->info(GNR,
                   6005,
                   "NEWGR selected {}: wl {:.0f} um, vias {}, overflow {}",
-                  wl_result.settings.name,
-                  wl_result.metrics.wirelength_um,
-                  wl_result.metrics.via_count,
-                  wl_result.overflow);
-    return std::move(wl_result.routes);
+                  primary.settings.name,
+                  primary.metrics.wirelength_um,
+                  primary.metrics.via_count,
+                  primary.overflow);
+    return std::move(primary.routes);
   }
 
-  CandidateResult recovery = run_candidate(recover, /*keep_routes=*/true);
-  const bool wl_is_best = is_better(wl_result, recovery);
-  const CandidateResult& best = wl_is_best ? wl_result : recovery;
+  CandidateResult recovery = run_candidate(baseline, /*keep_routes=*/true);
+  const bool primary_is_best = is_better(primary, recovery);
+  const CandidateResult& best = primary_is_best ? primary : recovery;
   logger_->info(GNR,
                 6007,
                 "NEWGR selected {}: wl {:.0f} um, vias {}, overflow {}",
@@ -226,7 +218,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 best.metrics.via_count,
                 best.overflow);
 
-  return wl_is_best ? std::move(wl_result.routes) : std::move(recovery.routes);
+  return primary_is_best ? std::move(primary.routes) : std::move(recovery.routes);
 }
 
 }  // namespace grt
