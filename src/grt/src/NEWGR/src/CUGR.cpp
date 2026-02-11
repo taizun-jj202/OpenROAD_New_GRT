@@ -40,6 +40,11 @@ CUGR::~CUGR() = default;
 
 void CUGR::init(const int min_routing_layer, const int max_routing_layer)
 {
+  // The OpenROAD API passes tech routing "levels" (1-based). Internally this
+  // router uses 0-based indices, so we translate here and keep the rest of the
+  // implementation consistent with the design/grid representation.
+  constants_.min_routing_layer = std::max(0, min_routing_layer - 1);
+
   design_ = std::make_unique<Design>(
       db_, logger_, constants_, min_routing_layer, max_routing_layer);
   grid_graph_ = std::make_unique<GridGraph>(design_.get(), constants_, logger_);

@@ -592,8 +592,10 @@ void PatternRoute::calculateRoutingCosts(
   viaCosts[0] = 0;
   for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
        layerIndex++) {
-    viaCosts[layerIndex] = viaCosts[layerIndex - 1]
-                           + grid_graph_->getViaCost(layerIndex - 1, *node);
+    viaCosts[layerIndex]
+        = viaCosts[layerIndex - 1]
+          + constants_.via_cost_scale
+                * grid_graph_->getViaCost(layerIndex - 1, *node);
   }
   IntervalT fixedLayers(node->getFixedLayers());
   fixedLayers.Set(std::min(fixedLayers.low(),

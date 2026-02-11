@@ -34,15 +34,19 @@ struct Constants
   // Favor shorter routing (primary metric) while still accounting for vias.
   double weight_wire_length = 1.25;
   // Increase via penalty to reduce layer switching and downstream DR vias.
-  double weight_via_number = 8.0;
+  double weight_via_number = 10.0;
   // Reduce congestion-driven detours to keep guides compact.
   double weight_short_area = 160.0;
 
-  // Allow routing on M1 to reduce the number of required M1<->M2 transitions
-  // for short/local connections (primary lever for DR via count).
+  // Internal min routing layer (0-based routing layer index). This is synced
+  // from the OpenROAD `min_routing_layer` argument during init().
   int min_routing_layer = 0;
 
   double cost_logistic_slope = 1.0;
+
+  // Scale the cost of moving across layers at a node. Increasing this reduces
+  // multi-layer "stacking" (and thus DR via count) with minimal runtime impact.
+  double via_cost_scale = 1.35;
 
   // allowed stem length increase to trunk length ratio
   double max_detour_ratio = 0.06;
