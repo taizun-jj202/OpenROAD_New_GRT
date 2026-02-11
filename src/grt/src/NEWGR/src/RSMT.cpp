@@ -453,6 +453,16 @@ void FastRouteCore::fluteCongest(const int netID,
 
 bool FastRouteCore::netCongestion(const int netID)
 {
+  // Identify whether this net's current 2D embedding crosses *meaningfully*
+  // congested edges. This is used as a coarse filter for when to invest in
+  // congestion-aware Steiner tree generation (which may increase wirelength).
+  //
+  // A single edge sitting exactly at capacity is common and doesn't necessarily
+  // imply the net needs a congestion-driven RSMT. Require either multiple
+  // over-cap edges or a larger single overflow.
+  int over_cap_edges = 0;
+  double max_over_cap = 0.0;
+
   for (const Segment& seg : seglist_[netID]) {
     const auto [ymin, ymax] = std::minmax(seg.y1, seg.y2);
 
@@ -461,30 +471,50 @@ bool FastRouteCore::netCongestion(const int netID)
       for (int i = seg.x1; i < seg.x2; i++) {
         const int cap = getEdgeCapacity(
             nets_[netID], i, seg.y1, EdgeDirection::Horizontal);
-        if (graph2d_.getEstUsageH(i, seg.y1) >= cap) {
-          return true;
+        const double over = graph2d_.getEstUsageH(i, seg.y1) - cap;
+        if (cap <= 0 || over > 0.0) {
+          over_cap_edges++;
+          max_over_cap = std::max(max_over_cap, cap <= 0 ? 1e9 : over);
+          if (over_cap_edges >= 2 || max_over_cap >= 1.0) {
+            return true;
+          }
         }
       }
       for (int i = ymin; i < ymax; i++) {
         const int cap
             = getEdgeCapacity(nets_[netID], seg.x2, i, EdgeDirection::Vertical);
-        if (graph2d_.getEstUsageV(seg.x2, i) >= cap) {
-          return true;
+        const double over = graph2d_.getEstUsageV(seg.x2, i) - cap;
+        if (cap <= 0 || over > 0.0) {
+          over_cap_edges++;
+          max_over_cap = std::max(max_over_cap, cap <= 0 ? 1e9 : over);
+          if (over_cap_edges >= 2 || max_over_cap >= 1.0) {
+            return true;
+          }
         }
       }
     } else {
       for (int i = ymin; i < ymax; i++) {
         const int cap
             = getEdgeCapacity(nets_[netID], seg.x1, i, EdgeDirection::Vertical);
-        if (graph2d_.getEstUsageV(seg.x1, i) >= cap) {
-          return true;
+        const double over = graph2d_.getEstUsageV(seg.x1, i) - cap;
+        if (cap <= 0 || over > 0.0) {
+          over_cap_edges++;
+          max_over_cap = std::max(max_over_cap, cap <= 0 ? 1e9 : over);
+          if (over_cap_edges >= 2 || max_over_cap >= 1.0) {
+            return true;
+          }
         }
       }
       for (int i = seg.x1; i < seg.x2; i++) {
         const int cap = getEdgeCapacity(
             nets_[netID], i, seg.y2, EdgeDirection::Horizontal);
-        if (graph2d_.getEstUsageH(i, seg.y2) >= cap) {
-          return true;
+        const double over = graph2d_.getEstUsageH(i, seg.y2) - cap;
+        if (cap <= 0 || over > 0.0) {
+          over_cap_edges++;
+          max_over_cap = std::max(max_over_cap, cap <= 0 ? 1e9 : over);
+          if (over_cap_edges >= 2 || max_over_cap >= 1.0) {
+            return true;
+          }
         }
       }
     }
@@ -629,6 +659,112 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
 
   const int flute_accuracy = 2;
 
+  auto tree_wirelength = [](const Tree& t) -> int {
+    int wl = 0;
+    for (int j = 0; j < t.branchCount(); j++) {
+      const int n = t.branch[j].n;
+      if (n == j) {  // root
+        continue;
+      }
+      wl += std::abs(t.branch[j].x - t.branch[n].x)
+            + std::abs(t.branch[j].y - t.branch[n].y);
+    }
+    return wl;
+  };
+
+  auto edge_overflow_penalty_h = [&](FrNet* net,
+                                     const int x,
+                                     const int y,
+                                     const int8_t edge_cost) -> double {
+    const int cap = getEdgeCapacity(net, x, y, EdgeDirection::Horizontal);
+    if (cap <= 0) {
+      return 1e9;
+    }
+    const double predicted = graph2d_.getEstUsageH(x, y) + edge_cost;
+    return std::max(0.0, predicted - cap);
+  };
+
+  auto edge_overflow_penalty_v = [&](FrNet* net,
+                                     const int x,
+                                     const int y,
+                                     const int8_t edge_cost) -> double {
+    const int cap = getEdgeCapacity(net, x, y, EdgeDirection::Vertical);
+    if (cap <= 0) {
+      return 1e9;
+    }
+    const double predicted = graph2d_.getEstUsageV(x, y) + edge_cost;
+    return std::max(0.0, predicted - cap);
+  };
+
+  auto lshape_overflow_penalty = [&](FrNet* net,
+                                     const int x1,
+                                     const int y1,
+                                     const int x2,
+                                     const int y2,
+                                     const int8_t edge_cost) -> double {
+    if (x1 == x2 && y1 == y2) {
+      return 0.0;
+    }
+    if (x1 == x2) {  // vertical
+      const auto [ymin, ymax] = std::minmax(y1, y2);
+      double p = 0.0;
+      for (int y = ymin; y < ymax; y++) {
+        p += edge_overflow_penalty_v(net, x1, y, edge_cost);
+      }
+      return p;
+    }
+    if (y1 == y2) {  // horizontal
+      const auto [xmin, xmax] = std::minmax(x1, x2);
+      double p = 0.0;
+      for (int x = xmin; x < xmax; x++) {
+        p += edge_overflow_penalty_h(net, x, y1, edge_cost);
+      }
+      return p;
+    }
+
+    // diagonal: take the less overflowing L shape
+    const auto [xmin, xmax] = std::minmax(x1, x2);
+    const auto [ymin, ymax] = std::minmax(y1, y2);
+
+    // (x1,y1)->(x2,y1)->(x2,y2)
+    double p_xy = 0.0;
+    for (int x = xmin; x < xmax; x++) {
+      p_xy += edge_overflow_penalty_h(net, x, y1, edge_cost);
+    }
+    for (int y = ymin; y < ymax; y++) {
+      p_xy += edge_overflow_penalty_v(net, x2, y, edge_cost);
+    }
+
+    // (x1,y1)->(x1,y2)->(x2,y2)
+    double p_yx = 0.0;
+    for (int y = ymin; y < ymax; y++) {
+      p_yx += edge_overflow_penalty_v(net, x1, y, edge_cost);
+    }
+    for (int x = xmin; x < xmax; x++) {
+      p_yx += edge_overflow_penalty_h(net, x, y2, edge_cost);
+    }
+
+    return std::min(p_xy, p_yx);
+  };
+
+  auto tree_overflow_penalty = [&](const Tree& t, FrNet* net) -> double {
+    const int8_t edge_cost = net->getEdgeCost();
+    double p = 0.0;
+    for (int j = 0; j < t.branchCount(); j++) {
+      const int n = t.branch[j].n;
+      if (n == j) {  // root
+        continue;
+      }
+      p += lshape_overflow_penalty(net,
+                                   t.branch[j].x,
+                                   t.branch[j].y,
+                                   t.branch[n].x,
+                                   t.branch[n].y,
+                                   edge_cost);
+    }
+    return p;
+  };
+
   for (const int& netID : net_ids_) {
     FrNet* net = nets_[netID];
 
@@ -669,25 +805,57 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
       float coeffV = 1.36;
 
       if (congestionDriven) {
-        // call congestion driven flute to generate RSMT
-        bool cong;
+        // Congestion-driven RSMT:
+        // Prefer a shorter (wirelength) tree when it does not substantially
+        // worsen predicted overflow. This reduces detours that later show up as
+        // DR wirelength inflation, while still allowing congestion-aware trees
+        // for truly congested nets.
+        bool cong = false;
         coeffV = noADJ ? 1.2 : coeffADJ(netID);
         cong = netCongestion(netID);
-        if (cong) {
-          fluteCongest(netID,
-                       net->getPinX(),
-                       net->getPinY(),
-                       flute_accuracy,
-                       coeffV,
-                       rsmt);
-        } else {
+        if (!cong) {
           fluteNormal(netID,
                       net->getPinX(),
                       net->getPinY(),
                       flute_accuracy,
                       coeffV,
                       rsmt);
+        } else {
+          Tree rsmt_wl;
+          Tree rsmt_cong;
+          fluteNormal(netID,
+                      net->getPinX(),
+                      net->getPinY(),
+                      flute_accuracy,
+                      coeffV,
+                      rsmt_wl);
+          fluteCongest(netID,
+                       net->getPinX(),
+                       net->getPinY(),
+                       flute_accuracy,
+                       coeffV,
+                       rsmt_cong);
+
+          const int wl_wl = tree_wirelength(rsmt_wl);
+          const int wl_cong = tree_wirelength(rsmt_cong);
+          const double pen_wl = tree_overflow_penalty(rsmt_wl, net);
+          const double pen_cong = tree_overflow_penalty(rsmt_cong, net);
+
+          // Weight overflow modestly: the global router still has rip-up and
+          // reroute stages. The goal here is primarily to reduce detours.
+          constexpr double k_overflow_wt = 3.0;
+          const double cost_wl = wl_wl + k_overflow_wt * pen_wl;
+          const double cost_cong = wl_cong + k_overflow_wt * pen_cong;
+
+          // Safety clamp: don't pick the WL tree if it is predicted to be far
+          // more overflowing than the congestion tree.
+          const bool wl_tree_is_risky
+              = (pen_wl > pen_cong * 4.0) && (pen_wl - pen_cong > 50.0);
+
+          rsmt = (!wl_tree_is_risky && cost_wl <= cost_cong) ? rsmt_wl
+                                                            : rsmt_cong;
         }
+
         if (d > 3) {
           numShift += edgeShiftNew(rsmt, netID);
         }
@@ -723,6 +891,7 @@ void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
       }
     }
 
+    seglist_[netID].clear();
     for (int j = 0; j < rsmt.branchCount(); j++) {
       const int x1 = rsmt.branch[j].x;
       const int y1 = rsmt.branch[j].y;
