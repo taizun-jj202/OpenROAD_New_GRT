@@ -387,8 +387,8 @@ void add_congestion_patches(NetRouteMap& routes,
   }
 }
 
-// Add small 3x3 "pin-access" point guides (degenerate segments) around
-// non-core pins (macros/pads/ports) when local spare resources are low.
+// Add small "pin-access" escape vias at *existing* leaf endpoints when local
+// spare resources are low.
 //
 // Motivation: detailed routing often introduces wirelength detours (and extra
 // vias) near macros/pads due to restricted pin access. Adding a few extra guide
@@ -417,10 +417,14 @@ void add_endpoint_access_patches(NetRouteMap& routes,
   }
 
   // Guardrails: keep patching bounded and focused.
-  constexpr int kMaxTotalVias = 45000;
+  constexpr int kMaxTotalVias = 18000;
   constexpr int kMaxViasPerNet = 36;
   constexpr int kMaxEndpointsPerNet = 8;
-  constexpr int kPatchRadiusTiles = 1;  // 3x3 around the pin
+  // IMPORTANT: keep patches connected to the existing guide graph.
+  // Standalone guide islands can break incremental routing/parasitics updates
+  // (net connectivity checks). Therefore we only add escape vias at the
+  // existing endpoint coordinate (no 3x3 halo).
+  constexpr int kPatchRadiusTiles = 0;
 
   // Threshold is expressed in "spare tracks" on the edge.
   constexpr int kPinSpareThreshold = 1;
@@ -1288,6 +1292,313 @@ void add_via(GRoute& route,
     return;
   }
   route.emplace_back(p.x(), p.y(), layer0, p.x(), p.y(), layer1);
+}
+
+RouteMetrics compute_route_metrics(const GRoute& segments, odb::dbTech* tech);
+
+// Add "rectilinear corridor" guides based on an RSMT topology (FLUTE when
+// available), but *without* FastRoute's detours. These extra corridors are
+// injected only for nets whose base guides appear significantly detoured vs
+// their RSMT length.
+//
+// Rationale (radical WL strategy): detailed routing wirelength can increase
+// when the guide set only contains congestion-safe detours. By injecting the
+// shorter rectilinear corridors as *additional* guides, we give the detailed
+// router a chance to realize a shorter path when tracks/vias allow it, while
+// still keeping the overflow-free detour guides present as a fallback.
+void add_rsmt_rectilinear_corridors(NetRouteMap& routes,
+                                    GlobalRouter* grouter,
+                                    stt::SteinerTreeBuilder* stt_builder,
+                                    odb::dbTech* tech,
+                                    utl::Logger* logger,
+                                    const int min_routing_layer,
+                                    const int max_routing_layer)
+{
+  if (routes.empty() || grouter == nullptr || tech == nullptr || logger == nullptr
+      || stt_builder == nullptr) {
+    return;
+  }
+
+  const Grid* grid = grouter->grid();
+  if (grid == nullptr) {
+    return;
+  }
+
+  const int tile_size = grid->getTileSize();
+  if (tile_size <= 0) {
+    return;
+  }
+
+  const int x_corner = grid->getXMin();
+  const int y_corner = grid->getYMin();
+  const int x_grids = grid->getXGrids();
+  const int y_grids = grid->getYGrids();
+  if (x_grids <= 0 || y_grids <= 0) {
+    return;
+  }
+
+  const int h_layer = pick_routing_layer_by_dir(
+      tech,
+      min_routing_layer,
+      max_routing_layer,
+      odb::dbTechLayerDir::HORIZONTAL);
+  const int v_layer = pick_routing_layer_by_dir(
+      tech, min_routing_layer, max_routing_layer, odb::dbTechLayerDir::VERTICAL);
+
+  // Guardrails.
+  constexpr int kMaxTotalAddedSegments = 220000;
+  constexpr int kMaxAddedSegmentsPerNet = 220;
+  const long min_net_wl_dbu = static_cast<long>(tile_size) * 25;
+
+  // Only target "detoured" nets: base_wl must exceed RSMT length by a ratio.
+  constexpr double kDetourRatioThreshold = 1.18;  // radical but not too broad
+
+  // Keep the corridors "rectilinear": never detour outside the Manhattan
+  // rectangle for an RSMT edge; optionally add both L-shapes when both look
+  // similarly routable (more options for DR).
+  constexpr int kMaxBlockedEdgesForAlt = 1;
+
+  auto to_grid = [&](const odb::Point& p) -> GridPoint {
+    GridPoint gp;
+    gp.gx = (p.x() - x_corner) / tile_size;
+    gp.gy = (p.y() - y_corner) / tile_size;
+    gp.gx = std::max(0, std::min(x_grids - 1, gp.gx));
+    gp.gy = std::max(0, std::min(y_grids - 1, gp.gy));
+    return gp;
+  };
+
+  auto to_dbu = [&](const GridPoint& gp) -> odb::Point {
+    const int x_dbu = x_corner + gp.gx * tile_size + tile_size / 2;
+    const int y_dbu = y_corner + gp.gy * tile_size + tile_size / 2;
+    return odb::Point(x_dbu, y_dbu);
+  };
+
+  auto is_better_score = [](const LShapeScore& a, const LShapeScore& b) -> bool {
+    if (a.blocked_edges != b.blocked_edges) {
+      return a.blocked_edges < b.blocked_edges;
+    }
+    if (a.min_available != b.min_available) {
+      return a.min_available > b.min_available;
+    }
+    return false;
+  };
+
+  int total_added = 0;
+  int nets_augmented = 0;
+
+  for (auto& [db_net, route] : routes) {
+    if (total_added >= kMaxTotalAddedSegments) {
+      break;
+    }
+    if (db_net == nullptr || route.empty()) {
+      continue;
+    }
+
+    const RouteMetrics base_m = compute_route_metrics(route, tech);
+    if (base_m.wirelength_dbu < min_net_wl_dbu) {
+      continue;
+    }
+
+    std::vector<PinGridLocation> pin_locs = grouter->getPinGridPositions(db_net);
+    if (pin_locs.size() < 2) {
+      continue;
+    }
+
+    std::vector<GridPoint> pins_grid;
+    pins_grid.reserve(pin_locs.size());
+    std::unordered_set<GridPoint, GridPointHash> seen;
+    seen.reserve(pin_locs.size() * 2);
+    for (const auto& loc : pin_locs) {
+      const GridPoint gp = to_grid(loc.grid_pt);
+      if (seen.insert(gp).second) {
+        pins_grid.push_back(gp);
+      }
+    }
+    if (pins_grid.size() < 2) {
+      continue;
+    }
+
+    std::vector<int> xs;
+    std::vector<int> ys;
+    xs.reserve(pins_grid.size());
+    ys.reserve(pins_grid.size());
+    for (const auto& gp : pins_grid) {
+      xs.push_back(gp.gx);
+      ys.push_back(gp.gy);
+    }
+
+    constexpr int kFluteAccuracy = 3;
+    const stt::Tree rsmt = stt_builder->flute(xs, ys, kFluteAccuracy);
+    if (rsmt.branchCount() <= 0) {
+      continue;
+    }
+
+    // Estimate RSMT length (grid-manhttan units), then translate to DBU.
+    long rsmt_len_tiles = 0;
+    {
+      std::unordered_set<std::uint64_t> seen_edges;
+      seen_edges.reserve(static_cast<std::size_t>(rsmt.branchCount()) * 2);
+
+      for (int i = 0; i < rsmt.branchCount(); i++) {
+        const int j = rsmt.branch[i].n;
+        if (j < 0 || j >= rsmt.branchCount() || j == i) {
+          continue;
+        }
+        int a = i;
+        int b = j;
+        if (a > b) {
+          std::swap(a, b);
+        }
+        const std::uint64_t key
+            = (static_cast<std::uint64_t>(a) << 32) | static_cast<std::uint32_t>(b);
+        if (!seen_edges.insert(key).second) {
+          continue;
+        }
+        rsmt_len_tiles += std::abs(rsmt.branch[a].x - rsmt.branch[b].x)
+                          + std::abs(rsmt.branch[a].y - rsmt.branch[b].y);
+      }
+    }
+    const long rsmt_len_dbu = rsmt_len_tiles * static_cast<long>(tile_size);
+    if (rsmt_len_dbu <= 0) {
+      continue;
+    }
+
+    const double detour_ratio
+        = static_cast<double>(base_m.wirelength_dbu)
+          / static_cast<double>(std::max<long>(1, rsmt_len_dbu));
+    if (detour_ratio < kDetourRatioThreshold) {
+      continue;
+    }
+
+    std::unordered_set<GSegment, GSegmentHash> existing;
+    existing.reserve(route.size() * 2 + 256);
+    for (const auto& seg : route) {
+      existing.insert(seg);
+    }
+
+    int added_for_net = 0;
+    bool net_counted = false;
+
+    auto add_wire_unique = [&](const odb::Point& p0,
+                               const odb::Point& p1,
+                               const int layer) {
+      if (p0 == p1) {
+        return;
+      }
+      const GSegment seg(p0.x(), p0.y(), layer, p1.x(), p1.y(), layer);
+      if (existing.insert(seg).second) {
+        route.push_back(seg);
+        added_for_net++;
+        total_added++;
+      }
+    };
+
+    auto add_via_unique = [&](const odb::Point& p,
+                              const int layer0,
+                              const int layer1) {
+      if (layer0 == layer1) {
+        return;
+      }
+      const int via_lo = std::min(layer0, layer1);
+      const int via_hi = std::max(layer0, layer1);
+      const GSegment via(p.x(), p.y(), via_lo, p.x(), p.y(), via_hi);
+      if (existing.insert(via).second) {
+        route.push_back(via);
+        added_for_net++;
+        total_added++;
+      }
+    };
+
+    std::unordered_set<std::uint64_t> emitted_edges;
+    emitted_edges.reserve(static_cast<std::size_t>(rsmt.branchCount()) * 2);
+
+    auto emit_lshape = [&](const GridPoint& a, const GridPoint& b, const GridPoint& t) {
+      const odb::Point p_a = to_dbu(a);
+      const odb::Point p_b = to_dbu(b);
+      const odb::Point p_t = to_dbu(t);
+
+      if (a.gx == t.gx) {
+        add_wire_unique(p_a, p_t, v_layer);
+      } else if (a.gy == t.gy) {
+        add_wire_unique(p_a, p_t, h_layer);
+      }
+      if (t.gx == b.gx) {
+        add_wire_unique(p_t, p_b, v_layer);
+      } else if (t.gy == b.gy) {
+        add_wire_unique(p_t, p_b, h_layer);
+      }
+      if (h_layer != v_layer && a.gx != b.gx && a.gy != b.gy) {
+        add_via_unique(p_t, h_layer, v_layer);
+      }
+    };
+
+    for (int i = 0; i < rsmt.branchCount(); i++) {
+      if (total_added >= kMaxTotalAddedSegments
+          || added_for_net >= kMaxAddedSegmentsPerNet) {
+        break;
+      }
+
+      const int j = rsmt.branch[i].n;
+      if (j < 0 || j >= rsmt.branchCount() || j == i) {
+        continue;
+      }
+      int a = i;
+      int b = j;
+      if (a > b) {
+        std::swap(a, b);
+      }
+      const std::uint64_t key
+          = (static_cast<std::uint64_t>(a) << 32) | static_cast<std::uint32_t>(b);
+      if (!emitted_edges.insert(key).second) {
+        continue;
+      }
+
+      const GridPoint p0{std::max(0, std::min(x_grids - 1, rsmt.branch[a].x)),
+                         std::max(0, std::min(y_grids - 1, rsmt.branch[a].y))};
+      const GridPoint p1{std::max(0, std::min(x_grids - 1, rsmt.branch[b].x)),
+                         std::max(0, std::min(y_grids - 1, rsmt.branch[b].y))};
+      if (p0 == p1) {
+        continue;
+      }
+
+      const GridPoint turn1{p0.gx, p1.gy};
+      const GridPoint turn2{p1.gx, p0.gy};
+      const LShapeScore s1
+          = score_lshape(p0, p1, turn1, h_layer, v_layer, db_net, grouter);
+      const LShapeScore s2
+          = score_lshape(p0, p1, turn2, h_layer, v_layer, db_net, grouter);
+
+      const GridPoint best = is_better_score(s1, s2) ? turn1 : turn2;
+      emit_lshape(p0, p1, best);
+
+      // Optional: also emit the alternative L-shape when both are "almost
+      // unblocked", giving DR a second rectilinear corridor without full maze
+      // detours. This is intentionally aggressive (radical exploration) but
+      // bounded by strict budgets above.
+      if (s1.blocked_edges <= kMaxBlockedEdgesForAlt
+          && s2.blocked_edges <= kMaxBlockedEdgesForAlt && !(turn1 == turn2)
+          && total_added < kMaxTotalAddedSegments
+          && added_for_net + 3 < kMaxAddedSegmentsPerNet) {
+        const GridPoint alt = (best == turn1) ? turn2 : turn1;
+        emit_lshape(p0, p1, alt);
+      }
+
+      if (!net_counted && added_for_net > 0) {
+        nets_augmented++;
+        net_counted = true;
+      }
+    }
+  }
+
+  if (nets_augmented > 0) {
+    logger->info(GNR,
+                 6014,
+                 "NEWGR RSMT rect-corridors: nets {}, added segs {}",
+                 nets_augmented,
+                 total_added);
+  } else {
+    logger->info(GNR, 6015, "NEWGR RSMT rect-corridors: no nets met detour criteria");
+  }
 }
 
 GRoute build_pattern_direct_route(odb::dbNet* db_net,
@@ -2250,6 +2561,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     NetRouteMap direct_routes = build_direct_candidate(routes);
     union_shorter_guides(
         routes, direct_routes, tech, grouter_, logger_);
+    add_rsmt_rectilinear_corridors(routes,
+                                   grouter_,
+                                   stt_builder,
+                                   tech,
+                                   logger_,
+                                   min_routing_layer,
+                                   max_routing_layer);
+    add_congestion_patches(routes,
+                           grouter_->fastroute(),
+                           grouter_->grid(),
+                           tech,
+                           logger_,
+                           min_routing_layer,
+                           max_routing_layer);
+    add_endpoint_access_patches(routes,
+                                grouter_->fastroute(),
+                                grouter_->grid(),
+                                tech,
+                                logger_,
+                                min_routing_layer,
+                                max_routing_layer);
     add_lane_patches(
         routes, grouter_, logger_, min_routing_layer, max_routing_layer);
     return routes;
@@ -2279,6 +2611,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   NetRouteMap direct_routes = build_direct_candidate(routes);
   union_shorter_guides(
       routes, direct_routes, tech, grouter_, logger_);
+  add_rsmt_rectilinear_corridors(routes,
+                                 grouter_,
+                                 stt_builder,
+                                 tech,
+                                 logger_,
+                                 min_routing_layer,
+                                 max_routing_layer);
+  add_congestion_patches(routes,
+                         grouter_->fastroute(),
+                         grouter_->grid(),
+                         tech,
+                         logger_,
+                         min_routing_layer,
+                         max_routing_layer);
+  add_endpoint_access_patches(routes,
+                              grouter_->fastroute(),
+                              grouter_->grid(),
+                              tech,
+                              logger_,
+                              min_routing_layer,
+                              max_routing_layer);
   add_lane_patches(
       routes, grouter_, logger_, min_routing_layer, max_routing_layer);
   return routes;
