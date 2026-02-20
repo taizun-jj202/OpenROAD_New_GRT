@@ -531,6 +531,7 @@ class GlobalRouter
   std::map<int, odb::dbTechLayer*> routing_layers_;
   std::vector<RoutingTracks> routing_tracks_;
   std::unique_ptr<SprouteAdapter> sproute_adapter_;
+  std::unique_ptr<NewGR> newgr_router_;
   SprouteGridData sproute_grid_data_;
   std::vector<SprouteNetData> sproute_nets_;
   int sproute_total_overflow_{0};

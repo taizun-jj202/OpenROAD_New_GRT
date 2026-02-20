@@ -107,6 +107,7 @@ GlobalRouter::GlobalRouter(utl::Logger* logger,
       = new FastRouteCore(db_, logger_, callback_handler_, stt_builder_, sta_);
   cugr_ = new CUGR(db_, logger_, stt_builder_);
   sproute_adapter_ = std::make_unique<SprouteAdapter>(logger_);
+  newgr_router_ = std::make_unique<NewGR>(this, cugr_, logger_);
 }
 
 void GlobalRouter::initGui(std::unique_ptr<AbstractRoutingCongestionDataSource>
@@ -215,7 +216,8 @@ void GlobalRouter::applyAdjustments(int min_routing_layer,
 // previous congestion report file.
 void GlobalRouter::saveCongestion()
 {
-  if (router_type_ == RouterType::Sproute) {
+  if (router_type_ == RouterType::Sproute
+      || router_type_ == RouterType::NewGR) {
     is_congested_ = sproute_total_overflow_ > 0;
   } else {
     is_congested_ = fastroute_->totalOverflow() > 0;
@@ -386,6 +388,7 @@ void GlobalRouter::globalRoute(bool save_guides,
           }
           sproute_adapter_->initialize(sproute_grid_data_, sproute_nets_);
           routes_ = sproute_adapter_->run();
+          sproute_total_overflow_ = sproute_adapter_->getTotalOverflow();
           addRemainingGuides(routes_, nets, min_layer, max_layer);
           connectPadPins(routes_);
           for (auto& net_route : routes_) {
@@ -484,6 +487,13 @@ void GlobalRouter::updateDbCongestion()
         block_ = db_->getChip()->getBlock();
       }
       sproute_adapter_->updateDbCongestion(block_);
+    }
+  } else if (router_type_ == RouterType::NewGR) {
+    if (newgr_router_ != nullptr) {
+      if (block_ == nullptr) {
+        block_ = db_->getChip()->getBlock();
+      }
+      newgr_router_->updateDbCongestion(block_);
     }
   } else if (use_cugr_) {
     cugr_->updateDbCongestion();
@@ -618,8 +628,13 @@ NetRouteMap GlobalRouter::runNewGrRouting(std::vector<Net*>& nets,
                                           int min_routing_layer,
                                           int max_routing_layer)
 {
-  NewGR router(this, cugr_, logger_);
-  return router.run(nets, min_routing_layer, max_routing_layer);
+  if (newgr_router_ == nullptr) {
+    newgr_router_ = std::make_unique<NewGR>(this, cugr_, logger_);
+  }
+  NetRouteMap routes = newgr_router_->run(
+      nets, min_routing_layer, max_routing_layer);
+  sproute_total_overflow_ = newgr_router_->getTotalOverflow();
+  return routes;
 }
 
 std::vector<int> GlobalRouter::routeLayerLengths(odb::dbNet* db_net)
