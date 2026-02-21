@@ -1356,7 +1356,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		printf("\nLayer Assignment Begins");
 		// Push layer assignment moderately toward fewer layer transitions.
 		// This targets via reduction while preserving the DetPart/A* flow.
-		viacost = 9;
+		viacost = 11;
 		newLA ();
 		printf("layer assignment finished\n");
 

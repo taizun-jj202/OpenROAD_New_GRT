@@ -567,9 +567,26 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	routelen = treeedge->route.routelen;
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
-	const int via_cost_entry = ADIFF(1, 0) * 2;
-	const int via_cost_step = ADIFF(1, 0) * 3;
-	const int via_cost_exit = ADIFF(1, 0) * 1;
+	const int layer_step = ADIFF(1, 0);
+	// Favor single-layer continuation on short/local edges, while keeping
+	// flexibility for very large nets and long trunks.
+	int via_bias = layer_step;
+	if (routelen <= 32) {
+		via_bias += layer_step;
+	}
+	if (routelen <= 10) {
+		via_bias += layer_step;
+	}
+	if (nets[netID]->deg <= 64) {
+		via_bias += layer_step;
+	}
+	if (nets[netID]->deg > 1024 || routelen > 96) {
+		via_bias = layer_step;
+	}
+	const int via_cost_entry = layer_step * 2 + via_bias;
+	const int via_cost_step = layer_step * 3 + via_bias;
+	const int via_cost_exit = layer_step + via_bias / 2;
+	const int layer_bias = (routelen <= 24) ? 2 : 1;
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
@@ -697,18 +714,19 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 			min_result = 100*BIG_INT;
 			endLayer = treenodes[n2a].topL;
 			for (i = treenodes[n2a].topL; i >= treenodes[n2a].botL; i--) {
-				const int layer_score = gridD[i][routelen] + i;
+				const int layer_score = gridD[i][routelen] + layer_bias * i;
 				if (layer_score < min_result) {
 					min_result = layer_score;
 					endLayer = i;
 				}
 			}
 		} else {
-			min_result = gridD[0][routelen];
+			min_result = gridD[0][routelen] + layer_bias * 0;
 			endLayer = 0;
 			for (i = 0; i < numLayers; i++) {
-				if (gridD[i][routelen] < min_result) {
-					min_result = gridD[i][routelen] ;
+				const int layer_score = gridD[i][routelen] + layer_bias * i;
+				if (layer_score < min_result) {
+					min_result = layer_score;
 					endLayer = i;
 				}
 			}
@@ -839,7 +857,7 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 		if (treenodes[n1a].assigned) {
 			min_result = BIG_INT;
 			for (i = treenodes[n1a].topL; i >= treenodes[n1a].botL; i--) {
-				const int layer_score = gridD[i][0] + i;
+				const int layer_score = gridD[i][0] + layer_bias * i;
 				if (layer_score < min_result) {
 					min_result = layer_score;
 					endLayer = i;
@@ -847,11 +865,12 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 			}
 			
 		} else {
-			min_result = gridD[0][k];
+			min_result = gridD[0][0] + layer_bias * 0;
 			endLayer = 0;
 			for (i = 0; i < numLayers; i++) {
-				if (gridD[i][k] < min_result) {
-					min_result = gridD[i][k] ;
+				const int layer_score = gridD[i][0] + layer_bias * i;
+				if (layer_score < min_result) {
+					min_result = layer_score;
 					endLayer = i;
 				}
 			}
