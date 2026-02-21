@@ -31,7 +31,7 @@ struct Constants
 {
   double weight_wire_length = 0.5;
   double weight_via_number = 4.0;
-  double weight_short_area = 450.0;
+  double weight_short_area = 500.0;
 
   int min_routing_layer = 1;
 

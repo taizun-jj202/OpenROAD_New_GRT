@@ -373,6 +373,9 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   selected_access_points.reserve(net->getNumPins());
   const auto& boundingBox = net->getBoundingBox();
   const PointT netCenter(boundingBox.cx(), boundingBox.cy());
+  // Large nets are wirelength-dominant, while small nets are usually via-heavy.
+  // Use a hybrid tie-breaker to balance both metrics.
+  const bool prioritize_center_distance = boundingBox.hp() >= 24;
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
     std::tuple<int, int, int> bestAccessDist
         = {0, std::numeric_limits<int>::max(), std::numeric_limits<int>::max()};
@@ -398,13 +401,17 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
           = abs(netCenter.x() - point.x()) + abs(netCenter.y() - point.y());
       const int layerDistance
           = abs(point.getLayerIdx() - constants_.min_routing_layer);
+      const int primaryDist
+          = prioritize_center_distance ? distance : layerDistance;
+      const int secondaryDist
+          = prioritize_center_distance ? layerDistance : distance;
       if (accessibility > std::get<0>(bestAccessDist)
           || (accessibility == std::get<0>(bestAccessDist)
-              && (distance < std::get<1>(bestAccessDist)
-                  || (distance == std::get<1>(bestAccessDist)
-                      && layerDistance < std::get<2>(bestAccessDist))))) {
+              && (primaryDist < std::get<1>(bestAccessDist)
+                  || (primaryDist == std::get<1>(bestAccessDist)
+                      && secondaryDist < std::get<2>(bestAccessDist))))) {
         bestIndex = index;
-        bestAccessDist = {accessibility, distance, layerDistance};
+        bestAccessDist = {accessibility, primaryDist, secondaryDist};
       }
     }
     if (std::get<0>(bestAccessDist) == 0) {
