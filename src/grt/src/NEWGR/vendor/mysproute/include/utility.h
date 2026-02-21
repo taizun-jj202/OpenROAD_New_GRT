@@ -567,6 +567,10 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	routelen = treeedge->route.routelen;
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
+	const int via_unit = (viacost > 0) ? viacost : 1;
+	const int via_cost_entry = ADIFF(1, 0) * 2 * via_unit;
+	const int via_cost_step = ADIFF(1, 0) * 3 * via_unit;
+	const int via_cost_exit = ADIFF(1, 0) * via_unit;
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
@@ -622,15 +626,17 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 				for (i = 0 ; i < numLayers; i++) {
 					if (k == 0) {
 						if (l != i) {
-							if (gridD[i][k] > gridD[l][k]  + ADIFF(i,l)*2) {
-								gridD[i][k] = gridD[l][k]  + ADIFF(i,l)*2;
+							if (gridD[i][k] > gridD[l][k] + ADIFF(i, l) * via_cost_entry) {
+								gridD[i][k]
+								    = gridD[l][k] + ADIFF(i, l) * via_cost_entry;
 								viaLink[i][k] = l;
 							}
 						}
 					} else {
 						if (l != i) {
-							if (gridD[i][k] > gridD[l][k] + ADIFF(i,l) * 3 ) {
-								gridD[i][k] = gridD[l][k] + ADIFF(i,l) * 3  ;
+							if (gridD[i][k] > gridD[l][k] + ADIFF(i, l) * via_cost_step) {
+								gridD[i][k]
+								    = gridD[l][k] + ADIFF(i, l) * via_cost_step;
 								viaLink[i][k] = l;
 							}
 						}
@@ -654,8 +660,9 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 		for (l = 0 ; l < numLayers; l ++) {
 			for (i = 0 ; i < numLayers; i++) {
 				if (l != i) {
-					if (gridD[i][k] > gridD[l][k] + ADIFF(i,l)*1){//+ ADIFF(i,l) * 3 ) {
-						gridD[i][k] = gridD[l][k] + ADIFF(i,l)*1;//+ ADIFF(i,l) * 3 ;
+					if (gridD[i][k] > gridD[l][k] + ADIFF(i, l) * via_cost_exit) {
+						gridD[i][k]
+						    = gridD[l][k] + ADIFF(i, l) * via_cost_exit;
 						viaLink[i][k] = l;
 					}
 				}
@@ -788,15 +795,17 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 				for (i = 0 ; i < numLayers; i++) {
 					if (k == routelen) {
 						if (l != i) {
-							if (gridD[i][k] > gridD[l][k] + ADIFF(i,l)*2) {
-								gridD[i][k] = gridD[l][k] + ADIFF(i,l)*2 ;
+							if (gridD[i][k] > gridD[l][k] + ADIFF(i, l) * via_cost_entry) {
+								gridD[i][k]
+								    = gridD[l][k] + ADIFF(i, l) * via_cost_entry;
 								viaLink[i][k] = l;
 							}
 						}
 					} else {
 						if (l != i) {
-							if (gridD[i][k] > gridD[l][k] + ADIFF(i,l) * 3 ) {
-								gridD[i][k] = gridD[l][k] + ADIFF(i,l) * 3 ;
+							if (gridD[i][k] > gridD[l][k] + ADIFF(i, l) * via_cost_step) {
+								gridD[i][k]
+								    = gridD[l][k] + ADIFF(i, l) * via_cost_step;
 								viaLink[i][k] = l;
 							}
 						}
@@ -818,8 +827,9 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 		for (l = 0 ; l < numLayers; l ++) {
 			for (i = 0 ; i < numLayers; i++) {
 				if (l != i) {
-					if (gridD[i][0] > gridD[l][0] + ADIFF(i,l)*1) {
-						gridD[i][0] = gridD[l][0] + ADIFF(i,l)*1;
+					if (gridD[i][0] > gridD[l][0] + ADIFF(i, l) * via_cost_exit) {
+						gridD[i][0]
+						    = gridD[l][0] + ADIFF(i, l) * via_cost_exit;
 						viaLink[i][0] = l;
 					}
 				}
