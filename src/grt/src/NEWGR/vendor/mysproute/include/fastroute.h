@@ -694,7 +694,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 
 		VIA=2;
 		//viacost = VIA;
-		viacost = 0;
+		// Enable via-aware FLUTE topology generation to bias toward fewer vias.
+		viacost = 1;
 		gen_brk_RSMT(FALSE, FALSE, FALSE, FALSE, noADJ);
 		printf("first L\n");
 		routeLAll(TRUE);
