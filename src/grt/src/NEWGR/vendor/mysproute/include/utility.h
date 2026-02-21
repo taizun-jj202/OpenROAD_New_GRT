@@ -567,9 +567,9 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	routelen = treeedge->route.routelen;
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
-	const int via_cost_entry = ADIFF(1, 0) * 2;
-	const int via_cost_step = ADIFF(1, 0) * 3;
-	const int via_cost_exit = ADIFF(1, 0) * 1;
+	const int via_cost_entry = ADIFF(1, 0) * 3;
+	const int via_cost_step = ADIFF(1, 0) * 4;
+	const int via_cost_exit = ADIFF(1, 0) * 2;
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
@@ -1207,10 +1207,10 @@ void newLA ()
 					// to trim avoidable access vias; allow escape flexibility only
 					// as fanout grows.
 					int pin_layer_flex = 0;
-					if (nets[netID]->deg > 512) {
+					if (nets[netID]->deg > 1024) {
 						pin_layer_flex = 1;
 					}
-					if (nets[netID]->deg > 1536) {
+					if (nets[netID]->deg > 2048) {
 						pin_layer_flex = 2;
 					}
 					treenodes[d].topL = min(pin_layer_flex, numLayers - 1);
