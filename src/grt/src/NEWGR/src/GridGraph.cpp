@@ -377,12 +377,15 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   // Use a hybrid tie-breaker to balance both metrics.
   const bool prioritize_center_distance = boundingBox.hp() >= 24;
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
-    std::tuple<int, int, int> bestAccessDist
-        = {0, std::numeric_limits<int>::max(), std::numeric_limits<int>::max()};
+    int bestAccessibility = -1;
+    double bestLocalSpare = -std::numeric_limits<double>::max();
+    int bestPrimaryDist = std::numeric_limits<int>::max();
+    int bestSecondaryDist = std::numeric_limits<int>::max();
     int bestIndex = -1;
     for (int index = 0; index < accessPoints.size(); index++) {
       const GRPoint& point = accessPoints[index];
       int accessibility = 0;
+      double localSpare = 0.0;
       if (point.getLayerIdx() >= constants_.min_routing_layer) {
         const int direction = getLayerDirection(point.getLayerIdx());
         accessibility
@@ -393,6 +396,27 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
           accessibility
               += getEdge(lower.getLayerIdx(), lower.x(), lower.y()).capacity
                  >= 1;
+        }
+
+        localSpare = std::numeric_limits<double>::max();
+        bool hasAdjacentEdge = false;
+        if (point[direction] + 1 < getSize(direction)) {
+          localSpare
+              = std::min(localSpare,
+                         getEdge(point.getLayerIdx(), point.x(), point.y())
+                             .getResource());
+          hasAdjacentEdge = true;
+        }
+        if (point[direction] > 0) {
+          auto lower = point;
+          lower[direction] -= 1;
+          localSpare = std::min(
+              localSpare,
+              getEdge(lower.getLayerIdx(), lower.x(), lower.y()).getResource());
+          hasAdjacentEdge = true;
+        }
+        if (!hasAdjacentEdge) {
+          localSpare = -std::numeric_limits<double>::max();
         }
       } else {
         accessibility = 1;
@@ -405,16 +429,21 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
           = prioritize_center_distance ? distance : layerDistance;
       const int secondaryDist
           = prioritize_center_distance ? layerDistance : distance;
-      if (accessibility > std::get<0>(bestAccessDist)
-          || (accessibility == std::get<0>(bestAccessDist)
-              && (primaryDist < std::get<1>(bestAccessDist)
-                  || (primaryDist == std::get<1>(bestAccessDist)
-                      && secondaryDist < std::get<2>(bestAccessDist))))) {
+      if (accessibility > bestAccessibility
+          || (accessibility == bestAccessibility
+              && (localSpare > bestLocalSpare
+                  || (localSpare == bestLocalSpare
+                      && (primaryDist < bestPrimaryDist
+                          || (primaryDist == bestPrimaryDist
+                              && secondaryDist < bestSecondaryDist)))))) {
         bestIndex = index;
-        bestAccessDist = {accessibility, primaryDist, secondaryDist};
+        bestAccessibility = accessibility;
+        bestLocalSpare = localSpare;
+        bestPrimaryDist = primaryDist;
+        bestSecondaryDist = secondaryDist;
       }
     }
-    if (std::get<0>(bestAccessDist) == 0) {
+    if (bestAccessibility == 0) {
       logger_->warn(utl::GRT, 7001, "pin is hard to access.");
     }
     const GRPoint& selectedPoint = accessPoints[bestIndex];
