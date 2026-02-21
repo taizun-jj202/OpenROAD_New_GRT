@@ -71,7 +71,9 @@ class GlobalRouter;
 class AbstractRoutingCongestionDataSource;
 class GRouteDbCbk;
 class Rudy;
-class NewGR;
+namespace newgr {
+class CUGR;
+}
 
 struct RegionAdjustment
 {
@@ -520,6 +522,7 @@ class GlobalRouter
   // Objects variables
   FastRouteCore* fastroute_;
   CUGR* cugr_;
+  newgr::CUGR* newgr_;
   RouterType router_type_{RouterType::FastRoute};
   odb::Point grid_origin_;
   std::unique_ptr<AbstractGrouteRenderer> groute_renderer_;
@@ -591,7 +594,6 @@ class GlobalRouter
 
   friend class IncrementalGRoute;
   friend class GRouteDbCbk;
-  friend class NewGR;
   friend class RepairAntennas;
 };
 

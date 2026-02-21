@@ -1,18 +1,48 @@
-FastRoute
+CUGR 2.0
+======================================
+CUGR 2.0, the successor of [CUGR](https://github.com/cuhk-eda/cu-gr), is a VLSI global routing tool developed by the research team supervised by Prof. Evangeline F. Y. Young at The Chinese University of Hong Kong (CUHK).
+CUGR 2.0 is a detailed routability-driven global router and its solution quality is solely determined by the final detailed routing results.
 
-Min Pan, Yue Xu, Yanheng Zhang, Chris Chu
+Please read our paper for more technical details:
 
-Contacts: yuexu@iastate.edu
+* Jinwei Liu, Evangeline F. Y. Young,
+EDGE: Efficient DAG-Based Global Routing Engine,
+ACM/IEEE Design Automation Conference (DAC), San Francisco, CA, USA, July 9-13, 2023.
 
-Introduction
+(CUGR 2.0 supports ICCAD'19 benchmarks ([v2](http://iccad-contest.org/2019/Problem_C/iccad19_benchmarks_v2.tar.gz), [hidden](http://iccad-contest.org/2019/Problem_C/iccad19_hidden_benchmarks.tar.gz)).)
 
-FastRoute is a global routing tool for VLSI back-end design. It  is based on sequential rip-up and re-route (RRR) and a lot of novel techniques. FastRoute 1.0 first uses FLUTE to construct congestion-driven Steiner trees, which will later undergo the edge shifting process to optimize tree structure to reduce congestion. It then uses pattern routing and maze routing with logistic function based cost function to solve the congestion problem. FastRoute 2.0 proposed monotonic routing and multi-source multi-sink maze routing techniques to enhance the capability to reduce congestion. FastRoute 3.0 introduced the virtual capacity technique to adaptively change the capacity associated with each global edge to divert wire usage from highly congested regions to less congested regions. FastRoute 4.0 proposed via-aware Steiner tree, 3-bend routing and a delicate layer assignment algorithm to effectively reduce via count while maintaining outstanding congestion reduction capability. FastRoute 4.1 simplifies the way the virtual capacities are updated and applies a single set of tuning parameters to all benchmark circuits.
+## 1. License
 
-Literature
+READ THIS LICENSE AGREEMENT CAREFULLY BEFORE USING THIS PRODUCT. BY USING THIS PRODUCT YOU INDICATE YOUR ACCEPTANCE OF THE TERMS OF THE FOLLOWING AGREEMENT. THESE TERMS APPLY TO YOU AND ANY SUBSEQUENT LICENSEE OF THIS PRODUCT.
 
-1. Chris Chu and Yiu-Chung Wong, FLUTE: Fast Lookup Table Based Rectilinear Steiner Minimal Tree Algorithm for VLSI Design. In IEEE Transactions on Computer-Aided Design, vol. 27, no. 1, pages 70-83, January 2008.
-2. Min Pan and Chris Chu, FastRoute: A Step to Integrate Global Routing into Placement. IEEE/ACM International Conference on Computer-Aided Design, pages 464-471, 2006.
-3. Min Pan and Chris Chu, FastRoute 2.0: A High-quality and Efficient Global Router. Asian and South Pacific Design Automation Conference, pages 250-255, 2007.
-4. Yanheng Zhang, Yue Xu and Chris Chu, FastRoute 3.0: A Fast and High Quality Global Router Based on Virtual Capacity. IEEE/ACM International Conference on Computer-Aided Design, pages 344-349, 2008.
-5. Yue Xu, Yanheng Zhang and Chris Chu. "FastRoute 4.0: Global Router with Efficient Via Minimization. Asian and South Pacific Design Automation Conference, pages 576-581, 2009.
-6. Min Pan, Yue Xu, Yanheng Zhang and Chris Chu. "FastRoute: An Efficient and High-Quality Global Router. VLSI Design, Article ID 608362, 2012.
+
+
+License Agreement for CUGR 2.0
+
+
+
+Copyright (c) 2023 by The Chinese University of Hong Kong
+
+
+
+All rights reserved
+
+
+
+CU-SD LICENSE (adapted from the original BSD license) Redistribution of the any code, with or without modification, are permitted provided that the conditions below are met.
+
+
+
+Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+
+
+Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+
+
+Neither the name nor trademark of the copyright holder or the author may be used to endorse or promote products derived from this software without specific prior written permission.
+
+
+
+Users are entirely responsible, to the exclusion of the author, for compliance with (a) regulations set by owners or administrators of employed equipment, (b) licensing terms of any other software, and (c) local, national, and international regulations regarding use, including those regarding import, export, and use of encryption software.

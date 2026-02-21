@@ -27,9 +27,11 @@
 #include "AbstractFastRouteRenderer.h"
 #include "AbstractGrouteRenderer.h"
 #include "AbstractRoutingCongestionDataSource.h"
-#include "CUGR.h"
 #include "FastRoute.h"
-#include "NEWGR/NewGR.h"
+#include "cugr/include/CUGR.h"
+#if GRT_ENABLE_NEWGR
+#include "NEWGR/include/CUGR.h"
+#endif
 #include "Grid.h"
 #include "Net.h"
 #include "RepairAntennas.h"
@@ -78,6 +80,7 @@ GlobalRouter::GlobalRouter(utl::Logger* logger,
       opendp_(opendp),
       fastroute_(nullptr),
       cugr_(nullptr),
+      newgr_(nullptr),
       router_type_(RouterType::FastRoute),
       grid_origin_(0, 0),
       groute_renderer_(nullptr),
@@ -106,6 +109,9 @@ GlobalRouter::GlobalRouter(utl::Logger* logger,
   fastroute_
       = new FastRouteCore(db_, logger_, callback_handler_, stt_builder_, sta_);
   cugr_ = new CUGR(db_, logger_, stt_builder_);
+#if GRT_ENABLE_NEWGR
+  newgr_ = new newgr::CUGR(db_, logger_, stt_builder_);
+#endif
   sproute_adapter_ = std::make_unique<SprouteAdapter>(logger_);
 }
 
@@ -145,6 +151,9 @@ GlobalRouter::~GlobalRouter()
 {
   delete fastroute_;
   delete cugr_;
+#if GRT_ENABLE_NEWGR
+  delete newgr_;
+#endif
   delete grid_;
   for (auto [ignored, net] : db_net_map_) {
     delete net;
@@ -618,8 +627,18 @@ NetRouteMap GlobalRouter::runNewGrRouting(std::vector<Net*>& nets,
                                           int min_routing_layer,
                                           int max_routing_layer)
 {
-  NewGR router(this, cugr_, logger_);
-  return router.run(nets, min_routing_layer, max_routing_layer);
+#if GRT_ENABLE_NEWGR
+  (void) nets;
+  newgr_->init(min_routing_layer, max_routing_layer);
+  newgr_->route();
+  return newgr_->getRoutes();
+#else
+  (void) nets;
+  (void) min_routing_layer;
+  (void) max_routing_layer;
+  logger_->error(GRT, 6003, "NEWGR router is not enabled in this build.");
+  return {};
+#endif
 }
 
 std::vector<int> GlobalRouter::routeLayerLengths(odb::dbNet* db_net)

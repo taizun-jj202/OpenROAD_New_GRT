@@ -46,18 +46,6 @@ target_include_directories(grt_lib
     src/fastroute/include
 )
 
-if(USE_NEWGR)
-  target_include_directories(grt_lib
-    PRIVATE
-      src/NEWGR
-      src/NEWGR/include
-  )
-  target_sources(grt_lib PRIVATE $<TARGET_OBJECTS:NEWGR_lib> src/NEWGR/NewGR.cpp)
-  target_compile_definitions(grt_lib PUBLIC GRT_ENABLE_NEWGR=1)
-else()
-  target_compile_definitions(grt_lib PUBLIC GRT_ENABLE_NEWGR=0)
-endif()
-
 target_link_libraries(grt_lib
     utl_lib
     FastRoute4.1
@@ -72,6 +60,13 @@ target_link_libraries(grt_lib
     Boost::boost
     OpenMP::OpenMP_CXX
 )
+
+if(USE_NEWGR)
+  target_link_libraries(grt_lib NEWGR)
+  target_compile_definitions(grt_lib PUBLIC GRT_ENABLE_NEWGR=1)
+else()
+  target_compile_definitions(grt_lib PUBLIC GRT_ENABLE_NEWGR=0)
+endif()
 
 target_sources(grt
   PRIVATE
@@ -91,14 +86,6 @@ target_include_directories(grt
 )
 
 target_sources(grt PRIVATE src/fastroute/src/FastRouteRenderer.cpp)
-if(USE_NEWGR)
-  target_sources(grt PRIVATE src/NEWGR/src/FastRouteRenderer.cpp)
-  target_include_directories(grt
-    PRIVATE
-      src/NEWGR
-      src/NEWGR/include
-  )
-endif()
 
 target_link_libraries(grt
     grt_lib
@@ -146,11 +133,7 @@ if (Python3_FOUND AND BUILD_PYTHON)
   )
 
   if(USE_NEWGR)
-    target_include_directories(grt_py
-      PRIVATE
-        src/NEWGR
-        src/NEWGR/include
-    )
+    target_link_libraries(grt_py PUBLIC NEWGR)
     target_compile_definitions(grt_py PRIVATE GRT_ENABLE_NEWGR=1)
   else()
     target_compile_definitions(grt_py PRIVATE GRT_ENABLE_NEWGR=0)
