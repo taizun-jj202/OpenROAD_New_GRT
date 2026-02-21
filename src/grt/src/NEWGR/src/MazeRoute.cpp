@@ -188,26 +188,18 @@ void MazeRoute::run()
   solutions_.reserve(numPseudoPins);
 
   std::vector<bool> visited(numPseudoPins, false);
-  int minX = std::numeric_limits<int>::max();
-  int minY = std::numeric_limits<int>::max();
-  int maxX = std::numeric_limits<int>::min();
-  int maxY = std::numeric_limits<int>::min();
-  for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
-    const PointT pinPoint = graph_.getPseudoPin(pinIndex).point;
-    minX = std::min(minX, pinPoint.x());
-    minY = std::min(minY, pinPoint.y());
-    maxX = std::max(maxX, pinPoint.x());
-    maxY = std::max(maxY, pinPoint.y());
-  }
-  const PointT center((minX + maxX) / 2, (minY + maxY) / 2);
   int startPinIndex = 0;
-  int bestCenterDistance = std::numeric_limits<int>::max();
+  int64_t bestDistanceSum = std::numeric_limits<int64_t>::max();
   for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
-    const PointT pinPoint = graph_.getPseudoPin(pinIndex).point;
-    const int centerDistance
-        = std::abs(center.x() - pinPoint.x()) + std::abs(center.y() - pinPoint.y());
-    if (centerDistance < bestCenterDistance) {
-      bestCenterDistance = centerDistance;
+    const PointT source = graph_.getPseudoPin(pinIndex).point;
+    int64_t distanceSum = 0;
+    for (int otherPin = 0; otherPin < numPseudoPins; otherPin++) {
+      const PointT target = graph_.getPseudoPin(otherPin).point;
+      distanceSum += std::abs(source.x() - target.x())
+                     + std::abs(source.y() - target.y());
+    }
+    if (distanceSum < bestDistanceSum) {
+      bestDistanceSum = distanceSum;
       startPinIndex = pinIndex;
     }
   }
