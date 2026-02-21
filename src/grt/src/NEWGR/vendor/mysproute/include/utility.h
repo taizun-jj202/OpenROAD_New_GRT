@@ -567,42 +567,9 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	routelen = treeedge->route.routelen;
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
-	const int net_degree = nets[netID]->deg;
-	int via_unit = (viacost > 0) ? viacost : 1;
-	if (net_degree <= 8) {
-		via_unit += 3;
-	} else if (net_degree <= 32) {
-		via_unit += 2;
-	} else if (net_degree <= 128) {
-		via_unit += 1;
-	}
-	// For short 2D segments, extra layer hops are frequently avoidable.
-	// Raise via pressure locally to trim redundant up/down transitions.
-	if (routelen <= 12) {
-		via_unit += 1;
-	}
-	if (routelen <= 6) {
-		via_unit += 1;
-	}
-	int via_entry_mult = (net_degree <= 16) ? 3 : 2;
-	int via_step_mult = (net_degree <= 16) ? 5 : 4;
-	if (routelen <= 10) {
-		via_entry_mult += 1;
-		via_step_mult += 1;
-	}
-	if (routelen <= 4 && net_degree <= 64) {
-		via_step_mult += 1;
-	}
-	int via_exit_mult = 1;
-	if (routelen <= 8) {
-		via_exit_mult = 2;
-	}
-	if (routelen <= 4 && net_degree <= 32) {
-		via_exit_mult = 3;
-	}
-	const int via_cost_entry = ADIFF(1, 0) * via_entry_mult * via_unit;
-	const int via_cost_step = ADIFF(1, 0) * via_step_mult * via_unit;
-	const int via_cost_exit = ADIFF(1, 0) * via_exit_mult * via_unit;
+	const int via_cost_entry = ADIFF(1, 0) * 2;
+	const int via_cost_step = ADIFF(1, 0) * 3;
+	const int via_cost_exit = ADIFF(1, 0) * 1;
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
