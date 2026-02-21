@@ -576,8 +576,23 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	} else if (net_degree <= 128) {
 		via_unit += 1;
 	}
-	const int via_entry_mult = (net_degree <= 16) ? 3 : 2;
-	const int via_step_mult = (net_degree <= 16) ? 5 : 4;
+	// For short 2D segments, extra layer hops are frequently avoidable.
+	// Raise via pressure locally to trim redundant up/down transitions.
+	if (routelen <= 12) {
+		via_unit += 1;
+	}
+	if (routelen <= 6) {
+		via_unit += 1;
+	}
+	int via_entry_mult = (net_degree <= 16) ? 3 : 2;
+	int via_step_mult = (net_degree <= 16) ? 5 : 4;
+	if (routelen <= 10) {
+		via_entry_mult += 1;
+		via_step_mult += 1;
+	}
+	if (routelen <= 4 && net_degree <= 64) {
+		via_step_mult += 1;
+	}
 	const int via_cost_entry = ADIFF(1, 0) * via_entry_mult * via_unit;
 	const int via_cost_step = ADIFF(1, 0) * via_step_mult * via_unit;
 	const int via_cost_exit = ADIFF(1, 0) * via_unit;
@@ -1215,15 +1230,14 @@ void newLA ()
 				treenodes[d].botL = treenodes[d].layer; //0; //netID, d = pinID
 				if (treenodes[d].layer == 0) {
 					// Keep most low/medium-degree nets anchored to the pin layer.
-					// This cuts avoidable access vias while preserving flexibility for
-					// very high-degree nets that need vertical detours for routability.
-					int pin_layer_flex = 3;
-					if (nets[netID]->deg <= 32) {
+					// Reserve broad vertical freedom only for very high fanout nets.
+					int pin_layer_flex = 2;
+					if (nets[netID]->deg <= 64) {
 						pin_layer_flex = 0;
-					} else if (nets[netID]->deg <= 128) {
-						pin_layer_flex = 1;
 					} else if (nets[netID]->deg <= 256) {
-						pin_layer_flex = 2;
+						pin_layer_flex = 1;
+					} else if (nets[netID]->deg > 1024) {
+						pin_layer_flex = 3;
 					}
 					treenodes[d].topL = min(pin_layer_flex, numLayers - 1);
 				} else {
