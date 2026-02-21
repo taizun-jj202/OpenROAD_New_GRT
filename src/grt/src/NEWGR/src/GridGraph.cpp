@@ -374,7 +374,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   const auto& boundingBox = net->getBoundingBox();
   const PointT netCenter(boundingBox.cx(), boundingBox.cy());
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
-    std::tuple<int, int, int> bestAccessScore
+    std::tuple<int, int, int> bestAccessDist
         = {0, std::numeric_limits<int>::max(), std::numeric_limits<int>::max()};
     int bestIndex = -1;
     for (int index = 0; index < accessPoints.size(); index++) {
@@ -398,16 +398,16 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
           = abs(netCenter.x() - point.x()) + abs(netCenter.y() - point.y());
       const int layerDistance
           = abs(point.getLayerIdx() - constants_.min_routing_layer);
-      if (accessibility > std::get<0>(bestAccessScore)
-          || (accessibility == std::get<0>(bestAccessScore)
-              && (layerDistance < std::get<1>(bestAccessScore)
-                  || (layerDistance == std::get<1>(bestAccessScore)
-                      && distance < std::get<2>(bestAccessScore))))) {
+      if (accessibility > std::get<0>(bestAccessDist)
+          || (accessibility == std::get<0>(bestAccessDist)
+              && (distance < std::get<1>(bestAccessDist)
+                  || (distance == std::get<1>(bestAccessDist)
+                      && layerDistance < std::get<2>(bestAccessDist))))) {
         bestIndex = index;
-        bestAccessScore = {accessibility, layerDistance, distance};
+        bestAccessDist = {accessibility, distance, layerDistance};
       }
     }
-    if (std::get<0>(bestAccessScore) == 0) {
+    if (std::get<0>(bestAccessDist) == 0) {
       logger_->warn(utl::GRT, 7001, "pin is hard to access.");
     }
     const GRPoint& selectedPoint = accessPoints[bestIndex];

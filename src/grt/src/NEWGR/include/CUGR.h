@@ -31,15 +31,15 @@ struct Constants
 {
   double weight_wire_length = 0.5;
   double weight_via_number = 4.0;
-  double weight_short_area = 500.0;
+  double weight_short_area = 450.0;
 
   int min_routing_layer = 1;
 
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.14;
-  int target_detour_count = 8;
+  double max_detour_ratio = 0.16;
+  int target_detour_count = 10;
 
   double via_multiplier = 2.0;
 
