@@ -31,7 +31,7 @@ float max_rudy;
 
 #define OBS_NO_STOP 0 // 1 == go through OBS, 0 == hard stop
 
-#define DEFAULT_RUDY_WEIGHT 0.12
+#define DEFAULT_RUDY_WEIGHT 0.11
 #define NO_RUDY 0
 #define DEFAULT_PIN_DENSITY_WEIGHT 1.0
 
