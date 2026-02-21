@@ -1355,7 +1355,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		printf("\nLayer Assignment Begins");
 		// Bias the final layer assignment toward fewer layer transitions.
 		// Keep early routing penalties unchanged to preserve runtime/wirelength.
-		viacost = 4;
+		viacost = 2;
 		newLA ();
 		printf("layer assignment finished\n");
 
