@@ -112,16 +112,38 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   if (netIndices.empty()) {
     return;
   }
-  logger_->report("stage 3: maze routing on sparsified routing graph");
+  std::vector<int> severeOverflowNets;
+  severeOverflowNets.reserve(netIndices.size());
   for (const int netIndex : netIndices) {
+    const int overflow
+        = grid_graph_->checkOverflow(gr_nets_[netIndex]->getRoutingTree());
+    if (overflow >= constants_.maze_overflow_threshold) {
+      severeOverflowNets.push_back(netIndex);
+    }
+  }
+  if (severeOverflowNets.empty()) {
+    logger_->report(
+        "stage 3: skipped maze routing (no net overflow >= {}).",
+        constants_.maze_overflow_threshold);
+    updateOverflowNets(netIndices);
+    return;
+  }
+
+  logger_->report(
+      "stage 3: maze routing on sparsified routing graph ({} / {} nets, "
+      "overflow >= {})",
+      severeOverflowNets.size(),
+      netIndices.size(),
+      constants_.maze_overflow_threshold);
+  for (const int netIndex : severeOverflowNets) {
     grid_graph_->commitTree(gr_nets_[netIndex]->getRoutingTree(),
                             /*ripup*/ true);
   }
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
-  sortNetIndices(netIndices, /*large_first*/ true);
-  SparseGrid grid(10, 10, 0, 0);
-  for (const int netIndex : netIndices) {
+  sortNetIndices(severeOverflowNets, /*large_first*/ true);
+  SparseGrid grid(8, 8, 0, 0);
+  for (const int netIndex : severeOverflowNets) {
     GRNet* net = gr_nets_[netIndex].get();
     MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
     mazeRoute.constructSparsifiedGraph(wireCostView, grid);

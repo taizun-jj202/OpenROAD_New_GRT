@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <limits>
 #include <memory>
@@ -157,6 +158,11 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
 
 void MazeRoute::run()
 {
+  const int numPseudoPins = graph_.getNumPseudoPins();
+  if (numPseudoPins <= 0) {
+    logger_->error(utl::GRT, 7005, "failed to construct pseudo pins.");
+  }
+
   std::vector<CostT> minCosts(graph_.getNumVertices(),
                               std::numeric_limits<CostT>::max());
 
@@ -179,12 +185,34 @@ void MazeRoute::run()
     }
   };
 
-  solutions_.reserve(net_->getNumPins());
+  solutions_.reserve(numPseudoPins);
 
-  std::vector<bool> visited(net_->getNumPins(), false);
-  const int startPinIndex = 0;
+  std::vector<bool> visited(numPseudoPins, false);
+  int minX = std::numeric_limits<int>::max();
+  int minY = std::numeric_limits<int>::max();
+  int maxX = std::numeric_limits<int>::min();
+  int maxY = std::numeric_limits<int>::min();
+  for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
+    const PointT pinPoint = graph_.getPseudoPin(pinIndex).point;
+    minX = std::min(minX, pinPoint.x());
+    minY = std::min(minY, pinPoint.y());
+    maxX = std::max(maxX, pinPoint.x());
+    maxY = std::max(maxY, pinPoint.y());
+  }
+  const PointT center((minX + maxX) / 2, (minY + maxY) / 2);
+  int startPinIndex = 0;
+  int bestCenterDistance = std::numeric_limits<int>::max();
+  for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
+    const PointT pinPoint = graph_.getPseudoPin(pinIndex).point;
+    const int centerDistance
+        = std::abs(center.x() - pinPoint.x()) + std::abs(center.y() - pinPoint.y());
+    if (centerDistance < bestCenterDistance) {
+      bestCenterDistance = centerDistance;
+      startPinIndex = pinIndex;
+    }
+  }
   visited[startPinIndex] = true;
-  int numDetached = graph_.getNumPseudoPins() - 1;
+  int numDetached = numPseudoPins - 1;
   updateSolution(std::make_shared<Solution>(
       0, graph_.getPinVertex(startPinIndex), nullptr));
 
