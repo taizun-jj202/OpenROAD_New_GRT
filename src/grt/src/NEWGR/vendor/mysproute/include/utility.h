@@ -593,9 +593,16 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	if (routelen <= 4 && net_degree <= 64) {
 		via_step_mult += 1;
 	}
+	int via_exit_mult = 1;
+	if (routelen <= 8) {
+		via_exit_mult = 2;
+	}
+	if (routelen <= 4 && net_degree <= 32) {
+		via_exit_mult = 3;
+	}
 	const int via_cost_entry = ADIFF(1, 0) * via_entry_mult * via_unit;
 	const int via_cost_step = ADIFF(1, 0) * via_step_mult * via_unit;
-	const int via_cost_exit = ADIFF(1, 0) * via_unit;
+	const int via_cost_exit = ADIFF(1, 0) * via_exit_mult * via_unit;
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
@@ -1229,15 +1236,16 @@ void newLA ()
 				//treenodes[d].botL = treenodes[d].topL = 0;
 				treenodes[d].botL = treenodes[d].layer; //0; //netID, d = pinID
 				if (treenodes[d].layer == 0) {
-					// Keep most low/medium-degree nets anchored to the pin layer.
-					// Reserve broad vertical freedom only for very high fanout nets.
-					int pin_layer_flex = 2;
-					if (nets[netID]->deg <= 64) {
+					// Keep low/medium fanout nets close to pin layer to suppress
+					// avoidable access vias, while preserving flexibility for
+					// high-fanout nets that need vertical escape options.
+					int pin_layer_flex = 1;
+					if (nets[netID]->deg <= 128) {
 						pin_layer_flex = 0;
-					} else if (nets[netID]->deg <= 256) {
+					} else if (nets[netID]->deg <= 512) {
 						pin_layer_flex = 1;
 					} else if (nets[netID]->deg > 1024) {
-						pin_layer_flex = 3;
+						pin_layer_flex = 2;
 					}
 					treenodes[d].topL = min(pin_layer_flex, numLayers - 1);
 				} else {
