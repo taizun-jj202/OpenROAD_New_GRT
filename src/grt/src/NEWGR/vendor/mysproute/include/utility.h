@@ -1203,7 +1203,19 @@ void newLA ()
 				treenodes[d].layer = findLayer(netID, treenodes[d]);
 				//treenodes[d].botL = treenodes[d].topL = 0;
 				treenodes[d].botL = treenodes[d].layer; //0; //netID, d = pinID
-				treenodes[d].topL = (treenodes[d].layer == 0)? 3 : treenodes[d].layer; //Michael
+				if (treenodes[d].layer == 0) {
+					// Keep large nets flexible, but reduce unnecessary layer hopping on
+					// small/medium nets to suppress via-heavy pin access patterns.
+					int pin_layer_flex = 3;
+					if (nets[netID]->deg <= 4) {
+						pin_layer_flex = 1;
+					} else if (nets[netID]->deg <= 16) {
+						pin_layer_flex = 2;
+					}
+					treenodes[d].topL = min(pin_layer_flex, numLayers - 1);
+				} else {
+					treenodes[d].topL = treenodes[d].layer;
+				}
 				//if(string(nets[netID]->name) == "ionet11")
 				//	cout << " x y l:" << treenodes[d].x << " " << treenodes[d].y << " " << treenodes[d].botL  << " " << treenodes[d].topL<< endl;
 				//treenodes[d].l = 0;
