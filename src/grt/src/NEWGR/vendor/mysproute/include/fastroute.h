@@ -692,10 +692,10 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	    
 		// call FLUTE to generate RSMT and break the nets into segments (2-pin nets)
 
-		VIA=3;
+		VIA=2;
 		//viacost = VIA;
 		// Enable via-aware FLUTE topology generation to bias toward fewer vias.
-		viacost = 2;
+		viacost = 1;
 		gen_brk_RSMT(FALSE, FALSE, FALSE, FALSE, noADJ);
 		printf("first L\n");
 		routeLAll(TRUE);
@@ -725,7 +725,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		if (maxOverflow > 700) {
 			costheight = 8;
 			LOGIS_COF = 1.33;
-			VIA = 2;
+			VIA = 1;
 			THRESH_M = 0;
 			CSTEP1 = 30;
 			slope = BIG_INT;
@@ -822,7 +822,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 				slope = BIG_INT;
 				//slope = 20;
 				if (i == 5) {
-					VIA = 2;
+					VIA = 1;
 					LOGIS_COF = 1.33;
 					ripup_threshold = -1;
 				//	cost_type = 3;
