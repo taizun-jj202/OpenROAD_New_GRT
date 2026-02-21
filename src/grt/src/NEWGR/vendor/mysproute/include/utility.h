@@ -697,8 +697,9 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 			min_result = 100*BIG_INT;
 			endLayer = treenodes[n2a].topL;
 			for (i = treenodes[n2a].topL; i >= treenodes[n2a].botL; i--) {
-				if (gridD[i][routelen] < min_result) {
-					min_result = gridD[i][routelen] ;
+				const int layer_score = gridD[i][routelen] + i;
+				if (layer_score < min_result) {
+					min_result = layer_score;
 					endLayer = i;
 				}
 			}
@@ -838,8 +839,9 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 		if (treenodes[n1a].assigned) {
 			min_result = BIG_INT;
 			for (i = treenodes[n1a].topL; i >= treenodes[n1a].botL; i--) {
-				if (gridD[i][k] < min_result) {
-					min_result = gridD[i][0] ;
+				const int layer_score = gridD[i][0] + i;
+				if (layer_score < min_result) {
+					min_result = layer_score;
 					endLayer = i;
 				}
 			}
