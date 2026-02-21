@@ -694,8 +694,9 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 
 		VIA=2;
 		//viacost = VIA;
-		// Keep topology generation lightly via-aware to avoid over-penalizing detours.
-		viacost = 1;
+		// Make initial tree generation moderately via-aware so early topology
+		// decisions avoid unnecessary z-hopping.
+		viacost = 2;
 		gen_brk_RSMT(FALSE, FALSE, FALSE, FALSE, noADJ);
 		printf("first L\n");
 		routeLAll(TRUE);
@@ -1355,7 +1356,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		printf("\nLayer Assignment Begins");
 		// Push layer assignment harder toward fewer layer transitions to trim
 		// final via count after global routing converges.
-		viacost = 4;
+		viacost = 5;
 		newLA ();
 		printf("layer assignment finished\n");
 
