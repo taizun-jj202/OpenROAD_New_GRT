@@ -1203,15 +1203,14 @@ void newLA ()
 				//treenodes[d].botL = treenodes[d].topL = 0;
 				treenodes[d].botL = treenodes[d].layer; //0; //netID, d = pinID
 				if (treenodes[d].layer == 0) {
-					// Keep low/medium fanout nets close to pin layer to suppress
-					// avoidable access vias, while preserving flexibility for
-					// high-fanout nets that need vertical escape options.
-					int pin_layer_flex = 1;
-					if (nets[netID]->deg <= 128) {
-						pin_layer_flex = 0;
-					} else if (nets[netID]->deg <= 512) {
+					// Keep low/medium fanout nets anchored on the pin layer longer
+					// to trim avoidable access vias; allow escape flexibility only
+					// as fanout grows.
+					int pin_layer_flex = 0;
+					if (nets[netID]->deg > 256) {
 						pin_layer_flex = 1;
-					} else if (nets[netID]->deg > 1024) {
+					}
+					if (nets[netID]->deg > 1024) {
 						pin_layer_flex = 2;
 					}
 					treenodes[d].topL = min(pin_layer_flex, numLayers - 1);
