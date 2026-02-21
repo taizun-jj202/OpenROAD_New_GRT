@@ -1356,7 +1356,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		printf("\nLayer Assignment Begins");
 		// Push layer assignment moderately toward fewer layer transitions.
 		// This targets via reduction while preserving the DetPart/A* flow.
-		viacost = 8;
+		viacost = 9;
 		newLA ();
 		printf("layer assignment finished\n");
 
@@ -1365,7 +1365,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		//printf("2D + Layer Assignment Runtime: %f sec\n", gen_brk_Time); 
 
 		costheight = 3;
-		viacost = 1;
+		viacost = 2;
 
 		if (gen_brk_Time < 60) {
 			ripupTH3D = 15;
