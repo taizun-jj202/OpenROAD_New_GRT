@@ -694,9 +694,9 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 
 		VIA=2;
 		//viacost = VIA;
-		// Keep initial topology generation strongly via-aware to discourage early
+		// Keep initial topology generation more via-aware to discourage early
 		// z-hopping that tends to inflate final via count.
-		viacost = 4;
+		viacost = 3;
 		gen_brk_RSMT(FALSE, FALSE, FALSE, FALSE, noADJ);
 		printf("first L\n");
 		routeLAll(TRUE);
@@ -1354,9 +1354,9 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		getOverflow2Dmaze( &maxOverflow , & tUsage);
 
 		printf("\nLayer Assignment Begins");
-		// Push layer assignment harder toward fewer layer transitions.
+		// Push layer assignment moderately toward fewer layer transitions.
 		// This targets via reduction while preserving the DetPart/A* flow.
-		viacost = 9;
+		viacost = 8;
 		newLA ();
 		printf("layer assignment finished\n");
 
