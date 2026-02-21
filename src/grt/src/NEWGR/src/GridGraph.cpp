@@ -405,21 +405,21 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     if (bestAccessDist.first == 0) {
       logger_->warn(utl::GRT, 7001, "pin is hard to access.");
     }
-    const PointT selectedPoint = accessPoints[bestIndex];
-    const AccessPoint ap{selectedPoint, {}};
+    const GRPoint& selectedPoint = accessPoints[bestIndex];
+    const AccessPoint ap{{selectedPoint.x(), selectedPoint.y()}, {}};
     auto it = selected_access_points.emplace(ap).first;
     IntervalT& fixedLayerInterval = it->layers;
-    for (const auto& point : accessPoints) {
-      if (point.x() == selectedPoint.x() && point.y() == selectedPoint.y()) {
-        fixedLayerInterval.Update(point.getLayerIdx());
-      }
+    int lowLayer = selectedPoint.getLayerIdx();
+    int highLayer = selectedPoint.getLayerIdx();
+    if (selectedPoint.getLayerIdx() < constants_.min_routing_layer) {
+      highLayer = constants_.min_routing_layer;
     }
-  }
-  // Extend the fixed layers to 2 layers higher to facilitate track switching
-  for (auto& accessPoint : selected_access_points) {
-    IntervalT& fixedLayers = accessPoint.layers;
-    fixedLayers.SetHigh(
-        std::min(fixedLayers.high() + 2, (int) getNumLayers() - 1));
+    if (!fixedLayerInterval.IsValid()) {
+      fixedLayerInterval.Set(lowLayer, highLayer);
+    } else {
+      fixedLayerInterval.Update(lowLayer);
+      fixedLayerInterval.Update(highLayer);
+    }
   }
   return selected_access_points;
 }

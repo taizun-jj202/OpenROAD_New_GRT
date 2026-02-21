@@ -251,12 +251,17 @@ NetRouteMap CUGR::getRoutes()
 void CUGR::sortNetIndices(std::vector<int>& netIndices) const
 {
   std::vector<int> halfParameters(gr_nets_.size());
+  std::vector<int> pinCounts(gr_nets_.size());
   for (int netIndex : netIndices) {
     auto& net = gr_nets_[netIndex];
     halfParameters[netIndex] = net->getBoundingBox().hp();
+    pinCounts[netIndex] = net->getNumPins();
   }
   sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
-    return halfParameters[lhs] < halfParameters[rhs];
+    if (halfParameters[lhs] != halfParameters[rhs]) {
+      return halfParameters[lhs] > halfParameters[rhs];
+    }
+    return pinCounts[lhs] > pinCounts[rhs];
   });
 }
 

@@ -38,8 +38,8 @@ struct Constants
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.25;
-  int target_detour_count = 20;
+  double max_detour_ratio = 0.18;
+  int target_detour_count = 12;
 
   double via_multiplier = 2.0;
 
