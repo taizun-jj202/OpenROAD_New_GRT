@@ -90,7 +90,7 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
   // (2d) direction -> x -> y -> has overflow?
   GridGraphView<bool> congestionView;
   grid_graph_->extractCongestionView(congestionView);
-  sortNetIndices(netIndices, /*large_first*/ false);
+  sortNetIndices(netIndices, /*large_first*/ true);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
     grid_graph_->commitTree(net->getRoutingTree(), /*ripup*/ true);
@@ -119,7 +119,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   }
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
-  sortNetIndices(netIndices, /*large_first*/ false);
+  sortNetIndices(netIndices, /*large_first*/ true);
   SparseGrid grid(10, 10, 0, 0);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
