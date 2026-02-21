@@ -71,7 +71,7 @@ class CUGR
   void patternRoute(std::vector<int>& netIndices);
   void patternRouteWithDetours(std::vector<int>& netIndices);
   void mazeRoute(std::vector<int>& netIndices);
-  void sortNetIndices(std::vector<int>& netIndices) const;
+  void sortNetIndices(std::vector<int>& netIndices, bool large_first) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
   void printStatistics() const;

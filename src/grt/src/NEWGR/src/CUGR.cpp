@@ -65,7 +65,7 @@ void CUGR::updateOverflowNets(std::vector<int>& netIndices)
 void CUGR::patternRoute(std::vector<int>& netIndices)
 {
   logger_->report("stage 1: pattern routing");
-  sortNetIndices(netIndices);
+  sortNetIndices(netIndices, /*large_first*/ true);
   for (const int netIndex : netIndices) {
     PatternRoute patternRoute(gr_nets_[netIndex].get(),
                               grid_graph_.get(),
@@ -90,7 +90,7 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
   // (2d) direction -> x -> y -> has overflow?
   GridGraphView<bool> congestionView;
   grid_graph_->extractCongestionView(congestionView);
-  sortNetIndices(netIndices);
+  sortNetIndices(netIndices, /*large_first*/ false);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
     grid_graph_->commitTree(net->getRoutingTree(), /*ripup*/ true);
@@ -119,7 +119,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   }
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
-  sortNetIndices(netIndices);
+  sortNetIndices(netIndices, /*large_first*/ false);
   SparseGrid grid(10, 10, 0, 0);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
@@ -248,7 +248,8 @@ NetRouteMap CUGR::getRoutes()
   return routes;
 }
 
-void CUGR::sortNetIndices(std::vector<int>& netIndices) const
+void CUGR::sortNetIndices(std::vector<int>& netIndices,
+                          const bool large_first) const
 {
   std::vector<int> halfParameters(gr_nets_.size());
   std::vector<int> pinCounts(gr_nets_.size());
@@ -259,9 +260,11 @@ void CUGR::sortNetIndices(std::vector<int>& netIndices) const
   }
   sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
     if (halfParameters[lhs] != halfParameters[rhs]) {
-      return halfParameters[lhs] > halfParameters[rhs];
+      return large_first ? halfParameters[lhs] > halfParameters[rhs]
+                         : halfParameters[lhs] < halfParameters[rhs];
     }
-    return pinCounts[lhs] > pinCounts[rhs];
+    return large_first ? pinCounts[lhs] > pinCounts[rhs]
+                       : pinCounts[lhs] < pinCounts[rhs];
   });
 }
 
