@@ -1207,10 +1207,10 @@ void newLA ()
 					// to trim avoidable access vias; allow escape flexibility only
 					// as fanout grows.
 					int pin_layer_flex = 0;
-					if (nets[netID]->deg > 1024) {
+					if (nets[netID]->deg > 1536) {
 						pin_layer_flex = 1;
 					}
-					if (nets[netID]->deg > 2048) {
+					if (nets[netID]->deg > 3072) {
 						pin_layer_flex = 2;
 					}
 					treenodes[d].topL = min(pin_layer_flex, numLayers - 1);
