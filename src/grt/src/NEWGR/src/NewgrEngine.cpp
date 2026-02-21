@@ -23,6 +23,13 @@ namespace grt {
 
 namespace {
 
+struct GridPoint3D
+{
+  int x{0};
+  int y{0};
+  int l{0};
+};
+
 void ensureGaloisRuntime()
 {
   static std::unique_ptr<galois::SharedMemSys> runtime
@@ -56,6 +63,52 @@ const Edge3D& verticalEdge(const SprouteGridData& grid,
   const int per_layer = grid.x_grids * (grid.y_grids - 1);
   const int idx = layer * per_layer + y * grid.x_grids + x;
   return v_edges3D[idx];
+}
+
+std::vector<GridPoint3D> simplifyEdgeRoute(const Route& edge_route)
+{
+  std::vector<GridPoint3D> points;
+  points.reserve(edge_route.routelen + 1);
+
+  for (int i = 0; i <= edge_route.routelen; ++i) {
+    GridPoint3D point{
+        edge_route.gridsX[i], edge_route.gridsY[i], edge_route.gridsL[i]};
+
+    if (!points.empty()) {
+      const GridPoint3D& last = points.back();
+      if (last.x == point.x && last.y == point.y && last.l == point.l) {
+        continue;
+      }
+    }
+
+    if (points.size() >= 2) {
+      const GridPoint3D& last = points.back();
+      const GridPoint3D& prev = points[points.size() - 2];
+      const bool no_op_via_bounce = prev.x == point.x && prev.y == point.y
+                                    && prev.l == point.l && last.x == point.x
+                                    && last.y == point.y && last.l != point.l;
+      if (no_op_via_bounce) {
+        points.pop_back();
+        continue;
+      }
+    }
+
+    if (points.size() >= 2) {
+      const GridPoint3D& last = points.back();
+      const GridPoint3D& prev = points[points.size() - 2];
+      const bool same_layer = prev.l == last.l && last.l == point.l;
+      const bool collinear = (prev.x == last.x && last.x == point.x)
+                             || (prev.y == last.y && last.y == point.y);
+      if (same_layer && collinear) {
+        points.back() = point;
+        continue;
+      }
+    }
+
+    points.push_back(point);
+  }
+
+  return points;
 }
 
 }  // namespace
@@ -316,13 +369,17 @@ void NewgrEngine::appendRouteSegments(int net_id, GRoute& route) const
         || edge_route.gridsY == nullptr || edge_route.gridsL == nullptr) {
       continue;
     }
-    for (int i = 0; i < edge_route.routelen; ++i) {
-      const int x0 = edge_route.gridsX[i];
-      const int y0 = edge_route.gridsY[i];
-      const int l0 = edge_route.gridsL[i];
-      const int x1 = edge_route.gridsX[i + 1];
-      const int y1 = edge_route.gridsY[i + 1];
-      const int l1 = edge_route.gridsL[i + 1];
+    const std::vector<GridPoint3D> points = simplifyEdgeRoute(edge_route);
+    if (points.size() < 2) {
+      continue;
+    }
+    for (size_t i = 0; i + 1 < points.size(); ++i) {
+      const int x0 = points[i].x;
+      const int y0 = points[i].y;
+      const int l0 = points[i].l;
+      const int x1 = points[i + 1].x;
+      const int y1 = points[i + 1].y;
+      const int l1 = points[i + 1].l;
       addSegment(route, x0, y0, l0, x1, y1, l1);
     }
   }
