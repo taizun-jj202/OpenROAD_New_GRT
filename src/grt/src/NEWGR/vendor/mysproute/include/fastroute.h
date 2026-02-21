@@ -1353,9 +1353,9 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		getOverflow2Dmaze( &maxOverflow , & tUsage);
 
 		printf("\nLayer Assignment Begins");
-		// Bias final layer assignment toward fewer layer transitions.
-		// Keep this moderate to avoid starving detour flexibility.
-		viacost = 2;
+		// Push layer assignment harder toward fewer layer transitions to trim
+		// final via count after global routing converges.
+		viacost = 4;
 		newLA ();
 		printf("layer assignment finished\n");
 

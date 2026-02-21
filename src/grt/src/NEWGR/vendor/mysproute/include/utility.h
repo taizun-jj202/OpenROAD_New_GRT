@@ -567,7 +567,12 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	routelen = treeedge->route.routelen;
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
-	const int via_unit = (viacost > 0) ? viacost : 1;
+	int via_unit = (viacost > 0) ? viacost : 1;
+	if (nets[netID]->deg <= 8) {
+		via_unit += 2;
+	} else if (nets[netID]->deg <= 32) {
+		via_unit += 1;
+	}
 	const int via_cost_entry = ADIFF(1, 0) * 2 * via_unit;
 	const int via_cost_step = ADIFF(1, 0) * 3 * via_unit;
 	const int via_cost_exit = ADIFF(1, 0) * via_unit;
@@ -1204,12 +1209,14 @@ void newLA ()
 				//treenodes[d].botL = treenodes[d].topL = 0;
 				treenodes[d].botL = treenodes[d].layer; //0; //netID, d = pinID
 				if (treenodes[d].layer == 0) {
-					// Keep large nets flexible, but reduce unnecessary layer hopping on
-					// small/medium nets to suppress via-heavy pin access patterns.
+					// Clamp low-degree nets closer to the pin layer to suppress
+					// avoidable pin-access vias while retaining flexibility on large nets.
 					int pin_layer_flex = 3;
-					if (nets[netID]->deg <= 4) {
+					if (nets[netID]->deg <= 8) {
+						pin_layer_flex = 0;
+					} else if (nets[netID]->deg <= 32) {
 						pin_layer_flex = 1;
-					} else if (nets[netID]->deg <= 16) {
+					} else if (nets[netID]->deg <= 128) {
 						pin_layer_flex = 2;
 					}
 					treenodes[d].topL = min(pin_layer_flex, numLayers - 1);
