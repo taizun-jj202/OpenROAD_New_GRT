@@ -145,6 +145,65 @@ int segmentWeight(const GSegment& segment)
   return segment.length() + via_cost;
 }
 
+int segmentViaSpan(const GSegment& segment)
+{
+  return std::abs(segment.final_layer - segment.init_layer);
+}
+
+bool isBetterSegmentForEqualWeight(const GSegment& candidate,
+                                   const GSegment& incumbent)
+{
+  const int candidate_len = candidate.length();
+  const int incumbent_len = incumbent.length();
+  if (candidate_len != incumbent_len) {
+    return candidate_len < incumbent_len;
+  }
+
+  const int candidate_vias = segmentViaSpan(candidate);
+  const int incumbent_vias = segmentViaSpan(incumbent);
+  if (candidate_vias != incumbent_vias) {
+    return candidate_vias < incumbent_vias;
+  }
+
+  if (candidate.init_layer != incumbent.init_layer) {
+    return candidate.init_layer < incumbent.init_layer;
+  }
+  if (candidate.final_layer != incumbent.final_layer) {
+    return candidate.final_layer < incumbent.final_layer;
+  }
+  if (candidate.init_x != incumbent.init_x) {
+    return candidate.init_x < incumbent.init_x;
+  }
+  if (candidate.init_y != incumbent.init_y) {
+    return candidate.init_y < incumbent.init_y;
+  }
+  if (candidate.final_x != incumbent.final_x) {
+    return candidate.final_x < incumbent.final_x;
+  }
+  return candidate.final_y < incumbent.final_y;
+}
+
+bool isBetterEdgeForMst(const EdgeInfo& lhs, const EdgeInfo& rhs)
+{
+  if (lhs.weight != rhs.weight) {
+    return lhs.weight < rhs.weight;
+  }
+
+  const GSegment& left_seg = lhs.segment;
+  const GSegment& right_seg = rhs.segment;
+  if (isBetterSegmentForEqualWeight(left_seg, right_seg)) {
+    return true;
+  }
+  if (isBetterSegmentForEqualWeight(right_seg, left_seg)) {
+    return false;
+  }
+
+  if (lhs.u != rhs.u) {
+    return lhs.u < rhs.u;
+  }
+  return lhs.v < rhs.v;
+}
+
 RouteStats computeRouteStats(const GRoute& route)
 {
   RouteStats stats;
@@ -216,7 +275,10 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     EdgeKey key{src_id, dst_id};
     const int weight = segmentWeight(segment);
     auto found = edge_table.find(key);
-    if (found == edge_table.end() || weight < found->second.weight) {
+    if (found == edge_table.end()
+        || weight < found->second.weight
+        || (weight == found->second.weight
+            && isBetterSegmentForEqualWeight(segment, found->second.segment))) {
       edge_table[key] = EdgeInfo{src_id, dst_id, weight, segment};
     }
   }
@@ -339,7 +401,7 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     std::sort(sorted_edges.begin(),
               sorted_edges.end(),
               [&](int lhs, int rhs) {
-                return edges[lhs].weight < edges[rhs].weight;
+                return isBetterEdgeForMst(edges[lhs], edges[rhs]);
               });
 
     DisjointSet mst_sets(comp_nodes.size());
