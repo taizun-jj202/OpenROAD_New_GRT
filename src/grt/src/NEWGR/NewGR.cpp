@@ -21,25 +21,27 @@ namespace grt {
 
 namespace {
 
-constexpr int kDefaultViaPenalty = 1000;
-constexpr int kLargeNetViaPenalty = 700;
+constexpr int kDefaultViaPenalty = 900;
+constexpr int kLargeNetViaPenalty = 560;
 constexpr int kLargeNetPinCount = 10;
 constexpr int64_t kLargeNetWirelengthThreshold = 15000;
-constexpr int kWirelengthPerExtraViaBudgetSmallNet = 28;
-constexpr int kWirelengthPerExtraViaBudgetLargeNet = 10;
-constexpr int kStrongWireGainPerExtraViaSmallNet = 72;
-constexpr int kStrongWireGainPerExtraViaLargeNet = 44;
-constexpr int kMaxExtraViasSmallNet = 2;
-constexpr int kMaxExtraViasLargeNet = 5;
-constexpr int kAggressivePruneSegmentThresholdSmallNet = 5;
-constexpr int kAggressivePruneSegmentThresholdLargeNet = 7;
-constexpr int kMinViaGainForAggressivePruneSmallNet = 1;
-constexpr int kMinViaGainForAggressivePruneLargeNet = 2;
-constexpr int64_t kMinWireGainForAggressivePruneSmallNet = 48;
-constexpr int64_t kMinWireGainForAggressivePruneLargeNet = 128;
-constexpr int kNearestNodeLayerWeight = 96;
-constexpr int kPinAnchorIncidentWeightDivisor = 8;
-constexpr int kNearestNodeIncidentWeightDivisor = 16;
+constexpr int kWirelengthPerExtraViaBudgetSmallNet = 14;
+constexpr int kWirelengthPerExtraViaBudgetLargeNet = 4;
+constexpr int kStrongWireGainPerExtraViaSmallNet = 36;
+constexpr int kStrongWireGainPerExtraViaLargeNet = 16;
+constexpr int kMaxExtraViasSmallNet = 4;
+constexpr int kMaxExtraViasLargeNet = 10;
+constexpr int kMaxViaIncreaseForAnyWireGainSmallNet = 6;
+constexpr int kMaxViaIncreaseForAnyWireGainLargeNet = 14;
+constexpr int kAggressivePruneSegmentThresholdSmallNet = 7;
+constexpr int kAggressivePruneSegmentThresholdLargeNet = 9;
+constexpr int kMinViaGainForAggressivePruneSmallNet = 0;
+constexpr int kMinViaGainForAggressivePruneLargeNet = 0;
+constexpr int64_t kMinWireGainForAggressivePruneSmallNet = 24;
+constexpr int64_t kMinWireGainForAggressivePruneLargeNet = 64;
+constexpr int kNearestNodeLayerWeight = 72;
+constexpr int kPinAnchorIncidentWeightDivisor = 16;
+constexpr int kNearestNodeIncidentWeightDivisor = 32;
 
 struct RouteStats
 {
@@ -664,6 +666,9 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
                   : kStrongWireGainPerExtraViaSmallNet;
   const int max_extra_vias
       = large_net ? kMaxExtraViasLargeNet : kMaxExtraViasSmallNet;
+  const int max_via_increase_for_any_wire_gain
+      = large_net ? kMaxViaIncreaseForAnyWireGainLargeNet
+                  : kMaxViaIncreaseForAnyWireGainSmallNet;
   const int aggressive_prune_segment_threshold
       = large_net ? kAggressivePruneSegmentThresholdLargeNet
                   : kAggressivePruneSegmentThresholdSmallNet;
@@ -676,6 +681,9 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   const bool improves_wire_without_more_vias
       = improves_wirelength
         && optimized_stats.via_count <= original_stats.via_count;
+  const bool improves_wire_with_moderate_via_growth
+      = improves_wirelength && via_delta > 0
+        && via_delta <= max_via_increase_for_any_wire_gain;
   const bool improves_wire_with_via_budget
       = improves_wirelength && via_delta > 0
         && via_delta <= max_extra_vias
@@ -701,7 +709,9 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
 
   if (!optimized.empty()
       && prune_guard_ok
-      && (improves_wire_without_more_vias || improves_wire_with_via_budget
+      && (improves_wire_without_more_vias
+          || improves_wire_with_moderate_via_growth
+          || improves_wire_with_via_budget
           || strong_wire_tradeoff
           || improves_via_without_more_wire
           || same_wire_and_fewer_vias)) {
