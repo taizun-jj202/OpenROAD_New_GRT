@@ -30,7 +30,7 @@ class BoxT;
 struct Constants
 {
   double weight_wire_length = 0.5;
-  double weight_via_number = 5.4;
+  double weight_via_number = 5.5;
   double weight_short_area = 500.0;
 
   int min_routing_layer = 1;
@@ -44,7 +44,7 @@ struct Constants
   double via_multiplier = 2.2;
   // Require a meaningful gain before switching a child branch to a higher
   // layer during layer assignment.
-  double layer_assignment_hysteresis_ratio = 0.24;
+  double layer_assignment_hysteresis_ratio = 0.26;
 
   double maze_logistic_slope = 0.5;
   int maze_overflow_threshold = 7;
