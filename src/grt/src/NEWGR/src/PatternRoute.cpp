@@ -585,13 +585,13 @@ void PatternRoute::calculateRoutingCosts(
   // to avoid vias are usually cheap in wirelength.
   const int hp = net_->getBoundingBox().hp();
   const int pins = net_->getNumPins();
-  double viaScale = 1.0;
+  double viaScale = 1.04;
   if (pins <= 4 && hp <= 40) {
-    viaScale = 1.35;
+    viaScale = 1.40;
   } else if (pins <= 12 && hp <= 120) {
-    viaScale = 1.20;
+    viaScale = 1.24;
   } else if (pins <= 24 && hp <= 240) {
-    viaScale = 1.10;
+    viaScale = 1.13;
   }
   for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
        layerIndex++) {
@@ -604,6 +604,9 @@ void PatternRoute::calculateRoutingCosts(
                            static_cast<int>(grid_graph_->getNumLayers()) - 1),
                   std::max(fixedLayers.high(), constants_.min_routing_layer));
 
+  const CostT layerSwitchHysteresis
+      = constants_.layer_assignment_hysteresis_ratio
+        * grid_graph_->getUnitViaCost();
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
        lowLayerIndex++) {
     std::vector<CostT> minChildCosts;
@@ -618,10 +621,11 @@ void PatternRoute::calculateRoutingCosts(
          layerIndex++) {
       for (int child_index = 0; child_index < node->getPaths().size();
            child_index++) {
-        if (childCosts[child_index][layerIndex].first
+        const CostT candidateCost = childCosts[child_index][layerIndex].first;
+        if (candidateCost + layerSwitchHysteresis
             < minChildCosts[child_index]) {
           minChildCosts[child_index]
-              = childCosts[child_index][layerIndex].first;
+              = candidateCost;
           bestPaths[child_index] = std::make_pair(
               childCosts[child_index][layerIndex].second, layerIndex);
         }
