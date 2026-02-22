@@ -50,7 +50,7 @@ struct Constants
   double layer_usage_penalty_ratio = 0.048;
 
   double maze_logistic_slope = 0.5;
-  int maze_overflow_threshold = 6;
+  int maze_overflow_threshold = 7;
 
   // Apply guide patching conservatively for low-overflow nets to avoid extra
   // detailed-route detours and vias.
