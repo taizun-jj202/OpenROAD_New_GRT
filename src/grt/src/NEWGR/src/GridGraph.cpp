@@ -429,8 +429,14 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
           = abs(netCenter.x() - point.x()) + abs(netCenter.y() - point.y());
       const int layerDistance
           = abs(point.getLayerIdx() - constants_.min_routing_layer);
-      const int primaryDist
-          = prioritize_center_distance ? distance : layerDistance;
+      // In distance-first mode, fold a small layer penalty into the primary
+      // metric so we avoid selecting much higher-layer access points unless
+      // they provide meaningful geometric gain.
+      const int layerPenalty
+          = prioritize_center_distance ? 2 * layerDistance : layerDistance;
+      const int primaryDist = prioritize_center_distance
+                                  ? distance + layerPenalty
+                                  : layerDistance;
       const int secondaryDist
           = prioritize_center_distance ? layerDistance : distance;
       const bool betterByDistance
