@@ -376,9 +376,10 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   // Large nets are wirelength-dominant, while small nets are usually via-heavy.
   // Use a hybrid tie-breaker to balance both metrics.
   const bool prioritize_center_distance = boundingBox.hp() >= 24;
-  // Require a meaningful local-resource gain before moving a pin access point
-  // away from a geometrically shorter candidate.
-  const double spare_margin = prioritize_center_distance ? 0.75 : 0.35;
+  // For large/high-degree nets, shorter geometric access tends to cut total
+  // wirelength; for others, preserving local spare resource often lowers vias.
+  const bool prefer_distance_tiebreak
+      = boundingBox.hp() >= 40 || net->getNumPins() >= 10;
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
     int bestAccessibility = -1;
     double bestLocalSpare = -std::numeric_limits<double>::max();
@@ -432,22 +433,22 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
           = prioritize_center_distance ? distance : layerDistance;
       const int secondaryDist
           = prioritize_center_distance ? layerDistance : distance;
-      const bool betterDistance
+      const bool betterByDistance
           = primaryDist < bestPrimaryDist
             || (primaryDist == bestPrimaryDist
-                && secondaryDist < bestSecondaryDist);
-      const bool significantlyBetterSpare
-          = localSpare > bestLocalSpare + spare_margin;
-      const bool comparableSpare
-          = std::abs(localSpare - bestLocalSpare) <= spare_margin;
+                && (secondaryDist < bestSecondaryDist
+                    || (secondaryDist == bestSecondaryDist
+                        && localSpare > bestLocalSpare)));
+      const bool betterBySpare
+          = localSpare > bestLocalSpare
+            || (localSpare == bestLocalSpare
+                && (primaryDist < bestPrimaryDist
+                    || (primaryDist == bestPrimaryDist
+                        && secondaryDist < bestSecondaryDist)));
       if (accessibility > bestAccessibility
           || (accessibility == bestAccessibility
-              && (significantlyBetterSpare
-                  || (comparableSpare
-                      && (betterDistance
-                          || (primaryDist == bestPrimaryDist
-                              && secondaryDist == bestSecondaryDist
-                              && localSpare > bestLocalSpare)))))) {
+              && ((prefer_distance_tiebreak && betterByDistance)
+                  || (!prefer_distance_tiebreak && betterBySpare)))) {
         bestIndex = index;
         bestAccessibility = accessibility;
         bestLocalSpare = localSpare;
