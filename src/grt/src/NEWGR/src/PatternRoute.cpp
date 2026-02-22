@@ -585,13 +585,13 @@ void PatternRoute::calculateRoutingCosts(
   // to avoid vias are usually cheap in wirelength.
   const int hp = net_->getBoundingBox().hp();
   const int pins = net_->getNumPins();
-  double viaScale = 1.10;
+  double viaScale = 1.18;
   if (pins <= 4 && hp <= 40) {
-    viaScale = 1.54;
+    viaScale = 1.62;
   } else if (pins <= 12 && hp <= 120) {
-    viaScale = 1.37;
+    viaScale = 1.45;
   } else if (pins <= 24 && hp <= 240) {
-    viaScale = 1.22;
+    viaScale = 1.28;
   }
   for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
        layerIndex++) {
@@ -617,9 +617,9 @@ void PatternRoute::calculateRoutingCosts(
     layerUsagePenalty *= 1.18;
   } else if (pins > 48 || hp > 480) {
     // Let very large nets climb layers more freely to avoid long detours.
-    layerUsagePenalty *= 0.45;
+    layerUsagePenalty *= 0.62;
   } else if (pins > 24 || hp > 240) {
-    layerUsagePenalty *= 0.75;
+    layerUsagePenalty *= 0.88;
   }
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
        lowLayerIndex++) {
