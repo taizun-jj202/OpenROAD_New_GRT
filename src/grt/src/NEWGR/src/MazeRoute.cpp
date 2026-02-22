@@ -190,6 +190,7 @@ void MazeRoute::run()
   std::vector<bool> visited(numPseudoPins, false);
   int startPinIndex = 0;
   int64_t bestDistanceSum = std::numeric_limits<int64_t>::max();
+  CostT bestEscapeCost = std::numeric_limits<CostT>::max();
   for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
     const PointT source = graph_.getPseudoPin(pinIndex).point;
     int64_t distanceSum = 0;
@@ -198,8 +199,21 @@ void MazeRoute::run()
       distanceSum += std::abs(source.x() - target.x())
                      + std::abs(source.y() - target.y());
     }
-    if (distanceSum < bestDistanceSum) {
+    CostT minEscapeCost = std::numeric_limits<CostT>::max();
+    const int sourceVertex = graph_.getPinVertex(pinIndex);
+    for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++) {
+      if (graph_.getNextVertex(sourceVertex, edgeIndex) == -1) {
+        continue;
+      }
+      minEscapeCost
+          = std::min(minEscapeCost,
+                     graph_.getEdgeCost(sourceVertex, edgeIndex));
+    }
+    if (distanceSum < bestDistanceSum
+        || (distanceSum == bestDistanceSum
+            && minEscapeCost < bestEscapeCost)) {
       bestDistanceSum = distanceSum;
+      bestEscapeCost = minEscapeCost;
       startPinIndex = pinIndex;
     }
   }

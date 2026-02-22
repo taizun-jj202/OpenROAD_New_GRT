@@ -142,7 +142,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
   sortNetIndices(severeOverflowNets, /*large_first*/ true);
-  SparseGrid grid(7, 7, 0, 0);
+  SparseGrid grid(8, 8, 0, 0);
   for (const int netIndex : severeOverflowNets) {
     GRNet* net = gr_nets_[netIndex].get();
     MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
