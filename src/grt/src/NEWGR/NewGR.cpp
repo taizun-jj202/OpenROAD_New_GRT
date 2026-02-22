@@ -21,25 +21,17 @@ namespace grt {
 
 namespace {
 
-constexpr int kDefaultViaPenalty = 900;
-constexpr int kLargeNetViaPenalty = 560;
+constexpr int kDefaultViaPenalty = 700;
+constexpr int kLargeNetViaPenalty = 450;
 constexpr int kLargeNetPinCount = 10;
 constexpr int64_t kLargeNetWirelengthThreshold = 15000;
-constexpr int kWirelengthPerExtraViaBudgetSmallNet = 14;
-constexpr int kWirelengthPerExtraViaBudgetLargeNet = 4;
-constexpr int kStrongWireGainPerExtraViaSmallNet = 36;
-constexpr int kStrongWireGainPerExtraViaLargeNet = 16;
-constexpr int kMaxExtraViasSmallNet = 4;
-constexpr int kMaxExtraViasLargeNet = 10;
-constexpr int kMaxViaIncreaseForAnyWireGainSmallNet = 6;
-constexpr int kMaxViaIncreaseForAnyWireGainLargeNet = 14;
 constexpr int kAggressivePruneSegmentThresholdSmallNet = 7;
 constexpr int kAggressivePruneSegmentThresholdLargeNet = 9;
 constexpr int kMinViaGainForAggressivePruneSmallNet = 0;
 constexpr int kMinViaGainForAggressivePruneLargeNet = 0;
 constexpr int64_t kMinWireGainForAggressivePruneSmallNet = 24;
 constexpr int64_t kMinWireGainForAggressivePruneLargeNet = 64;
-constexpr int kNearestNodeLayerWeight = 72;
+constexpr int kNearestNodeLayerWeight = 64;
 constexpr int kPinAnchorIncidentWeightDivisor = 16;
 constexpr int kNearestNodeIncidentWeightDivisor = 32;
 
@@ -654,21 +646,9 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
       = optimized_stats.wirelength < original_stats.wirelength;
   const int64_t wirelength_gain
       = original_stats.wirelength - optimized_stats.wirelength;
-  const int via_delta = optimized_stats.via_count - original_stats.via_count;
   const int via_gain = original_stats.via_count - optimized_stats.via_count;
   const int segment_reduction = static_cast<int>(route.size())
                                 - static_cast<int>(optimized.size());
-  const int64_t wirelength_budget_per_via
-      = large_net ? kWirelengthPerExtraViaBudgetLargeNet
-                  : kWirelengthPerExtraViaBudgetSmallNet;
-  const int strong_wire_gain_per_via
-      = large_net ? kStrongWireGainPerExtraViaLargeNet
-                  : kStrongWireGainPerExtraViaSmallNet;
-  const int max_extra_vias
-      = large_net ? kMaxExtraViasLargeNet : kMaxExtraViasSmallNet;
-  const int max_via_increase_for_any_wire_gain
-      = large_net ? kMaxViaIncreaseForAnyWireGainLargeNet
-                  : kMaxViaIncreaseForAnyWireGainSmallNet;
   const int aggressive_prune_segment_threshold
       = large_net ? kAggressivePruneSegmentThresholdLargeNet
                   : kAggressivePruneSegmentThresholdSmallNet;
@@ -678,24 +658,6 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   const int64_t min_wire_gain_for_aggressive_prune
       = large_net ? kMinWireGainForAggressivePruneLargeNet
                   : kMinWireGainForAggressivePruneSmallNet;
-  const bool improves_wire_without_more_vias
-      = improves_wirelength
-        && optimized_stats.via_count <= original_stats.via_count;
-  const bool improves_wire_with_moderate_via_growth
-      = improves_wirelength && via_delta > 0
-        && via_delta <= max_via_increase_for_any_wire_gain;
-  const bool improves_wire_with_via_budget
-      = improves_wirelength && via_delta > 0
-        && via_delta <= max_extra_vias
-        && wirelength_gain
-               >= static_cast<int64_t>(via_delta) * wirelength_budget_per_via;
-  const bool strong_wire_tradeoff
-      = improves_wirelength && via_delta > 0
-        && wirelength_gain
-               >= static_cast<int64_t>(via_delta) * strong_wire_gain_per_via;
-  const bool improves_via_without_more_wire
-      = optimized_stats.via_count < original_stats.via_count
-        && optimized_stats.wirelength <= original_stats.wirelength;
   const bool same_wire_and_fewer_vias
       = optimized_stats.wirelength == original_stats.wirelength
         && optimized_stats.via_count < original_stats.via_count;
@@ -709,12 +671,7 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
 
   if (!optimized.empty()
       && prune_guard_ok
-      && (improves_wire_without_more_vias
-          || improves_wire_with_moderate_via_growth
-          || improves_wire_with_via_budget
-          || strong_wire_tradeoff
-          || improves_via_without_more_wire
-          || same_wire_and_fewer_vias)) {
+      && (improves_wirelength || same_wire_and_fewer_vias)) {
     route.swap(optimized);
   }
 }
