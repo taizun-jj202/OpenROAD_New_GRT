@@ -21,6 +21,8 @@ namespace grt {
 namespace {
 
 constexpr int kViaPenalty = 1000;
+// Require meaningful wirelength gain when a candidate introduces extra vias.
+constexpr int kWirelengthPerExtraViaBudget = 64;
 
 struct RouteStats
 {
@@ -231,6 +233,37 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     static_cast<void>(ignored_key);
     edges.push_back(edge);
   }
+  std::sort(edges.begin(),
+            edges.end(),
+            [](const EdgeInfo& lhs, const EdgeInfo& rhs) {
+              if (lhs.u != rhs.u) {
+                return lhs.u < rhs.u;
+              }
+              if (lhs.v != rhs.v) {
+                return lhs.v < rhs.v;
+              }
+              if (lhs.weight != rhs.weight) {
+                return lhs.weight < rhs.weight;
+              }
+              const GSegment& ls = lhs.segment;
+              const GSegment& rs = rhs.segment;
+              if (ls.init_layer != rs.init_layer) {
+                return ls.init_layer < rs.init_layer;
+              }
+              if (ls.final_layer != rs.final_layer) {
+                return ls.final_layer < rs.final_layer;
+              }
+              if (ls.init_x != rs.init_x) {
+                return ls.init_x < rs.init_x;
+              }
+              if (ls.init_y != rs.init_y) {
+                return ls.init_y < rs.init_y;
+              }
+              if (ls.final_x != rs.final_x) {
+                return ls.final_x < rs.final_x;
+              }
+              return ls.final_y < rs.final_y;
+            });
 
   const int node_count = nodes.size();
   DisjointSet components(node_count);
@@ -254,13 +287,23 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
       // unnecessary vertical stacks at the same (x, y).
       int best_node = -1;
       int best_score = std::numeric_limits<int>::max();
+      int best_primary_score = std::numeric_limits<int>::max();
+      int best_layer = std::numeric_limits<int>::max();
       const int pin_layer = pin.getConnectionLayer();
       for (int node_id : matching_nodes->second) {
         const NodeKey& node = nodes[node_id];
         const int layer_distance = std::min(std::abs(node.layer - pin_layer),
                                             std::abs(node.layer - (pin_layer + 1)));
-        if (layer_distance < best_score) {
+        const int primary_distance = std::abs(node.layer - pin_layer);
+        if (layer_distance < best_score
+            || (layer_distance == best_score
+                && primary_distance < best_primary_score)
+            || (layer_distance == best_score
+                && primary_distance == best_primary_score
+                && node.layer < best_layer)) {
           best_score = layer_distance;
+          best_primary_score = primary_distance;
+          best_layer = node.layer;
           best_node = node_id;
         }
       }
@@ -340,7 +383,15 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     std::sort(sorted_edges.begin(),
               sorted_edges.end(),
               [&](int lhs, int rhs) {
-                return edges[lhs].weight < edges[rhs].weight;
+                const EdgeInfo& lhs_edge = edges[lhs];
+                const EdgeInfo& rhs_edge = edges[rhs];
+                if (lhs_edge.weight != rhs_edge.weight) {
+                  return lhs_edge.weight < rhs_edge.weight;
+                }
+                if (lhs_edge.u != rhs_edge.u) {
+                  return lhs_edge.u < rhs_edge.u;
+                }
+                return lhs_edge.v < rhs_edge.v;
               });
 
     DisjointSet mst_sets(comp_nodes.size());
@@ -446,11 +497,21 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   const RouteStats optimized_stats = computeRouteStats(optimized);
   const bool improves_wirelength
       = optimized_stats.wirelength < original_stats.wirelength;
+  const int64_t wirelength_gain
+      = original_stats.wirelength - optimized_stats.wirelength;
+  const int via_delta = optimized_stats.via_count - original_stats.via_count;
+  const bool improves_wire_with_via_budget
+      = improves_wirelength
+        && (via_delta <= 0
+            || wirelength_gain
+                   >= static_cast<int64_t>(via_delta)
+                          * kWirelengthPerExtraViaBudget);
   const bool same_wire_and_no_more_vias
       = optimized_stats.wirelength == original_stats.wirelength
         && optimized_stats.via_count <= original_stats.via_count;
 
-  if (!optimized.empty() && (improves_wirelength || same_wire_and_no_more_vias)) {
+  if (!optimized.empty()
+      && (improves_wire_with_via_budget || same_wire_and_no_more_vias)) {
     route.swap(optimized);
   }
 }
