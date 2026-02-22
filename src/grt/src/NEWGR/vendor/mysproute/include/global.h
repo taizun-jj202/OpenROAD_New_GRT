@@ -12,22 +12,22 @@ int acc_count;
 int n_small_undone;
 float max_rudy;
 
-#define M2_ADJ_MIN 0.69
+#define M2_ADJ_MIN 0.68
 #define M2_ADJ_MAX 1.00
-#define M2_ADJ_MID 3.8
+#define M2_ADJ_MID 3.5
 #define M2_ADJ_K 2.0
 
-#define M3_ADJ_MIN 0.69
+#define M3_ADJ_MIN 0.68
 #define M3_ADJ_MAX 1.00
-#define M3_ADJ_MID 3.8
+#define M3_ADJ_MID 3.5
 #define M3_ADJ_K 2.0
 
-#define MID_ADJ_MIN 0.985
+#define MID_ADJ_MIN 0.98
 #define MID_ADJ_MAX 1.00
 #define MID_ADJ_MID 5.0
 #define MID_ADJ_K 2.0
 
-#define HIGH_ADJ 0.93
+#define HIGH_ADJ 0.92
 
 #define OBS_NO_STOP 0 // 1 == go through OBS, 0 == hard stop
 

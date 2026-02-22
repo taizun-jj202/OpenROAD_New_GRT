@@ -1241,7 +1241,10 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 				VIA = max(VIA, 2);
 			}
 			if (past_cong < 1200) {
-				VIA = max(VIA, 3);
+				VIA = max(VIA, 4);
+			}
+			if (past_cong < 200) {
+				VIA = max(VIA, 5);
 			}
 			viacost = VIA;
 			//if(i == 1)
@@ -1361,7 +1364,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 
 		// Keep a moderate via bias for layer assignment once 2D overflow is gone.
 		if (past_cong == 0) {
-			VIA = max(VIA, 3);
+			VIA = max(VIA, 4);
 		}
 		viacost = max(viacost, VIA);
 		printf("\nLayer Assignment Begins");
