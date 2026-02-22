@@ -105,6 +105,10 @@ void PatternRoute::constructSteinerTree()
     fluteAccuracy = 8;
   } else if (degree < 16 && hp < 72) {
     fluteAccuracy = 5;
+  } else if (degree < 28 && hp < 140) {
+    // A small bump for medium nets improves RSMT quality with modest runtime
+    // overhead compared to using the high-accuracy setting broadly.
+    fluteAccuracy = 4;
   }
   stt::Tree flutetree = stt_builder_->flute(xs, ys, fluteAccuracy);
   const int numBranches = degree + degree - 2;
@@ -577,10 +581,23 @@ void PatternRoute::calculateRoutingCosts(
   // Calculate the partial sum of the via costs
   std::vector<CostT> viaCosts(grid_graph_->getNumLayers());
   viaCosts[0] = 0;
+  // Encourage fewer layer transitions on small/mid nets where extra detours
+  // to avoid vias are usually cheap in wirelength.
+  const int hp = net_->getBoundingBox().hp();
+  const int pins = net_->getNumPins();
+  double viaScale = 1.0;
+  if (pins <= 4 && hp <= 40) {
+    viaScale = 1.35;
+  } else if (pins <= 12 && hp <= 120) {
+    viaScale = 1.20;
+  } else if (pins <= 24 && hp <= 240) {
+    viaScale = 1.10;
+  }
   for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
        layerIndex++) {
-    viaCosts[layerIndex] = viaCosts[layerIndex - 1]
-                           + grid_graph_->getViaCost(layerIndex - 1, *node);
+    viaCosts[layerIndex]
+        = viaCosts[layerIndex - 1]
+          + viaScale * grid_graph_->getViaCost(layerIndex - 1, *node);
   }
   IntervalT fixedLayers(node->getFixedLayers());
   fixedLayers.Set(std::min(fixedLayers.low(),
