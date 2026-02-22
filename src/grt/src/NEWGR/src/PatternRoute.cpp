@@ -615,6 +615,11 @@ void PatternRoute::calculateRoutingCosts(
     layerUsagePenalty *= 1.35;
   } else if (pins <= 24 && hp <= 240) {
     layerUsagePenalty *= 1.18;
+  } else if (pins > 48 || hp > 480) {
+    // Let very large nets climb layers more freely to avoid long detours.
+    layerUsagePenalty *= 0.45;
+  } else if (pins > 24 || hp > 240) {
+    layerUsagePenalty *= 0.75;
   }
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
        lowLayerIndex++) {
