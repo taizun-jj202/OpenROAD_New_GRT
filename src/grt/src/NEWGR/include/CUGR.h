@@ -45,14 +45,19 @@ struct Constants
   // Require a meaningful gain before switching a child branch to a higher
   // layer during layer assignment.
   double layer_assignment_hysteresis_ratio = 0.26;
+  // Discourage unnecessary use of higher layers even when congestion is low.
+  double layer_usage_penalty_ratio = 0.05;
 
   double maze_logistic_slope = 0.5;
   int maze_overflow_threshold = 7;
 
-  double pin_patch_threshold = 20.0;
+  // Apply guide patching conservatively for low-overflow nets to avoid extra
+  // detailed-route detours and vias.
+  int guide_patch_overflow_threshold = 2;
+  double pin_patch_threshold = 18.0;
   int pin_patch_padding = 1;
-  double wire_patch_threshold = 1.5;
-  double wire_patch_inflation_rate = 1.05;
+  double wire_patch_threshold = 1.2;
+  double wire_patch_inflation_rate = 1.03;
 
   bool write_heatmap = false;
 };

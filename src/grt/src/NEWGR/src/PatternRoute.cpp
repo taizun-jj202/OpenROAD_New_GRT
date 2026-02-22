@@ -607,6 +607,15 @@ void PatternRoute::calculateRoutingCosts(
   const CostT layerSwitchHysteresis
       = constants_.layer_assignment_hysteresis_ratio
         * grid_graph_->getUnitViaCost();
+  CostT layerUsagePenalty
+      = constants_.layer_usage_penalty_ratio * grid_graph_->getUnitViaCost();
+  if (pins <= 4 && hp <= 40) {
+    layerUsagePenalty *= 1.6;
+  } else if (pins <= 12 && hp <= 120) {
+    layerUsagePenalty *= 1.35;
+  } else if (pins <= 24 && hp <= 240) {
+    layerUsagePenalty *= 1.18;
+  }
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
        lowLayerIndex++) {
     std::vector<CostT> minChildCosts;
@@ -631,6 +640,7 @@ void PatternRoute::calculateRoutingCosts(
       }
       if (layerIndex >= fixedLayers.high()) {
         CostT cost = viaCosts[layerIndex] - viaCosts[lowLayerIndex];
+        cost += layerUsagePenalty * (layerIndex - lowLayerIndex);
         for (CostT childCost : minChildCosts) {
           cost += childCost;
         }

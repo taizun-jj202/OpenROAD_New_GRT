@@ -340,9 +340,10 @@ void CUGR::getGuides(const GRNet* net,
     return resource;
   };
 
-  // If a net has no local overflow, keep guides compact and avoid extra patch
-  // boxes that can cause unnecessary detours/vias in detailed routing.
-  if (grid_graph_->checkOverflow(routingTree) == 0) {
+  // Keep guides compact for low-overflow nets to avoid over-inflating guide
+  // regions, which can increase detailed-route detours and via usage.
+  const int netOverflow = grid_graph_->checkOverflow(routingTree);
+  if (netOverflow <= constants_.guide_patch_overflow_threshold) {
     return;
   }
 
