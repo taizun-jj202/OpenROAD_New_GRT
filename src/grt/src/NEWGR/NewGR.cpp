@@ -182,10 +182,10 @@ void dedupeAndDropStubs(GRoute& route)
 void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
 {
   dedupeAndDropStubs(route);
-  const RouteStats original_stats = computeRouteStats(route);
-  if (route.size() < 3) {
+  if (pins.size() < 3 || route.size() < 3) {
     return;
   }
+  const RouteStats original_stats = computeRouteStats(route);
 
   std::unordered_map<NodeKey, int, NodeKeyHash> node_to_id;
   std::vector<NodeKey> nodes;
@@ -250,8 +250,22 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     const uint64_t key = xyKey(pin_pos.x(), pin_pos.y());
     auto matching_nodes = xy_to_nodes.find(key);
     if (matching_nodes != xy_to_nodes.end() && !matching_nodes->second.empty()) {
+      // Anchor each pin to one best-fit node to avoid preserving
+      // unnecessary vertical stacks at the same (x, y).
+      int best_node = -1;
+      int best_score = std::numeric_limits<int>::max();
+      const int pin_layer = pin.getConnectionLayer();
       for (int node_id : matching_nodes->second) {
-        required[node_id] = true;
+        const NodeKey& node = nodes[node_id];
+        const int layer_distance = std::min(std::abs(node.layer - pin_layer),
+                                            std::abs(node.layer - (pin_layer + 1)));
+        if (layer_distance < best_score) {
+          best_score = layer_distance;
+          best_node = node_id;
+        }
+      }
+      if (best_node >= 0) {
+        required[best_node] = true;
       }
       continue;
     }
