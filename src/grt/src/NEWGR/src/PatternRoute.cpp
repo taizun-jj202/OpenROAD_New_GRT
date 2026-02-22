@@ -442,7 +442,7 @@ void PatternRoute::constructDetours(GridGraphView<bool>& congestion_view)
         shiftInterval.addToLow(-1);
       }
       while (shiftInterval.high() + 1 < grid_graph_->getSize(1 - direction)
-             && getTotalStemLength(stems, shiftInterval.high() - 1)
+             && getTotalStemLength(stems, shiftInterval.high() + 1)
                         - originalLength
                     <= maxLengthIncrease) {
         shiftInterval.addToHigh(1);
