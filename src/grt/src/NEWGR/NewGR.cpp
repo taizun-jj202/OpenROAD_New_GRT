@@ -185,7 +185,7 @@ void dedupeAndDropStubs(GRoute& route)
 void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
 {
   dedupeAndDropStubs(route);
-  if (pins.size() < 2 || route.size() < 3) {
+  if (pins.size() < 3 || route.size() < 3) {
     return;
   }
   const RouteStats original_stats = computeRouteStats(route);
