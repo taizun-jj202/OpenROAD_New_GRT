@@ -97,7 +97,16 @@ void PatternRoute::constructSteinerTree()
     ys.push_back(accessPoint.point.y());
   }
 
-  stt::Tree flutetree = stt_builder_->flute(xs, ys, flute_accuracy_);
+  // Tune FLUTE quality by net complexity: preserve runtime on large nets while
+  // improving topology quality for smaller/mid-size nets.
+  const int hp = net_->getBoundingBox().hp();
+  int fluteAccuracy = 3;
+  if (degree < 8 && hp < 32) {
+    fluteAccuracy = 8;
+  } else if (degree < 16 && hp < 72) {
+    fluteAccuracy = 5;
+  }
+  stt::Tree flutetree = stt_builder_->flute(xs, ys, fluteAccuracy);
   const int numBranches = degree + degree - 2;
   std::vector<PointT> steinerPoints;
   steinerPoints.reserve(numBranches);
