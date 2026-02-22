@@ -22,10 +22,19 @@ class NewGR
   void updateDbCongestion(odb::dbBlock* block);
 
  private:
+  enum class Backend
+  {
+    None,
+    FastRoute,
+    NewgrEngine
+  };
+
   GlobalRouter* grouter_;
   CUGR* cugr_;
   utl::Logger* logger_;
   std::unique_ptr<NewgrEngine> engine_;
+  Backend active_backend_{Backend::None};
+  int last_total_overflow_{0};
 };
 
 }  // namespace grt
