@@ -89,9 +89,20 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
   std::vector<int> detourNetIndices;
   detourNetIndices.reserve(netIndices.size());
   for (const int netIndex : netIndices) {
+    const GRNet* net = gr_nets_[netIndex].get();
     const int overflow
-        = grid_graph_->checkOverflow(gr_nets_[netIndex]->getRoutingTree());
-    if (overflow >= constants_.detour_overflow_threshold) {
+        = grid_graph_->checkOverflow(net->getRoutingTree());
+
+    // Large nets dominate global wirelength and are more sensitive to early
+    // congestion around trunks. Route them with detours sooner.
+    int detourThreshold = constants_.detour_overflow_threshold;
+    const int hp = net->getBoundingBox().hp();
+    const int pins = net->getNumPins();
+    if (pins > 24 || hp > 160) {
+      detourThreshold = std::max(1, detourThreshold - 1);
+    }
+
+    if (overflow >= detourThreshold) {
       detourNetIndices.push_back(netIndex);
     }
   }
