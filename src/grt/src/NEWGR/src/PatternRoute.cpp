@@ -585,13 +585,13 @@ void PatternRoute::calculateRoutingCosts(
   // to avoid vias are usually cheap in wirelength.
   const int hp = net_->getBoundingBox().hp();
   const int pins = net_->getNumPins();
-  double viaScale = 1.04;
+  double viaScale = 1.08;
   if (pins <= 4 && hp <= 40) {
-    viaScale = 1.40;
+    viaScale = 1.50;
   } else if (pins <= 12 && hp <= 120) {
-    viaScale = 1.24;
+    viaScale = 1.34;
   } else if (pins <= 24 && hp <= 240) {
-    viaScale = 1.13;
+    viaScale = 1.20;
   }
   for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
        layerIndex++) {
