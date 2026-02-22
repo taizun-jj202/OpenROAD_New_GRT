@@ -627,7 +627,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	CSTEP4 = 1000;
 	COSHEIGHT=40;
 	L=0;
-	VIA=3;
+	VIA=2;
 	L_afterSTOP=1;
 	Ripvalue=-1;
 	ripupTH3D = 10;
@@ -692,9 +692,9 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	    
 		// call FLUTE to generate RSMT and break the nets into segments (2-pin nets)
 
-		VIA=3;
+		VIA=2;
 		//viacost = VIA;
-		viacost = VIA;
+		viacost = 0;
 		gen_brk_RSMT(FALSE, FALSE, FALSE, FALSE, noADJ);
 		printf("first L\n");
 		routeLAll(TRUE);
@@ -724,7 +724,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		if (maxOverflow > 700) {
 			costheight = 8;
 			LOGIS_COF = 1.33;
-			VIA = 2;
+			VIA = 1;
 			THRESH_M = 0;
 			CSTEP1 = 30;
 			slope = BIG_INT;
@@ -821,7 +821,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 				slope = BIG_INT;
 				//slope = 20;
 				if (i == 5) {
-					VIA = 2;
+					VIA = 1;
 					LOGIS_COF = 1.33;
 					ripup_threshold = -1;
 				//	cost_type = 3;
@@ -1236,13 +1236,13 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
             last_cong = past_cong;
  
 			past_cong = getOverflow2Dmaze(&maxOverflow , & tUsage); 
-			// Increase via penalty only after congestion has dropped so
-			// early maze iterations can still prioritize overflow cleanup.
-			if (past_cong < 5000) {
-				VIA = max(VIA, 3);
+			// Keep via penalty moderate while converging so WL minimization
+			// remains dominant after overflow cleanup.
+			if (past_cong < 6000) {
+				VIA = max(VIA, 2);
 			}
-			if (past_cong < 1000) {
-				VIA = max(VIA, 4);
+			if (past_cong < 1200) {
+				VIA = max(VIA, 3);
 			}
 			viacost = VIA;
 			//if(i == 1)
@@ -1360,9 +1360,10 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		printf("Final 2D results: \n");
 		getOverflow2Dmaze( &maxOverflow , & tUsage);
 
-		// Make layer assignment via-aware once 2D overflow is addressed.
+		// Encourage a light via penalty for layer assignment while still
+		// avoiding extreme via growth once overflow is resolved.
 		if (past_cong == 0) {
-			VIA = max(VIA, 4);
+			VIA = max(VIA, 3);
 		}
 		viacost = max(viacost, VIA);
 		printf("\nLayer Assignment Begins");
@@ -1374,7 +1375,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		//printf("2D + Layer Assignment Runtime: %f sec\n", gen_brk_Time); 
 
 		costheight = 3;
-		viacost = 2;
+		viacost = 1;
 
 		if (gen_brk_Time < 60) {
 			ripupTH3D = 15;

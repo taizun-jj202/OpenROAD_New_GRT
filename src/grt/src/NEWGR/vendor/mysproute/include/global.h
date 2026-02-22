@@ -12,22 +12,22 @@ int acc_count;
 int n_small_undone;
 float max_rudy;
 
-#define M2_ADJ_MIN 0.45
-#define M2_ADJ_MAX 0.9
+#define M2_ADJ_MIN 0.68
+#define M2_ADJ_MAX 1.00
 #define M2_ADJ_MID 3.5
 #define M2_ADJ_K 2.0
 
-#define M3_ADJ_MIN 0.45
-#define M3_ADJ_MAX 0.9
+#define M3_ADJ_MIN 0.68
+#define M3_ADJ_MAX 1.00
 #define M3_ADJ_MID 3.5
 #define M3_ADJ_K 2.0
 
-#define MID_ADJ_MIN 0.9
-#define MID_ADJ_MAX 0.9
+#define MID_ADJ_MIN 0.98
+#define MID_ADJ_MAX 1.00
 #define MID_ADJ_MID 5.0
 #define MID_ADJ_K 2.0
 
-#define HIGH_ADJ 0.7
+#define HIGH_ADJ 0.92
 
 #define OBS_NO_STOP 0 // 1 == go through OBS, 0 == hard stop
 
@@ -43,7 +43,9 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 	if(x == 0)
 		return 0;
 	else {
-		float adj;
+		// Default to no soft-cap reduction for layers that are not explicitly
+		// parameterized below (e.g. metal1).
+		float adj = 1.0f;
 
 		if(layerID == 1) //metal2
 			adj = (float) M2_ADJ_MIN + (float)(M2_ADJ_MAX - M2_ADJ_MIN) / (1.0 + exp(M2_ADJ_K * (rudy - M2_ADJ_MID)));
@@ -55,8 +57,11 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 			adj = HIGH_ADJ;
 		
 
-		//adj = 0.9;
-		return ((float) x * adj < 2)?  1 : x * adj;
+		// Keep soft-cap behavior, but avoid overly aggressive truncation on
+		// low-capacity edges (e.g. 1.8 -> 1), which can over-constrain routing.
+		const float scaled_cap = (float) x * adj;
+		const int adjusted_cap = (int) (scaled_cap + 0.5f);
+		return (adjusted_cap < 1) ? 1 : adjusted_cap;
 	}
 }
 
