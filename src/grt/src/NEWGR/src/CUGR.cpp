@@ -390,9 +390,12 @@ void CUGR::getGuides(const GRNet* net,
               const GRPoint point = (direction == MetalLayer::H
                                          ? GRPoint(node->getLayerIdx(), c, r)
                                          : GRPoint(node->getLayerIdx(), r, c));
-              if (getSpareResource(point) < wire_patch_threshold) {
+              const double currentSpare = getSpareResource(point);
+              if (currentSpare < wire_patch_threshold) {
                 int bestLayer = -1;
                 double bestSpare = -std::numeric_limits<double>::max();
+                const double minRequiredSpare
+                    = std::max(1.0, currentSpare + 0.75);
                 for (int layerIndex = node->getLayerIdx() - 1;
                      layerIndex <= node->getLayerIdx() + 1;
                      layerIndex += 2) {
@@ -402,7 +405,8 @@ void CUGR::getGuides(const GRNet* net,
                   }
                   const double spareResource
                       = getSpareResource({layerIndex, point.x(), point.y()});
-                  if (spareResource >= 1.0 && spareResource > bestSpare) {
+                  if (spareResource >= minRequiredSpare
+                      && spareResource > bestSpare) {
                     bestSpare = spareResource;
                     bestLayer = layerIndex;
                   }
