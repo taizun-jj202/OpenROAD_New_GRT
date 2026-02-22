@@ -20,7 +20,13 @@ namespace grt {
 
 namespace {
 
-constexpr int kViaPenalty = 4000;
+constexpr int kViaPenalty = 1000;
+
+struct RouteStats
+{
+  int64_t wirelength{0};
+  int via_count{0};
+};
 
 GSegment normalizeSegment(const GSegment& segment)
 {
@@ -139,6 +145,19 @@ int segmentWeight(const GSegment& segment)
   return segment.length() + via_cost;
 }
 
+RouteStats computeRouteStats(const GRoute& route)
+{
+  RouteStats stats;
+  for (const GSegment& segment : route) {
+    if (segment.isVia()) {
+      stats.via_count += std::abs(segment.final_layer - segment.init_layer);
+    } else {
+      stats.wirelength += segment.length();
+    }
+  }
+  return stats;
+}
+
 void dedupeAndDropStubs(GRoute& route)
 {
   GRoute filtered;
@@ -163,6 +182,7 @@ void dedupeAndDropStubs(GRoute& route)
 void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
 {
   dedupeAndDropStubs(route);
+  const RouteStats original_stats = computeRouteStats(route);
   if (route.size() < 3) {
     return;
   }
@@ -408,7 +428,14 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     }
   }
 
-  if (!optimized.empty()) {
+  const RouteStats optimized_stats = computeRouteStats(optimized);
+  const bool improves_wirelength
+      = optimized_stats.wirelength < original_stats.wirelength;
+  const bool same_wire_and_no_more_vias
+      = optimized_stats.wirelength == original_stats.wirelength
+        && optimized_stats.via_count <= original_stats.via_count;
+
+  if (!optimized.empty() && (improves_wirelength || same_wire_and_no_more_vias)) {
     route.swap(optimized);
   }
 }
