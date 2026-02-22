@@ -25,81 +25,6 @@
 
 namespace grt::newgr {
 
-namespace {
-
-bool samePoint(const std::shared_ptr<GRTreeNode>& lhs,
-               const std::shared_ptr<GRTreeNode>& rhs)
-{
-  return lhs->x() == rhs->x() && lhs->y() == rhs->y();
-}
-
-bool collinearOnSameLayer(const std::shared_ptr<GRTreeNode>& parent,
-                          const std::shared_ptr<GRTreeNode>& middle,
-                          const std::shared_ptr<GRTreeNode>& child)
-{
-  if (parent->getLayerIdx() != middle->getLayerIdx()
-      || middle->getLayerIdx() != child->getLayerIdx()) {
-    return false;
-  }
-  return (parent->x() == middle->x() && middle->x() == child->x())
-         || (parent->y() == middle->y() && middle->y() == child->y());
-}
-
-void simplifyRoutingTree(const std::shared_ptr<GRTreeNode>& node)
-{
-  auto simplify_node = [](const std::shared_ptr<GRTreeNode>& current) {
-    bool changed = true;
-    while (changed) {
-      changed = false;
-      auto& children = current->getChildren();
-      for (std::size_t i = 0; i < children.size(); i++) {
-        const auto child = children[i];
-
-        if (child->getLayerIdx() == current->getLayerIdx()
-            && samePoint(current, child)) {
-          const auto promoted = child->getChildren();
-          children.erase(children.begin() + i);
-          children.insert(children.begin() + i, promoted.begin(), promoted.end());
-          changed = true;
-          break;
-        }
-
-        if (child->getChildren().size() == 1) {
-          const auto grand_child = child->getChildren().front();
-          if (samePoint(current, child) && samePoint(child, grand_child)
-              && grand_child->getLayerIdx() == current->getLayerIdx()) {
-            children[i] = grand_child;
-            changed = true;
-            break;
-          }
-          if (collinearOnSameLayer(current, child, grand_child)) {
-            children[i] = grand_child;
-            changed = true;
-            break;
-          }
-        }
-      }
-    }
-  };
-
-  std::vector<std::pair<std::shared_ptr<GRTreeNode>, bool>> stack;
-  stack.emplace_back(node, false);
-  while (!stack.empty()) {
-    auto [current, visited] = stack.back();
-    stack.pop_back();
-    if (!visited) {
-      stack.emplace_back(current, true);
-      for (const auto& child : current->getChildren()) {
-        stack.emplace_back(child, false);
-      }
-      continue;
-    }
-    simplify_node(current);
-  }
-}
-
-}  // namespace
-
 void SteinerTreeNode::preorder(
     const std::shared_ptr<SteinerTreeNode>& node,
     const std::function<void(std::shared_ptr<SteinerTreeNode>)>& visit)
@@ -181,8 +106,9 @@ void PatternRoute::constructSteinerTree()
   } else if (degree < 16 && hp < 72) {
     fluteAccuracy = 5;
   } else if (degree < 28 && hp < 140) {
-    // A small bump for medium nets improves RSMT quality with modest runtime
-    // overhead compared to using the high-accuracy setting broadly.
+    fluteAccuracy = 5;
+  } else if (degree < 40 && hp < 220) {
+    // Increase medium-net RSMT fidelity while keeping large-net runtime low.
     fluteAccuracy = 4;
   }
   stt::Tree flutetree = stt_builder_->flute(xs, ys, fluteAccuracy);
@@ -602,9 +528,7 @@ void PatternRoute::constructDetours(GridGraphView<bool>& congestion_view)
 void PatternRoute::run()
 {
   calculateRoutingCosts(routing_dag_);
-  auto routing_tree = getRoutingTree(routing_dag_);
-  simplifyRoutingTree(routing_tree);
-  net_->setRoutingTree(routing_tree);
+  net_->setRoutingTree(getRoutingTree(routing_dag_));
 }
 
 void PatternRoute::calculateRoutingCosts(
