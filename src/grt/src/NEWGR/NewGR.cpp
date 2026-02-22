@@ -185,7 +185,7 @@ void dedupeAndDropStubs(GRoute& route)
 void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
 {
   dedupeAndDropStubs(route);
-  if (pins.size() < 3 || route.size() < 3) {
+  if (pins.size() < 2 || route.size() < 2) {
     return;
   }
   const RouteStats original_stats = computeRouteStats(route);
@@ -323,7 +323,7 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
                                           std::abs(node.layer - (pin_layer + 1)));
       const int distance = std::abs(node.x - pin_pos.x())
                            + std::abs(node.y - pin_pos.y())
-                           + 100 * layer_distance;
+                           + 32 * layer_distance;
       if (distance < best_distance) {
         best_distance = distance;
         nearest_node = node_id;
