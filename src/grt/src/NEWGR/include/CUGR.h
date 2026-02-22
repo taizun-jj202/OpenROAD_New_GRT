@@ -57,8 +57,8 @@ struct Constants
   int guide_patch_overflow_threshold = 3;
   double pin_patch_threshold = 18.0;
   int pin_patch_padding = 1;
-  double wire_patch_threshold = 1.1;
-  double wire_patch_inflation_rate = 1.03;
+  double wire_patch_threshold = 1.05;
+  double wire_patch_inflation_rate = 1.01;
 
   bool write_heatmap = false;
 };
