@@ -29,20 +29,19 @@ class BoxT;
 
 struct Constants
 {
-  // Balanced profile: preserve wirelength while avoiding excess vias.
-  double weight_wire_length = 0.56;
-  double weight_via_number = 4.3;
-  double weight_short_area = 470.0;
+  double weight_wire_length = 0.5;
+  double weight_via_number = 4.0;
+  double weight_short_area = 500.0;
 
   int min_routing_layer = 1;
 
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.22;
-  int target_detour_count = 16;
+  double max_detour_ratio = 0.25;
+  int target_detour_count = 20;
 
-  double via_multiplier = 2.15;
+  double via_multiplier = 2.0;
 
   double maze_logistic_slope = 0.5;
 
@@ -68,17 +67,11 @@ class CUGR
   void updateDbCongestion();
 
  private:
-  enum class NetSortStage
-  {
-    kInitialPattern,
-    kOverflowRepair
-  };
-
   void updateOverflowNets(std::vector<int>& netIndices);
   void patternRoute(std::vector<int>& netIndices);
   void patternRouteWithDetours(std::vector<int>& netIndices);
   void mazeRoute(std::vector<int>& netIndices);
-  void sortNetIndices(std::vector<int>& netIndices, NetSortStage stage) const;
+  void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
   void printStatistics() const;

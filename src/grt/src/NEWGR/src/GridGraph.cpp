@@ -415,38 +415,11 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       }
     }
   }
-  // Extend fixed layers with moderate slack to reduce local pin detours.
+  // Extend the fixed layers to 2 layers higher to facilitate track switching
   for (auto& accessPoint : selected_access_points) {
     IntervalT& fixedLayers = accessPoint.layers;
-    const int x = accessPoint.point.x();
-    const int y = accessPoint.point.y();
-    const int probeLayer
-        = std::min(std::max(fixedLayers.high(), constants_.min_routing_layer),
-                   static_cast<int>(getNumLayers()) - 1);
-
-    int extension = 2;
-    if (fixedLayers.high() < constants_.min_routing_layer) {
-      // Keep min-layer pins reachable and allow one additional routing layer.
-      extension = constants_.min_routing_layer - fixedLayers.high() + 2;
-    } else {
-      int accessibility = 0;
-      const int direction = getLayerDirection(probeLayer);
-      if (x >= 0 && x < getSize(0) && y >= 0 && y < getSize(1)) {
-        accessibility += getEdge(probeLayer, x, y).capacity >= 1;
-        if (accessPoint.point[direction] > 0) {
-          PointT lower = accessPoint.point;
-          lower[direction] -= 1;
-          accessibility
-              += getEdge(probeLayer, lower.x(), lower.y()).capacity >= 1;
-        }
-      }
-      if (accessibility == 0) {
-        extension = 3;
-      }
-    }
-
-    fixedLayers.SetHigh(std::min(
-        fixedLayers.high() + extension, static_cast<int>(getNumLayers()) - 1));
+    fixedLayers.SetHigh(
+        std::min(fixedLayers.high() + 2, (int) getNumLayers() - 1));
   }
   return selected_access_points;
 }
