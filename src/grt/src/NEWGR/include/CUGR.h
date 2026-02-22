@@ -30,7 +30,7 @@ class BoxT;
 struct Constants
 {
   double weight_wire_length = 0.5;
-  double weight_via_number = 6.6;
+  double weight_via_number = 6.3;
   double weight_short_area = 500.0;
 
   int min_routing_layer = 1;
@@ -54,11 +54,11 @@ struct Constants
 
   // Apply guide patching conservatively for low-overflow nets to avoid extra
   // detailed-route detours and vias.
-  int guide_patch_overflow_threshold = 3;
+  int guide_patch_overflow_threshold = 2;
   double pin_patch_threshold = 18.0;
   int pin_patch_padding = 1;
-  double wire_patch_threshold = 1.05;
-  double wire_patch_inflation_rate = 1.01;
+  double wire_patch_threshold = 1.2;
+  double wire_patch_inflation_rate = 1.03;
 
   bool write_heatmap = false;
 };
