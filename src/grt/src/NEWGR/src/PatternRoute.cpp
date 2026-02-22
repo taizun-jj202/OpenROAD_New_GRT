@@ -649,6 +649,22 @@ void PatternRoute::calculateRoutingCosts(
     layerUsagePenalty *= 0.78;
   }
   layerUsagePenalty *= (1.0 + 0.55 * (branchingViaBias - 1.0));
+  CostT branchLayerMismatchPenalty = 0.0;
+  if (branchCount >= 3) {
+    // Mildly encourage sibling branches to stay close in layer assignment,
+    // reducing avoidable via stacks at Steiner branching points.
+    branchLayerMismatchPenalty = 0.03 * grid_graph_->getUnitViaCost();
+    if (pins <= 4 && hp <= 40) {
+      branchLayerMismatchPenalty *= 1.10;
+    } else if (pins <= 12 && hp <= 120) {
+      branchLayerMismatchPenalty *= 1.05;
+    } else if (pins > 48 || hp > 480) {
+      branchLayerMismatchPenalty *= 0.45;
+    } else if (pins > 24 || hp > 240) {
+      branchLayerMismatchPenalty *= 0.65;
+    }
+    branchLayerMismatchPenalty *= (1.0 + 0.35 * (branchingViaBias - 1.0));
+  }
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
        lowLayerIndex++) {
     std::vector<CostT> minChildCosts;
@@ -674,8 +690,13 @@ void PatternRoute::calculateRoutingCosts(
       if (layerIndex >= fixedLayers.high()) {
         CostT cost = viaCosts[layerIndex] - viaCosts[lowLayerIndex];
         cost += layerUsagePenalty * (layerIndex - lowLayerIndex);
-        for (CostT childCost : minChildCosts) {
-          cost += childCost;
+        for (size_t child_index = 0; child_index < minChildCosts.size();
+             child_index++) {
+          cost += minChildCosts[child_index];
+          const int childLayer = bestPaths[child_index].second;
+          if (childLayer >= 0 && branchLayerMismatchPenalty > 0.0) {
+            cost += branchLayerMismatchPenalty * abs(childLayer - layerIndex);
+          }
         }
         if (cost < node->getCosts()[layerIndex]) {
           node->getCosts()[layerIndex] = cost;
