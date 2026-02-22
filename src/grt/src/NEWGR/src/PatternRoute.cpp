@@ -586,12 +586,18 @@ void PatternRoute::calculateRoutingCosts(
   const int hp = net_->getBoundingBox().hp();
   const int pins = net_->getNumPins();
   double viaScale = 1.08;
+  // Penalize parent/child layer mismatch to avoid unnecessary layer switches
+  // at Steiner branching points.
+  double childLayerTransitionScale = 0.10;
   if (pins <= 4 && hp <= 40) {
     viaScale = 1.50;
+    childLayerTransitionScale = 0.34;
   } else if (pins <= 12 && hp <= 120) {
     viaScale = 1.34;
+    childLayerTransitionScale = 0.26;
   } else if (pins <= 24 && hp <= 240) {
     viaScale = 1.20;
+    childLayerTransitionScale = 0.17;
   }
   for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
        layerIndex++) {
@@ -609,33 +615,49 @@ void PatternRoute::calculateRoutingCosts(
         * grid_graph_->getUnitViaCost();
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
        lowLayerIndex++) {
-    std::vector<CostT> minChildCosts;
-    std::vector<std::pair<int, int>> bestPaths;
-    if (!node->getPaths().empty()) {
-      minChildCosts.assign(node->getPaths().size(),
-                           std::numeric_limits<CostT>::max());
-      bestPaths.assign(node->getPaths().size(), {-1, -1});
-    }
     for (int layerIndex = lowLayerIndex;
          layerIndex < grid_graph_->getNumLayers();
          layerIndex++) {
+      std::vector<CostT> minChildCosts;
+      std::vector<std::pair<int, int>> bestPaths;
+      if (!node->getPaths().empty()) {
+        minChildCosts.assign(node->getPaths().size(),
+                             std::numeric_limits<CostT>::max());
+        bestPaths.assign(node->getPaths().size(), {-1, -1});
+      }
       for (int child_index = 0; child_index < node->getPaths().size();
            child_index++) {
-        const CostT candidateCost = childCosts[child_index][layerIndex].first;
-        if (candidateCost + layerSwitchHysteresis
-            < minChildCosts[child_index]) {
-          minChildCosts[child_index]
-              = candidateCost;
-          bestPaths[child_index] = std::make_pair(
-              childCosts[child_index][layerIndex].second, layerIndex);
+        for (int childLayerIndex = lowLayerIndex;
+             childLayerIndex <= layerIndex;
+             childLayerIndex++) {
+          const CostT childCost = childCosts[child_index][childLayerIndex].first;
+          if (childCosts[child_index][childLayerIndex].second < 0) {
+            continue;
+          }
+          const CostT layerTransitionCost
+              = childLayerTransitionScale
+                * (viaCosts[layerIndex] - viaCosts[childLayerIndex]);
+          const CostT candidateCost = childCost + layerTransitionCost;
+          if (candidateCost + layerSwitchHysteresis
+              < minChildCosts[child_index]) {
+            minChildCosts[child_index] = candidateCost;
+            bestPaths[child_index] = std::make_pair(
+                childCosts[child_index][childLayerIndex].second,
+                childLayerIndex);
+          }
         }
       }
       if (layerIndex >= fixedLayers.high()) {
+        bool hasInvalidChild = false;
         CostT cost = viaCosts[layerIndex] - viaCosts[lowLayerIndex];
         for (CostT childCost : minChildCosts) {
+          if (childCost == std::numeric_limits<CostT>::max()) {
+            hasInvalidChild = true;
+            break;
+          }
           cost += childCost;
         }
-        if (cost < node->getCosts()[layerIndex]) {
+        if (!hasInvalidChild && cost < node->getCosts()[layerIndex]) {
           node->getCosts()[layerIndex] = cost;
           node->getBestPaths()[layerIndex] = bestPaths;
         }
