@@ -649,6 +649,23 @@ void PatternRoute::calculateRoutingCosts(
     layerUsagePenalty *= 0.78;
   }
   layerUsagePenalty *= (1.0 + 0.55 * (branchingViaBias - 1.0));
+  // Penalize splitting sibling branches across too many layers at a branching
+  // point. This lowers stacked-via usage while still allowing detours when
+  // congestion savings are meaningful.
+  CostT layerDispersionPenalty = 0.0;
+  if (branchCount >= 2) {
+    layerDispersionPenalty = 0.44 * grid_graph_->getUnitViaCost();
+    if (branchCount >= 3) {
+      layerDispersionPenalty *= (1.0 + 0.14 * std::min(branchCount - 2, 5));
+    }
+    if (pins <= 12 && hp <= 120) {
+      layerDispersionPenalty *= 1.22;
+    } else if (pins > 48 || hp > 480) {
+      layerDispersionPenalty *= 0.78;
+    } else if (pins > 24 || hp > 240) {
+      layerDispersionPenalty *= 0.88;
+    }
+  }
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
        lowLayerIndex++) {
     std::vector<CostT> minChildCosts;
@@ -676,6 +693,19 @@ void PatternRoute::calculateRoutingCosts(
         cost += layerUsagePenalty * (layerIndex - lowLayerIndex);
         for (CostT childCost : minChildCosts) {
           cost += childCost;
+        }
+        if (layerDispersionPenalty > 0.0 && !bestPaths.empty()) {
+          std::vector<bool> usedLayers(grid_graph_->getNumLayers(), false);
+          int distinctLayerCount = 0;
+          for (const auto& bestPath : bestPaths) {
+            if (bestPath.second >= 0 && !usedLayers[bestPath.second]) {
+              usedLayers[bestPath.second] = true;
+              distinctLayerCount++;
+            }
+          }
+          if (distinctLayerCount > 1) {
+            cost += layerDispersionPenalty * (distinctLayerCount - 1);
+          }
         }
         if (cost < node->getCosts()[layerIndex]) {
           node->getCosts()[layerIndex] = cost;
