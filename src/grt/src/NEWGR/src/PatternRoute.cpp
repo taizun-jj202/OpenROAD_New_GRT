@@ -595,9 +595,9 @@ void PatternRoute::calculateRoutingCosts(
   } else if (pins <= 24 && hp <= 240) {
     viaScale = 1.25;
   } else if (pins > 48 || hp > 480) {
-    viaScale *= 0.78;
+    viaScale *= 0.82;
   } else if (pins > 24 || hp > 240) {
-    viaScale *= 0.88;
+    viaScale *= 0.92;
   }
   for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
        layerIndex++) {
@@ -644,9 +644,9 @@ void PatternRoute::calculateRoutingCosts(
     layerUsagePenalty *= 1.18;
   } else if (pins > 48 || hp > 480) {
     // Let very large nets climb layers more freely to avoid long detours.
-    layerUsagePenalty *= 0.46;
+    layerUsagePenalty *= 0.52;
   } else if (pins > 24 || hp > 240) {
-    layerUsagePenalty *= 0.72;
+    layerUsagePenalty *= 0.78;
   }
   layerUsagePenalty *= (1.0 + 0.55 * (branchingViaBias - 1.0));
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
