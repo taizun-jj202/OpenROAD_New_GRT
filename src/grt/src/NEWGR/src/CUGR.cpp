@@ -340,6 +340,12 @@ void CUGR::getGuides(const GRNet* net,
     return resource;
   };
 
+  // If a net has no local overflow, keep guides compact and avoid extra patch
+  // boxes that can cause unnecessary detours/vias in detailed routing.
+  if (grid_graph_->checkOverflow(routingTree) == 0) {
+    return;
+  }
+
   // 1. Pin access patches
   assert(constants_.min_routing_layer + 1 < grid_graph_->getNumLayers());
   for (auto& gpts : net->getPinAccessPoints()) {
