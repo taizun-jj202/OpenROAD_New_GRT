@@ -376,10 +376,6 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   // Large nets are wirelength-dominant, while small nets are usually via-heavy.
   // Use a hybrid tie-breaker to balance both metrics.
   const bool prioritize_center_distance = boundingBox.hp() >= 24;
-  // For tiny nets, distance to net center dominates quality and often trims
-  // both guide wirelength and post-route vias.
-  const bool tiny_net_distance_first
-      = net->getNumPins() <= 3 || boundingBox.hp() <= 14;
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
     int bestAccessibility = -1;
     double bestLocalSpare = -std::numeric_limits<double>::max();
@@ -433,22 +429,13 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
           = prioritize_center_distance ? distance : layerDistance;
       const int secondaryDist
           = prioritize_center_distance ? layerDistance : distance;
-      const bool betterByDistance
-          = primaryDist < bestPrimaryDist
-            || (primaryDist == bestPrimaryDist
-                && (secondaryDist < bestSecondaryDist
-                    || (secondaryDist == bestSecondaryDist
-                        && localSpare > bestLocalSpare)));
-      const bool betterBySpare
-          = localSpare > bestLocalSpare
-            || (localSpare == bestLocalSpare
-                && (primaryDist < bestPrimaryDist
-                    || (primaryDist == bestPrimaryDist
-                        && secondaryDist < bestSecondaryDist)));
       if (accessibility > bestAccessibility
           || (accessibility == bestAccessibility
-              && ((tiny_net_distance_first && betterByDistance)
-                  || (!tiny_net_distance_first && betterBySpare)))) {
+              && (localSpare > bestLocalSpare
+                  || (localSpare == bestLocalSpare
+                      && (primaryDist < bestPrimaryDist
+                          || (primaryDist == bestPrimaryDist
+                              && secondaryDist < bestSecondaryDist)))))) {
         bestIndex = index;
         bestAccessibility = accessibility;
         bestLocalSpare = localSpare;
