@@ -106,9 +106,8 @@ void PatternRoute::constructSteinerTree()
   } else if (degree < 16 && hp < 72) {
     fluteAccuracy = 5;
   } else if (degree < 28 && hp < 140) {
-    fluteAccuracy = 5;
-  } else if (degree < 40 && hp < 220) {
-    // Increase medium-net RSMT fidelity while keeping large-net runtime low.
+    // A small bump for medium nets improves RSMT quality with modest runtime
+    // overhead compared to using the high-accuracy setting broadly.
     fluteAccuracy = 4;
   }
   stt::Tree flutetree = stt_builder_->flute(xs, ys, fluteAccuracy);
