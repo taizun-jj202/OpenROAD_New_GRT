@@ -5,7 +5,6 @@
 #include <deque>
 #include <limits>
 #include <memory>
-#include <queue>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -21,19 +20,7 @@ namespace grt {
 
 namespace {
 
-constexpr int kDefaultViaPenalty = 700;
-constexpr int kLargeNetViaPenalty = 450;
-constexpr int kLargeNetPinCount = 10;
-constexpr int64_t kLargeNetWirelengthThreshold = 15000;
-constexpr int kAggressivePruneSegmentThresholdSmallNet = 7;
-constexpr int kAggressivePruneSegmentThresholdLargeNet = 9;
-constexpr int kMinViaGainForAggressivePruneSmallNet = 0;
-constexpr int kMinViaGainForAggressivePruneLargeNet = 0;
-constexpr int64_t kMinWireGainForAggressivePruneSmallNet = 24;
-constexpr int64_t kMinWireGainForAggressivePruneLargeNet = 64;
-constexpr int kNearestNodeLayerWeight = 64;
-constexpr int kPinAnchorIncidentWeightDivisor = 16;
-constexpr int kNearestNodeIncidentWeightDivisor = 32;
+constexpr int kViaPenalty = 1000;
 
 struct RouteStats
 {
@@ -151,10 +138,10 @@ uint64_t xyKey(int x, int y)
          | static_cast<uint32_t>(y);
 }
 
-int segmentWeight(const GSegment& segment, int via_penalty)
+int segmentWeight(const GSegment& segment)
 {
   const int via_cost = std::abs(segment.final_layer - segment.init_layer)
-                       * via_penalty;
+                       * kViaPenalty;
   return segment.length() + via_cost;
 }
 
@@ -199,10 +186,6 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     return;
   }
   const RouteStats original_stats = computeRouteStats(route);
-  const bool large_net = pins.size() >= kLargeNetPinCount
-                         || original_stats.wirelength
-                                >= kLargeNetWirelengthThreshold;
-  const int via_penalty = large_net ? kLargeNetViaPenalty : kDefaultViaPenalty;
 
   std::unordered_map<NodeKey, int, NodeKeyHash> node_to_id;
   std::vector<NodeKey> nodes;
@@ -231,7 +214,7 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
       std::swap(src_id, dst_id);
     }
     EdgeKey key{src_id, dst_id};
-    const int weight = segmentWeight(segment, via_penalty);
+    const int weight = segmentWeight(segment);
     auto found = edge_table.find(key);
     if (found == edge_table.end() || weight < found->second.weight) {
       edge_table[key] = EdgeInfo{src_id, dst_id, weight, segment};
@@ -248,47 +231,8 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     static_cast<void>(ignored_key);
     edges.push_back(edge);
   }
-  std::sort(edges.begin(),
-            edges.end(),
-            [](const EdgeInfo& lhs, const EdgeInfo& rhs) {
-              if (lhs.weight != rhs.weight) {
-                return lhs.weight < rhs.weight;
-              }
-              if (lhs.u != rhs.u) {
-                return lhs.u < rhs.u;
-              }
-              if (lhs.v != rhs.v) {
-                return lhs.v < rhs.v;
-              }
-              const GSegment& ls = lhs.segment;
-              const GSegment& rs = rhs.segment;
-              if (ls.init_layer != rs.init_layer) {
-                return ls.init_layer < rs.init_layer;
-              }
-              if (ls.final_layer != rs.final_layer) {
-                return ls.final_layer < rs.final_layer;
-              }
-              if (ls.init_x != rs.init_x) {
-                return ls.init_x < rs.init_x;
-              }
-              if (ls.init_y != rs.init_y) {
-                return ls.init_y < rs.init_y;
-              }
-              if (ls.final_x != rs.final_x) {
-                return ls.final_x < rs.final_x;
-              }
-              return ls.final_y < rs.final_y;
-            });
 
   const int node_count = nodes.size();
-  std::vector<int> node_min_edge_weight(node_count, std::numeric_limits<int>::max());
-  for (const EdgeInfo& edge : edges) {
-    node_min_edge_weight[edge.u]
-        = std::min(node_min_edge_weight[edge.u], edge.weight);
-    node_min_edge_weight[edge.v]
-        = std::min(node_min_edge_weight[edge.v], edge.weight);
-  }
-
   DisjointSet components(node_count);
   for (const EdgeInfo& edge : edges) {
     components.unite(edge.u, edge.v);
@@ -306,35 +250,17 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     const uint64_t key = xyKey(pin_pos.x(), pin_pos.y());
     auto matching_nodes = xy_to_nodes.find(key);
     if (matching_nodes != xy_to_nodes.end() && !matching_nodes->second.empty()) {
+      // Anchor each pin to one best-fit node to avoid preserving
+      // unnecessary vertical stacks at the same (x, y).
       int best_node = -1;
-      int best_primary_score = std::numeric_limits<int>::max();
-      int best_connection_score = std::numeric_limits<int>::max();
-      int best_secondary_score = std::numeric_limits<int>::max();
-      int best_layer = std::numeric_limits<int>::max();
+      int best_score = std::numeric_limits<int>::max();
       const int pin_layer = pin.getConnectionLayer();
       for (int node_id : matching_nodes->second) {
         const NodeKey& node = nodes[node_id];
-        const int primary_distance = std::abs(node.layer - pin_layer);
-        const int secondary_distance = std::abs(node.layer - (pin_layer + 1));
-        const int incident_weight = node_min_edge_weight[node_id];
-        const int connection_score
-            = incident_weight == std::numeric_limits<int>::max()
-                  ? 0
-                  : incident_weight / kPinAnchorIncidentWeightDivisor;
-        if (primary_distance < best_primary_score
-            || (primary_distance == best_primary_score
-                && connection_score < best_connection_score)
-            || (primary_distance == best_primary_score
-                && connection_score == best_connection_score
-                && secondary_distance < best_secondary_score)
-            || (primary_distance == best_primary_score
-                && connection_score == best_connection_score
-                && secondary_distance == best_secondary_score
-                && node.layer < best_layer)) {
-          best_primary_score = primary_distance;
-          best_connection_score = connection_score;
-          best_secondary_score = secondary_distance;
-          best_layer = node.layer;
+        const int layer_distance = std::min(std::abs(node.layer - pin_layer),
+                                            std::abs(node.layer - (pin_layer + 1)));
+        if (layer_distance < best_score) {
+          best_score = layer_distance;
           best_node = node_id;
         }
       }
@@ -349,17 +275,10 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     const int pin_layer = pin.getConnectionLayer();
     for (int node_id = 0; node_id < node_count; ++node_id) {
       const NodeKey& node = nodes[node_id];
-      const int layer_distance = std::min(std::abs(node.layer - pin_layer),
-                                          std::abs(node.layer - (pin_layer + 1)));
-      const int incident_weight = node_min_edge_weight[node_id];
-      const int incident_score
-          = incident_weight == std::numeric_limits<int>::max()
-                ? 0
-                : incident_weight / kNearestNodeIncidentWeightDivisor;
       const int distance = std::abs(node.x - pin_pos.x())
                            + std::abs(node.y - pin_pos.y())
-                           + kNearestNodeLayerWeight * layer_distance
-                           + incident_score;
+                           + 100 * std::min(std::abs(node.layer - pin_layer),
+                                            std::abs(node.layer - (pin_layer + 1)));
       if (distance < best_distance) {
         best_distance = distance;
         nearest_node = node_id;
@@ -392,7 +311,10 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     const auto it = component_required_count.find(root);
     const int required_count = (it == component_required_count.end()) ? 0
                                                                        : it->second;
-    if (required_count == 0) {
+    if (required_count <= 1) {
+      for (int edge_id : comp_edge_ids) {
+        keep_edge[edge_id] = true;
+      }
       continue;
     }
 
@@ -413,166 +335,46 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
       }
     }
 
-    std::vector<bool> comp_required(comp_nodes.size(), false);
-    std::vector<int> required_locals;
-    required_locals.reserve(required_count);
-    for (int local = 0; local < static_cast<int>(comp_nodes.size()); ++local) {
-      const int global = comp_nodes[local];
-      if (required[global]) {
-        comp_required[local] = true;
-        required_locals.push_back(local);
-      }
-    }
-    if (required_locals.size() <= 1) {
-      continue;
-    }
+    std::vector<int> sorted_edges = comp_edge_ids;
+    std::sort(sorted_edges.begin(),
+              sorted_edges.end(),
+              [&](int lhs, int rhs) {
+                return edges[lhs].weight < edges[rhs].weight;
+              });
 
-    struct AdjEdge
-    {
-      int to;
-      int edge_id;
-    };
-    std::vector<std::vector<AdjEdge>> adjacency(comp_nodes.size());
-    for (int edge_id : comp_edge_ids) {
+    DisjointSet mst_sets(comp_nodes.size());
+    std::vector<int> mst_edges;
+    mst_edges.reserve(comp_nodes.size() > 0 ? comp_nodes.size() - 1 : 0);
+
+    for (int edge_id : sorted_edges) {
       const EdgeInfo& edge = edges[edge_id];
       const int u_local = local_id[edge.u];
       const int v_local = local_id[edge.v];
-      adjacency[u_local].push_back(AdjEdge{v_local, edge_id});
-      adjacency[v_local].push_back(AdjEdge{u_local, edge_id});
-    }
-    for (auto& neighbors : adjacency) {
-      std::sort(neighbors.begin(),
-                neighbors.end(),
-                [&](const AdjEdge& lhs, const AdjEdge& rhs) {
-                  if (edges[lhs.edge_id].weight != edges[rhs.edge_id].weight) {
-                    return edges[lhs.edge_id].weight < edges[rhs.edge_id].weight;
-                  }
-                  if (lhs.edge_id != rhs.edge_id) {
-                    return lhs.edge_id < rhs.edge_id;
-                  }
-                  return lhs.to < rhs.to;
-                });
-    }
-
-    std::vector<bool> in_tree(comp_nodes.size(), false);
-    int root_local = required_locals.front();
-    for (int local : required_locals) {
-      if (comp_nodes[local] < comp_nodes[root_local]) {
-        root_local = local;
+      if (mst_sets.unite(u_local, v_local)) {
+        mst_edges.push_back(edge_id);
       }
     }
-    in_tree[root_local] = true;
 
-    std::unordered_set<int> steiner_edge_set;
-    steiner_edge_set.reserve(comp_edge_ids.size());
-
-    auto remainingRequired = [&]() -> int {
-      int remaining = 0;
-      for (int local : required_locals) {
-        if (!in_tree[local]) {
-          remaining++;
-        }
-      }
-      return remaining;
-    };
-
-    bool failed_to_connect = false;
-    while (remainingRequired() > 0) {
-      using HeapItem = std::pair<int64_t, int>;
-      std::priority_queue<HeapItem, std::vector<HeapItem>, std::greater<HeapItem>>
-          min_heap;
-      const int64_t kInf = std::numeric_limits<int64_t>::max() / 4;
-      std::vector<int64_t> distance(comp_nodes.size(), kInf);
-      std::vector<int> parent(comp_nodes.size(), -1);
-      std::vector<int> parent_edge(comp_nodes.size(), -1);
-      for (int local = 0; local < static_cast<int>(comp_nodes.size()); ++local) {
-        if (in_tree[local]) {
-          distance[local] = 0;
-          min_heap.push(HeapItem{0, local});
-        }
-      }
-
-      int target_local = -1;
-      while (!min_heap.empty()) {
-        const auto [dist, local] = min_heap.top();
-        min_heap.pop();
-        if (dist != distance[local]) {
-          continue;
-        }
-        if (comp_required[local] && !in_tree[local]) {
-          target_local = local;
-          break;
-        }
-        for (const AdjEdge& adj : adjacency[local]) {
-          const int neighbor = adj.to;
-          const int edge_id = adj.edge_id;
-          const int64_t candidate = dist + edges[edge_id].weight;
-          const bool better_distance = candidate < distance[neighbor];
-          const bool same_distance_better_parent
-              = candidate == distance[neighbor]
-                && (parent_edge[neighbor] == -1
-                    || edge_id < parent_edge[neighbor]
-                    || (edge_id == parent_edge[neighbor]
-                        && local < parent[neighbor]));
-          if (better_distance || same_distance_better_parent) {
-            distance[neighbor] = candidate;
-            parent[neighbor] = local;
-            parent_edge[neighbor] = edge_id;
-            min_heap.push(HeapItem{candidate, neighbor});
-          }
-        }
-      }
-
-      if (target_local < 0) {
-        failed_to_connect = true;
-        break;
-      }
-
-      int walk = target_local;
-      bool valid_path = true;
-      while (!in_tree[walk]) {
-        const int edge_id = parent_edge[walk];
-        const int previous = parent[walk];
-        if (edge_id < 0 || previous < 0) {
-          valid_path = false;
-          break;
-        }
-        steiner_edge_set.insert(edge_id);
-        in_tree[walk] = true;
-        walk = previous;
-      }
-      if (!valid_path) {
-        failed_to_connect = true;
-        break;
-      }
-      in_tree[walk] = true;
-    }
-
-    if (failed_to_connect || steiner_edge_set.empty()) {
+    if (mst_edges.empty()) {
       for (int edge_id : comp_edge_ids) {
         keep_edge[edge_id] = true;
       }
       continue;
     }
 
-    std::vector<int> steiner_edges(steiner_edge_set.begin(),
-                                   steiner_edge_set.end());
-    std::sort(steiner_edges.begin(), steiner_edges.end());
-
     std::vector<std::vector<int>> incident(comp_nodes.size());
     std::vector<int> degree(comp_nodes.size(), 0);
-    for (int steiner_id = 0; steiner_id < static_cast<int>(steiner_edges.size());
-         ++steiner_id) {
-      const EdgeInfo& edge = edges[steiner_edges[steiner_id]];
+    for (int mst_id = 0; mst_id < static_cast<int>(mst_edges.size()); ++mst_id) {
+      const EdgeInfo& edge = edges[mst_edges[mst_id]];
       const int u_local = local_id[edge.u];
       const int v_local = local_id[edge.v];
-      incident[u_local].push_back(steiner_id);
-      incident[v_local].push_back(steiner_id);
+      incident[u_local].push_back(mst_id);
+      incident[v_local].push_back(mst_id);
       degree[u_local]++;
       degree[v_local]++;
     }
 
-    std::vector<bool> steiner_active(steiner_edges.size(), true);
+    std::vector<bool> mst_active(mst_edges.size(), true);
     std::deque<int> leaves;
     for (int node_local = 0; node_local < static_cast<int>(comp_nodes.size());
          ++node_local) {
@@ -593,12 +395,12 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
         continue;
       }
 
-      for (int steiner_id : incident[node_local]) {
-        if (!steiner_active[steiner_id]) {
+      for (int mst_id : incident[node_local]) {
+        if (!mst_active[mst_id]) {
           continue;
         }
-        steiner_active[steiner_id] = false;
-        const EdgeInfo& edge = edges[steiner_edges[steiner_id]];
+        mst_active[mst_id] = false;
+        const EdgeInfo& edge = edges[mst_edges[mst_id]];
         const int u_local = local_id[edge.u];
         const int v_local = local_id[edge.v];
         const int other_local = (u_local == node_local) ? v_local : u_local;
@@ -613,10 +415,9 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     }
 
     int active_edges = 0;
-    for (int steiner_id = 0; steiner_id < static_cast<int>(steiner_edges.size());
-         ++steiner_id) {
-      if (steiner_active[steiner_id]) {
-        keep_edge[steiner_edges[steiner_id]] = true;
+    for (int mst_id = 0; mst_id < static_cast<int>(mst_edges.size()); ++mst_id) {
+      if (mst_active[mst_id]) {
+        keep_edge[mst_edges[mst_id]] = true;
         active_edges++;
       }
     }
@@ -644,34 +445,11 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   const RouteStats optimized_stats = computeRouteStats(optimized);
   const bool improves_wirelength
       = optimized_stats.wirelength < original_stats.wirelength;
-  const int64_t wirelength_gain
-      = original_stats.wirelength - optimized_stats.wirelength;
-  const int via_gain = original_stats.via_count - optimized_stats.via_count;
-  const int segment_reduction = static_cast<int>(route.size())
-                                - static_cast<int>(optimized.size());
-  const int aggressive_prune_segment_threshold
-      = large_net ? kAggressivePruneSegmentThresholdLargeNet
-                  : kAggressivePruneSegmentThresholdSmallNet;
-  const int min_via_gain_for_aggressive_prune
-      = large_net ? kMinViaGainForAggressivePruneLargeNet
-                  : kMinViaGainForAggressivePruneSmallNet;
-  const int64_t min_wire_gain_for_aggressive_prune
-      = large_net ? kMinWireGainForAggressivePruneLargeNet
-                  : kMinWireGainForAggressivePruneSmallNet;
-  const bool same_wire_and_fewer_vias
+  const bool same_wire_and_no_more_vias
       = optimized_stats.wirelength == original_stats.wirelength
-        && optimized_stats.via_count < original_stats.via_count;
-  const bool aggressively_pruned
-      = segment_reduction >= aggressive_prune_segment_threshold;
-  const bool meaningful_gain_for_pruned_route
-      = via_gain >= min_via_gain_for_aggressive_prune
-        || wirelength_gain >= min_wire_gain_for_aggressive_prune;
-  const bool prune_guard_ok
-      = !aggressively_pruned || meaningful_gain_for_pruned_route;
+        && optimized_stats.via_count <= original_stats.via_count;
 
-  if (!optimized.empty()
-      && prune_guard_ok
-      && (improves_wirelength || same_wire_and_fewer_vias)) {
+  if (!optimized.empty() && (improves_wirelength || same_wire_and_no_more_vias)) {
     route.swap(optimized);
   }
 }
