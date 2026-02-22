@@ -22,10 +22,6 @@ namespace grt {
 namespace {
 
 constexpr int kViaPenalty = 1150;
-// Require meaningful wirelength gain when a candidate introduces extra vias.
-constexpr int kWirelengthPerExtraViaBudget = 72;
-// Allow only a small wirelength increase when it buys via reduction.
-constexpr int kWirelengthPerSavedViaBudget = 12;
 
 struct RouteStats
 {
@@ -626,32 +622,18 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   }
 
   const RouteStats optimized_stats = computeRouteStats(optimized);
-  const bool improves_wirelength
-      = optimized_stats.wirelength < original_stats.wirelength;
-  const int64_t wirelength_gain
-      = original_stats.wirelength - optimized_stats.wirelength;
-  const int64_t wirelength_delta
-      = optimized_stats.wirelength - original_stats.wirelength;
-  const int via_delta = optimized_stats.via_count - original_stats.via_count;
-  const int via_improvement = original_stats.via_count - optimized_stats.via_count;
-  const bool improves_wire_with_via_budget
-      = improves_wirelength
-        && (via_delta <= 0
-            || wirelength_gain
-                   >= static_cast<int64_t>(via_delta)
-                          * kWirelengthPerExtraViaBudget);
-  const bool improves_via_with_wire_budget
-      = via_improvement > 0
-        && (wirelength_delta <= 0
-            || wirelength_delta
-                   <= static_cast<int64_t>(via_improvement)
-                          * kWirelengthPerSavedViaBudget);
+  const bool improves_wire_without_more_vias
+      = optimized_stats.wirelength < original_stats.wirelength
+        && optimized_stats.via_count <= original_stats.via_count;
+  const bool improves_via_without_more_wire
+      = optimized_stats.via_count < original_stats.via_count
+        && optimized_stats.wirelength <= original_stats.wirelength;
   const bool same_wire_and_no_more_vias
       = optimized_stats.wirelength == original_stats.wirelength
         && optimized_stats.via_count <= original_stats.via_count;
 
   if (!optimized.empty()
-      && (improves_wire_with_via_budget || improves_via_with_wire_budget
+      && (improves_wire_without_more_vias || improves_via_without_more_wire
           || same_wire_and_no_more_vias)) {
     route.swap(optimized);
   }
