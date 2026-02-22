@@ -61,6 +61,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   NetRouteMap routes
       = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
   if (!routes.empty()) {
+    grouter_->connectPadPins(routes);
+    for (auto& net_route : routes) {
+      std::vector<Pin>& pins = grouter_->db_net_map_[net_route.first]->getPins();
+      GRoute& route = net_route.second;
+      grouter_->mergeSegments(pins, route);
+    }
     cleanupRouteSegments(routes);
     active_backend_ = Backend::FastRoute;
     last_total_overflow_ = grouter_->fastroute_->totalOverflow();
