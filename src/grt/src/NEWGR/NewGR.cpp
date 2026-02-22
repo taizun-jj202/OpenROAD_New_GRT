@@ -1,6 +1,7 @@
 #include "NEWGR/NewGR.h"
 
 #include <memory>
+#include <unordered_set>
 #include <vector>
 
 #include "FastRoute.h"
@@ -10,6 +11,34 @@
 #include "utl/Logger.h"
 
 namespace grt {
+
+namespace {
+
+void cleanupRouteSegments(NetRouteMap& routes)
+{
+  for (auto& [ignored_db_net, route] : routes) {
+    static_cast<void>(ignored_db_net);
+    GRoute filtered;
+    filtered.reserve(route.size());
+    std::unordered_set<GSegment, GSegmentHash> seen;
+    seen.reserve(route.size());
+    for (const GSegment& segment : route) {
+      const bool is_zero_length_stub
+          = segment.init_x == segment.final_x
+            && segment.init_y == segment.final_y
+            && segment.init_layer == segment.final_layer;
+      if (is_zero_length_stub) {
+        continue;
+      }
+      if (seen.insert(segment).second) {
+        filtered.push_back(segment);
+      }
+    }
+    route.swap(filtered);
+  }
+}
+
+}  // namespace
 
 NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
     : grouter_(grouter), cugr_(cugr), logger_(logger)
@@ -32,6 +61,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   NetRouteMap routes
       = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
   if (!routes.empty()) {
+    cleanupRouteSegments(routes);
     active_backend_ = Backend::FastRoute;
     last_total_overflow_ = grouter_->fastroute_->totalOverflow();
     return routes;
@@ -56,6 +86,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     GRoute& route = net_route.second;
     grouter_->mergeSegments(pins, route);
   }
+  cleanupRouteSegments(routes);
   active_backend_ = Backend::NewgrEngine;
   last_total_overflow_ = engine_->getTotalOverflow();
 
