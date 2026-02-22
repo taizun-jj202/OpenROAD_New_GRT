@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <functional>
@@ -650,23 +649,6 @@ void PatternRoute::calculateRoutingCosts(
     layerUsagePenalty *= 0.78;
   }
   layerUsagePenalty *= (1.0 + 0.55 * (branchingViaBias - 1.0));
-  // Prefer branch segments to stay close to the current layer at branching
-  // points. This discourages unnecessary stacked vias without hard-constraining
-  // siblings to one layer.
-  CostT parentAlignmentPenalty = 0.0;
-  if (branchCount >= 2) {
-    parentAlignmentPenalty = 0.09 * grid_graph_->getUnitViaCost();
-    if (branchCount >= 3) {
-      parentAlignmentPenalty *= (1.0 + 0.08 * std::min(branchCount - 2, 5));
-    }
-    if (pins <= 12 && hp <= 120) {
-      parentAlignmentPenalty *= 1.12;
-    } else if (pins > 48 || hp > 480) {
-      parentAlignmentPenalty *= 0.84;
-    } else if (pins > 24 || hp > 240) {
-      parentAlignmentPenalty *= 0.92;
-    }
-  }
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
        lowLayerIndex++) {
     std::vector<CostT> minChildCosts;
@@ -694,14 +676,6 @@ void PatternRoute::calculateRoutingCosts(
         cost += layerUsagePenalty * (layerIndex - lowLayerIndex);
         for (CostT childCost : minChildCosts) {
           cost += childCost;
-        }
-        if (parentAlignmentPenalty > 0.0 && !bestPaths.empty()) {
-          for (const auto& bestPath : bestPaths) {
-            if (bestPath.second >= 0) {
-              cost += parentAlignmentPenalty
-                      * std::abs(bestPath.second - layerIndex);
-            }
-          }
         }
         if (cost < node->getCosts()[layerIndex]) {
           node->getCosts()[layerIndex] = cost;
