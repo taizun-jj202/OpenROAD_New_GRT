@@ -693,7 +693,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		// call FLUTE to generate RSMT and break the nets into segments (2-pin nets)
 
 		VIA=2;
-		viacost = 1;
+		viacost = 0;
 		gen_brk_RSMT(FALSE, FALSE, FALSE, FALSE, noADJ);
 		printf("first L\n");
 		routeLAll(TRUE);
@@ -723,7 +723,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		if (maxOverflow > 700) {
 			costheight = 8;
 			LOGIS_COF = 1.33;
-			VIA = 2;
+			VIA = 1;
 			THRESH_M = 0;
 			CSTEP1 = 30;
 			slope = BIG_INT;
@@ -1235,13 +1235,13 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
             last_cong = past_cong;
  
 			past_cong = getOverflow2Dmaze(&maxOverflow , & tUsage); 
-			// Keep via penalty modest while converging; overly strong penalties
-			// near zero-overflow can increase detours and hurt final DR via count.
+			// Keep via penalty moderate while converging so overflow cleanup does
+			// not over-constrain route shapes in late maze iterations.
 			if (past_cong < 6000) {
-				VIA = max(VIA, 3);
+				VIA = max(VIA, 2);
 			}
 			if (past_cong < 1200) {
-				VIA = max(VIA, 4);
+				VIA = max(VIA, 3);
 			}
 			viacost = VIA;
 			//if(i == 1)
@@ -1359,9 +1359,9 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		printf("Final 2D results: \n");
 		getOverflow2Dmaze( &maxOverflow , & tUsage);
 
-		// Keep a strong via bias for layer assignment once 2D overflow is gone.
+		// Keep a moderate via bias for layer assignment once 2D overflow is gone.
 		if (past_cong == 0) {
-			VIA = max(VIA, 4);
+			VIA = max(VIA, 3);
 		}
 		viacost = max(viacost, VIA);
 		printf("\nLayer Assignment Begins");
