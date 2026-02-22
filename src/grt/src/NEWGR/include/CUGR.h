@@ -46,7 +46,7 @@ struct Constants
   // layer during layer assignment.
   double layer_assignment_hysteresis_ratio = 0.26;
   // Discourage unnecessary use of higher layers even when congestion is low.
-  double layer_usage_penalty_ratio = 0.035;
+  double layer_usage_penalty_ratio = 0.04;
 
   double maze_logistic_slope = 0.5;
   int maze_overflow_threshold = 7;

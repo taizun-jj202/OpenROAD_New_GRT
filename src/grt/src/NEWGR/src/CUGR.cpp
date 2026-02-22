@@ -334,7 +334,7 @@ void CUGR::getGuides(const GRNet* net,
       lower[direction] -= 1;
       resource = std::min(
           resource,
-          grid_graph_->getEdge(lower.getLayerIdx(), point.x(), point.y())
+          grid_graph_->getEdge(lower.getLayerIdx(), lower.x(), lower.y())
               .getResource());
     }
     return resource;
