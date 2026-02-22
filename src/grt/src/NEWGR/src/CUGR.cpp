@@ -269,11 +269,12 @@ void CUGR::sortNetIndices(std::vector<int>& netIndices,
       return overflowCounts[lhs] > overflowCounts[rhs];
     }
     if (halfParameters[lhs] != halfParameters[rhs]) {
-      // Route long/high-impact nets first to protect wirelength.
-      return halfParameters[lhs] > halfParameters[rhs];
+      // Route compact nets first to reduce forced layer switching around pins.
+      return halfParameters[lhs] < halfParameters[rhs];
     }
     if (pinCounts[lhs] != pinCounts[rhs]) {
-      return pinCounts[lhs] > pinCounts[rhs];
+      // Favor simpler nets earlier to stabilize local resources.
+      return pinCounts[lhs] < pinCounts[rhs];
     }
     return lhs < rhs;
   });

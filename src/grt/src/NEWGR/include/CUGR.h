@@ -29,20 +29,20 @@ class BoxT;
 
 struct Constants
 {
-  // Wirelength-first cost profile used by NEWGR.
-  double weight_wire_length = 0.62;
-  double weight_via_number = 3.4;
-  double weight_short_area = 420.0;
+  // Balanced profile: preserve wirelength while avoiding excess vias.
+  double weight_wire_length = 0.56;
+  double weight_via_number = 4.3;
+  double weight_short_area = 470.0;
 
   int min_routing_layer = 1;
 
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.18;
-  int target_detour_count = 12;
+  double max_detour_ratio = 0.22;
+  int target_detour_count = 16;
 
-  double via_multiplier = 1.7;
+  double via_multiplier = 2.15;
 
   double maze_logistic_slope = 0.5;
 
