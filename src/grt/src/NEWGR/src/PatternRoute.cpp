@@ -595,9 +595,9 @@ void PatternRoute::calculateRoutingCosts(
   } else if (pins <= 24 && hp <= 240) {
     viaScale = 1.25;
   } else if (pins > 48 || hp > 480) {
-    viaScale *= 0.90;
+    viaScale *= 0.82;
   } else if (pins > 24 || hp > 240) {
-    viaScale *= 0.97;
+    viaScale *= 0.92;
   }
   for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
        layerIndex++) {
@@ -618,9 +618,9 @@ void PatternRoute::calculateRoutingCosts(
     branchingViaBias += 0.08 * std::min(branchCount - 2, 6);
   }
   if (pins > 48 || hp > 480) {
-    branchingViaBias *= 0.94;
+    branchingViaBias *= 0.88;
   } else if (pins > 24 || hp > 240) {
-    branchingViaBias *= 0.97;
+    branchingViaBias *= 0.94;
   }
 
   CostT layerSwitchHysteresis
@@ -629,9 +629,9 @@ void PatternRoute::calculateRoutingCosts(
   if (pins <= 4 && hp <= 40) {
     layerSwitchHysteresis *= 1.18;
   } else if (pins > 48 || hp > 480) {
-    layerSwitchHysteresis *= 0.80;
+    layerSwitchHysteresis *= 0.72;
   } else if (pins > 24 || hp > 240) {
-    layerSwitchHysteresis *= 0.90;
+    layerSwitchHysteresis *= 0.84;
   }
   layerSwitchHysteresis *= branchingViaBias;
   CostT layerUsagePenalty
@@ -644,9 +644,9 @@ void PatternRoute::calculateRoutingCosts(
     layerUsagePenalty *= 1.18;
   } else if (pins > 48 || hp > 480) {
     // Let very large nets climb layers more freely to avoid long detours.
-    layerUsagePenalty *= 0.60;
+    layerUsagePenalty *= 0.52;
   } else if (pins > 24 || hp > 240) {
-    layerUsagePenalty *= 0.84;
+    layerUsagePenalty *= 0.78;
   }
   layerUsagePenalty *= (1.0 + 0.55 * (branchingViaBias - 1.0));
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();

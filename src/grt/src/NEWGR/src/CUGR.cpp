@@ -427,7 +427,7 @@ void CUGR::getGuides(const GRNet* net,
               const double currentSpare = getSpareResource(point);
               if (currentSpare < wire_patch_threshold) {
                 int bestLayer = -1;
-                double bestSpare = -std::numeric_limits<double>::max();
+                double bestScore = -std::numeric_limits<double>::max();
                 const double minRequiredSpare
                     = std::max(1.0, currentSpare + 0.75);
                 for (int layerIndex = node->getLayerIdx() - 1;
@@ -439,9 +439,17 @@ void CUGR::getGuides(const GRNet* net,
                   }
                   const double spareResource
                       = getSpareResource({layerIndex, point.x(), point.y()});
+                  // Prefer lower adjacent patch layers to reduce detailed-route
+                  // layer hopping unless an upper layer is clearly less
+                  // congested.
+                  double score = spareResource;
+                  if (layerIndex > node->getLayerIdx()) {
+                    score -= 0.5;
+                  }
                   if (spareResource >= minRequiredSpare
-                      && spareResource > bestSpare) {
-                    bestSpare = spareResource;
+                      && (score > bestScore
+                          || (score == bestScore && layerIndex < bestLayer))) {
+                    bestScore = score;
                     bestLayer = layerIndex;
                   }
                 }
