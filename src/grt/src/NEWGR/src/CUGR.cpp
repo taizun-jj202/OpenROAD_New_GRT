@@ -347,7 +347,7 @@ void CUGR::getGuides(const GRNet* net,
   }
 
   // 1. Pin access patches
-  assert(constants_.min_routing_layer + 1 < grid_graph_->getNumLayers());
+  assert(constants_.min_routing_layer < grid_graph_->getNumLayers());
   for (auto& gpts : net->getPinAccessPoints()) {
     for (auto& gpt : gpts) {
       if (gpt.getLayerIdx() < constants_.min_routing_layer) {
@@ -357,7 +357,7 @@ void CUGR::getGuides(const GRNet* net,
           padding = constants_.pin_patch_padding;
         }
         for (int layerIdx = gpt.getLayerIdx();
-             layerIdx <= constants_.min_routing_layer + 1;
+             layerIdx <= constants_.min_routing_layer;
              layerIdx++) {
           guides.emplace_back(
               layerIdx,
@@ -391,6 +391,8 @@ void CUGR::getGuides(const GRNet* net,
                                          ? GRPoint(node->getLayerIdx(), c, r)
                                          : GRPoint(node->getLayerIdx(), r, c));
               if (getSpareResource(point) < wire_patch_threshold) {
+                int bestLayer = -1;
+                double bestSpare = -std::numeric_limits<double>::max();
                 for (int layerIndex = node->getLayerIdx() - 1;
                      layerIndex <= node->getLayerIdx() + 1;
                      layerIndex += 2) {
@@ -398,12 +400,17 @@ void CUGR::getGuides(const GRNet* net,
                       || layerIndex >= grid_graph_->getNumLayers()) {
                     continue;
                   }
-                  if (getSpareResource({layerIndex, point.x(), point.y()})
-                      >= 1.0) {
-                    guides.emplace_back(layerIndex, BoxT(point.x(), point.y()));
-                    area_of_wire_patches_ += 1;
-                    patched = true;
+                  const double spareResource
+                      = getSpareResource({layerIndex, point.x(), point.y()});
+                  if (spareResource >= 1.0 && spareResource > bestSpare) {
+                    bestSpare = spareResource;
+                    bestLayer = layerIndex;
                   }
+                }
+                if (bestLayer != -1) {
+                  guides.emplace_back(bestLayer, BoxT(point.x(), point.y()));
+                  area_of_wire_patches_ += 1;
+                  patched = true;
                 }
               }
               if (patched) {
