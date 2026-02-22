@@ -279,38 +279,56 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   }
 
   std::vector<bool> required(node_count, false);
+  std::unordered_map<uint64_t, std::vector<int>> pin_layers_by_xy;
+  pin_layers_by_xy.reserve(pins.size());
+  for (const Pin& pin : pins) {
+    const odb::Point& pin_pos = pin.getOnGridPosition();
+    pin_layers_by_xy[xyKey(pin_pos.x(), pin_pos.y())].push_back(
+        pin.getConnectionLayer());
+  }
+
+  // Collapse anchors for pins that share the same (x, y) to avoid keeping
+  // parallel via stacks that do not improve connectivity.
+  for (const auto& [key, pin_layers] : pin_layers_by_xy) {
+    auto matching_nodes = xy_to_nodes.find(key);
+    if (matching_nodes == xy_to_nodes.end() || matching_nodes->second.empty()) {
+      continue;
+    }
+    int best_node = -1;
+    int64_t best_total_score = std::numeric_limits<int64_t>::max();
+    int64_t best_primary_score = std::numeric_limits<int64_t>::max();
+    int best_layer = std::numeric_limits<int>::max();
+    for (int node_id : matching_nodes->second) {
+      const NodeKey& node = nodes[node_id];
+      int64_t total_score = 0;
+      int64_t primary_score = 0;
+      for (int pin_layer : pin_layers) {
+        total_score += std::min(std::abs(node.layer - pin_layer),
+                                std::abs(node.layer - (pin_layer + 1)));
+        primary_score += std::abs(node.layer - pin_layer);
+      }
+      if (total_score < best_total_score
+          || (total_score == best_total_score
+              && primary_score < best_primary_score)
+          || (total_score == best_total_score
+              && primary_score == best_primary_score
+              && node.layer < best_layer)) {
+        best_total_score = total_score;
+        best_primary_score = primary_score;
+        best_layer = node.layer;
+        best_node = node_id;
+      }
+    }
+    if (best_node >= 0) {
+      required[best_node] = true;
+    }
+  }
+
   for (const Pin& pin : pins) {
     const odb::Point& pin_pos = pin.getOnGridPosition();
     const uint64_t key = xyKey(pin_pos.x(), pin_pos.y());
     auto matching_nodes = xy_to_nodes.find(key);
     if (matching_nodes != xy_to_nodes.end() && !matching_nodes->second.empty()) {
-      // Anchor each pin to one best-fit node to avoid preserving
-      // unnecessary vertical stacks at the same (x, y).
-      int best_node = -1;
-      int best_score = std::numeric_limits<int>::max();
-      int best_primary_score = std::numeric_limits<int>::max();
-      int best_layer = std::numeric_limits<int>::max();
-      const int pin_layer = pin.getConnectionLayer();
-      for (int node_id : matching_nodes->second) {
-        const NodeKey& node = nodes[node_id];
-        const int layer_distance = std::min(std::abs(node.layer - pin_layer),
-                                            std::abs(node.layer - (pin_layer + 1)));
-        const int primary_distance = std::abs(node.layer - pin_layer);
-        if (layer_distance < best_score
-            || (layer_distance == best_score
-                && primary_distance < best_primary_score)
-            || (layer_distance == best_score
-                && primary_distance == best_primary_score
-                && node.layer < best_layer)) {
-          best_score = layer_distance;
-          best_primary_score = primary_distance;
-          best_layer = node.layer;
-          best_node = node_id;
-        }
-      }
-      if (best_node >= 0) {
-        required[best_node] = true;
-      }
       continue;
     }
 
