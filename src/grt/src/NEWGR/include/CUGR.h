@@ -30,7 +30,7 @@ class BoxT;
 struct Constants
 {
   double weight_wire_length = 0.5;
-  double weight_via_number = 4.0;
+  double weight_via_number = 4.8;
   double weight_short_area = 500.0;
 
   int min_routing_layer = 1;
@@ -41,10 +41,10 @@ struct Constants
   double max_detour_ratio = 0.06;
   int target_detour_count = 2;
 
-  double via_multiplier = 2.0;
+  double via_multiplier = 2.2;
 
   double maze_logistic_slope = 0.5;
-  int maze_overflow_threshold = 6;
+  int maze_overflow_threshold = 7;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
