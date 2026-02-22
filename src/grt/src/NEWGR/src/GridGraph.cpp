@@ -431,11 +431,11 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
           = prioritize_center_distance ? layerDistance : distance;
       if (accessibility > bestAccessibility
           || (accessibility == bestAccessibility
-              && (primaryDist < bestPrimaryDist
-                  || (primaryDist == bestPrimaryDist
-                      && (secondaryDist < bestSecondaryDist
-                          || (secondaryDist == bestSecondaryDist
-                              && localSpare > bestLocalSpare)))))) {
+              && (localSpare > bestLocalSpare
+                  || (localSpare == bestLocalSpare
+                      && (primaryDist < bestPrimaryDist
+                          || (primaryDist == bestPrimaryDist
+                              && secondaryDist < bestSecondaryDist)))))) {
         bestIndex = index;
         bestAccessibility = accessibility;
         bestLocalSpare = localSpare;

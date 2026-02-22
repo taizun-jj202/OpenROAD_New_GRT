@@ -101,12 +101,10 @@ void PatternRoute::constructSteinerTree()
   // improving topology quality for smaller/mid-size nets.
   const int hp = net_->getBoundingBox().hp();
   int fluteAccuracy = 3;
-  if (degree < 12 && hp < 48) {
-    fluteAccuracy = 9;
-  } else if (degree < 24 && hp < 120) {
-    fluteAccuracy = 6;
-  } else if (degree < 40 && hp < 220) {
-    fluteAccuracy = 4;
+  if (degree < 8 && hp < 32) {
+    fluteAccuracy = 8;
+  } else if (degree < 16 && hp < 72) {
+    fluteAccuracy = 5;
   }
   stt::Tree flutetree = stt_builder_->flute(xs, ys, fluteAccuracy);
   const int numBranches = degree + degree - 2;
