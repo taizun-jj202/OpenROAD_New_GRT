@@ -29,19 +29,20 @@ class BoxT;
 
 struct Constants
 {
-  double weight_wire_length = 0.5;
-  double weight_via_number = 4.0;
-  double weight_short_area = 500.0;
+  // Wirelength-first cost profile used by NEWGR.
+  double weight_wire_length = 0.62;
+  double weight_via_number = 3.4;
+  double weight_short_area = 420.0;
 
   int min_routing_layer = 1;
 
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.25;
-  int target_detour_count = 20;
+  double max_detour_ratio = 0.18;
+  int target_detour_count = 12;
 
-  double via_multiplier = 2.0;
+  double via_multiplier = 1.7;
 
   double maze_logistic_slope = 0.5;
 
@@ -67,11 +68,17 @@ class CUGR
   void updateDbCongestion();
 
  private:
+  enum class NetSortStage
+  {
+    kInitialPattern,
+    kOverflowRepair
+  };
+
   void updateOverflowNets(std::vector<int>& netIndices);
   void patternRoute(std::vector<int>& netIndices);
   void patternRouteWithDetours(std::vector<int>& netIndices);
   void mazeRoute(std::vector<int>& netIndices);
-  void sortNetIndices(std::vector<int>& netIndices) const;
+  void sortNetIndices(std::vector<int>& netIndices, NetSortStage stage) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
   void printStatistics() const;
