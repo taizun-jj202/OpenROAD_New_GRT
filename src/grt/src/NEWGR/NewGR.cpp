@@ -24,9 +24,13 @@ namespace {
 constexpr int kViaPenalty = 1000;
 constexpr int kLargeNetPinCount = 10;
 constexpr int64_t kLargeNetWirelengthThreshold = 15000;
-constexpr int kWirelengthPerExtraViaBudgetSmallNet = 48;
-constexpr int kWirelengthPerExtraViaBudgetLargeNet = 24;
+constexpr int kWirelengthPerExtraViaBudgetSmallNet = 40;
+constexpr int kWirelengthPerExtraViaBudgetLargeNet = 20;
+constexpr int kMaxExtraViasSmallNet = 1;
+constexpr int kMaxExtraViasLargeNet = 2;
 constexpr int kNearestNodeLayerWeight = 96;
+constexpr int kPinAnchorIncidentWeightDivisor = 8;
+constexpr int kNearestNodeIncidentWeightDivisor = 16;
 
 struct RouteStats
 {
@@ -270,6 +274,14 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
             });
 
   const int node_count = nodes.size();
+  std::vector<int> node_min_edge_weight(node_count, std::numeric_limits<int>::max());
+  for (const EdgeInfo& edge : edges) {
+    node_min_edge_weight[edge.u]
+        = std::min(node_min_edge_weight[edge.u], edge.weight);
+    node_min_edge_weight[edge.v]
+        = std::min(node_min_edge_weight[edge.v], edge.weight);
+  }
+
   DisjointSet components(node_count);
   for (const EdgeInfo& edge : edges) {
     components.unite(edge.u, edge.v);
@@ -289,6 +301,7 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     if (matching_nodes != xy_to_nodes.end() && !matching_nodes->second.empty()) {
       int best_node = -1;
       int best_primary_score = std::numeric_limits<int>::max();
+      int best_connection_score = std::numeric_limits<int>::max();
       int best_secondary_score = std::numeric_limits<int>::max();
       int best_layer = std::numeric_limits<int>::max();
       const int pin_layer = pin.getConnectionLayer();
@@ -296,13 +309,23 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
         const NodeKey& node = nodes[node_id];
         const int primary_distance = std::abs(node.layer - pin_layer);
         const int secondary_distance = std::abs(node.layer - (pin_layer + 1));
+        const int incident_weight = node_min_edge_weight[node_id];
+        const int connection_score
+            = incident_weight == std::numeric_limits<int>::max()
+                  ? 0
+                  : incident_weight / kPinAnchorIncidentWeightDivisor;
         if (primary_distance < best_primary_score
             || (primary_distance == best_primary_score
+                && connection_score < best_connection_score)
+            || (primary_distance == best_primary_score
+                && connection_score == best_connection_score
                 && secondary_distance < best_secondary_score)
             || (primary_distance == best_primary_score
+                && connection_score == best_connection_score
                 && secondary_distance == best_secondary_score
                 && node.layer < best_layer)) {
           best_primary_score = primary_distance;
+          best_connection_score = connection_score;
           best_secondary_score = secondary_distance;
           best_layer = node.layer;
           best_node = node_id;
@@ -321,9 +344,15 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
       const NodeKey& node = nodes[node_id];
       const int layer_distance = std::min(std::abs(node.layer - pin_layer),
                                           std::abs(node.layer - (pin_layer + 1)));
+      const int incident_weight = node_min_edge_weight[node_id];
+      const int incident_score
+          = incident_weight == std::numeric_limits<int>::max()
+                ? 0
+                : incident_weight / kNearestNodeIncidentWeightDivisor;
       const int distance = std::abs(node.x - pin_pos.x())
                            + std::abs(node.y - pin_pos.y())
-                           + kNearestNodeLayerWeight * layer_distance;
+                           + kNearestNodeLayerWeight * layer_distance
+                           + incident_score;
       if (distance < best_distance) {
         best_distance = distance;
         nearest_node = node_id;
@@ -617,11 +646,14 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   const int64_t wirelength_budget_per_via
       = large_net ? kWirelengthPerExtraViaBudgetLargeNet
                   : kWirelengthPerExtraViaBudgetSmallNet;
+  const int max_extra_vias
+      = large_net ? kMaxExtraViasLargeNet : kMaxExtraViasSmallNet;
   const bool improves_wire_without_more_vias
       = improves_wirelength
         && optimized_stats.via_count <= original_stats.via_count;
   const bool improves_wire_with_via_budget
       = improves_wirelength && via_delta > 0
+        && via_delta <= max_extra_vias
         && wirelength_gain
                >= static_cast<int64_t>(via_delta) * wirelength_budget_per_via;
   const bool improves_via_without_more_wire
