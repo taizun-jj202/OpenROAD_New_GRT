@@ -595,9 +595,9 @@ void PatternRoute::calculateRoutingCosts(
   } else if (pins <= 24 && hp <= 240) {
     viaScale = 1.25;
   } else if (pins > 48 || hp > 480) {
-    viaScale *= 0.88;
+    viaScale *= 0.82;
   } else if (pins > 24 || hp > 240) {
-    viaScale *= 0.96;
+    viaScale *= 0.92;
   }
   auto getLayerLocalSpare = [&](const int layerIndex) {
     const int direction = grid_graph_->getLayerDirection(layerIndex);
@@ -636,14 +636,14 @@ void PatternRoute::calculateRoutingCosts(
   } else if (localSpare >= 4.0) {
     viaConservationScale = 1.12;
   } else if (localSpare <= 0.5) {
-    viaConservationScale = 0.88;
+    viaConservationScale = 0.82;
   } else if (localSpare <= 1.5) {
-    viaConservationScale = 0.95;
+    viaConservationScale = 0.92;
   }
   if (pins > 48 || hp > 480) {
-    viaConservationScale = 1.0 + 0.55 * (viaConservationScale - 1.0);
+    viaConservationScale = 1.0 + 0.45 * (viaConservationScale - 1.0);
   } else if (pins > 24 || hp > 240) {
-    viaConservationScale = 1.0 + 0.80 * (viaConservationScale - 1.0);
+    viaConservationScale = 1.0 + 0.70 * (viaConservationScale - 1.0);
   }
   viaScale *= viaConservationScale;
   for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
@@ -676,9 +676,9 @@ void PatternRoute::calculateRoutingCosts(
   if (pins <= 4 && hp <= 40) {
     layerSwitchHysteresis *= 1.18;
   } else if (pins > 48 || hp > 480) {
-    layerSwitchHysteresis *= 0.78;
+    layerSwitchHysteresis *= 0.72;
   } else if (pins > 24 || hp > 240) {
-    layerSwitchHysteresis *= 0.88;
+    layerSwitchHysteresis *= 0.84;
   }
   layerSwitchHysteresis *= branchingViaBias;
   layerSwitchHysteresis *= viaConservationScale;
@@ -692,9 +692,9 @@ void PatternRoute::calculateRoutingCosts(
     layerUsagePenalty *= 1.18;
   } else if (pins > 48 || hp > 480) {
     // Let very large nets climb layers more freely to avoid long detours.
-    layerUsagePenalty *= 0.62;
+    layerUsagePenalty *= 0.52;
   } else if (pins > 24 || hp > 240) {
-    layerUsagePenalty *= 0.84;
+    layerUsagePenalty *= 0.78;
   }
   layerUsagePenalty *= (1.0 + 0.55 * (branchingViaBias - 1.0));
   layerUsagePenalty *= viaConservationScale;
@@ -708,9 +708,9 @@ void PatternRoute::calculateRoutingCosts(
     } else if (pins <= 12 && hp <= 120) {
       branchLayerMismatchPenalty *= 1.05;
     } else if (pins > 48 || hp > 480) {
-      branchLayerMismatchPenalty *= 0.52;
+      branchLayerMismatchPenalty *= 0.45;
     } else if (pins > 24 || hp > 240) {
-      branchLayerMismatchPenalty *= 0.70;
+      branchLayerMismatchPenalty *= 0.65;
     }
     branchLayerMismatchPenalty *= (1.0 + 0.35 * (branchingViaBias - 1.0));
     branchLayerMismatchPenalty *= viaConservationScale;
@@ -723,9 +723,9 @@ void PatternRoute::calculateRoutingCosts(
     } else if (pins <= 12 && hp <= 120) {
       siblingLayerSpanPenalty *= 1.10;
     } else if (pins > 48 || hp > 480) {
-      siblingLayerSpanPenalty *= 0.62;
+      siblingLayerSpanPenalty *= 0.55;
     } else if (pins > 24 || hp > 240) {
-      siblingLayerSpanPenalty *= 0.80;
+      siblingLayerSpanPenalty *= 0.75;
     }
     siblingLayerSpanPenalty *= viaConservationScale;
   }
