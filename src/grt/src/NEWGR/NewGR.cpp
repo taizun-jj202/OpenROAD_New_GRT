@@ -1,58 +1,15 @@
 #include "NEWGR/NewGR.h"
 
-#include <algorithm>
 #include <memory>
-#include <set>
-#include <tuple>
 #include <vector>
 
 #include "FastRoute.h"
-#include "src/NewgrEngine.h"
 #include "Net.h"
 #include "Pin.h"
+#include "src/NewgrEngine.h"
 #include "utl/Logger.h"
 
 namespace grt {
-
-namespace {
-
-using SegmentKey = std::tuple<int, int, int, int, int, int>;
-
-SegmentKey canonicalKey(const GSegment& segment)
-{
-  std::tuple<int, int, int> first{
-      segment.init_x, segment.init_y, segment.init_layer};
-  std::tuple<int, int, int> second{
-      segment.final_x, segment.final_y, segment.final_layer};
-  if (second < first) {
-    std::swap(first, second);
-  }
-  return SegmentKey{std::get<0>(first),
-                    std::get<1>(first),
-                    std::get<2>(first),
-                    std::get<0>(second),
-                    std::get<1>(second),
-                    std::get<2>(second)};
-}
-
-void removeDuplicateSegments(NetRouteMap& routes)
-{
-  for (auto& [ignored_db_net, route] : routes) {
-    static_cast<void>(ignored_db_net);
-    GRoute deduped;
-    deduped.reserve(route.size());
-    std::set<SegmentKey> seen;
-    for (const GSegment& segment : route) {
-      const SegmentKey key = canonicalKey(segment);
-      if (seen.insert(key).second) {
-        deduped.push_back(segment);
-      }
-    }
-    route.swap(deduped);
-  }
-}
-
-}  // namespace
 
 NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
     : grouter_(grouter), cugr_(cugr), logger_(logger)
@@ -71,11 +28,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return {};
   }
 
-  // Quality-oriented pass: leverage FastRoute's lower wirelength/via tendency.
+  // Emit native FastRoute guides first for stability.
   NetRouteMap routes
       = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
   if (!routes.empty()) {
-    removeDuplicateSegments(routes);
     active_backend_ = Backend::FastRoute;
     last_total_overflow_ = grouter_->fastroute_->totalOverflow();
     return routes;
@@ -100,7 +56,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     GRoute& route = net_route.second;
     grouter_->mergeSegments(pins, route);
   }
-  removeDuplicateSegments(routes);
   active_backend_ = Backend::NewgrEngine;
   last_total_overflow_ = engine_->getTotalOverflow();
 
