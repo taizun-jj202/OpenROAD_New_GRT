@@ -24,6 +24,9 @@ namespace {
 constexpr int kViaPenalty = 1000;
 constexpr int kLargeNetPinCount = 10;
 constexpr int64_t kLargeNetWirelengthThreshold = 15000;
+constexpr int kWirelengthPerExtraViaBudgetSmallNet = 48;
+constexpr int kWirelengthPerExtraViaBudgetLargeNet = 24;
+constexpr int kNearestNodeLayerWeight = 96;
 
 struct RouteStats
 {
@@ -237,14 +240,14 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   std::sort(edges.begin(),
             edges.end(),
             [](const EdgeInfo& lhs, const EdgeInfo& rhs) {
+              if (lhs.weight != rhs.weight) {
+                return lhs.weight < rhs.weight;
+              }
               if (lhs.u != rhs.u) {
                 return lhs.u < rhs.u;
               }
               if (lhs.v != rhs.v) {
                 return lhs.v < rhs.v;
-              }
-              if (lhs.weight != rhs.weight) {
-                return lhs.weight < rhs.weight;
               }
               const GSegment& ls = lhs.segment;
               const GSegment& rs = rhs.segment;
@@ -279,56 +282,35 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   }
 
   std::vector<bool> required(node_count, false);
-  std::unordered_map<uint64_t, std::vector<int>> pin_layers_by_xy;
-  pin_layers_by_xy.reserve(pins.size());
-  for (const Pin& pin : pins) {
-    const odb::Point& pin_pos = pin.getOnGridPosition();
-    pin_layers_by_xy[xyKey(pin_pos.x(), pin_pos.y())].push_back(
-        pin.getConnectionLayer());
-  }
-
-  // Collapse anchors for pins that share the same (x, y) to avoid keeping
-  // parallel via stacks that do not improve connectivity.
-  for (const auto& [key, pin_layers] : pin_layers_by_xy) {
-    auto matching_nodes = xy_to_nodes.find(key);
-    if (matching_nodes == xy_to_nodes.end() || matching_nodes->second.empty()) {
-      continue;
-    }
-    int best_node = -1;
-    int64_t best_total_score = std::numeric_limits<int64_t>::max();
-    int64_t best_primary_score = std::numeric_limits<int64_t>::max();
-    int best_layer = std::numeric_limits<int>::max();
-    for (int node_id : matching_nodes->second) {
-      const NodeKey& node = nodes[node_id];
-      int64_t total_score = 0;
-      int64_t primary_score = 0;
-      for (int pin_layer : pin_layers) {
-        total_score += std::min(std::abs(node.layer - pin_layer),
-                                std::abs(node.layer - (pin_layer + 1)));
-        primary_score += std::abs(node.layer - pin_layer);
-      }
-      if (total_score < best_total_score
-          || (total_score == best_total_score
-              && primary_score < best_primary_score)
-          || (total_score == best_total_score
-              && primary_score == best_primary_score
-              && node.layer < best_layer)) {
-        best_total_score = total_score;
-        best_primary_score = primary_score;
-        best_layer = node.layer;
-        best_node = node_id;
-      }
-    }
-    if (best_node >= 0) {
-      required[best_node] = true;
-    }
-  }
-
   for (const Pin& pin : pins) {
     const odb::Point& pin_pos = pin.getOnGridPosition();
     const uint64_t key = xyKey(pin_pos.x(), pin_pos.y());
     auto matching_nodes = xy_to_nodes.find(key);
     if (matching_nodes != xy_to_nodes.end() && !matching_nodes->second.empty()) {
+      int best_node = -1;
+      int best_primary_score = std::numeric_limits<int>::max();
+      int best_secondary_score = std::numeric_limits<int>::max();
+      int best_layer = std::numeric_limits<int>::max();
+      const int pin_layer = pin.getConnectionLayer();
+      for (int node_id : matching_nodes->second) {
+        const NodeKey& node = nodes[node_id];
+        const int primary_distance = std::abs(node.layer - pin_layer);
+        const int secondary_distance = std::abs(node.layer - (pin_layer + 1));
+        if (primary_distance < best_primary_score
+            || (primary_distance == best_primary_score
+                && secondary_distance < best_secondary_score)
+            || (primary_distance == best_primary_score
+                && secondary_distance == best_secondary_score
+                && node.layer < best_layer)) {
+          best_primary_score = primary_distance;
+          best_secondary_score = secondary_distance;
+          best_layer = node.layer;
+          best_node = node_id;
+        }
+      }
+      if (best_node >= 0) {
+        required[best_node] = true;
+      }
       continue;
     }
 
@@ -341,7 +323,7 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
                                           std::abs(node.layer - (pin_layer + 1)));
       const int distance = std::abs(node.x - pin_pos.x())
                            + std::abs(node.y - pin_pos.y())
-                           + 32 * layer_distance;
+                           + kNearestNodeLayerWeight * layer_distance;
       if (distance < best_distance) {
         best_distance = distance;
         nearest_node = node_id;
@@ -632,12 +614,16 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   const int64_t wirelength_gain
       = original_stats.wirelength - optimized_stats.wirelength;
   const int via_delta = optimized_stats.via_count - original_stats.via_count;
+  const int64_t wirelength_budget_per_via
+      = large_net ? kWirelengthPerExtraViaBudgetLargeNet
+                  : kWirelengthPerExtraViaBudgetSmallNet;
   const bool improves_wire_without_more_vias
       = improves_wirelength
         && optimized_stats.via_count <= original_stats.via_count;
-  const bool improves_wire_on_large_net
-      = large_net && improves_wirelength
-        && (via_delta <= 0 || wirelength_gain * 4 >= via_delta);
+  const bool improves_wire_with_via_budget
+      = improves_wirelength && via_delta > 0
+        && wirelength_gain
+               >= static_cast<int64_t>(via_delta) * wirelength_budget_per_via;
   const bool improves_via_without_more_wire
       = optimized_stats.via_count < original_stats.via_count
         && optimized_stats.wirelength <= original_stats.wirelength;
@@ -646,7 +632,7 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
         && optimized_stats.via_count <= original_stats.via_count;
 
   if (!optimized.empty()
-      && (improves_wire_without_more_vias || improves_wire_on_large_net
+      && (improves_wire_without_more_vias || improves_wire_with_via_budget
           || improves_via_without_more_wire
           || same_wire_and_no_more_vias)) {
     route.swap(optimized);
