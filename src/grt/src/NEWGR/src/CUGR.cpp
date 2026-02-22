@@ -98,7 +98,7 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
     int detourThreshold = constants_.detour_overflow_threshold;
     const int hp = net->getBoundingBox().hp();
     const int pins = net->getNumPins();
-    if (pins > 24 || hp > 160) {
+    if (pins > 16 || hp > 120) {
       detourThreshold = std::max(1, detourThreshold - 1);
     }
 
