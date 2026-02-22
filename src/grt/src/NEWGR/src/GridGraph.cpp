@@ -376,14 +376,18 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   // Bias access-point tie-breaking toward lower layers on small nets, while
   // allowing large nets to use upper layers more freely for wirelength.
   const int hp = boundingBox.hp();
+  const int pins = net->getNumPins();
   int layerDistanceBias = 10;
-  if (hp >= 200 || net->getNumPins() > 48) {
+  if (hp >= 200 || pins > 48) {
     layerDistanceBias = 4;
-  } else if (hp >= 96 || net->getNumPins() > 24) {
+  } else if (hp >= 96 || pins > 24) {
     layerDistanceBias = 6;
   } else if (hp >= 32) {
     layerDistanceBias = 8;
   }
+  // On small/mid nets, prioritize compact/lower-layer AP choices before local
+  // spare. For large nets keep spare-first tie breaking to avoid congestion.
+  const bool favorCompactApChoices = !(hp >= 140 || pins > 32);
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
     int bestAccessibility = -1;
     int bestIntervalExpansion = std::numeric_limits<int>::max();
@@ -458,22 +462,49 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       const int primaryDist = distance + layerDistanceBias * layerDistance
                               + layerDistanceBias * intervalExpansion;
       const int secondaryDist = distance;
-      if (accessibility > bestAccessibility
-          || (accessibility == bestAccessibility
-              && (intervalExpansion < bestIntervalExpansion
-                  || (intervalExpansion == bestIntervalExpansion
-                      && (resultingSpan < bestResultingSpan
-                          || (resultingSpan == bestResultingSpan
-                              && (localSpare > bestLocalSpare
-                                  || (localSpare == bestLocalSpare
-                                      && (primaryDist < bestPrimaryDist
-                                          || (primaryDist == bestPrimaryDist
-                                              && (secondaryDist
-                                                      < bestSecondaryDist
-                                                  || (secondaryDist
-                                                          == bestSecondaryDist
-                                                      && point.getLayerIdx()
-                                                             < bestLayerIdx)))))))))))) {
+      bool better = false;
+      if (accessibility > bestAccessibility) {
+        better = true;
+      } else if (accessibility == bestAccessibility) {
+        if (intervalExpansion < bestIntervalExpansion) {
+          better = true;
+        } else if (intervalExpansion == bestIntervalExpansion) {
+          if (resultingSpan < bestResultingSpan) {
+            better = true;
+          } else if (resultingSpan == bestResultingSpan) {
+            if (favorCompactApChoices) {
+              if (primaryDist < bestPrimaryDist) {
+                better = true;
+              } else if (primaryDist == bestPrimaryDist) {
+                if (localSpare > bestLocalSpare) {
+                  better = true;
+                } else if (localSpare == bestLocalSpare) {
+                  if (secondaryDist < bestSecondaryDist
+                      || (secondaryDist == bestSecondaryDist
+                          && point.getLayerIdx() < bestLayerIdx)) {
+                    better = true;
+                  }
+                }
+              }
+            } else {
+              if (localSpare > bestLocalSpare) {
+                better = true;
+              } else if (localSpare == bestLocalSpare) {
+                if (primaryDist < bestPrimaryDist) {
+                  better = true;
+                } else if (primaryDist == bestPrimaryDist) {
+                  if (secondaryDist < bestSecondaryDist
+                      || (secondaryDist == bestSecondaryDist
+                          && point.getLayerIdx() < bestLayerIdx)) {
+                    better = true;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      if (better) {
         bestIndex = index;
         bestAccessibility = accessibility;
         bestIntervalExpansion = intervalExpansion;

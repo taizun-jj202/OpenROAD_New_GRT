@@ -595,7 +595,7 @@ void PatternRoute::calculateRoutingCosts(
   } else if (pins <= 24 && hp <= 240) {
     viaScale = 1.25;
   } else if (pins > 48 || hp > 480) {
-    viaScale *= 0.84;
+    viaScale *= 0.82;
   } else if (pins > 24 || hp > 240) {
     viaScale *= 0.92;
   }
@@ -618,7 +618,7 @@ void PatternRoute::calculateRoutingCosts(
     branchingViaBias += 0.08 * std::min(branchCount - 2, 6);
   }
   if (pins > 48 || hp > 480) {
-    branchingViaBias *= 0.90;
+    branchingViaBias *= 0.88;
   } else if (pins > 24 || hp > 240) {
     branchingViaBias *= 0.94;
   }
@@ -629,7 +629,7 @@ void PatternRoute::calculateRoutingCosts(
   if (pins <= 4 && hp <= 40) {
     layerSwitchHysteresis *= 1.18;
   } else if (pins > 48 || hp > 480) {
-    layerSwitchHysteresis *= 0.75;
+    layerSwitchHysteresis *= 0.72;
   } else if (pins > 24 || hp > 240) {
     layerSwitchHysteresis *= 0.84;
   }
@@ -644,7 +644,7 @@ void PatternRoute::calculateRoutingCosts(
     layerUsagePenalty *= 1.18;
   } else if (pins > 48 || hp > 480) {
     // Let very large nets climb layers more freely to avoid long detours.
-    layerUsagePenalty *= 0.55;
+    layerUsagePenalty *= 0.52;
   } else if (pins > 24 || hp > 240) {
     layerUsagePenalty *= 0.78;
   }
