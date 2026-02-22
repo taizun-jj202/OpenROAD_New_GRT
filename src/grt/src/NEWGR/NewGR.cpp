@@ -5,6 +5,7 @@
 #include <deque>
 #include <limits>
 #include <memory>
+#include <queue>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -184,7 +185,7 @@ void dedupeAndDropStubs(GRoute& route)
 void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
 {
   dedupeAndDropStubs(route);
-  if (pins.size() < 3 || route.size() < 3) {
+  if (pins.size() < 2 || route.size() < 3) {
     return;
   }
   const RouteStats original_stats = computeRouteStats(route);
@@ -355,10 +356,7 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     const auto it = component_required_count.find(root);
     const int required_count = (it == component_required_count.end()) ? 0
                                                                        : it->second;
-    if (required_count <= 1) {
-      for (int edge_id : comp_edge_ids) {
-        keep_edge[edge_id] = true;
-      }
+    if (required_count == 0) {
       continue;
     }
 
@@ -379,54 +377,166 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
       }
     }
 
-    std::vector<int> sorted_edges = comp_edge_ids;
-    std::sort(sorted_edges.begin(),
-              sorted_edges.end(),
-              [&](int lhs, int rhs) {
-                const EdgeInfo& lhs_edge = edges[lhs];
-                const EdgeInfo& rhs_edge = edges[rhs];
-                if (lhs_edge.weight != rhs_edge.weight) {
-                  return lhs_edge.weight < rhs_edge.weight;
-                }
-                if (lhs_edge.u != rhs_edge.u) {
-                  return lhs_edge.u < rhs_edge.u;
-                }
-                return lhs_edge.v < rhs_edge.v;
-              });
+    std::vector<bool> comp_required(comp_nodes.size(), false);
+    std::vector<int> required_locals;
+    required_locals.reserve(required_count);
+    for (int local = 0; local < static_cast<int>(comp_nodes.size()); ++local) {
+      const int global = comp_nodes[local];
+      if (required[global]) {
+        comp_required[local] = true;
+        required_locals.push_back(local);
+      }
+    }
+    if (required_locals.size() <= 1) {
+      continue;
+    }
 
-    DisjointSet mst_sets(comp_nodes.size());
-    std::vector<int> mst_edges;
-    mst_edges.reserve(comp_nodes.size() > 0 ? comp_nodes.size() - 1 : 0);
-
-    for (int edge_id : sorted_edges) {
+    struct AdjEdge
+    {
+      int to;
+      int edge_id;
+    };
+    std::vector<std::vector<AdjEdge>> adjacency(comp_nodes.size());
+    for (int edge_id : comp_edge_ids) {
       const EdgeInfo& edge = edges[edge_id];
       const int u_local = local_id[edge.u];
       const int v_local = local_id[edge.v];
-      if (mst_sets.unite(u_local, v_local)) {
-        mst_edges.push_back(edge_id);
-      }
+      adjacency[u_local].push_back(AdjEdge{v_local, edge_id});
+      adjacency[v_local].push_back(AdjEdge{u_local, edge_id});
+    }
+    for (auto& neighbors : adjacency) {
+      std::sort(neighbors.begin(),
+                neighbors.end(),
+                [&](const AdjEdge& lhs, const AdjEdge& rhs) {
+                  if (edges[lhs.edge_id].weight != edges[rhs.edge_id].weight) {
+                    return edges[lhs.edge_id].weight < edges[rhs.edge_id].weight;
+                  }
+                  if (lhs.edge_id != rhs.edge_id) {
+                    return lhs.edge_id < rhs.edge_id;
+                  }
+                  return lhs.to < rhs.to;
+                });
     }
 
-    if (mst_edges.empty()) {
+    std::vector<bool> in_tree(comp_nodes.size(), false);
+    int root_local = required_locals.front();
+    for (int local : required_locals) {
+      if (comp_nodes[local] < comp_nodes[root_local]) {
+        root_local = local;
+      }
+    }
+    in_tree[root_local] = true;
+
+    std::unordered_set<int> steiner_edge_set;
+    steiner_edge_set.reserve(comp_edge_ids.size());
+
+    auto remainingRequired = [&]() -> int {
+      int remaining = 0;
+      for (int local : required_locals) {
+        if (!in_tree[local]) {
+          remaining++;
+        }
+      }
+      return remaining;
+    };
+
+    bool failed_to_connect = false;
+    while (remainingRequired() > 0) {
+      using HeapItem = std::pair<int64_t, int>;
+      std::priority_queue<HeapItem, std::vector<HeapItem>, std::greater<HeapItem>>
+          min_heap;
+      const int64_t kInf = std::numeric_limits<int64_t>::max() / 4;
+      std::vector<int64_t> distance(comp_nodes.size(), kInf);
+      std::vector<int> parent(comp_nodes.size(), -1);
+      std::vector<int> parent_edge(comp_nodes.size(), -1);
+      for (int local = 0; local < static_cast<int>(comp_nodes.size()); ++local) {
+        if (in_tree[local]) {
+          distance[local] = 0;
+          min_heap.push(HeapItem{0, local});
+        }
+      }
+
+      int target_local = -1;
+      while (!min_heap.empty()) {
+        const auto [dist, local] = min_heap.top();
+        min_heap.pop();
+        if (dist != distance[local]) {
+          continue;
+        }
+        if (comp_required[local] && !in_tree[local]) {
+          target_local = local;
+          break;
+        }
+        for (const AdjEdge& adj : adjacency[local]) {
+          const int neighbor = adj.to;
+          const int edge_id = adj.edge_id;
+          const int64_t candidate = dist + edges[edge_id].weight;
+          const bool better_distance = candidate < distance[neighbor];
+          const bool same_distance_better_parent
+              = candidate == distance[neighbor]
+                && (parent_edge[neighbor] == -1
+                    || edge_id < parent_edge[neighbor]
+                    || (edge_id == parent_edge[neighbor]
+                        && local < parent[neighbor]));
+          if (better_distance || same_distance_better_parent) {
+            distance[neighbor] = candidate;
+            parent[neighbor] = local;
+            parent_edge[neighbor] = edge_id;
+            min_heap.push(HeapItem{candidate, neighbor});
+          }
+        }
+      }
+
+      if (target_local < 0) {
+        failed_to_connect = true;
+        break;
+      }
+
+      int walk = target_local;
+      bool valid_path = true;
+      while (!in_tree[walk]) {
+        const int edge_id = parent_edge[walk];
+        const int previous = parent[walk];
+        if (edge_id < 0 || previous < 0) {
+          valid_path = false;
+          break;
+        }
+        steiner_edge_set.insert(edge_id);
+        in_tree[walk] = true;
+        walk = previous;
+      }
+      if (!valid_path) {
+        failed_to_connect = true;
+        break;
+      }
+      in_tree[walk] = true;
+    }
+
+    if (failed_to_connect || steiner_edge_set.empty()) {
       for (int edge_id : comp_edge_ids) {
         keep_edge[edge_id] = true;
       }
       continue;
     }
 
+    std::vector<int> steiner_edges(steiner_edge_set.begin(),
+                                   steiner_edge_set.end());
+    std::sort(steiner_edges.begin(), steiner_edges.end());
+
     std::vector<std::vector<int>> incident(comp_nodes.size());
     std::vector<int> degree(comp_nodes.size(), 0);
-    for (int mst_id = 0; mst_id < static_cast<int>(mst_edges.size()); ++mst_id) {
-      const EdgeInfo& edge = edges[mst_edges[mst_id]];
+    for (int steiner_id = 0; steiner_id < static_cast<int>(steiner_edges.size());
+         ++steiner_id) {
+      const EdgeInfo& edge = edges[steiner_edges[steiner_id]];
       const int u_local = local_id[edge.u];
       const int v_local = local_id[edge.v];
-      incident[u_local].push_back(mst_id);
-      incident[v_local].push_back(mst_id);
+      incident[u_local].push_back(steiner_id);
+      incident[v_local].push_back(steiner_id);
       degree[u_local]++;
       degree[v_local]++;
     }
 
-    std::vector<bool> mst_active(mst_edges.size(), true);
+    std::vector<bool> steiner_active(steiner_edges.size(), true);
     std::deque<int> leaves;
     for (int node_local = 0; node_local < static_cast<int>(comp_nodes.size());
          ++node_local) {
@@ -447,12 +557,12 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
         continue;
       }
 
-      for (int mst_id : incident[node_local]) {
-        if (!mst_active[mst_id]) {
+      for (int steiner_id : incident[node_local]) {
+        if (!steiner_active[steiner_id]) {
           continue;
         }
-        mst_active[mst_id] = false;
-        const EdgeInfo& edge = edges[mst_edges[mst_id]];
+        steiner_active[steiner_id] = false;
+        const EdgeInfo& edge = edges[steiner_edges[steiner_id]];
         const int u_local = local_id[edge.u];
         const int v_local = local_id[edge.v];
         const int other_local = (u_local == node_local) ? v_local : u_local;
@@ -467,9 +577,10 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     }
 
     int active_edges = 0;
-    for (int mst_id = 0; mst_id < static_cast<int>(mst_edges.size()); ++mst_id) {
-      if (mst_active[mst_id]) {
-        keep_edge[mst_edges[mst_id]] = true;
+    for (int steiner_id = 0; steiner_id < static_cast<int>(steiner_edges.size());
+         ++steiner_id) {
+      if (steiner_active[steiner_id]) {
+        keep_edge[steiner_edges[steiner_id]] = true;
         active_edges++;
       }
     }
