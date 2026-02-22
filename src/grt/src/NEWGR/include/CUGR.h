@@ -38,13 +38,13 @@ struct Constants
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.12;
-  int target_detour_count = 8;
+  double max_detour_ratio = 0.10;
+  int target_detour_count = 6;
 
   double via_multiplier = 2.0;
 
   double maze_logistic_slope = 0.5;
-  int maze_overflow_threshold = 3;
+  int maze_overflow_threshold = 4;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
