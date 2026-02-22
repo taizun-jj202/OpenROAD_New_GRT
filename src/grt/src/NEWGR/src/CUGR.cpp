@@ -373,10 +373,16 @@ void CUGR::getGuides(const GRNet* net,
     return resource;
   };
 
+  const int hp = net->getBoundingBox().hp();
+  const int pins = net->getNumPins();
   // Keep guides compact for low-overflow nets to avoid over-inflating guide
   // regions, which can increase detailed-route detours and via usage.
   const int netOverflow = grid_graph_->checkOverflow(routingTree);
-  if (netOverflow <= constants_.guide_patch_overflow_threshold) {
+  int guidePatchOverflowThreshold = constants_.guide_patch_overflow_threshold;
+  if (pins > 32 || hp > 220) {
+    guidePatchOverflowThreshold += 1;
+  }
+  if (netOverflow <= guidePatchOverflowThreshold) {
     return;
   }
 
@@ -428,8 +434,16 @@ void CUGR::getGuides(const GRNet* net,
               if (currentSpare < wire_patch_threshold) {
                 int bestLayer = -1;
                 double bestScore = -std::numeric_limits<double>::max();
+                double requiredSpareGain = 0.75;
+                if (pins > 24 || hp > 200) {
+                  // Avoid marginal patches on large nets; these are the most
+                  // likely to trigger avoidable detailed-route layer hopping.
+                  requiredSpareGain = 1.10;
+                }
                 const double minRequiredSpare
-                    = std::max(1.0, currentSpare + 0.75);
+                    = std::max(1.0, currentSpare + requiredSpareGain);
+                const double upperLayerPenalty
+                    = (pins > 24 || hp > 200) ? 0.75 : 0.50;
                 for (int layerIndex = node->getLayerIdx() - 1;
                      layerIndex <= node->getLayerIdx() + 1;
                      layerIndex += 2) {
@@ -444,7 +458,7 @@ void CUGR::getGuides(const GRNet* net,
                   // congested.
                   double score = spareResource;
                   if (layerIndex > node->getLayerIdx()) {
-                    score -= 0.5;
+                    score -= upperLayerPenalty;
                   }
                   if (spareResource >= minRequiredSpare
                       && (score > bestScore
