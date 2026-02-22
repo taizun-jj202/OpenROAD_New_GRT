@@ -21,7 +21,9 @@ namespace grt {
 
 namespace {
 
-constexpr int kViaPenalty = 1150;
+constexpr int kViaPenalty = 1000;
+constexpr int kLargeNetPinCount = 10;
+constexpr int64_t kLargeNetWirelengthThreshold = 15000;
 
 struct RouteStats
 {
@@ -183,7 +185,7 @@ void dedupeAndDropStubs(GRoute& route)
 void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
 {
   dedupeAndDropStubs(route);
-  if (pins.size() < 2 || route.size() < 2) {
+  if (pins.size() < 3 || route.size() < 3) {
     return;
   }
   const RouteStats original_stats = computeRouteStats(route);
@@ -622,9 +624,20 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   }
 
   const RouteStats optimized_stats = computeRouteStats(optimized);
+  const bool large_net = pins.size() >= kLargeNetPinCount
+                         || original_stats.wirelength
+                                >= kLargeNetWirelengthThreshold;
+  const bool improves_wirelength
+      = optimized_stats.wirelength < original_stats.wirelength;
+  const int64_t wirelength_gain
+      = original_stats.wirelength - optimized_stats.wirelength;
+  const int via_delta = optimized_stats.via_count - original_stats.via_count;
   const bool improves_wire_without_more_vias
-      = optimized_stats.wirelength < original_stats.wirelength
+      = improves_wirelength
         && optimized_stats.via_count <= original_stats.via_count;
+  const bool improves_wire_on_large_net
+      = large_net && improves_wirelength
+        && (via_delta <= 0 || wirelength_gain * 4 >= via_delta);
   const bool improves_via_without_more_wire
       = optimized_stats.via_count < original_stats.via_count
         && optimized_stats.wirelength <= original_stats.wirelength;
@@ -633,7 +646,8 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
         && optimized_stats.via_count <= original_stats.via_count;
 
   if (!optimized.empty()
-      && (improves_wire_without_more_vias || improves_via_without_more_wire
+      && (improves_wire_without_more_vias || improves_wire_on_large_net
+          || improves_via_without_more_wire
           || same_wire_and_no_more_vias)) {
     route.swap(optimized);
   }
