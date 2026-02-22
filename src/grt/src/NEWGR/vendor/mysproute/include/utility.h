@@ -568,12 +568,6 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
 
-	// Layer-assignment via penalties are derived from global viacost so late
-	// routing stages can steer toward fewer layer transitions.
-	const int la_via_start = (viacost > 2) ? viacost : 2;
-	const int la_via_mid = (viacost > 2) ? (viacost + 1) : 3;
-	const int la_via_end = (viacost > 1) ? viacost : 2;
-
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
 			gridD[l][k] = 100 * BIG_INT;
@@ -628,15 +622,15 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 				for (i = 0 ; i < numLayers; i++) {
 					if (k == 0) {
 						if (l != i) {
-							if (gridD[i][k] > gridD[l][k]  + ADIFF(i,l) * la_via_start) {
-								gridD[i][k] = gridD[l][k]  + ADIFF(i,l) * la_via_start;
+							if (gridD[i][k] > gridD[l][k]  + ADIFF(i,l)*2) {
+								gridD[i][k] = gridD[l][k]  + ADIFF(i,l)*2;
 								viaLink[i][k] = l;
 							}
 						}
 					} else {
 						if (l != i) {
-							if (gridD[i][k] > gridD[l][k] + ADIFF(i,l) * la_via_mid ) {
-								gridD[i][k] = gridD[l][k] + ADIFF(i,l) * la_via_mid;
+							if (gridD[i][k] > gridD[l][k] + ADIFF(i,l) * 3 ) {
+								gridD[i][k] = gridD[l][k] + ADIFF(i,l) * 3  ;
 								viaLink[i][k] = l;
 							}
 						}
@@ -660,8 +654,8 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 		for (l = 0 ; l < numLayers; l ++) {
 			for (i = 0 ; i < numLayers; i++) {
 				if (l != i) {
-					if (gridD[i][k] > gridD[l][k] + ADIFF(i,l) * la_via_end) {//+ ADIFF(i,l) * 3 ) {
-						gridD[i][k] = gridD[l][k] + ADIFF(i,l) * la_via_end;//+ ADIFF(i,l) * 3 ;
+					if (gridD[i][k] > gridD[l][k] + ADIFF(i,l)*1){//+ ADIFF(i,l) * 3 ) {
+						gridD[i][k] = gridD[l][k] + ADIFF(i,l)*1;//+ ADIFF(i,l) * 3 ;
 						viaLink[i][k] = l;
 					}
 				}
@@ -794,15 +788,15 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 				for (i = 0 ; i < numLayers; i++) {
 					if (k == routelen) {
 						if (l != i) {
-							if (gridD[i][k] > gridD[l][k] + ADIFF(i,l) * la_via_start) {
-								gridD[i][k] = gridD[l][k] + ADIFF(i,l) * la_via_start;
+							if (gridD[i][k] > gridD[l][k] + ADIFF(i,l)*2) {
+								gridD[i][k] = gridD[l][k] + ADIFF(i,l)*2 ;
 								viaLink[i][k] = l;
 							}
 						}
 					} else {
 						if (l != i) {
-							if (gridD[i][k] > gridD[l][k] + ADIFF(i,l) * la_via_mid ) {
-								gridD[i][k] = gridD[l][k] + ADIFF(i,l) * la_via_mid;
+							if (gridD[i][k] > gridD[l][k] + ADIFF(i,l) * 3 ) {
+								gridD[i][k] = gridD[l][k] + ADIFF(i,l) * 3 ;
 								viaLink[i][k] = l;
 							}
 						}
@@ -824,8 +818,8 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 		for (l = 0 ; l < numLayers; l ++) {
 			for (i = 0 ; i < numLayers; i++) {
 				if (l != i) {
-					if (gridD[i][0] > gridD[l][0] + ADIFF(i,l) * la_via_end) {
-						gridD[i][0] = gridD[l][0] + ADIFF(i,l) * la_via_end;
+					if (gridD[i][0] > gridD[l][0] + ADIFF(i,l)*1) {
+						gridD[i][0] = gridD[l][0] + ADIFF(i,l)*1;
 						viaLink[i][0] = l;
 					}
 				}
