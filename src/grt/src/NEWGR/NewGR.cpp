@@ -253,14 +253,24 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
       // Anchor each pin to one best-fit node to avoid preserving
       // unnecessary vertical stacks at the same (x, y).
       int best_node = -1;
-      int best_score = std::numeric_limits<int>::max();
+      int best_primary_score = std::numeric_limits<int>::max();
+      int best_secondary_score = std::numeric_limits<int>::max();
+      int best_layer = std::numeric_limits<int>::max();
       const int pin_layer = pin.getConnectionLayer();
       for (int node_id : matching_nodes->second) {
         const NodeKey& node = nodes[node_id];
-        const int layer_distance = std::min(std::abs(node.layer - pin_layer),
-                                            std::abs(node.layer - (pin_layer + 1)));
-        if (layer_distance < best_score) {
-          best_score = layer_distance;
+        // Prefer the pin's own layer, then the adjacent upper layer.
+        const int primary_distance = std::abs(node.layer - pin_layer);
+        const int secondary_distance = std::abs(node.layer - (pin_layer + 1));
+        if (primary_distance < best_primary_score
+            || (primary_distance == best_primary_score
+                && secondary_distance < best_secondary_score)
+            || (primary_distance == best_primary_score
+                && secondary_distance == best_secondary_score
+                && node.layer < best_layer)) {
+          best_primary_score = primary_distance;
+          best_secondary_score = secondary_distance;
+          best_layer = node.layer;
           best_node = node_id;
         }
       }
@@ -275,10 +285,11 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     const int pin_layer = pin.getConnectionLayer();
     for (int node_id = 0; node_id < node_count; ++node_id) {
       const NodeKey& node = nodes[node_id];
+      const int primary_distance = std::abs(node.layer - pin_layer);
+      const int secondary_distance = std::abs(node.layer - (pin_layer + 1));
       const int distance = std::abs(node.x - pin_pos.x())
                            + std::abs(node.y - pin_pos.y())
-                           + 100 * std::min(std::abs(node.layer - pin_layer),
-                                            std::abs(node.layer - (pin_layer + 1)));
+                           + 100 * primary_distance + 10 * secondary_distance;
       if (distance < best_distance) {
         best_distance = distance;
         nearest_node = node_id;
