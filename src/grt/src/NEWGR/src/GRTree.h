@@ -38,10 +38,14 @@ class GRTreeNode : public GRPoint
     return children_;
   }
 
+  std::vector<std::shared_ptr<GRTreeNode>>& getChildren() { return children_; }
+
   void addChild(std::shared_ptr<GRTreeNode> child)
   {
     return children_.push_back(std::move(child));
   }
+
+  void removeChild(const int index) { children_.erase(children_.begin() + index); }
 
   static void preorder(
       const std::shared_ptr<GRTreeNode>& node,
