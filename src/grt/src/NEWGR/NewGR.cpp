@@ -25,16 +25,18 @@ constexpr int kDefaultViaPenalty = 1000;
 constexpr int kLargeNetViaPenalty = 700;
 constexpr int kLargeNetPinCount = 10;
 constexpr int64_t kLargeNetWirelengthThreshold = 15000;
-constexpr int kWirelengthPerExtraViaBudgetSmallNet = 40;
-constexpr int kWirelengthPerExtraViaBudgetLargeNet = 14;
-constexpr int kMaxExtraViasSmallNet = 1;
-constexpr int kMaxExtraViasLargeNet = 3;
-constexpr int kAggressivePruneSegmentThresholdSmallNet = 3;
-constexpr int kAggressivePruneSegmentThresholdLargeNet = 5;
-constexpr int kMinViaGainForAggressivePruneSmallNet = 2;
-constexpr int kMinViaGainForAggressivePruneLargeNet = 3;
-constexpr int64_t kMinWireGainForAggressivePruneSmallNet = 64;
-constexpr int64_t kMinWireGainForAggressivePruneLargeNet = 160;
+constexpr int kWirelengthPerExtraViaBudgetSmallNet = 28;
+constexpr int kWirelengthPerExtraViaBudgetLargeNet = 10;
+constexpr int kStrongWireGainPerExtraViaSmallNet = 72;
+constexpr int kStrongWireGainPerExtraViaLargeNet = 44;
+constexpr int kMaxExtraViasSmallNet = 2;
+constexpr int kMaxExtraViasLargeNet = 5;
+constexpr int kAggressivePruneSegmentThresholdSmallNet = 5;
+constexpr int kAggressivePruneSegmentThresholdLargeNet = 7;
+constexpr int kMinViaGainForAggressivePruneSmallNet = 1;
+constexpr int kMinViaGainForAggressivePruneLargeNet = 2;
+constexpr int64_t kMinWireGainForAggressivePruneSmallNet = 48;
+constexpr int64_t kMinWireGainForAggressivePruneLargeNet = 128;
 constexpr int kNearestNodeLayerWeight = 96;
 constexpr int kPinAnchorIncidentWeightDivisor = 8;
 constexpr int kNearestNodeIncidentWeightDivisor = 16;
@@ -657,6 +659,9 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   const int64_t wirelength_budget_per_via
       = large_net ? kWirelengthPerExtraViaBudgetLargeNet
                   : kWirelengthPerExtraViaBudgetSmallNet;
+  const int strong_wire_gain_per_via
+      = large_net ? kStrongWireGainPerExtraViaLargeNet
+                  : kStrongWireGainPerExtraViaSmallNet;
   const int max_extra_vias
       = large_net ? kMaxExtraViasLargeNet : kMaxExtraViasSmallNet;
   const int aggressive_prune_segment_threshold
@@ -676,6 +681,10 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
         && via_delta <= max_extra_vias
         && wirelength_gain
                >= static_cast<int64_t>(via_delta) * wirelength_budget_per_via;
+  const bool strong_wire_tradeoff
+      = improves_wirelength && via_delta > 0
+        && wirelength_gain
+               >= static_cast<int64_t>(via_delta) * strong_wire_gain_per_via;
   const bool improves_via_without_more_wire
       = optimized_stats.via_count < original_stats.via_count
         && optimized_stats.wirelength <= original_stats.wirelength;
@@ -693,6 +702,7 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   if (!optimized.empty()
       && prune_guard_ok
       && (improves_wire_without_more_vias || improves_wire_with_via_budget
+          || strong_wire_tradeoff
           || improves_via_without_more_wire
           || same_wire_and_fewer_vias)) {
     route.swap(optimized);
