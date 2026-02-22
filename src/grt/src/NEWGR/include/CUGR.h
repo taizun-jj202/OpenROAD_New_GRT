@@ -41,19 +41,19 @@ struct Constants
   double max_detour_ratio = 0.06;
   int target_detour_count = 2;
 
-  double via_multiplier = 2.35;
+  double via_multiplier = 2.25;
   // Require a meaningful gain before switching a child branch to a higher
   // layer during layer assignment.
-  double layer_assignment_hysteresis_ratio = 0.34;
+  double layer_assignment_hysteresis_ratio = 0.30;
   // Discourage unnecessary use of higher layers even when congestion is low.
-  double layer_usage_penalty_ratio = 0.055;
+  double layer_usage_penalty_ratio = 0.048;
 
   double maze_logistic_slope = 0.5;
   int maze_overflow_threshold = 7;
 
   // Apply guide patching conservatively for low-overflow nets to avoid extra
   // detailed-route detours and vias.
-  int guide_patch_overflow_threshold = 1;
+  int guide_patch_overflow_threshold = 2;
   double pin_patch_threshold = 18.0;
   int pin_patch_padding = 1;
   double wire_patch_threshold = 1.2;

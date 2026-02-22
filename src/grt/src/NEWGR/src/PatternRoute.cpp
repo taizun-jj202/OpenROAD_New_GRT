@@ -585,13 +585,17 @@ void PatternRoute::calculateRoutingCosts(
   // to avoid vias are usually cheap in wirelength.
   const int hp = net_->getBoundingBox().hp();
   const int pins = net_->getNumPins();
-  double viaScale = 1.18;
+  double viaScale = 1.14;
   if (pins <= 4 && hp <= 40) {
-    viaScale = 1.62;
+    viaScale = 1.58;
   } else if (pins <= 12 && hp <= 120) {
-    viaScale = 1.45;
+    viaScale = 1.42;
   } else if (pins <= 24 && hp <= 240) {
-    viaScale = 1.28;
+    viaScale = 1.25;
+  } else if (pins > 48 || hp > 480) {
+    viaScale *= 0.82;
+  } else if (pins > 24 || hp > 240) {
+    viaScale *= 0.92;
   }
   for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
        layerIndex++) {
@@ -604,9 +608,16 @@ void PatternRoute::calculateRoutingCosts(
                            static_cast<int>(grid_graph_->getNumLayers()) - 1),
                   std::max(fixedLayers.high(), constants_.min_routing_layer));
 
-  const CostT layerSwitchHysteresis
+  CostT layerSwitchHysteresis
       = constants_.layer_assignment_hysteresis_ratio
         * grid_graph_->getUnitViaCost();
+  if (pins <= 4 && hp <= 40) {
+    layerSwitchHysteresis *= 1.18;
+  } else if (pins > 48 || hp > 480) {
+    layerSwitchHysteresis *= 0.72;
+  } else if (pins > 24 || hp > 240) {
+    layerSwitchHysteresis *= 0.84;
+  }
   CostT layerUsagePenalty
       = constants_.layer_usage_penalty_ratio * grid_graph_->getUnitViaCost();
   if (pins <= 4 && hp <= 40) {
@@ -617,9 +628,9 @@ void PatternRoute::calculateRoutingCosts(
     layerUsagePenalty *= 1.18;
   } else if (pins > 48 || hp > 480) {
     // Let very large nets climb layers more freely to avoid long detours.
-    layerUsagePenalty *= 0.62;
+    layerUsagePenalty *= 0.52;
   } else if (pins > 24 || hp > 240) {
-    layerUsagePenalty *= 0.88;
+    layerUsagePenalty *= 0.78;
   }
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
        lowLayerIndex++) {

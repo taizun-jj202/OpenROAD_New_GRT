@@ -373,10 +373,17 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   selected_access_points.reserve(net->getNumPins());
   const auto& boundingBox = net->getBoundingBox();
   const PointT netCenter(boundingBox.cx(), boundingBox.cy());
-  // Bias access-point tie-breaking toward lower routing layers to reduce vias,
-  // while still keeping the selected point near the net center.
-  const bool largeNet = boundingBox.hp() >= 24;
-  const int layerDistanceBias = largeNet ? 6 : 10;
+  // Bias access-point tie-breaking toward lower layers on small nets, while
+  // allowing large nets to use upper layers more freely for wirelength.
+  const int hp = boundingBox.hp();
+  int layerDistanceBias = 10;
+  if (hp >= 200 || net->getNumPins() > 48) {
+    layerDistanceBias = 4;
+  } else if (hp >= 96 || net->getNumPins() > 24) {
+    layerDistanceBias = 6;
+  } else if (hp >= 32) {
+    layerDistanceBias = 8;
+  }
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
     int bestAccessibility = -1;
     double bestLocalSpare = -std::numeric_limits<double>::max();
