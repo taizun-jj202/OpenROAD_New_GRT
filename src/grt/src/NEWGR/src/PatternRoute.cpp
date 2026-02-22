@@ -595,9 +595,9 @@ void PatternRoute::calculateRoutingCosts(
   } else if (pins <= 24 && hp <= 240) {
     viaScale = 1.25;
   } else if (pins > 48 || hp > 480) {
-    viaScale *= 0.82;
+    viaScale *= 0.78;
   } else if (pins > 24 || hp > 240) {
-    viaScale *= 0.92;
+    viaScale *= 0.88;
   }
   for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
        layerIndex++) {
@@ -644,24 +644,11 @@ void PatternRoute::calculateRoutingCosts(
     layerUsagePenalty *= 1.18;
   } else if (pins > 48 || hp > 480) {
     // Let very large nets climb layers more freely to avoid long detours.
-    layerUsagePenalty *= 0.52;
+    layerUsagePenalty *= 0.46;
   } else if (pins > 24 || hp > 240) {
-    layerUsagePenalty *= 0.78;
+    layerUsagePenalty *= 0.72;
   }
   layerUsagePenalty *= (1.0 + 0.55 * (branchingViaBias - 1.0));
-  CostT branchLayerMismatchPenalty
-      = constants_.branch_layer_mismatch_penalty_ratio
-        * grid_graph_->getUnitViaCost();
-  if (pins <= 4 && hp <= 40) {
-    branchLayerMismatchPenalty *= 1.30;
-  } else if (pins <= 12 && hp <= 120) {
-    branchLayerMismatchPenalty *= 1.18;
-  } else if (pins > 48 || hp > 480) {
-    branchLayerMismatchPenalty *= 0.72;
-  } else if (pins > 24 || hp > 240) {
-    branchLayerMismatchPenalty *= 0.86;
-  }
-  branchLayerMismatchPenalty *= (1.0 + 0.45 * (branchingViaBias - 1.0));
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
        lowLayerIndex++) {
     std::vector<CostT> minChildCosts;
@@ -687,13 +674,8 @@ void PatternRoute::calculateRoutingCosts(
       if (layerIndex >= fixedLayers.high()) {
         CostT cost = viaCosts[layerIndex] - viaCosts[lowLayerIndex];
         cost += layerUsagePenalty * (layerIndex - lowLayerIndex);
-        for (size_t child_index = 0; child_index < minChildCosts.size();
-             child_index++) {
-          cost += minChildCosts[child_index];
-          const int childLayer = bestPaths[child_index].second;
-          if (childLayer >= 0) {
-            cost += branchLayerMismatchPenalty * abs(childLayer - layerIndex);
-          }
+        for (CostT childCost : minChildCosts) {
+          cost += childCost;
         }
         if (cost < node->getCosts()[layerIndex]) {
           node->getCosts()[layerIndex] = cost;

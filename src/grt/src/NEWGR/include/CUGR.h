@@ -48,9 +48,6 @@ struct Constants
   double layer_assignment_hysteresis_ratio = 0.30;
   // Discourage unnecessary use of higher layers even when congestion is low.
   double layer_usage_penalty_ratio = 0.048;
-  // Penalize assigning child branches to layers far from the parent branch
-  // layer to reduce layer churn at Steiner branching points.
-  double branch_layer_mismatch_penalty_ratio = 0.20;
 
   double maze_logistic_slope = 0.5;
   int maze_overflow_threshold = 7;
