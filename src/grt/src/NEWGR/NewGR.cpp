@@ -3,7 +3,7 @@
 #include <memory>
 #include <vector>
 
-#include "NEWGR/src/NewgrEngine.h"
+#include "src/NewgrEngine.h"
 #include "Net.h"
 #include "Pin.h"
 #include "utl/Logger.h"

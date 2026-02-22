@@ -59,10 +59,9 @@ target_link_options(newgr_tool
 )
 
 target_include_directories(newgr_tool
-  PUBLIC
+  PRIVATE
     ${NEWGR_ROOT}
     ${NEWGR_VENDOR_DIR}/include
-  PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/grt/include
