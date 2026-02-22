@@ -105,9 +105,11 @@ void PatternRoute::constructSteinerTree()
     fluteAccuracy = 8;
   } else if (degree < 16 && hp < 72) {
     fluteAccuracy = 5;
-  } else if (degree < 28 && hp < 140) {
-    // A small bump for medium nets improves RSMT quality with modest runtime
-    // overhead compared to using the high-accuracy setting broadly.
+  } else if (degree < 24 && hp < 140) {
+    fluteAccuracy = 5;
+  } else if (degree < 40 && hp < 220) {
+    // Give medium nets a bit more topology quality without the runtime hit of
+    // the high-accuracy setting on very large nets.
     fluteAccuracy = 4;
   }
   stt::Tree flutetree = stt_builder_->flute(xs, ys, fluteAccuracy);
@@ -608,6 +610,19 @@ void PatternRoute::calculateRoutingCosts(
                            static_cast<int>(grid_graph_->getNumLayers()) - 1),
                   std::max(fixedLayers.high(), constants_.min_routing_layer));
 
+  // Branching points dominate transition count; apply a stronger via bias only
+  // there to reduce layer churn without over-constraining long 2-pin trunks.
+  const int branchCount = static_cast<int>(node->getPaths().size());
+  double branchingViaBias = 1.0;
+  if (branchCount >= 3) {
+    branchingViaBias += 0.08 * std::min(branchCount - 2, 6);
+  }
+  if (pins > 48 || hp > 480) {
+    branchingViaBias *= 0.88;
+  } else if (pins > 24 || hp > 240) {
+    branchingViaBias *= 0.94;
+  }
+
   CostT layerSwitchHysteresis
       = constants_.layer_assignment_hysteresis_ratio
         * grid_graph_->getUnitViaCost();
@@ -618,6 +633,7 @@ void PatternRoute::calculateRoutingCosts(
   } else if (pins > 24 || hp > 240) {
     layerSwitchHysteresis *= 0.84;
   }
+  layerSwitchHysteresis *= branchingViaBias;
   CostT layerUsagePenalty
       = constants_.layer_usage_penalty_ratio * grid_graph_->getUnitViaCost();
   if (pins <= 4 && hp <= 40) {
@@ -632,6 +648,7 @@ void PatternRoute::calculateRoutingCosts(
   } else if (pins > 24 || hp > 240) {
     layerUsagePenalty *= 0.78;
   }
+  layerUsagePenalty *= (1.0 + 0.55 * (branchingViaBias - 1.0));
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
        lowLayerIndex++) {
     std::vector<CostT> minChildCosts;
