@@ -431,11 +431,11 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
           = prioritize_center_distance ? layerDistance : distance;
       if (accessibility > bestAccessibility
           || (accessibility == bestAccessibility
-              && (localSpare > bestLocalSpare
-                  || (localSpare == bestLocalSpare
-                      && (primaryDist < bestPrimaryDist
-                          || (primaryDist == bestPrimaryDist
-                              && secondaryDist < bestSecondaryDist)))))) {
+              && (primaryDist < bestPrimaryDist
+                  || (primaryDist == bestPrimaryDist
+                      && (secondaryDist < bestSecondaryDist
+                          || (secondaryDist == bestSecondaryDist
+                              && localSpare > bestLocalSpare)))))) {
         bestIndex = index;
         bestAccessibility = accessibility;
         bestLocalSpare = localSpare;
@@ -450,9 +450,19 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     const AccessPoint ap{{selectedPoint.x(), selectedPoint.y()}, {}};
     auto it = selected_access_points.emplace(ap).first;
     IntervalT& fixedLayerInterval = it->layers;
-    int lowLayer = selectedPoint.getLayerIdx();
-    int highLayer = selectedPoint.getLayerIdx();
-    if (selectedPoint.getLayerIdx() < constants_.min_routing_layer) {
+    int lowLayer = std::numeric_limits<int>::max();
+    int highLayer = std::numeric_limits<int>::min();
+    for (const auto& point : accessPoints) {
+      if (point.x() == selectedPoint.x() && point.y() == selectedPoint.y()) {
+        lowLayer = std::min(lowLayer, point.getLayerIdx());
+        highLayer = std::max(highLayer, point.getLayerIdx());
+      }
+    }
+    if (lowLayer > highLayer) {
+      lowLayer = selectedPoint.getLayerIdx();
+      highLayer = selectedPoint.getLayerIdx();
+    }
+    if (highLayer < constants_.min_routing_layer) {
       highLayer = constants_.min_routing_layer;
     }
     if (!fixedLayerInterval.IsValid()) {
