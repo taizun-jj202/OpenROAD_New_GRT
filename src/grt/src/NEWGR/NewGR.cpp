@@ -21,13 +21,14 @@ namespace grt {
 
 namespace {
 
-constexpr int kViaPenalty = 1000;
+constexpr int kDefaultViaPenalty = 1000;
+constexpr int kLargeNetViaPenalty = 700;
 constexpr int kLargeNetPinCount = 10;
 constexpr int64_t kLargeNetWirelengthThreshold = 15000;
 constexpr int kWirelengthPerExtraViaBudgetSmallNet = 40;
-constexpr int kWirelengthPerExtraViaBudgetLargeNet = 20;
+constexpr int kWirelengthPerExtraViaBudgetLargeNet = 14;
 constexpr int kMaxExtraViasSmallNet = 1;
-constexpr int kMaxExtraViasLargeNet = 2;
+constexpr int kMaxExtraViasLargeNet = 3;
 constexpr int kNearestNodeLayerWeight = 96;
 constexpr int kPinAnchorIncidentWeightDivisor = 8;
 constexpr int kNearestNodeIncidentWeightDivisor = 16;
@@ -148,10 +149,10 @@ uint64_t xyKey(int x, int y)
          | static_cast<uint32_t>(y);
 }
 
-int segmentWeight(const GSegment& segment)
+int segmentWeight(const GSegment& segment, int via_penalty)
 {
   const int via_cost = std::abs(segment.final_layer - segment.init_layer)
-                       * kViaPenalty;
+                       * via_penalty;
   return segment.length() + via_cost;
 }
 
@@ -196,6 +197,10 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
     return;
   }
   const RouteStats original_stats = computeRouteStats(route);
+  const bool large_net = pins.size() >= kLargeNetPinCount
+                         || original_stats.wirelength
+                                >= kLargeNetWirelengthThreshold;
+  const int via_penalty = large_net ? kLargeNetViaPenalty : kDefaultViaPenalty;
 
   std::unordered_map<NodeKey, int, NodeKeyHash> node_to_id;
   std::vector<NodeKey> nodes;
@@ -224,7 +229,7 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
       std::swap(src_id, dst_id);
     }
     EdgeKey key{src_id, dst_id};
-    const int weight = segmentWeight(segment);
+    const int weight = segmentWeight(segment, via_penalty);
     auto found = edge_table.find(key);
     if (found == edge_table.end() || weight < found->second.weight) {
       edge_table[key] = EdgeInfo{src_id, dst_id, weight, segment};
@@ -635,9 +640,6 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   }
 
   const RouteStats optimized_stats = computeRouteStats(optimized);
-  const bool large_net = pins.size() >= kLargeNetPinCount
-                         || original_stats.wirelength
-                                >= kLargeNetWirelengthThreshold;
   const bool improves_wirelength
       = optimized_stats.wirelength < original_stats.wirelength;
   const int64_t wirelength_gain
