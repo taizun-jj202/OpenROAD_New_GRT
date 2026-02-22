@@ -1,5 +1,6 @@
 #include "NEWGR/NewGR.h"
 
+#include <algorithm>
 #include <memory>
 #include <unordered_set>
 #include <vector>
@@ -13,6 +14,15 @@
 namespace grt {
 
 namespace {
+
+GSegment normalizeSegment(const GSegment& segment)
+{
+  GSegment normalized = segment;
+  if (normalized.isVia() && normalized.init_layer > normalized.final_layer) {
+    std::swap(normalized.init_layer, normalized.final_layer);
+  }
+  return normalized;
+}
 
 void cleanupRouteSegments(NetRouteMap& routes)
 {
@@ -30,8 +40,9 @@ void cleanupRouteSegments(NetRouteMap& routes)
       if (is_zero_length_stub) {
         continue;
       }
-      if (seen.insert(segment).second) {
-        filtered.push_back(segment);
+      const GSegment normalized_segment = normalizeSegment(segment);
+      if (seen.insert(normalized_segment).second) {
+        filtered.push_back(normalized_segment);
       }
     }
     route.swap(filtered);
@@ -57,10 +68,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return {};
   }
 
-  // Emit native FastRoute guides first for stability.
-  NetRouteMap routes
-      = grouter_->findRouting(nets, min_routing_layer, max_routing_layer);
+  // Start from FastRoute guides and run NEWGR-specific cleanup.
+  NetRouteMap routes = grouter_->fastroute_->run();
   if (!routes.empty()) {
+    grouter_->addRemainingGuides(
+        routes, nets, min_routing_layer, max_routing_layer);
     grouter_->connectPadPins(routes);
     for (auto& net_route : routes) {
       std::vector<Pin>& pins = grouter_->db_net_map_[net_route.first]->getPins();
