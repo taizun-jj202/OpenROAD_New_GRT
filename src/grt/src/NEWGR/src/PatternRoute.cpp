@@ -599,6 +599,53 @@ void PatternRoute::calculateRoutingCosts(
   } else if (pins > 24 || hp > 240) {
     viaScale *= 0.92;
   }
+  auto getLayerLocalSpare = [&](const int layerIndex) {
+    const int direction = grid_graph_->getLayerDirection(layerIndex);
+    double layerSpare = std::numeric_limits<double>::max();
+    bool hasAdjacentEdge = false;
+    if ((*node)[direction] + 1 < grid_graph_->getSize(direction)) {
+      layerSpare = std::min(layerSpare,
+                            grid_graph_->getEdge(
+                                           layerIndex, node->x(), node->y())
+                                .getResource());
+      hasAdjacentEdge = true;
+    }
+    if ((*node)[direction] > 0) {
+      GRPoint lower(layerIndex, node->x(), node->y());
+      lower[direction] -= 1;
+      layerSpare
+          = std::min(layerSpare,
+                     grid_graph_->getEdge(layerIndex, lower.x(), lower.y())
+                         .getResource());
+      hasAdjacentEdge = true;
+    }
+    if (!hasAdjacentEdge) {
+      return 0.0;
+    }
+    return layerSpare;
+  };
+  double localSpare = std::numeric_limits<double>::max();
+  for (int layerIndex = constants_.min_routing_layer;
+       layerIndex < grid_graph_->getNumLayers();
+       layerIndex++) {
+    localSpare = std::min(localSpare, getLayerLocalSpare(layerIndex));
+  }
+  double viaConservationScale = 1.0;
+  if (localSpare >= 8.0) {
+    viaConservationScale = 1.24;
+  } else if (localSpare >= 4.0) {
+    viaConservationScale = 1.12;
+  } else if (localSpare <= 0.5) {
+    viaConservationScale = 0.82;
+  } else if (localSpare <= 1.5) {
+    viaConservationScale = 0.92;
+  }
+  if (pins > 48 || hp > 480) {
+    viaConservationScale = 1.0 + 0.45 * (viaConservationScale - 1.0);
+  } else if (pins > 24 || hp > 240) {
+    viaConservationScale = 1.0 + 0.70 * (viaConservationScale - 1.0);
+  }
+  viaScale *= viaConservationScale;
   for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
        layerIndex++) {
     viaCosts[layerIndex]
@@ -634,6 +681,7 @@ void PatternRoute::calculateRoutingCosts(
     layerSwitchHysteresis *= 0.84;
   }
   layerSwitchHysteresis *= branchingViaBias;
+  layerSwitchHysteresis *= viaConservationScale;
   CostT layerUsagePenalty
       = constants_.layer_usage_penalty_ratio * grid_graph_->getUnitViaCost();
   if (pins <= 4 && hp <= 40) {
@@ -649,6 +697,7 @@ void PatternRoute::calculateRoutingCosts(
     layerUsagePenalty *= 0.78;
   }
   layerUsagePenalty *= (1.0 + 0.55 * (branchingViaBias - 1.0));
+  layerUsagePenalty *= viaConservationScale;
   CostT branchLayerMismatchPenalty = 0.0;
   if (branchCount >= 3) {
     // Mildly encourage sibling branches to stay close in layer assignment,
@@ -664,6 +713,21 @@ void PatternRoute::calculateRoutingCosts(
       branchLayerMismatchPenalty *= 0.65;
     }
     branchLayerMismatchPenalty *= (1.0 + 0.35 * (branchingViaBias - 1.0));
+    branchLayerMismatchPenalty *= viaConservationScale;
+  }
+  CostT siblingLayerSpanPenalty = 0.0;
+  if (branchCount >= 3) {
+    siblingLayerSpanPenalty = 0.018 * grid_graph_->getUnitViaCost();
+    if (pins <= 4 && hp <= 40) {
+      siblingLayerSpanPenalty *= 1.20;
+    } else if (pins <= 12 && hp <= 120) {
+      siblingLayerSpanPenalty *= 1.10;
+    } else if (pins > 48 || hp > 480) {
+      siblingLayerSpanPenalty *= 0.55;
+    } else if (pins > 24 || hp > 240) {
+      siblingLayerSpanPenalty *= 0.75;
+    }
+    siblingLayerSpanPenalty *= viaConservationScale;
   }
   for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
        lowLayerIndex++) {
@@ -690,13 +754,20 @@ void PatternRoute::calculateRoutingCosts(
       if (layerIndex >= fixedLayers.high()) {
         CostT cost = viaCosts[layerIndex] - viaCosts[lowLayerIndex];
         cost += layerUsagePenalty * (layerIndex - lowLayerIndex);
+        int minChildLayer = std::numeric_limits<int>::max();
+        int maxChildLayer = std::numeric_limits<int>::min();
         for (size_t child_index = 0; child_index < minChildCosts.size();
              child_index++) {
           cost += minChildCosts[child_index];
           const int childLayer = bestPaths[child_index].second;
           if (childLayer >= 0 && branchLayerMismatchPenalty > 0.0) {
             cost += branchLayerMismatchPenalty * abs(childLayer - layerIndex);
+            minChildLayer = std::min(minChildLayer, childLayer);
+            maxChildLayer = std::max(maxChildLayer, childLayer);
           }
+        }
+        if (siblingLayerSpanPenalty > 0.0 && minChildLayer <= maxChildLayer) {
+          cost += siblingLayerSpanPenalty * (maxChildLayer - minChildLayer);
         }
         if (cost < node->getCosts()[layerIndex]) {
           node->getCosts()[layerIndex] = cost;
@@ -721,10 +792,42 @@ std::shared_ptr<GRTreeNode> PatternRoute::getRoutingTree(
 {
   if (parentLayerIndex == -1) {
     CostT minCost = std::numeric_limits<CostT>::max();
+    int bestVerticalDistance = std::numeric_limits<int>::max();
+    const CostT costEpsilon = std::max(
+        static_cast<CostT>(1e-6),
+        static_cast<CostT>(1e-3 * grid_graph_->getUnitViaCost()));
+    auto getVerticalDistance = [&](const int layerIndex) {
+      int verticalDistance = 0;
+      const IntervalT fixedLayers = node->getFixedLayers();
+      if (fixedLayers.IsValid()) {
+        if (layerIndex < fixedLayers.low()) {
+          verticalDistance += fixedLayers.low() - layerIndex;
+        } else if (layerIndex > fixedLayers.high()) {
+          verticalDistance += layerIndex - fixedLayers.high();
+        }
+      }
+      if (layerIndex >= 0
+          && layerIndex < static_cast<int>(node->getBestPaths().size())) {
+        for (const auto& [pathIndex, childLayer] : node->getBestPaths()[layerIndex]) {
+          if (pathIndex >= 0 && childLayer >= 0) {
+            verticalDistance += abs(childLayer - layerIndex);
+          }
+        }
+      }
+      return verticalDistance;
+    };
     for (int layerIndex = 0; layerIndex < grid_graph_->getNumLayers();
          layerIndex++) {
-      if (routing_dag_->getCosts()[layerIndex] < minCost) {
-        minCost = routing_dag_->getCosts()[layerIndex];
+      const CostT layerCost = node->getCosts()[layerIndex];
+      if (layerCost == std::numeric_limits<CostT>::max()) {
+        continue;
+      }
+      const int verticalDistance = getVerticalDistance(layerIndex);
+      if (layerCost + costEpsilon < minCost
+          || (abs(layerCost - minCost) <= costEpsilon
+              && verticalDistance < bestVerticalDistance)) {
+        minCost = layerCost;
+        bestVerticalDistance = verticalDistance;
         parentLayerIndex = layerIndex;
       }
     }
