@@ -254,16 +254,13 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
       // unnecessary vertical stacks at the same (x, y).
       int best_node = -1;
       int best_score = std::numeric_limits<int>::max();
-      int best_layer = std::numeric_limits<int>::max();
       const int pin_layer = pin.getConnectionLayer();
       for (int node_id : matching_nodes->second) {
         const NodeKey& node = nodes[node_id];
         const int layer_distance = std::min(std::abs(node.layer - pin_layer),
                                             std::abs(node.layer - (pin_layer + 1)));
-        if (layer_distance < best_score
-            || (layer_distance == best_score && node.layer < best_layer)) {
+        if (layer_distance < best_score) {
           best_score = layer_distance;
-          best_layer = node.layer;
           best_node = node_id;
         }
       }
@@ -452,18 +449,8 @@ void optimizeRouteTopology(const std::vector<Pin>& pins, GRoute& route)
   const bool same_wire_and_no_more_vias
       = optimized_stats.wirelength == original_stats.wirelength
         && optimized_stats.via_count <= original_stats.via_count;
-  const int64_t original_weighted_cost
-      = original_stats.wirelength
-        + static_cast<int64_t>(original_stats.via_count) * kViaPenalty;
-  const int64_t optimized_weighted_cost
-      = optimized_stats.wirelength
-        + static_cast<int64_t>(optimized_stats.via_count) * kViaPenalty;
-  const bool wire_improves_with_good_tradeoff
-      = improves_wirelength
-        && optimized_weighted_cost + (kViaPenalty / 2) < original_weighted_cost;
 
-  if (!optimized.empty()
-      && (same_wire_and_no_more_vias || wire_improves_with_good_tradeoff)) {
+  if (!optimized.empty() && (improves_wirelength || same_wire_and_no_more_vias)) {
     route.swap(optimized);
   }
 }
