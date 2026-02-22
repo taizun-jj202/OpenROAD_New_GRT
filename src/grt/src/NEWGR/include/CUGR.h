@@ -40,6 +40,7 @@ struct Constants
   // allowed stem length increase to trunk length ratio
   double max_detour_ratio = 0.06;
   int target_detour_count = 2;
+  int detour_overflow_threshold = 2;
 
   double via_multiplier = 2.25;
   // Require a meaningful gain before switching a child branch to a higher

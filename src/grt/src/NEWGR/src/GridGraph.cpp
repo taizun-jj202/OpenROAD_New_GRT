@@ -386,6 +386,8 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   }
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
     int bestAccessibility = -1;
+    int bestIntervalExpansion = std::numeric_limits<int>::max();
+    int bestResultingSpan = std::numeric_limits<int>::max();
     double bestLocalSpare = -std::numeric_limits<double>::max();
     int bestPrimaryDist = std::numeric_limits<int>::max();
     int bestSecondaryDist = std::numeric_limits<int>::max();
@@ -434,20 +436,48 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
           = abs(netCenter.x() - point.x()) + abs(netCenter.y() - point.y());
       const int layerDistance
           = abs(point.getLayerIdx() - constants_.min_routing_layer);
-      const int primaryDist = distance + layerDistanceBias * layerDistance;
+      int candidateLowLayer = point.getLayerIdx();
+      int candidateHighLayer = point.getLayerIdx();
+      if (point.getLayerIdx() < constants_.min_routing_layer) {
+        candidateHighLayer = constants_.min_routing_layer;
+      }
+
+      int intervalExpansion = 0;
+      int resultingSpan = candidateHighLayer - candidateLowLayer;
+      const AccessPoint candidate{{point.x(), point.y()}, {}};
+      if (auto existing = selected_access_points.find(candidate);
+          existing != selected_access_points.end() && existing->layers.IsValid()) {
+        const int mergedLow
+            = std::min(existing->layers.low(), candidateLowLayer);
+        const int mergedHigh
+            = std::max(existing->layers.high(), candidateHighLayer);
+        resultingSpan = mergedHigh - mergedLow;
+        intervalExpansion = resultingSpan - existing->layers.range();
+      }
+
+      const int primaryDist = distance + layerDistanceBias * layerDistance
+                              + layerDistanceBias * intervalExpansion;
       const int secondaryDist = distance;
       if (accessibility > bestAccessibility
           || (accessibility == bestAccessibility
-              && (localSpare > bestLocalSpare
-                  || (localSpare == bestLocalSpare
-                      && (primaryDist < bestPrimaryDist
-                          || (primaryDist == bestPrimaryDist
-                              && (secondaryDist < bestSecondaryDist
-                                  || (secondaryDist == bestSecondaryDist
-                                      && point.getLayerIdx()
-                                             < bestLayerIdx)))))))) {
+              && (intervalExpansion < bestIntervalExpansion
+                  || (intervalExpansion == bestIntervalExpansion
+                      && (resultingSpan < bestResultingSpan
+                          || (resultingSpan == bestResultingSpan
+                              && (localSpare > bestLocalSpare
+                                  || (localSpare == bestLocalSpare
+                                      && (primaryDist < bestPrimaryDist
+                                          || (primaryDist == bestPrimaryDist
+                                              && (secondaryDist
+                                                      < bestSecondaryDist
+                                                  || (secondaryDist
+                                                          == bestSecondaryDist
+                                                      && point.getLayerIdx()
+                                                             < bestLayerIdx)))))))))))) {
         bestIndex = index;
         bestAccessibility = accessibility;
+        bestIntervalExpansion = intervalExpansion;
+        bestResultingSpan = resultingSpan;
         bestLocalSpare = localSpare;
         bestPrimaryDist = primaryDist;
         bestSecondaryDist = secondaryDist;

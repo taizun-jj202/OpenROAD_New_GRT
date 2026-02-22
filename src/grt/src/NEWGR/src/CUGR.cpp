@@ -86,12 +86,34 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
   if (netIndices.empty()) {
     return;
   }
-  logger_->report("stage 2: pattern routing with possible detours");
+  std::vector<int> detourNetIndices;
+  detourNetIndices.reserve(netIndices.size());
+  for (const int netIndex : netIndices) {
+    const int overflow
+        = grid_graph_->checkOverflow(gr_nets_[netIndex]->getRoutingTree());
+    if (overflow >= constants_.detour_overflow_threshold) {
+      detourNetIndices.push_back(netIndex);
+    }
+  }
+  if (detourNetIndices.empty()) {
+    logger_->report(
+        "stage 2: skipped detour routing (no net overflow >= {}).",
+        constants_.detour_overflow_threshold);
+    updateOverflowNets(netIndices);
+    return;
+  }
+
+  logger_->report(
+      "stage 2: pattern routing with possible detours ({} / {} nets, "
+      "overflow >= {})",
+      detourNetIndices.size(),
+      netIndices.size(),
+      constants_.detour_overflow_threshold);
   // (2d) direction -> x -> y -> has overflow?
   GridGraphView<bool> congestionView;
   grid_graph_->extractCongestionView(congestionView);
-  sortNetIndices(netIndices, /*large_first*/ true);
-  for (const int netIndex : netIndices) {
+  sortNetIndices(detourNetIndices, /*large_first*/ true);
+  for (const int netIndex : detourNetIndices) {
     GRNet* net = gr_nets_[netIndex].get();
     grid_graph_->commitTree(net->getRoutingTree(), /*ripup*/ true);
     PatternRoute patternRoute(
