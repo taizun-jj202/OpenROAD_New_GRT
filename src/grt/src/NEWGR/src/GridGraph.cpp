@@ -373,7 +373,6 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   selected_access_points.reserve(net->getNumPins());
   const auto& boundingBox = net->getBoundingBox();
   const PointT netCenter(boundingBox.cx(), boundingBox.cy());
-  const bool lowDegreeNet = net->getNumPins() <= 2;
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
     int best_accessibility = -1;
     int best_resource_score = std::numeric_limits<int>::min();
@@ -442,15 +441,14 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       }
     }
   }
-  // Extend fixed layers conservatively:
-  // Favor tighter layer ranges on low-degree nets to suppress needless vias.
+  // Extend fixed layers conservatively to suppress needless vias.
+  // Keep at most one extra escape layer only for hard-to-access pins.
   for (auto& accessPoint : selected_access_points) {
     IntervalT& fixedLayers = accessPoint.layers;
-    int extension = lowDegreeNet ? 0 : 1;
+    int extension = 0;
     if (fixedLayers.high() < constants_.min_routing_layer) {
-      // Keep low-layer pins reachable; keep less slack for simpler nets.
-      extension = constants_.min_routing_layer - fixedLayers.high()
-                  + (lowDegreeNet ? 0 : 1);
+      // Only extend enough to reach the minimum routing layer.
+      extension = constants_.min_routing_layer - fixedLayers.high();
     } else {
       const int probeLayer = std::min(fixedLayers.high(), getNumLayers() - 1);
       const int direction = getLayerDirection(probeLayer);
@@ -470,7 +468,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       if (accessible_edges == 2) {
         extension = 0;
       } else if (accessible_edges == 0) {
-        extension = lowDegreeNet ? 1 : 2;
+        extension = 1;
       }
     }
     fixedLayers.SetHigh(std::min(
