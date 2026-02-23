@@ -568,11 +568,11 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
 
-	// Escalate layer-assignment via penalties only at very high global via
-	// cost so wirelength-driven paths stay available in moderate congestion.
-	const int la_via_start = (viacost >= 5) ? 3 : 2;
-	const int la_via_mid = (viacost >= 5) ? 4 : 3;
-	const int la_via_end = (viacost >= 5) ? 2 : 1;
+	// Escalate layer-assignment via penalties only once global routing has
+	// already moved to moderate/high via costs.
+	const int la_via_start = (viacost >= 4) ? 3 : 2;
+	const int la_via_mid = (viacost >= 4) ? 4 : 3;
+	const int la_via_end = (viacost >= 4) ? 2 : 1;
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
