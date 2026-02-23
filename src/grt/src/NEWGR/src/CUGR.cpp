@@ -268,17 +268,6 @@ void CUGR::sortNetIndices(std::vector<int>& netIndices,
         && overflowCounts[lhs] != overflowCounts[rhs]) {
       return overflowCounts[lhs] > overflowCounts[rhs];
     }
-    // FastRoute-inspired ordering: prioritize compact multi-pin nets
-    // (small HPWL-per-pin) so they can settle on lower layers early.
-    const int lhsPinNorm = std::max(pinCounts[lhs] - 1, 1);
-    const int rhsPinNorm = std::max(pinCounts[rhs] - 1, 1);
-    const int64_t lhsHpwlPerPin
-        = static_cast<int64_t>(halfParameters[lhs]) * rhsPinNorm;
-    const int64_t rhsHpwlPerPin
-        = static_cast<int64_t>(halfParameters[rhs]) * lhsPinNorm;
-    if (lhsHpwlPerPin != rhsHpwlPerPin) {
-      return lhsHpwlPerPin < rhsHpwlPerPin;
-    }
     if (halfParameters[lhs] != halfParameters[rhs]) {
       return halfParameters[lhs] < halfParameters[rhs];
     }

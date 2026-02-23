@@ -616,6 +616,10 @@ void PatternRoute::calculateRoutingCosts(
         for (CostT childCost : minChildCosts) {
           cost += childCost;
         }
+        // Prefer tighter vertical spans when routing costs are comparable.
+        // This gently biases solutions toward fewer vias without dominating
+        // the true wire/overflow objective.
+        cost += 0.25 * (layerIndex - lowLayerIndex);
         if (cost < node->getCosts()[layerIndex]) {
           node->getCosts()[layerIndex] = cost;
           node->getBestPaths()[layerIndex] = bestPaths;
