@@ -568,11 +568,11 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
 
-	// Keep layer-assignment penalties stable to avoid overreacting to local
-	// congestion noise, which can increase detours and final wirelength.
-	const int la_via_start = 2;
-	const int la_via_mid = 3;
-	const int la_via_end = 1;
+	// Increase via transition penalty only when global routing has already
+	// decided to use a higher via cost, to avoid unnecessary detours.
+	const int la_via_start = (viacost >= 4) ? 3 : 2;
+	const int la_via_mid = (viacost >= 4) ? 4 : 3;
+	const int la_via_end = (viacost >= 4) ? 2 : 1;
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
@@ -1199,7 +1199,8 @@ void newLA ()
 				treenodes[d].layer = findLayer(netID, treenodes[d]);
 				//treenodes[d].botL = treenodes[d].topL = 0;
 				treenodes[d].botL = treenodes[d].layer; //0; //netID, d = pinID
-				treenodes[d].topL = (treenodes[d].layer == 0)? 2 : treenodes[d].layer; //Michael
+				// Keep M1 pins local (M1/M2) to avoid unnecessary early climbs.
+				treenodes[d].topL = (treenodes[d].layer == 0)? 1 : treenodes[d].layer; //Michael
 				//if(string(nets[netID]->name) == "ionet11")
 				//	cout << " x y l:" << treenodes[d].x << " " << treenodes[d].y << " " << treenodes[d].botL  << " " << treenodes[d].topL<< endl;
 				//treenodes[d].l = 0;
