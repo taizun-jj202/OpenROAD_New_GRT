@@ -377,6 +377,9 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   // Resource score is scaled by 1000. Use a mild layer penalty to avoid
   // over-selecting higher-layer access points unless resources are much better.
   constexpr int layer_bias = 120;
+  // For 2-pin nets, a small distance term helps avoid long detours when
+  // resource scores are close.
+  constexpr int low_degree_distance_bias = 6;
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
     int best_accessibility = -1;
     int best_balanced_score = std::numeric_limits<int>::min();
@@ -417,7 +420,9 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       const int balanced_score
           = resource_score == std::numeric_limits<int>::min()
                 ? resource_score
-                : resource_score - layer_penalty * layer_bias;
+                : resource_score - layer_penalty * layer_bias
+                      - (lowDegreeNet ? distance * low_degree_distance_bias
+                                      : 0);
 
       const bool better = accessibility > best_accessibility
                           || (accessibility == best_accessibility
@@ -456,16 +461,14 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       }
     }
   }
-  // Extend fixed layers adaptively:
-  // keep 2-pin nets tight while preserving flexibility for multi-pin nets.
+  // Extend fixed layers with a wirelength-first bias:
+  // keep easy pins tight, but allow one escape layer in typical cases so
+  // low-degree nets avoid long horizontal/vertical detours.
   for (auto& accessPoint : selected_access_points) {
     IntervalT& fixedLayers = accessPoint.layers;
-    int extension = lowDegreeNet ? 0 : 1;
+    int extension = 1;
     if (fixedLayers.high() < constants_.min_routing_layer) {
-      // Reach min routing layer, with one extra escape layer for
-      // higher-degree nets.
-      extension = constants_.min_routing_layer - fixedLayers.high()
-                  + (lowDegreeNet ? 0 : 1);
+      extension = constants_.min_routing_layer - fixedLayers.high() + 1;
     } else {
       const int probeLayer = std::min(fixedLayers.high(), getNumLayers() - 1);
       const int direction = getLayerDirection(probeLayer);
@@ -487,7 +490,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       } else if (accessible_edges == 0) {
         extension = lowDegreeNet ? 1 : 2;
       } else {
-        extension = lowDegreeNet ? 0 : 1;
+        extension = 1;
       }
     }
     fixedLayers.SetHigh(std::min(
