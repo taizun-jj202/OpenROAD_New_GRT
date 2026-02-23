@@ -269,10 +269,10 @@ void CUGR::sortNetIndices(std::vector<int>& netIndices,
       return overflowCounts[lhs] > overflowCounts[rhs];
     }
     if (halfParameters[lhs] != halfParameters[rhs]) {
-      return halfParameters[lhs] > halfParameters[rhs];
+      return halfParameters[lhs] < halfParameters[rhs];
     }
     if (pinCounts[lhs] != pinCounts[rhs]) {
-      return pinCounts[lhs] > pinCounts[rhs];
+      return pinCounts[lhs] < pinCounts[rhs];
     }
     return lhs < rhs;
   });
