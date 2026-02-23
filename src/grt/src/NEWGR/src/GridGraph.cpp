@@ -376,10 +376,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   const bool lowDegreeNet = net->getNumPins() <= 2;
   // Resource score is scaled by 1000. Use a mild layer penalty to avoid
   // over-selecting higher-layer access points unless resources are much better.
-  constexpr int layer_bias = 120;
-  // For 2-pin nets, a small distance term helps avoid long detours when
-  // resource scores are close.
-  constexpr int low_degree_distance_bias = 6;
+  constexpr int layer_bias = 135;
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
     int best_accessibility = -1;
     int best_balanced_score = std::numeric_limits<int>::min();
@@ -420,9 +417,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       const int balanced_score
           = resource_score == std::numeric_limits<int>::min()
                 ? resource_score
-                : resource_score - layer_penalty * layer_bias
-                      - (lowDegreeNet ? distance * low_degree_distance_bias
-                                      : 0);
+                : resource_score - layer_penalty * layer_bias;
 
       const bool better = accessibility > best_accessibility
                           || (accessibility == best_accessibility
@@ -490,7 +485,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       } else if (accessible_edges == 0) {
         extension = lowDegreeNet ? 1 : 2;
       } else {
-        extension = 1;
+        extension = lowDegreeNet ? 0 : 1;
       }
     }
     fixedLayers.SetHigh(std::min(
