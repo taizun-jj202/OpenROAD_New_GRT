@@ -569,7 +569,7 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	n2a = treeedge->n2a;
 
 	// Keep short segments wirelength-driven, and apply stronger via control
-	// primarily on long segments once global routing enters high via-cost mode.
+	// mainly on long routes once global routing enters high via-cost mode.
 	const bool la_high_via_mode = (viacost >= 4);
 	const bool la_long_route = (routelen >= 24);
 	const bool la_very_long_route = (routelen >= 64);
@@ -1202,10 +1202,9 @@ void newLA ()
 				treenodes[d].layer = findLayer(netID, treenodes[d]);
 				//treenodes[d].botL = treenodes[d].topL = 0;
 				treenodes[d].botL = treenodes[d].layer; //0; //netID, d = pinID
-				// Allow a limited extra lift for M1 pins on larger nets to avoid
-				// long detours around pin-access bottlenecks while keeping small
-				// nets local to reduce avoidable vias.
-				const int pin_lift_limit = (deg >= 24) ? 2 : 1;
+				// Allow broader lift only on larger nets; keep small nets local
+				// to avoid unnecessary vias while preserving escape flexibility.
+				const int pin_lift_limit = (deg >= 16) ? 2 : 1;
 				treenodes[d].topL
 					= (treenodes[d].layer == 0)
 						  ? pin_lift_limit
