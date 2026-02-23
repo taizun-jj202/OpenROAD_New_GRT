@@ -1202,9 +1202,9 @@ void newLA ()
 				treenodes[d].layer = findLayer(netID, treenodes[d]);
 				//treenodes[d].botL = treenodes[d].topL = 0;
 				treenodes[d].botL = treenodes[d].layer; //0; //netID, d = pinID
-				// Allow M1 pins to use M2/M3 during assignment to reduce detours in
-				// congested channels near pin access regions.
-				treenodes[d].topL = (treenodes[d].layer == 0)? 2 : treenodes[d].layer; //Michael
+				// Keep M1 pins local (M1/M2) to limit unnecessary early climbs and
+				// reduce via growth around dense pin-access regions.
+				treenodes[d].topL = (treenodes[d].layer == 0)? 1 : treenodes[d].layer; //Michael
 				//if(string(nets[netID]->name) == "ionet11")
 				//	cout << " x y l:" << treenodes[d].x << " " << treenodes[d].y << " " << treenodes[d].botL  << " " << treenodes[d].topL<< endl;
 				//treenodes[d].l = 0;
