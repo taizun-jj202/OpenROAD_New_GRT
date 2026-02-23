@@ -110,7 +110,7 @@ NetRouteMap NewgrEngine::run()
                congestion_map,
                timer,
                /*maxMazeRound=*/500,
-               Algo::NonDet);
+               Algo::FineGrain);
   timer.stop();
   last_total_overflow_ = totalOverflow;
 

@@ -1235,17 +1235,13 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
             last_cong = past_cong;
  
 			past_cong = getOverflow2Dmaze(&maxOverflow , & tUsage); 
-			// Apply a stronger late via bias once congestion is mostly resolved.
-			// This targets lower final via counts with minimal impact on runtime
-			// because this path is reached near convergence.
+			// Keep via penalty moderate while converging so WL minimization
+			// remains dominant after overflow cleanup.
 			if (past_cong < 6000) {
-				VIA = max(VIA, 3);
+				VIA = max(VIA, 2);
 			}
 			if (past_cong < 1200) {
-				VIA = max(VIA, 5);
-			}
-			if (past_cong < 200) {
-				VIA = max(VIA, 6);
+				VIA = max(VIA, 3);
 			}
 			viacost = VIA;
 			//if(i == 1)
@@ -1363,9 +1359,10 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		printf("Final 2D results: \n");
 		getOverflow2Dmaze( &maxOverflow , & tUsage);
 
-		// Keep a strong via bias for layer assignment once 2D overflow is gone.
+		// Encourage a light via penalty for layer assignment while still
+		// avoiding extreme via growth once overflow is resolved.
 		if (past_cong == 0) {
-			VIA = max(VIA, 6);
+			VIA = max(VIA, 3);
 		}
 		viacost = max(viacost, VIA);
 		printf("\nLayer Assignment Begins");
@@ -1377,7 +1374,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		//printf("2D + Layer Assignment Runtime: %f sec\n", gen_brk_Time); 
 
 		costheight = 3;
-		viacost = 2;
+		viacost = 1;
 
 		if (gen_brk_Time < 60) {
 			ripupTH3D = 15;

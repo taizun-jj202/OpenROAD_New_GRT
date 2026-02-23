@@ -568,11 +568,11 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
 
-	// Derive layer-assignment via penalties from the global via bias used in
-	// late routing, but keep minimums to avoid under-penalizing transitions.
-	const int la_via_start = (viacost > 2) ? viacost : 2;
-	const int la_via_mid = (viacost > 2) ? (viacost + 1) : 3;
-	const int la_via_end = (viacost > 1) ? viacost : 2;
+	// Use stable layer-assignment via penalties to avoid overreacting to
+	// transient late-stage via bias changes in maze routing.
+	const int la_via_start = 2;
+	const int la_via_mid = 3;
+	const int la_via_end = 1;
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
