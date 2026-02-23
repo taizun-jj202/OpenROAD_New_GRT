@@ -1161,6 +1161,57 @@ int findLayer(int netID, TreeNode treenode)
 	exit(1);
 }
 
+int selectPinLiftLimit(int pin_x, int pin_y, int deg)
+{
+	if (deg >= 16) {
+		return 2;
+	}
+
+	int near_saturated_edges = 0;
+	int overflowing_edges = 0;
+
+	auto score_edge = [&](int usage, int cap) {
+		if (cap <= 0) {
+			return;
+		}
+		if (usage > cap) {
+			overflowing_edges++;
+		}
+		if (usage * 10 >= cap * 9) {
+			near_saturated_edges++;
+		}
+	};
+
+	if (pin_x > 0 && pin_x - 1 < xGrid - 1 && pin_y >= 0 && pin_y < yGrid) {
+		const int edge = pin_y * (xGrid - 1) + (pin_x - 1);
+		score_edge(h_edges[edge].usage, h_edges[edge].cap);
+	}
+	if (pin_x >= 0 && pin_x < xGrid - 1 && pin_y >= 0 && pin_y < yGrid) {
+		const int edge = pin_y * (xGrid - 1) + pin_x;
+		score_edge(h_edges[edge].usage, h_edges[edge].cap);
+	}
+	if (pin_y > 0 && pin_y - 1 < yGrid - 1 && pin_x >= 0 && pin_x < xGrid) {
+		const int edge = (pin_y - 1) * xGrid + pin_x;
+		score_edge(v_edges[edge].usage, v_edges[edge].cap);
+	}
+	if (pin_y >= 0 && pin_y < yGrid - 1 && pin_x >= 0 && pin_x < xGrid) {
+		const int edge = pin_y * xGrid + pin_x;
+		score_edge(v_edges[edge].usage, v_edges[edge].cap);
+	}
+
+	if (overflowing_edges > 0) {
+		return 2;
+	}
+	if (near_saturated_edges >= 3) {
+		return 2;
+	}
+	if (deg >= 8 && near_saturated_edges >= 2) {
+		return 2;
+	}
+
+	return 1;
+}
+
 void newLA ()
 {
 	int netID, i,d, k, edgeID,nodeID,deg, numpoints, n1, n2, corN,  tmpX[MAXLEN], tmpY[MAXLEN],*gridsX,*gridsY,*gridsL, tmpL[MAXLEN], routeLen, n1a, n2a;;
@@ -1193,17 +1244,17 @@ void newLA ()
 			treenodes[d].status = 0;
 
 
-			if(d<deg)
-			{
-				treenodes[d].layer = findLayer(netID, treenodes[d]);
-				//treenodes[d].botL = treenodes[d].topL = 0;
-				treenodes[d].botL = treenodes[d].layer; //0; //netID, d = pinID
-				// Allow broader lift only on larger nets; keep small nets local
-				// to avoid unnecessary vias while preserving escape flexibility.
-				const int pin_lift_limit = (deg >= 16) ? 2 : 1;
-				treenodes[d].topL
-					= (treenodes[d].layer == 0)
-						  ? pin_lift_limit
+				if(d<deg)
+				{
+					treenodes[d].layer = findLayer(netID, treenodes[d]);
+					//treenodes[d].botL = treenodes[d].topL = 0;
+					treenodes[d].botL = treenodes[d].layer; //0; //netID, d = pinID
+					// Enable extra lift only in locally congested pin regions.
+					const int pin_lift_limit
+						= selectPinLiftLimit(treenodes[d].x, treenodes[d].y, deg);
+					treenodes[d].topL
+						= (treenodes[d].layer == 0)
+							  ? pin_lift_limit
 						  : treenodes[d].layer; //Michael
 				//if(string(nets[netID]->name) == "ionet11")
 				//	cout << " x y l:" << treenodes[d].x << " " << treenodes[d].y << " " << treenodes[d].botL  << " " << treenodes[d].topL<< endl;
