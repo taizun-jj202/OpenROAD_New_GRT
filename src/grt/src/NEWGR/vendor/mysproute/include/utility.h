@@ -568,11 +568,9 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
 
-	// Escalate layer-assignment via penalties only once global routing has
-	// already moved to moderate/high via costs.
-	const int la_via_start = (viacost >= 4) ? 3 : 2;
-	const int la_via_mid = (viacost >= 4) ? 4 : 3;
-	const int la_via_end = (viacost >= 4) ? 2 : 1;
+	int la_via_start = (viacost >= 4) ? 3 : 2;
+	int la_via_mid = (viacost >= 4) ? 4 : 3;
+	int la_via_end = (viacost >= 4) ? 2 : 1;
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
@@ -609,6 +607,44 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 				else
 					layerGrid[l][k] = -10;
 			}
+		}
+	}
+
+	// Adapt per-edge via penalties to local capacity: relax penalties when
+	// route steps are capacity-starved, tighten them on long easy segments.
+	int blocked_steps = 0;
+	int single_option_steps = 0;
+	for (k = 0; k < routelen; k++) {
+		int best_avail = -BIG_INT;
+		int positive_choices = 0;
+		for (l = 0; l < numLayers; l++) {
+			if (layerGrid[l][k] > best_avail) {
+				best_avail = layerGrid[l][k];
+			}
+			if (layerGrid[l][k] > 0) {
+				positive_choices++;
+			}
+		}
+		if (best_avail <= 0) {
+			blocked_steps++;
+		}
+		if (positive_choices <= 1) {
+			single_option_steps++;
+		}
+	}
+	if (routelen >= 40 && blocked_steps == 0 && single_option_steps * 8 < routelen) {
+		la_via_mid += 1;
+		la_via_end += 1;
+	}
+	if (blocked_steps * 3 >= routelen || single_option_steps * 2 >= routelen) {
+		if (la_via_start > 1) {
+			la_via_start--;
+		}
+		if (la_via_mid > 2) {
+			la_via_mid--;
+		}
+		if (la_via_end > 1) {
+			la_via_end--;
 		}
 	}
 
