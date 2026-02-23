@@ -373,8 +373,12 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   selected_access_points.reserve(net->getNumPins());
   const auto& boundingBox = net->getBoundingBox();
   const PointT netCenter(boundingBox.cx(), boundingBox.cy());
+  // Resource score is scaled by 1000. Use a mild layer penalty to avoid
+  // over-selecting higher-layer access points unless resources are much better.
+  constexpr int layer_bias = 120;
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
     int best_accessibility = -1;
+    int best_balanced_score = std::numeric_limits<int>::min();
     int best_resource_score = std::numeric_limits<int>::min();
     int best_layer_penalty = std::numeric_limits<int>::max();
     int best_distance = std::numeric_limits<int>::max();
@@ -409,20 +413,30 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
           = std::abs(point.getLayerIdx() - constants_.min_routing_layer);
       const int distance
           = abs(netCenter.x() - point.x()) + abs(netCenter.y() - point.y());
+      const int balanced_score
+          = resource_score == std::numeric_limits<int>::min()
+                ? resource_score
+                : resource_score - layer_penalty * layer_bias;
 
       const bool better = accessibility > best_accessibility
                           || (accessibility == best_accessibility
+                              && balanced_score > best_balanced_score)
+                          || (accessibility == best_accessibility
+                              && balanced_score == best_balanced_score
                               && resource_score > best_resource_score)
                           || (accessibility == best_accessibility
+                              && balanced_score == best_balanced_score
                               && resource_score == best_resource_score
                               && layer_penalty < best_layer_penalty)
                           || (accessibility == best_accessibility
+                              && balanced_score == best_balanced_score
                               && resource_score == best_resource_score
                               && layer_penalty == best_layer_penalty
                               && distance < best_distance);
       if (better) {
         bestIndex = index;
         best_accessibility = accessibility;
+        best_balanced_score = balanced_score;
         best_resource_score = resource_score;
         best_layer_penalty = layer_penalty;
         best_distance = distance;
