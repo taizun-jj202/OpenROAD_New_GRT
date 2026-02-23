@@ -91,8 +91,16 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
   GridGraphView<bool> congestionView;
   grid_graph_->extractCongestionView(congestionView);
   sortNetIndices(netIndices, NetSortStage::kOverflowRepair);
+  int skipped_detour_nets = 0;
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
+    const int overflow_edges = grid_graph_->checkOverflow(net->getRoutingTree());
+    const bool compact_net
+        = net->getNumPins() <= 2 || net->getBoundingBox().hp() <= 60;
+    if (compact_net && overflow_edges <= 2) {
+      skipped_detour_nets++;
+      continue;
+    }
     grid_graph_->commitTree(net->getRoutingTree(), /*ripup*/ true);
     PatternRoute patternRoute(
         net, grid_graph_.get(), stt_builder_, constants_, logger_);
@@ -102,6 +110,11 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
     patternRoute.constructDetours(congestionView);
     patternRoute.run();
     grid_graph_->commitTree(net->getRoutingTree());
+  }
+  if (skipped_detour_nets > 0) {
+    logger_->report(
+        "stage 2: skipped detours on {} compact low-overflow nets.",
+        skipped_detour_nets);
   }
 
   updateOverflowNets(netIndices);
