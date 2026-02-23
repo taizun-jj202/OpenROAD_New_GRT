@@ -1243,6 +1243,11 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			if (past_cong < 1200) {
 				VIA = max(VIA, 4);
 			}
+			// Apply a stronger via bias only at very low residual overflow,
+			// when local path choices are mostly stable.
+			if (past_cong < 400) {
+				VIA = max(VIA, 5);
+			}
 			viacost = VIA;
 			//if(i == 1)
 			//	break;

@@ -577,7 +577,7 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	const int la_via_mid
 		= (la_high_via_mode && la_mid_route) ? 5
 		  : (la_mid_route ? 4 : 3);
-	const int la_via_end = la_mid_route ? 2 : 1;
+	const int la_via_end = la_long_route ? 3 : (la_mid_route ? 2 : 1);
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
