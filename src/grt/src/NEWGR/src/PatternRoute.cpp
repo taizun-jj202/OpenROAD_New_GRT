@@ -616,8 +616,9 @@ void PatternRoute::calculateRoutingCosts(
         for (CostT childCost : minChildCosts) {
           cost += childCost;
         }
-        // Mildly prefer tighter vertical spans to limit unnecessary vias.
-        cost += 0.20 * (layerIndex - lowLayerIndex);
+        // Keep a mild preference for tighter vertical spans, but do not
+        // over-penalize layer flexibility needed for short trees.
+        cost += 0.12 * (layerIndex - lowLayerIndex);
         if (cost < node->getCosts()[layerIndex]) {
           node->getCosts()[layerIndex] = cost;
           node->getBestPaths()[layerIndex] = bestPaths;
