@@ -605,17 +605,6 @@ void PatternRoute::calculateRoutingCosts(
         for (CostT childCost : minChildCosts) {
           cost += childCost;
         }
-        // Mildly penalize tall layer spans, with slightly stronger effect on
-        // branch points where extra vias multiply quickly.
-        const CostT layer_span = static_cast<CostT>(layerIndex - lowLayerIndex);
-        const CostT branch_factor = 1.0
-                                    + 0.20
-                                          * std::max(
-                                              0,
-                                              static_cast<int>(
-                                                  node->getPaths().size())
-                                                  - 1);
-        cost += 0.05 * branch_factor * layer_span;
         if (cost < node->getCosts()[layerIndex]) {
           node->getCosts()[layerIndex] = cost;
           node->getBestPaths()[layerIndex] = bestPaths;
