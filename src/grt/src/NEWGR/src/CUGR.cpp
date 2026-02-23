@@ -269,10 +269,16 @@ void CUGR::sortNetIndices(std::vector<int>& netIndices,
       return overflowCounts[lhs] > overflowCounts[rhs];
     }
     if (halfParameters[lhs] != halfParameters[rhs]) {
-      return halfParameters[lhs] < halfParameters[rhs];
+      // FastRoute-inspired ordering: preserve long trunks early, then
+      // prioritize compact nets during overflow cleanup.
+      return stage == NetSortStage::kInitialPattern
+                 ? halfParameters[lhs] > halfParameters[rhs]
+                 : halfParameters[lhs] < halfParameters[rhs];
     }
     if (pinCounts[lhs] != pinCounts[rhs]) {
-      return pinCounts[lhs] < pinCounts[rhs];
+      return stage == NetSortStage::kInitialPattern
+                 ? pinCounts[lhs] > pinCounts[rhs]
+                 : pinCounts[lhs] < pinCounts[rhs];
     }
     return lhs < rhs;
   });
