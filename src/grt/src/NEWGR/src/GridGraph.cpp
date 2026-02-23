@@ -373,7 +373,9 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   selected_access_points.reserve(net->getNumPins());
   const auto& boundingBox = net->getBoundingBox();
   const PointT netCenter(boundingBox.cx(), boundingBox.cy());
+  const int net_half_perimeter = boundingBox.hp();
   const bool lowDegreeNet = net->getNumPins() <= 2;
+  const bool compactNet = net_half_perimeter <= 45;
   // Resource score is scaled by 1000. Use a mild layer penalty to avoid
   // over-selecting higher-layer access points unless resources are much better.
   constexpr int layer_bias = 120;
@@ -457,15 +459,17 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     }
   }
   // Extend fixed layers adaptively:
-  // keep 2-pin nets tight while preserving flexibility for multi-pin nets.
+  // keep small/compact nets tight for via reduction, while preserving
+  // flexibility for larger nets to avoid long detours.
   for (auto& accessPoint : selected_access_points) {
     IntervalT& fixedLayers = accessPoint.layers;
-    int extension = lowDegreeNet ? 0 : 1;
+    const bool tightNet = lowDegreeNet || compactNet;
+    int extension = tightNet ? 0 : 1;
     if (fixedLayers.high() < constants_.min_routing_layer) {
       // Reach min routing layer, with one extra escape layer for
       // higher-degree nets.
       extension = constants_.min_routing_layer - fixedLayers.high()
-                  + (lowDegreeNet ? 0 : 1);
+                  + (tightNet ? 0 : 1);
     } else {
       const int probeLayer = std::min(fixedLayers.high(), getNumLayers() - 1);
       const int direction = getLayerDirection(probeLayer);
@@ -485,9 +489,9 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       if (accessible_edges == 2) {
         extension = 0;
       } else if (accessible_edges == 0) {
-        extension = lowDegreeNet ? 1 : 2;
+        extension = tightNet ? 1 : 2;
       } else {
-        extension = lowDegreeNet ? 0 : 1;
+        extension = tightNet ? 0 : 1;
       }
     }
     fixedLayers.SetHigh(std::min(
