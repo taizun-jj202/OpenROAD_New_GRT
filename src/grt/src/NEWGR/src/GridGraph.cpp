@@ -442,10 +442,10 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     }
   }
   // Extend fixed layers conservatively:
-  // 0 extra layer for easy/moderate pins, 1 for hard pins.
+  // 0 extra layer for easy pins, 1 for moderate pins, 2 for hard pins.
   for (auto& accessPoint : selected_access_points) {
     IntervalT& fixedLayers = accessPoint.layers;
-    int extension = 0;
+    int extension = 1;
     if (fixedLayers.high() < constants_.min_routing_layer) {
       // Keep one extra layer above min routing for low-layer pin robustness.
       extension = constants_.min_routing_layer - fixedLayers.high() + 1;
@@ -468,7 +468,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       if (accessible_edges == 2) {
         extension = 0;
       } else if (accessible_edges == 0) {
-        extension = 1;
+        extension = 2;
       }
     }
     fixedLayers.SetHigh(std::min(
