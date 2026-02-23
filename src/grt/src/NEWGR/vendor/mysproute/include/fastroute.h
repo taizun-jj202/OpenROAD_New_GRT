@@ -1243,9 +1243,9 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			if (past_cong < 1200) {
 				VIA = max(VIA, 4);
 			}
-			// Apply a stronger via bias only at very low residual overflow,
-			// when local path choices are mostly stable.
-			if (past_cong < 400) {
+			// Apply the strongest via bias only at very low residual overflow
+			// to reduce wirelength detours during mid-late convergence.
+			if (past_cong < 250) {
 				VIA = max(VIA, 5);
 			}
 			viacost = VIA;
