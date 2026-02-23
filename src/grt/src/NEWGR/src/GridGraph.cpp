@@ -374,35 +374,61 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   const auto& boundingBox = net->getBoundingBox();
   const PointT netCenter(boundingBox.cx(), boundingBox.cy());
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
-    std::pair<int, int> bestAccessDist = {0, std::numeric_limits<int>::max()};
+    int best_accessibility = -1;
+    int best_resource_score = std::numeric_limits<int>::min();
+    int best_layer_penalty = std::numeric_limits<int>::max();
+    int best_distance = std::numeric_limits<int>::max();
     int bestIndex = -1;
     for (int index = 0; index < accessPoints.size(); index++) {
       const GRPoint& point = accessPoints[index];
       int accessibility = 0;
+      CapacityT min_resource = std::numeric_limits<CapacityT>::max();
       if (point.getLayerIdx() >= constants_.min_routing_layer) {
         const int direction = getLayerDirection(point.getLayerIdx());
-        accessibility
-            += getEdge(point.getLayerIdx(), point.x(), point.y()).capacity >= 1;
+        if (point[direction] + 1 < getSize(direction)) {
+          const auto edge = getEdge(point.getLayerIdx(), point.x(), point.y());
+          accessibility += edge.capacity >= 1;
+          min_resource = std::min(min_resource, edge.getResource());
+        }
         if (point[direction] > 0) {
           auto lower = point;
           lower[direction] -= 1;
-          accessibility
-              += getEdge(lower.getLayerIdx(), lower.x(), lower.y()).capacity
-                 >= 1;
+          const auto edge = getEdge(lower.getLayerIdx(), lower.x(), lower.y());
+          accessibility += edge.capacity >= 1;
+          min_resource = std::min(min_resource, edge.getResource());
         }
       } else {
         accessibility = 1;
       }
+
+      const int resource_score
+          = min_resource == std::numeric_limits<CapacityT>::max()
+                ? std::numeric_limits<int>::min()
+                : static_cast<int>(std::round(min_resource * 1000.0));
+      const int layer_penalty
+          = std::abs(point.getLayerIdx() - constants_.min_routing_layer);
       const int distance
           = abs(netCenter.x() - point.x()) + abs(netCenter.y() - point.y());
-      if (accessibility > bestAccessDist.first
-          || (accessibility == bestAccessDist.first
-              && distance < bestAccessDist.second)) {
+
+      const bool better = accessibility > best_accessibility
+                          || (accessibility == best_accessibility
+                              && resource_score > best_resource_score)
+                          || (accessibility == best_accessibility
+                              && resource_score == best_resource_score
+                              && layer_penalty < best_layer_penalty)
+                          || (accessibility == best_accessibility
+                              && resource_score == best_resource_score
+                              && layer_penalty == best_layer_penalty
+                              && distance < best_distance);
+      if (better) {
         bestIndex = index;
-        bestAccessDist = {accessibility, distance};
+        best_accessibility = accessibility;
+        best_resource_score = resource_score;
+        best_layer_penalty = layer_penalty;
+        best_distance = distance;
       }
     }
-    if (bestAccessDist.first == 0) {
+    if (best_accessibility == 0) {
       logger_->warn(utl::GRT, 7001, "pin is hard to access.");
     }
     const PointT selectedPoint = accessPoints[bestIndex];
@@ -415,11 +441,35 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       }
     }
   }
-  // Extend the fixed layers to 2 layers higher to facilitate track switching
+  // Extend fixed layers conservatively:
+  // keep one extra layer for easily accessible pins and two for harder pins.
   for (auto& accessPoint : selected_access_points) {
     IntervalT& fixedLayers = accessPoint.layers;
-    fixedLayers.SetHigh(
-        std::min(fixedLayers.high() + 2, (int) getNumLayers() - 1));
+    int extension = 2;
+    if (fixedLayers.high() < constants_.min_routing_layer) {
+      extension = constants_.min_routing_layer - fixedLayers.high() + 1;
+    } else {
+      const int probeLayer = std::min(fixedLayers.high(), getNumLayers() - 1);
+      const int direction = getLayerDirection(probeLayer);
+      int accessible_edges = 0;
+      if (accessPoint.point[direction] + 1 < getSize(direction)) {
+        accessible_edges
+            += getEdge(probeLayer, accessPoint.point.x(), accessPoint.point.y())
+                   .capacity
+               >= 1;
+      }
+      if (accessPoint.point[direction] > 0) {
+        PointT lower = accessPoint.point;
+        lower[direction] -= 1;
+        accessible_edges
+            += getEdge(probeLayer, lower.x(), lower.y()).capacity >= 1;
+      }
+      if (accessible_edges == 2) {
+        extension = 1;
+      }
+    }
+    fixedLayers.SetHigh(std::min(
+        fixedLayers.high() + extension, static_cast<int>(getNumLayers()) - 1));
   }
   return selected_access_points;
 }
