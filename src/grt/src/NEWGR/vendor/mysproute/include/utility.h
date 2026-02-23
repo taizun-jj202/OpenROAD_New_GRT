@@ -568,13 +568,11 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
 
-	// Keep the baseline penalties on short edges, but discourage unnecessary
-	// layer transitions on long edges where endpoint vias often dominate.
-	const bool is_long_route = routelen >= 24;
-	const bool is_very_long_route = routelen >= 64;
-	const int la_via_start = is_very_long_route ? 3 : 2;
-	const int la_via_mid = is_very_long_route ? 4 : 3;
-	const int la_via_end = is_long_route ? 2 : 1;
+	// Keep layer-assignment penalties stable to avoid overreacting to local
+	// congestion noise, which can increase detours and final wirelength.
+	const int la_via_start = 2;
+	const int la_via_mid = 3;
+	const int la_via_end = 1;
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
