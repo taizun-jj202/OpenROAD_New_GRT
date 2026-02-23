@@ -568,9 +568,21 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
 
-	int la_via_start = (viacost >= 4) ? 3 : 2;
-	int la_via_mid = (viacost >= 4) ? 4 : 3;
-	int la_via_end = (viacost >= 4) ? 2 : 1;
+	// Bias toward fewer layer transitions once via pressure starts rising.
+	// Keep this strongest on short routes to avoid unnecessary pin-proximal
+	// layer bouncing that often contributes vias without reducing wirelength.
+	const bool la_high_via_mode = (viacost >= 3);
+	const bool la_short_route = (routelen <= 8);
+	const bool la_mid_route = (routelen >= 16);
+	const bool la_long_route = (routelen >= 48);
+	const int la_via_start
+		= la_short_route ? 3 : ((la_high_via_mode && la_long_route) ? 4 : 2);
+	const int la_via_mid
+		= la_short_route ? 4
+						 : ((la_high_via_mode && la_mid_route) ? 5
+							: (la_mid_route ? 4 : 3));
+	const int la_via_end
+		= la_short_route ? 2 : (la_long_route ? 3 : (la_mid_route ? 2 : 1));
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
@@ -607,44 +619,6 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 				else
 					layerGrid[l][k] = -10;
 			}
-		}
-	}
-
-	// Adapt per-edge via penalties to local capacity: relax penalties when
-	// route steps are capacity-starved, tighten them on long easy segments.
-	int blocked_steps = 0;
-	int single_option_steps = 0;
-	for (k = 0; k < routelen; k++) {
-		int best_avail = -BIG_INT;
-		int positive_choices = 0;
-		for (l = 0; l < numLayers; l++) {
-			if (layerGrid[l][k] > best_avail) {
-				best_avail = layerGrid[l][k];
-			}
-			if (layerGrid[l][k] > 0) {
-				positive_choices++;
-			}
-		}
-		if (best_avail <= 0) {
-			blocked_steps++;
-		}
-		if (positive_choices <= 1) {
-			single_option_steps++;
-		}
-	}
-	if (routelen >= 40 && blocked_steps == 0 && single_option_steps * 8 < routelen) {
-		la_via_mid += 1;
-		la_via_end += 1;
-	}
-	if (blocked_steps * 3 >= routelen || single_option_steps * 2 >= routelen) {
-		if (la_via_start > 1) {
-			la_via_start--;
-		}
-		if (la_via_mid > 2) {
-			la_via_mid--;
-		}
-		if (la_via_end > 1) {
-			la_via_end--;
 		}
 	}
 
