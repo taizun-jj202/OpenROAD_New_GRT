@@ -22,12 +22,12 @@ float max_rudy;
 #define M3_ADJ_MID 3.9
 #define M3_ADJ_K 2.0
 
-#define MID_ADJ_MIN 0.99
+#define MID_ADJ_MIN 0.989
 #define MID_ADJ_MAX 1.00
 #define MID_ADJ_MID 5.0
 #define MID_ADJ_K 2.0
 
-#define HIGH_ADJ 0.94
+#define HIGH_ADJ 0.938
 
 #define OBS_NO_STOP 0 // 1 == go through OBS, 0 == hard stop
 
