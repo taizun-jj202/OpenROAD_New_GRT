@@ -456,15 +456,14 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       }
     }
   }
-  // Extend fixed layers adaptively:
-  // keep 2-pin nets tight while preserving flexibility for multi-pin nets.
+  // Extend fixed layers with a wirelength-first bias:
+  // keep easy pins tight, but allow one escape layer in typical cases so
+  // low-degree nets avoid long horizontal/vertical detours.
   for (auto& accessPoint : selected_access_points) {
     IntervalT& fixedLayers = accessPoint.layers;
-    int extension = lowDegreeNet ? 0 : 1;
+    int extension = 1;
     if (fixedLayers.high() < constants_.min_routing_layer) {
-      // Reach min routing layer, with one extra escape layer for higher-degree nets.
-      extension = constants_.min_routing_layer - fixedLayers.high()
-                  + (lowDegreeNet ? 0 : 1);
+      extension = constants_.min_routing_layer - fixedLayers.high() + 1;
     } else {
       const int probeLayer = std::min(fixedLayers.high(), getNumLayers() - 1);
       const int direction = getLayerDirection(probeLayer);
@@ -486,7 +485,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       } else if (accessible_edges == 0) {
         extension = lowDegreeNet ? 1 : 2;
       } else {
-        extension = lowDegreeNet ? 0 : 1;
+        extension = 1;
       }
     }
     fixedLayers.SetHigh(std::min(
