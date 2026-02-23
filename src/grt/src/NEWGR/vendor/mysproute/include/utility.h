@@ -568,10 +568,12 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
 
-	// Use a light and stable LA via model to keep assignments predictable.
-	const int la_via_start = 2;
-	const int la_via_mid = 3;
-	const int la_via_end = 1;
+	// Penalize vertical transitions more on short/medium routes to trim via
+	// count, while keeping long routes flexible to avoid wirelength detours.
+	const bool la_long_route = (routelen >= 48);
+	const int la_via_start = la_long_route ? 2 : 3;
+	const int la_via_mid = la_long_route ? 3 : 4;
+	const int la_via_end = la_long_route ? 1 : 2;
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
@@ -1163,7 +1165,7 @@ int findLayer(int netID, TreeNode treenode)
 
 int selectPinLiftLimit(int pin_x, int pin_y, int deg)
 {
-	if (deg >= 16) {
+	if (deg >= 24) {
 		return 2;
 	}
 
@@ -1177,7 +1179,7 @@ int selectPinLiftLimit(int pin_x, int pin_y, int deg)
 		if (usage > cap) {
 			overflowing_edges++;
 		}
-		if (usage * 10 >= cap * 9) {
+		if (usage * 20 >= cap * 19) {
 			near_saturated_edges++;
 		}
 	};
@@ -1199,13 +1201,13 @@ int selectPinLiftLimit(int pin_x, int pin_y, int deg)
 		score_edge(v_edges[edge].usage, v_edges[edge].cap);
 	}
 
-	if (overflowing_edges > 0) {
+	if (overflowing_edges >= 2) {
 		return 2;
 	}
-	if (near_saturated_edges >= 3) {
+	if (deg >= 16 && overflowing_edges >= 1 && near_saturated_edges >= 2) {
 		return 2;
 	}
-	if (deg >= 8 && near_saturated_edges >= 2) {
+	if (near_saturated_edges >= 4) {
 		return 2;
 	}
 
@@ -1249,7 +1251,10 @@ void newLA ()
 					treenodes[d].layer = findLayer(netID, treenodes[d]);
 					//treenodes[d].botL = treenodes[d].topL = 0;
 					treenodes[d].botL = treenodes[d].layer; //0; //netID, d = pinID
-					treenodes[d].topL = (treenodes[d].layer == 0)? 2 : treenodes[d].layer; //Michael
+					const int pin_lift_limit
+						= selectPinLiftLimit(treenodes[d].x, treenodes[d].y, deg);
+					treenodes[d].topL
+						= (treenodes[d].layer == 0) ? pin_lift_limit : treenodes[d].layer; //Michael
 				//if(string(nets[netID]->name) == "ionet11")
 				//	cout << " x y l:" << treenodes[d].x << " " << treenodes[d].y << " " << treenodes[d].botL  << " " << treenodes[d].topL<< endl;
 				//treenodes[d].l = 0;
