@@ -573,23 +573,12 @@ void PatternRoute::calculateRoutingCosts(
     viaCosts[layerIndex] = viaCosts[layerIndex - 1]
                            + grid_graph_->getViaCost(layerIndex - 1, *node);
   }
-  const bool hasFixedLayers = node->getFixedLayers().IsValid();
   IntervalT fixedLayers(node->getFixedLayers());
-  const int topLayer = static_cast<int>(grid_graph_->getNumLayers()) - 1;
-  if (hasFixedLayers) {
-    fixedLayers.Set(std::clamp(fixedLayers.low(), 0, topLayer),
-                    std::clamp(fixedLayers.high(), 0, topLayer));
-  } else {
-    // No fixed layer constraints: keep the original "fully flexible" span,
-    // but do not search below min_routing_layer.
-    fixedLayers.Set(topLayer, constants_.min_routing_layer);
-  }
-  const int lowLayerStart
-      = hasFixedLayers && fixedLayers.low() < constants_.min_routing_layer
-            ? fixedLayers.low()
-            : constants_.min_routing_layer;
+  fixedLayers.Set(std::min(fixedLayers.low(),
+                           static_cast<int>(grid_graph_->getNumLayers()) - 1),
+                  std::max(fixedLayers.high(), constants_.min_routing_layer));
 
-  for (int lowLayerIndex = lowLayerStart; lowLayerIndex <= fixedLayers.low();
+  for (int lowLayerIndex = 0; lowLayerIndex <= fixedLayers.low();
        lowLayerIndex++) {
     std::vector<CostT> minChildCosts;
     std::vector<std::pair<int, int>> bestPaths;
@@ -616,9 +605,6 @@ void PatternRoute::calculateRoutingCosts(
         for (CostT childCost : minChildCosts) {
           cost += childCost;
         }
-        // Keep a mild preference for tighter vertical spans, but do not
-        // over-penalize layer flexibility needed for short trees.
-        cost += 0.12 * (layerIndex - lowLayerIndex);
         if (cost < node->getCosts()[layerIndex]) {
           node->getCosts()[layerIndex] = cost;
           node->getBestPaths()[layerIndex] = bestPaths;
@@ -642,14 +628,7 @@ std::shared_ptr<GRTreeNode> PatternRoute::getRoutingTree(
 {
   if (parentLayerIndex == -1) {
     CostT minCost = std::numeric_limits<CostT>::max();
-    const bool hasFixedLayers = node->getFixedLayers().IsValid();
-    const int layerSearchStart
-        = hasFixedLayers
-                  && node->getFixedLayers().low() < constants_.min_routing_layer
-              ? node->getFixedLayers().low()
-              : constants_.min_routing_layer;
-    for (int layerIndex = layerSearchStart;
-         layerIndex < grid_graph_->getNumLayers();
+    for (int layerIndex = 0; layerIndex < grid_graph_->getNumLayers();
          layerIndex++) {
       if (routing_dag_->getCosts()[layerIndex] < minCost) {
         minCost = routing_dag_->getCosts()[layerIndex];

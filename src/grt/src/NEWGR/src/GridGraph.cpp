@@ -373,7 +373,6 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   selected_access_points.reserve(net->getNumPins());
   const auto& boundingBox = net->getBoundingBox();
   const PointT netCenter(boundingBox.cx(), boundingBox.cy());
-  const bool lowDegreeNet = net->getNumPins() <= 2;
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
     int best_accessibility = -1;
     int best_resource_score = std::numeric_limits<int>::min();
@@ -413,14 +412,14 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
 
       const bool better = accessibility > best_accessibility
                           || (accessibility == best_accessibility
+                              && resource_score > best_resource_score)
+                          || (accessibility == best_accessibility
+                              && resource_score == best_resource_score
                               && layer_penalty < best_layer_penalty)
                           || (accessibility == best_accessibility
+                              && resource_score == best_resource_score
                               && layer_penalty == best_layer_penalty
-                              && distance < best_distance)
-                          || (accessibility == best_accessibility
-                              && layer_penalty == best_layer_penalty
-                              && distance == best_distance
-                              && resource_score > best_resource_score);
+                              && distance < best_distance);
       if (better) {
         bestIndex = index;
         best_accessibility = accessibility;
@@ -432,7 +431,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     if (best_accessibility == 0) {
       logger_->warn(utl::GRT, 7001, "pin is hard to access.");
     }
-    const GRPoint& selectedPoint = accessPoints[bestIndex];
+    const PointT selectedPoint = accessPoints[bestIndex];
     const AccessPoint ap{selectedPoint, {}};
     auto it = selected_access_points.emplace(ap).first;
     IntervalT& fixedLayerInterval = it->layers;
@@ -442,15 +441,14 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       }
     }
   }
-  // Extend fixed layers adaptively:
-  // keep 2-pin nets tight, but allow a bit more flexibility on multi-pin nets
-  // to avoid long detours.
+  // Extend fixed layers conservatively:
+  // 0 extra layer for easy pins, 1 for moderate pins, 2 for hard pins.
   for (auto& accessPoint : selected_access_points) {
     IntervalT& fixedLayers = accessPoint.layers;
-    int extension = lowDegreeNet ? 0 : 1;
+    int extension = 1;
     if (fixedLayers.high() < constants_.min_routing_layer) {
-      extension = constants_.min_routing_layer - fixedLayers.high()
-                  + (lowDegreeNet ? 0 : 1);
+      // Keep one extra layer above min routing for low-layer pin robustness.
+      extension = constants_.min_routing_layer - fixedLayers.high() + 1;
     } else {
       const int probeLayer = std::min(fixedLayers.high(), getNumLayers() - 1);
       const int direction = getLayerDirection(probeLayer);
@@ -470,9 +468,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       if (accessible_edges == 2) {
         extension = 0;
       } else if (accessible_edges == 0) {
-        extension = lowDegreeNet ? 1 : 2;
-      } else {
-        extension = lowDegreeNet ? 0 : 1;
+        extension = 2;
       }
     }
     fixedLayers.SetHigh(std::min(
