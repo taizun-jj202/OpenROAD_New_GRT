@@ -1249,13 +1249,7 @@ void newLA ()
 					treenodes[d].layer = findLayer(netID, treenodes[d]);
 					//treenodes[d].botL = treenodes[d].topL = 0;
 					treenodes[d].botL = treenodes[d].layer; //0; //netID, d = pinID
-					// Enable extra lift only in locally congested pin regions.
-					const int pin_lift_limit
-						= selectPinLiftLimit(treenodes[d].x, treenodes[d].y, deg);
-					treenodes[d].topL
-						= (treenodes[d].layer == 0)
-							  ? pin_lift_limit
-						  : treenodes[d].layer; //Michael
+					treenodes[d].topL = (treenodes[d].layer == 0)? 2 : treenodes[d].layer; //Michael
 				//if(string(nets[netID]->name) == "ionet11")
 				//	cout << " x y l:" << treenodes[d].x << " " << treenodes[d].y << " " << treenodes[d].botL  << " " << treenodes[d].topL<< endl;
 				//treenodes[d].l = 0;
