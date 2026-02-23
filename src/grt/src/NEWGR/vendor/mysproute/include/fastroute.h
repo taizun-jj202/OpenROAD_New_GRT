@@ -1235,13 +1235,13 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
             last_cong = past_cong;
  
 			past_cong = getOverflow2Dmaze(&maxOverflow , & tUsage); 
-			// Apply a moderate late via bias once overflow is dropping so
-			// wirelength stays primary while still controlling via growth.
+			// Increase via pressure more aggressively once congestion is under
+			// control, so final trees avoid unnecessary layer bouncing.
 			if (past_cong < 6000) {
-				VIA = max(VIA, 3);
+				VIA = max(VIA, 4);
 			}
 			if (past_cong < 1200) {
-				VIA = max(VIA, 4);
+				VIA = max(VIA, 5);
 			}
 			viacost = VIA;
 			//if(i == 1)
@@ -1359,10 +1359,10 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		printf("Final 2D results: \n");
 		getOverflow2Dmaze( &maxOverflow , & tUsage);
 
-		// Keep a moderate via penalty in layer assignment after overflow is
-		// resolved to avoid excessive detours.
+		// Keep strong via penalty in layer assignment after overflow is
+		// resolved to prevent last-stage via growth.
 		if (past_cong == 0) {
-			VIA = max(VIA, 4);
+			VIA = max(VIA, 5);
 		}
 		viacost = max(viacost, VIA);
 		printf("\nLayer Assignment Begins");
