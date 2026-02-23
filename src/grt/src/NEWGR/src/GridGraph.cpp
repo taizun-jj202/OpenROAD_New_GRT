@@ -373,6 +373,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   selected_access_points.reserve(net->getNumPins());
   const auto& boundingBox = net->getBoundingBox();
   const PointT netCenter(boundingBox.cx(), boundingBox.cy());
+  const bool lowDegreeNet = net->getNumPins() <= 2;
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
     int best_accessibility = -1;
     int best_resource_score = std::numeric_limits<int>::min();
@@ -431,7 +432,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     if (best_accessibility == 0) {
       logger_->warn(utl::GRT, 7001, "pin is hard to access.");
     }
-    const PointT selectedPoint = accessPoints[bestIndex];
+    const GRPoint& selectedPoint = accessPoints[bestIndex];
     const AccessPoint ap{selectedPoint, {}};
     auto it = selected_access_points.emplace(ap).first;
     IntervalT& fixedLayerInterval = it->layers;
@@ -442,13 +443,14 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     }
   }
   // Extend fixed layers conservatively:
-  // 0 extra layer for easy pins, 1 for moderate pins, 2 for hard pins.
+  // Favor tighter layer ranges on low-degree nets to suppress needless vias.
   for (auto& accessPoint : selected_access_points) {
     IntervalT& fixedLayers = accessPoint.layers;
-    int extension = 1;
+    int extension = lowDegreeNet ? 0 : 1;
     if (fixedLayers.high() < constants_.min_routing_layer) {
-      // Keep one extra layer above min routing for low-layer pin robustness.
-      extension = constants_.min_routing_layer - fixedLayers.high() + 1;
+      // Keep low-layer pins reachable; keep less slack for simpler nets.
+      extension = constants_.min_routing_layer - fixedLayers.high()
+                  + (lowDegreeNet ? 0 : 1);
     } else {
       const int probeLayer = std::min(fixedLayers.high(), getNumLayers() - 1);
       const int direction = getLayerDirection(probeLayer);
@@ -468,7 +470,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       if (accessible_edges == 2) {
         extension = 0;
       } else if (accessible_edges == 0) {
-        extension = 2;
+        extension = lowDegreeNet ? 1 : 2;
       }
     }
     fixedLayers.SetHigh(std::min(
