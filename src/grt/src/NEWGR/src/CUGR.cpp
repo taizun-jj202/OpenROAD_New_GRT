@@ -65,7 +65,7 @@ void CUGR::updateOverflowNets(std::vector<int>& netIndices)
 void CUGR::patternRoute(std::vector<int>& netIndices)
 {
   logger_->report("stage 1: pattern routing");
-  sortNetIndices(netIndices);
+  sortNetIndices(netIndices, NetSortStage::kInitialPattern);
   for (const int netIndex : netIndices) {
     PatternRoute patternRoute(gr_nets_[netIndex].get(),
                               grid_graph_.get(),
@@ -90,7 +90,7 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
   // (2d) direction -> x -> y -> has overflow?
   GridGraphView<bool> congestionView;
   grid_graph_->extractCongestionView(congestionView);
-  sortNetIndices(netIndices);
+  sortNetIndices(netIndices, NetSortStage::kOverflowRepair);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
     grid_graph_->commitTree(net->getRoutingTree(), /*ripup*/ true);
@@ -119,7 +119,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   }
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
-  sortNetIndices(netIndices);
+  sortNetIndices(netIndices, NetSortStage::kOverflowRepair);
   SparseGrid grid(10, 10, 0, 0);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
@@ -248,15 +248,33 @@ NetRouteMap CUGR::getRoutes()
   return routes;
 }
 
-void CUGR::sortNetIndices(std::vector<int>& netIndices) const
+void CUGR::sortNetIndices(std::vector<int>& netIndices,
+                          const NetSortStage stage) const
 {
-  std::vector<int> halfParameters(gr_nets_.size());
+  std::vector<int> halfParameters(gr_nets_.size(), 0);
+  std::vector<int> pinCounts(gr_nets_.size(), 0);
+  std::vector<int> overflowCounts(gr_nets_.size(), 0);
   for (int netIndex : netIndices) {
     auto& net = gr_nets_[netIndex];
     halfParameters[netIndex] = net->getBoundingBox().hp();
+    pinCounts[netIndex] = net->getNumPins();
+    if (stage == NetSortStage::kOverflowRepair) {
+      overflowCounts[netIndex] = grid_graph_->checkOverflow(net->getRoutingTree());
+    }
   }
+
   sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
-    return halfParameters[lhs] < halfParameters[rhs];
+    if (stage == NetSortStage::kOverflowRepair
+        && overflowCounts[lhs] != overflowCounts[rhs]) {
+      return overflowCounts[lhs] > overflowCounts[rhs];
+    }
+    if (halfParameters[lhs] != halfParameters[rhs]) {
+      return halfParameters[lhs] > halfParameters[rhs];
+    }
+    if (pinCounts[lhs] != pinCounts[rhs]) {
+      return pinCounts[lhs] > pinCounts[rhs];
+    }
+    return lhs < rhs;
   });
 }
 

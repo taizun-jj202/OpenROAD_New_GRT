@@ -38,8 +38,8 @@ struct Constants
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.25;
-  int target_detour_count = 20;
+  double max_detour_ratio = 0.22;
+  int target_detour_count = 14;
 
   double via_multiplier = 2.1;
 
@@ -67,11 +67,17 @@ class CUGR
   void updateDbCongestion();
 
  private:
+  enum class NetSortStage
+  {
+    kInitialPattern,
+    kOverflowRepair
+  };
+
   void updateOverflowNets(std::vector<int>& netIndices);
   void patternRoute(std::vector<int>& netIndices);
   void patternRouteWithDetours(std::vector<int>& netIndices);
   void mazeRoute(std::vector<int>& netIndices);
-  void sortNetIndices(std::vector<int>& netIndices) const;
+  void sortNetIndices(std::vector<int>& netIndices, NetSortStage stage) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
   void printStatistics() const;
