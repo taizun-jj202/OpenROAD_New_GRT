@@ -568,14 +568,16 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
 
-	// Keep short segments wirelength-driven, and apply stronger via control
-	// mainly on long routes once global routing enters high via-cost mode.
-	const bool la_high_via_mode = (viacost >= 4);
-	const bool la_long_route = (routelen >= 24);
-	const bool la_very_long_route = (routelen >= 64);
-	const int la_via_start = (la_high_via_mode && la_very_long_route) ? 3 : 2;
-	const int la_via_mid = (la_high_via_mode && la_long_route) ? 4 : 3;
-	const int la_via_end = (la_high_via_mode && la_long_route) ? 2 : 1;
+	// Bias toward fewer layer transitions once via pressure starts rising.
+	// This affects LA only, so 2D guides remain wirelength-driven.
+	const bool la_high_via_mode = (viacost >= 3);
+	const bool la_mid_route = (routelen >= 16);
+	const bool la_long_route = (routelen >= 48);
+	const int la_via_start = (la_high_via_mode && la_long_route) ? 4 : 2;
+	const int la_via_mid
+		= (la_high_via_mode && la_mid_route) ? 5
+		  : (la_mid_route ? 4 : 3);
+	const int la_via_end = la_mid_route ? 2 : 1;
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
