@@ -568,21 +568,11 @@ void assignEdge(int netID, int edgeID, Bool processDIR)
 	n1a = treeedge->n1a;
 	n2a = treeedge->n2a;
 
-	// Bias toward fewer layer transitions once via pressure starts rising.
-	// Keep this strongest on short routes to avoid unnecessary pin-proximal
-	// layer bouncing that often contributes vias without reducing wirelength.
-	const bool la_high_via_mode = (viacost >= 3);
-	const bool la_short_route = (routelen <= 8);
-	const bool la_mid_route = (routelen >= 16);
-	const bool la_long_route = (routelen >= 48);
-	const int la_via_start
-		= la_short_route ? 3 : ((la_high_via_mode && la_long_route) ? 4 : 2);
-	const int la_via_mid
-		= la_short_route ? 4
-						 : ((la_high_via_mode && la_mid_route) ? 5
-							: (la_mid_route ? 4 : 3));
-	const int la_via_end
-		= la_short_route ? 2 : (la_long_route ? 3 : (la_mid_route ? 2 : 1));
+	// Escalate layer-assignment via penalties only once global routing has
+	// already moved to moderate/high via costs.
+	const int la_via_start = (viacost >= 4) ? 3 : 2;
+	const int la_via_mid = (viacost >= 4) ? 4 : 3;
+	const int la_via_end = (viacost >= 4) ? 2 : 1;
 
 	for (l = 0; l < numLayers; l ++) {
 		for (k = 0; k <= routelen; k ++) {
