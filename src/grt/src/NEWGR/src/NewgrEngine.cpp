@@ -85,6 +85,12 @@ NetRouteMap NewgrEngine::run()
   if (numThreads <= 0) {
     numThreads = 1;
   }
+  // Avoid very high thread counts that can destabilize quality for the same
+  // benchmark due to parallel rip-up/reroute ordering differences.
+  constexpr int kMaxRoutingThreads = 8;
+  if (numThreads > kMaxRoutingThreads) {
+    numThreads = kMaxRoutingThreads;
+  }
   galois::preAlloc(numThreads * 2);
   numThreads = galois::setActiveThreads(numThreads);
 
@@ -104,7 +110,7 @@ NetRouteMap NewgrEngine::run()
                congestion_map,
                timer,
                /*maxMazeRound=*/500,
-               Algo::FineGrain);
+               Algo::NonDet);
   timer.stop();
   last_total_overflow_ = totalOverflow;
 
