@@ -125,7 +125,8 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   // borderline nets that are structurally harder to clean with pattern routing.
   constexpr int kBorderlinePinThreshold = 8;
   constexpr int kBorderlineHpThreshold = 64;
-  constexpr int kBorderlineAdmissionDivisor = 4;
+  constexpr int kBorderlineAdmissionDivisor = 3;
+  constexpr int kBorderlineAdmissionMax = 8;
   for (const int netIndex : netIndices) {
     const int overflowCount
         = grid_graph_->checkOverflow(gr_nets_[netIndex]->getRoutingTree());
@@ -154,10 +155,14 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
               }
               return lhs < rhs;
             });
-  const int borderlineAdmissionCap
-      = selectedByThreshold > 0
-            ? std::max(1, selectedByThreshold / kBorderlineAdmissionDivisor)
-            : 0;
+  int borderlineAdmissionCap
+      = std::max(1, selectedByThreshold / kBorderlineAdmissionDivisor);
+  if (selectedByThreshold == 0) {
+    borderlineAdmissionCap
+        = std::min(1, static_cast<int>(borderlineNetIndices.size()));
+  }
+  borderlineAdmissionCap
+      = std::min(borderlineAdmissionCap, kBorderlineAdmissionMax);
   int admittedBorderline = 0;
   for (const int netIndex : borderlineNetIndices) {
     if (admittedBorderline >= borderlineAdmissionCap) {
