@@ -155,7 +155,9 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
               return lhs < rhs;
             });
   const int borderlineAdmissionCap
-      = std::max(1, selectedByThreshold / kBorderlineAdmissionDivisor);
+      = selectedByThreshold > 0
+            ? std::max(1, selectedByThreshold / kBorderlineAdmissionDivisor)
+            : 0;
   int admittedBorderline = 0;
   for (const int netIndex : borderlineNetIndices) {
     if (admittedBorderline >= borderlineAdmissionCap) {
