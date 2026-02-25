@@ -126,7 +126,9 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   constexpr int kBorderlinePinThreshold = 8;
   constexpr int kBorderlineHpThreshold = 64;
   constexpr int kBorderlineAdmissionDivisor = 3;
-  constexpr int kBorderlineAdmissionMax = 8;
+  // Keep maze work bounded while letting more near-threshold nets get
+  // one maze pass for potential WL cleanup.
+  constexpr int kBorderlineAdmissionMax = 64;
   for (const int netIndex : netIndices) {
     const int overflowCount
         = grid_graph_->checkOverflow(gr_nets_[netIndex]->getRoutingTree());
