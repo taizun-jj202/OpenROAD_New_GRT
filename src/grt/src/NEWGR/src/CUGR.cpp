@@ -123,12 +123,12 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   const int mazeThreshold = constants_.maze_overflow_threshold;
   // Bound expensive maze expansion: consider a small capped slice of
   // borderline nets that are structurally harder to clean with pattern routing.
-  constexpr int kBorderlinePinThreshold = 8;
-  constexpr int kBorderlineHpThreshold = 64;
-  constexpr int kBorderlineAdmissionDivisor = 4;
+  constexpr int kBorderlinePinThreshold = 10;
+  constexpr int kBorderlineHpThreshold = 96;
+  constexpr int kBorderlineAdmissionDivisor = 6;
   // Keep maze work bounded while letting more near-threshold nets get
   // one maze pass for potential WL cleanup.
-  constexpr int kBorderlineAdmissionMax = 64;
+  constexpr int kBorderlineAdmissionMax = 40;
   for (const int netIndex : netIndices) {
     const int overflowCount
         = grid_graph_->checkOverflow(gr_nets_[netIndex]->getRoutingTree());
