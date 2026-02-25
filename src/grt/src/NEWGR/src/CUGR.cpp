@@ -125,7 +125,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   // borderline nets that are structurally harder to clean with pattern routing.
   constexpr int kBorderlinePinThreshold = 8;
   constexpr int kBorderlineHpThreshold = 64;
-  constexpr int kBorderlineAdmissionDivisor = 3;
+  constexpr int kBorderlineAdmissionDivisor = 4;
   // Keep maze work bounded while letting more near-threshold nets get
   // one maze pass for potential WL cleanup.
   constexpr int kBorderlineAdmissionMax = 64;
