@@ -44,7 +44,7 @@ struct Constants
   double via_multiplier = 2.0;
 
   double maze_logistic_slope = 0.5;
-  int maze_overflow_threshold = 2;
+  int maze_overflow_threshold = 3;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
