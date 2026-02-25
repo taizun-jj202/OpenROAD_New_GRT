@@ -114,11 +114,13 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   }
   logger_->report("stage 3: maze routing on sparsified routing graph");
   std::vector<int> mazeNetIndices;
+  std::vector<int> overflowCounts(gr_nets_.size(), 0);
   mazeNetIndices.reserve(netIndices.size());
   int skippedByThreshold = 0;
   for (const int netIndex : netIndices) {
     const int overflowCount
         = grid_graph_->checkOverflow(gr_nets_[netIndex]->getRoutingTree());
+    overflowCounts[netIndex] = overflowCount;
     if (overflowCount >= constants_.maze_overflow_threshold) {
       mazeNetIndices.push_back(netIndex);
     } else {
@@ -140,7 +142,19 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   }
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
-  sortNetIndices(mazeNetIndices);
+  std::sort(mazeNetIndices.begin(),
+            mazeNetIndices.end(),
+            [&](const int lhs, const int rhs) {
+              if (overflowCounts[lhs] != overflowCounts[rhs]) {
+                return overflowCounts[lhs] > overflowCounts[rhs];
+              }
+              const int lhsHp = gr_nets_[lhs]->getBoundingBox().hp();
+              const int rhsHp = gr_nets_[rhs]->getBoundingBox().hp();
+              if (lhsHp != rhsHp) {
+                return lhsHp < rhsHp;
+              }
+              return lhs < rhs;
+            });
   SparseGrid grid(10, 10, 0, 0);
   for (const int netIndex : mazeNetIndices) {
     GRNet* net = gr_nets_[netIndex].get();
