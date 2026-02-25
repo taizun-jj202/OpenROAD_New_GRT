@@ -114,81 +114,25 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   }
   logger_->report("stage 3: maze routing on sparsified routing graph");
   std::vector<int> mazeNetIndices;
-  std::vector<int> borderlineNetIndices;
   std::vector<int> overflowCounts(gr_nets_.size(), 0);
   mazeNetIndices.reserve(netIndices.size());
-  borderlineNetIndices.reserve(netIndices.size());
-  int selectedByThreshold = 0;
   int skippedByThreshold = 0;
   const int mazeThreshold = constants_.maze_overflow_threshold;
-  // Bound expensive maze expansion: consider a small capped slice of
-  // borderline nets that are structurally harder to clean with pattern routing.
-  constexpr int kBorderlinePinThreshold = 10;
-  constexpr int kBorderlineHpThreshold = 96;
-  constexpr int kBorderlineAdmissionDivisor = 6;
-  // Keep maze work bounded while letting more near-threshold nets get
-  // one maze pass for potential WL cleanup.
-  constexpr int kBorderlineAdmissionMax = 40;
   for (const int netIndex : netIndices) {
     const int overflowCount
         = grid_graph_->checkOverflow(gr_nets_[netIndex]->getRoutingTree());
     overflowCounts[netIndex] = overflowCount;
     if (overflowCount >= mazeThreshold) {
       mazeNetIndices.push_back(netIndex);
-      selectedByThreshold++;
-    } else if (overflowCount + 1 == mazeThreshold) {
-      borderlineNetIndices.push_back(netIndex);
     } else {
       skippedByThreshold++;
     }
   }
-  std::sort(borderlineNetIndices.begin(),
-            borderlineNetIndices.end(),
-            [&](const int lhs, const int rhs) {
-              const int lhsPins = gr_nets_[lhs]->getNumPins();
-              const int rhsPins = gr_nets_[rhs]->getNumPins();
-              if (lhsPins != rhsPins) {
-                return lhsPins > rhsPins;
-              }
-              const int lhsHp = gr_nets_[lhs]->getBoundingBox().hp();
-              const int rhsHp = gr_nets_[rhs]->getBoundingBox().hp();
-              if (lhsHp != rhsHp) {
-                return lhsHp > rhsHp;
-              }
-              return lhs < rhs;
-            });
-  int borderlineAdmissionCap
-      = std::max(1, selectedByThreshold / kBorderlineAdmissionDivisor);
-  if (selectedByThreshold == 0) {
-    borderlineAdmissionCap
-        = std::min(1, static_cast<int>(borderlineNetIndices.size()));
-  }
-  borderlineAdmissionCap
-      = std::min(borderlineAdmissionCap, kBorderlineAdmissionMax);
-  int admittedBorderline = 0;
-  for (const int netIndex : borderlineNetIndices) {
-    if (admittedBorderline >= borderlineAdmissionCap) {
-      break;
-    }
-    const GRNet* net = gr_nets_[netIndex].get();
-    const bool isComplexBorderline = net->getNumPins() >= kBorderlinePinThreshold
-                                     || net->getBoundingBox().hp() >= kBorderlineHpThreshold;
-    if (!isComplexBorderline) {
-      continue;
-    }
-    mazeNetIndices.push_back(netIndex);
-    admittedBorderline++;
-  }
-  skippedByThreshold += static_cast<int>(borderlineNetIndices.size())
-                        - admittedBorderline;
   logger_->report(
-      "stage 3 threshold filter: {} selected ({} severe + {} borderline), {} skipped (threshold: {}, borderline cap: {})",
+      "stage 3 threshold filter: {} selected, {} skipped (threshold: {})",
       mazeNetIndices.size(),
-      selectedByThreshold,
-      admittedBorderline,
       skippedByThreshold,
-      mazeThreshold,
-      borderlineAdmissionCap);
+      mazeThreshold);
   if (mazeNetIndices.empty()) {
     updateOverflowNets(netIndices);
     return;
