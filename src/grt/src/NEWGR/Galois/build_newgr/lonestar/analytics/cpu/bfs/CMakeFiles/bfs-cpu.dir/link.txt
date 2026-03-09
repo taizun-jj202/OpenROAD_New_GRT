@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -march=native "CMakeFiles/bfs-cpu.dir/bfs.cpp.o" -o bfs-cpu  ../../../../libgalois/libgalois_shmem.a ../../../liblonestar/liblonestar.a ../../../../libgalois/libgalois_shmem.a /usr/lib/llvm-14/lib/libLLVMSupport.a -lrt -ldl -lm /usr/lib/x86_64-linux-gnu/libz.so /usr/lib/x86_64-linux-gnu/libtinfo.so /usr/lib/llvm-14/lib/libLLVMDemangle.a

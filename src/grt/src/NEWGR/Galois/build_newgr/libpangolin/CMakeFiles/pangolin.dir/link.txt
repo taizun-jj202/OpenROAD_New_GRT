@@ -1,0 +1,2 @@
+/usr/bin/ar qc libpangolin.a CMakeFiles/pangolin.dir/src/equivalence.cpp.o CMakeFiles/pangolin.dir/src/quick_pattern.cpp.o CMakeFiles/pangolin.dir/src/base_embedding.cpp.o CMakeFiles/pangolin.dir/src/vertex_embedding.cpp.o CMakeFiles/pangolin.dir/src/BfsMining/embedding_list.cpp.o
+/usr/bin/ranlib libpangolin.a

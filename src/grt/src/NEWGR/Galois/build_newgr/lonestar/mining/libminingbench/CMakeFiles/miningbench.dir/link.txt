@@ -1,0 +1,2 @@
+/usr/bin/ar qc libminingbench.a CMakeFiles/miningbench.dir/src/Start.cpp.o CMakeFiles/miningbench.dir/src/Input.cpp.o
+/usr/bin/ranlib libminingbench.a

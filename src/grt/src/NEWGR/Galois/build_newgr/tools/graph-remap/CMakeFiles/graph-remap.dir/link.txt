@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -march=native "CMakeFiles/graph-remap.dir/graph-remap.cpp.o" -o graph-remap  ../../libgalois/libgalois_shmem.a /usr/lib/llvm-14/lib/libLLVMSupport.a -lrt -ldl -lm /usr/lib/x86_64-linux-gnu/libz.so /usr/lib/x86_64-linux-gnu/libtinfo.so /usr/lib/llvm-14/lib/libLLVMDemangle.a

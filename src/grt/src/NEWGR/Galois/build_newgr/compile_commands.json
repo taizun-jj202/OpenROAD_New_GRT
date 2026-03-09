@@ -1,0 +1,1148 @@
+[
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libsupport",
+  "command": "/usr/bin/c++ -DFMT_LOCALE -DFMT_SHARED -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libsupport/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_support.dir/src/GetEnv.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libsupport/src/GetEnv.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libsupport/src/GetEnv.cpp",
+  "output": "libsupport/CMakeFiles/galois_support.dir/src/GetEnv.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libsupport",
+  "command": "/usr/bin/c++ -DFMT_LOCALE -DFMT_SHARED -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libsupport/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_support.dir/src/Logging.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libsupport/src/Logging.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libsupport/src/Logging.cpp",
+  "output": "libsupport/CMakeFiles/galois_support.dir/src/Logging.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libsupport/test",
+  "command": "/usr/bin/c++ -DFMT_LOCALE -DFMT_SHARED -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libsupport/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-getenv.dir/getenv.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libsupport/test/getenv.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libsupport/test/getenv.cpp",
+  "output": "libsupport/test/CMakeFiles/unit-getenv.dir/getenv.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libsupport/test",
+  "command": "/usr/bin/c++ -DFMT_LOCALE -DFMT_SHARED -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libsupport/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-logging.dir/logging.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libsupport/test/logging.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libsupport/test/logging.cpp",
+  "output": "libsupport/test/CMakeFiles/unit-logging.dir/logging.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/Version.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/Version.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/Version.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/Version.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Barrier_Counting.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier_Counting.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier_Counting.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Barrier_Counting.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Barrier.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Barrier.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Barrier_Dissemination.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier_Dissemination.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier_Dissemination.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Barrier_Dissemination.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Barrier_MCS.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier_MCS.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier_MCS.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Barrier_MCS.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Barrier_Pthread.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier_Pthread.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier_Pthread.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Barrier_Pthread.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Barrier_Simple.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier_Simple.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier_Simple.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Barrier_Simple.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Barrier_Topo.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier_Topo.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Barrier_Topo.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Barrier_Topo.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Context.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Context.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Context.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Context.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Deterministic.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Deterministic.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Deterministic.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Deterministic.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/DynamicBitset.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/DynamicBitset.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/DynamicBitset.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/DynamicBitset.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/EnvCheck.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/EnvCheck.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/EnvCheck.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/EnvCheck.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/FileGraph.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/FileGraph.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/FileGraph.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/FileGraph.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/FileGraphParallel.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/FileGraphParallel.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/FileGraphParallel.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/FileGraphParallel.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/gIO.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/gIO.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/gIO.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/gIO.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/GraphHelpers.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/GraphHelpers.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/GraphHelpers.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/GraphHelpers.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/HWTopo.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/HWTopo.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/HWTopo.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/HWTopo.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Mem.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Mem.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Mem.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Mem.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/NumaMem.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/NumaMem.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/NumaMem.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/NumaMem.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/OCFileGraph.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/OCFileGraph.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/OCFileGraph.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/OCFileGraph.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/PageAlloc.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/PageAlloc.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/PageAlloc.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/PageAlloc.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/PagePool.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/PagePool.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/PagePool.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/PagePool.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/ParaMeter.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/ParaMeter.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/ParaMeter.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/ParaMeter.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/PerThreadStorage.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/PerThreadStorage.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/PerThreadStorage.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/PerThreadStorage.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/PreAlloc.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/PreAlloc.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/PreAlloc.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/PreAlloc.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Profile.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Profile.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Profile.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Profile.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/PtrLock.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/PtrLock.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/PtrLock.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/PtrLock.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/SharedMem.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/SharedMem.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/SharedMem.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/SharedMem.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/SharedMemSys.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/SharedMemSys.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/SharedMemSys.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/SharedMemSys.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/SimpleLock.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/SimpleLock.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/SimpleLock.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/SimpleLock.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Statistics.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Statistics.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Statistics.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Statistics.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Substrate.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Substrate.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Substrate.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Substrate.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Support.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Support.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Support.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Support.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Termination.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Termination.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Termination.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Termination.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/ThreadPool.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/ThreadPool.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/ThreadPool.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/ThreadPool.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Threads.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Threads.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Threads.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Threads.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/ThreadTimer.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/ThreadTimer.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/ThreadTimer.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/ThreadTimer.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Timer.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Timer.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Timer.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Timer.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/Tracer.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Tracer.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/Tracer.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/Tracer.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois",
+  "command": "/usr/bin/c++ -DGALOIS_USE_SCHED_SETAFFINITY -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/galois_shmem.dir/src/HWTopoLinux.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/HWTopoLinux.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/src/HWTopoLinux.cpp",
+  "output": "libgalois/CMakeFiles/galois_shmem.dir/src/HWTopoLinux.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-acquire.dir/acquire.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/acquire.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/acquire.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-acquire.dir/acquire.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-bandwidth.dir/bandwidth.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/bandwidth.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/bandwidth.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-bandwidth.dir/bandwidth.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-barriers.dir/barriers.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/barriers.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/barriers.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-barriers.dir/barriers.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-empty-member-lcgraph.dir/empty-member-lcgraph.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/empty-member-lcgraph.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/empty-member-lcgraph.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-empty-member-lcgraph.dir/empty-member-lcgraph.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-flatmap.dir/flatmap.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/flatmap.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/flatmap.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-flatmap.dir/flatmap.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-floatingPointErrors.dir/floatingPointErrors.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/floatingPointErrors.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/floatingPointErrors.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-floatingPointErrors.dir/floatingPointErrors.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-foreach.dir/foreach.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/foreach.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/foreach.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-foreach.dir/foreach.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-forward-declare-graph.dir/forward-declare-graph.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/forward-declare-graph.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/forward-declare-graph.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-forward-declare-graph.dir/forward-declare-graph.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-gcollections.dir/gcollections.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/gcollections.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/gcollections.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-gcollections.dir/gcollections.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-graph.dir/graph.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/graph.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/graph.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-graph.dir/graph.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-graph-compile.dir/graph-compile.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/graph-compile.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/graph-compile.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-graph-compile.dir/graph-compile.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-gslist.dir/gslist.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/gslist.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/gslist.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-gslist.dir/gslist.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-hwtopo.dir/hwtopo.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/hwtopo.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/hwtopo.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-hwtopo.dir/hwtopo.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-lc-adaptor.dir/lc-adaptor.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/lc-adaptor.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/lc-adaptor.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-lc-adaptor.dir/lc-adaptor.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-lock.dir/lock.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/lock.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/lock.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-lock.dir/lock.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-mem.dir/mem.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/mem.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/mem.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-mem.dir/mem.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-morphgraph.dir/morphgraph.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/morphgraph.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/morphgraph.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-morphgraph.dir/morphgraph.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-move.dir/move.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/move.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/move.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-move.dir/move.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-oneach.dir/oneach.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/oneach.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/oneach.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-oneach.dir/oneach.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-papi.dir/papi.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/papi.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/papi.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-papi.dir/papi.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-pc.dir/pc.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/pc.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/pc.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-pc.dir/pc.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-reduction.dir/reduction.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/reduction.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/reduction.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-reduction.dir/reduction.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-sort.dir/sort.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/sort.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/sort.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-sort.dir/sort.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-static.dir/static.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/static.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/static.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-static.dir/static.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-traits.dir/traits.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/traits.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/traits.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-traits.dir/traits.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-twoleveliteratora.dir/twoleveliteratora.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/twoleveliteratora.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/twoleveliteratora.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-twoleveliteratora.dir/twoleveliteratora.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-wakeup-overhead.dir/wakeup-overhead.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/wakeup-overhead.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/wakeup-overhead.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-wakeup-overhead.dir/wakeup-overhead.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-worklists-compile.dir/worklists-compile.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/worklists-compile.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/worklists-compile.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-worklists-compile.dir/worklists-compile.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/test",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/unit-morphgraph-removal.dir/morphgraph-removal.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/morphgraph-removal.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/test/morphgraph-removal.cpp",
+  "output": "libgalois/test/CMakeFiles/unit-morphgraph-removal.dir/morphgraph-removal.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libpangolin",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/external/bliss -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/pangolin.dir/src/equivalence.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/src/equivalence.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/src/equivalence.cpp",
+  "output": "libpangolin/CMakeFiles/pangolin.dir/src/equivalence.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libpangolin",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/external/bliss -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/pangolin.dir/src/quick_pattern.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/src/quick_pattern.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/src/quick_pattern.cpp",
+  "output": "libpangolin/CMakeFiles/pangolin.dir/src/quick_pattern.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libpangolin",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/external/bliss -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/pangolin.dir/src/base_embedding.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/src/base_embedding.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/src/base_embedding.cpp",
+  "output": "libpangolin/CMakeFiles/pangolin.dir/src/base_embedding.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libpangolin",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/external/bliss -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/pangolin.dir/src/vertex_embedding.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/src/vertex_embedding.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/src/vertex_embedding.cpp",
+  "output": "libpangolin/CMakeFiles/pangolin.dir/src/vertex_embedding.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libpangolin",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/external/bliss -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/pangolin.dir/src/BfsMining/embedding_list.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/src/BfsMining/embedding_list.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/src/BfsMining/embedding_list.cpp",
+  "output": "libpangolin/CMakeFiles/pangolin.dir/src/BfsMining/embedding_list.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/liblonestar",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/lonestar.dir/src/BoilerPlate.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/src/BoilerPlate.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/src/BoilerPlate.cpp",
+  "output": "lonestar/liblonestar/CMakeFiles/lonestar.dir/src/BoilerPlate.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-sssp-push-simple.dir/SSSPPushSimple.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/SSSPPushSimple.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/SSSPPushSimple.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-sssp-push-simple.dir/SSSPPushSimple.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-sssp-simple.dir/SSSPsimple.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/SSSPsimple.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/SSSPsimple.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-sssp-simple.dir/SSSPsimple.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-sssp-pull-simple.dir/SSSPPullSimple.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/SSSPPullSimple.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/SSSPPullSimple.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-sssp-pull-simple.dir/SSSPPullSimple.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-hello-world.dir/HelloWorld.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/HelloWorld.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/HelloWorld.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-hello-world.dir/HelloWorld.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-torus.dir/Torus.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/Torus.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/Torus.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-torus.dir/Torus.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-torus-improved.dir/TorusImproved.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/TorusImproved.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/TorusImproved.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-torus-improved.dir/TorusImproved.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-torus-construction.dir/TorusConstruction.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/TorusConstruction.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/TorusConstruction.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-torus-construction.dir/TorusConstruction.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-graph-traversal-serial.dir/GraphTraversalSerial.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/GraphTraversalSerial.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/GraphTraversalSerial.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-graph-traversal-serial.dir/GraphTraversalSerial.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-graph-traversal-pull.dir/GraphTraversalPullOperator.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/GraphTraversalPullOperator.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/GraphTraversalPullOperator.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-graph-traversal-pull.dir/GraphTraversalPullOperator.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-graph-traversal-push.dir/GraphTraversalPushOperator.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/GraphTraversalPushOperator.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/GraphTraversalPushOperator.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-graph-traversal-push.dir/GraphTraversalPushOperator.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-conflict-aware-torus.dir/ConflictAwareTorus.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/ConflictAwareTorus.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/ConflictAwareTorus.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-conflict-aware-torus.dir/ConflictAwareTorus.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-spanningtree.dir/SpanningTree.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/SpanningTree.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/SpanningTree.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-spanningtree.dir/SpanningTree.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-countlevels.dir/CountLevels.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/CountLevels.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/CountLevels.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-countlevels.dir/CountLevels.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-malloc.dir/ThirdPartyMalloc.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/ThirdPartyMalloc.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/ThirdPartyMalloc.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-malloc.dir/ThirdPartyMalloc.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/tutorial_examples",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/example-wrapped-worklist.dir/ExampleWrappedWorklist.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/ExampleWrappedWorklist.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/tutorial_examples/ExampleWrappedWorklist.cpp",
+  "output": "lonestar/tutorial_examples/CMakeFiles/example-wrapped-worklist.dir/ExampleWrappedWorklist.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/betweennesscentrality",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/betweennesscentrality-cpu.dir/BetweennessCentrality.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/betweennesscentrality/BetweennessCentrality.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/betweennesscentrality/BetweennessCentrality.cpp",
+  "output": "lonestar/analytics/cpu/betweennesscentrality/CMakeFiles/betweennesscentrality-cpu.dir/BetweennessCentrality.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/bfs",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/bfs-cpu.dir/bfs.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bfs/bfs.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bfs/bfs.cpp",
+  "output": "lonestar/analytics/cpu/bfs/CMakeFiles/bfs-cpu.dir/bfs.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/bfs",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/bfs-directionopt-cpu.dir/bfsDirectionOpt.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bfs/bfsDirectionOpt.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bfs/bfsDirectionOpt.cpp",
+  "output": "lonestar/analytics/cpu/bfs/CMakeFiles/bfs-directionopt-cpu.dir/bfsDirectionOpt.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/bipart",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/bipart-cpu.dir/bipart.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bipart/bipart.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bipart/bipart.cpp",
+  "output": "lonestar/analytics/cpu/bipart/CMakeFiles/bipart-cpu.dir/bipart.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/bipart",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/bipart-cpu.dir/Coarsening.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bipart/Coarsening.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bipart/Coarsening.cpp",
+  "output": "lonestar/analytics/cpu/bipart/CMakeFiles/bipart-cpu.dir/Coarsening.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/bipart",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/bipart-cpu.dir/Metric.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bipart/Metric.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bipart/Metric.cpp",
+  "output": "lonestar/analytics/cpu/bipart/CMakeFiles/bipart-cpu.dir/Metric.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/bipart",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/bipart-cpu.dir/Partitioning.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bipart/Partitioning.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bipart/Partitioning.cpp",
+  "output": "lonestar/analytics/cpu/bipart/CMakeFiles/bipart-cpu.dir/Partitioning.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/bipart",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/bipart-cpu.dir/Refine.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bipart/Refine.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/bipart/Refine.cpp",
+  "output": "lonestar/analytics/cpu/bipart/CMakeFiles/bipart-cpu.dir/Refine.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/spanningtree",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/minimum-spanningtree-cpu.dir/Boruvka.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/spanningtree/Boruvka.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/spanningtree/Boruvka.cpp",
+  "output": "lonestar/analytics/cpu/spanningtree/CMakeFiles/minimum-spanningtree-cpu.dir/Boruvka.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/clustering",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/louvain-clustering-cpu.dir/louvainClustering.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/clustering/louvainClustering.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/clustering/louvainClustering.cpp",
+  "output": "lonestar/analytics/cpu/clustering/CMakeFiles/louvain-clustering-cpu.dir/louvainClustering.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/clustering",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/leiden-clustering-cpu.dir/leidenClustering.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/clustering/leidenClustering.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/clustering/leidenClustering.cpp",
+  "output": "lonestar/analytics/cpu/clustering/CMakeFiles/leiden-clustering-cpu.dir/leidenClustering.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/connected-components",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/connected-components-cpu.dir/ConnectedComponents.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/connected-components/ConnectedComponents.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/connected-components/ConnectedComponents.cpp",
+  "output": "lonestar/analytics/cpu/connected-components/CMakeFiles/connected-components-cpu.dir/ConnectedComponents.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/gmetis",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/gmetis-cpu.dir/Coarsening.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/gmetis/Coarsening.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/gmetis/Coarsening.cpp",
+  "output": "lonestar/analytics/cpu/gmetis/CMakeFiles/gmetis-cpu.dir/Coarsening.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/gmetis",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/gmetis-cpu.dir/GMetis.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/gmetis/GMetis.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/gmetis/GMetis.cpp",
+  "output": "lonestar/analytics/cpu/gmetis/CMakeFiles/gmetis-cpu.dir/GMetis.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/gmetis",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/gmetis-cpu.dir/Metric.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/gmetis/Metric.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/gmetis/Metric.cpp",
+  "output": "lonestar/analytics/cpu/gmetis/CMakeFiles/gmetis-cpu.dir/Metric.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/gmetis",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/gmetis-cpu.dir/Partitioning.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/gmetis/Partitioning.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/gmetis/Partitioning.cpp",
+  "output": "lonestar/analytics/cpu/gmetis/CMakeFiles/gmetis-cpu.dir/Partitioning.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/gmetis",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/gmetis-cpu.dir/Refine.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/gmetis/Refine.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/gmetis/Refine.cpp",
+  "output": "lonestar/analytics/cpu/gmetis/CMakeFiles/gmetis-cpu.dir/Refine.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/independentset",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/maximal-independentset-cpu.dir/IndependentSet.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/independentset/IndependentSet.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/independentset/IndependentSet.cpp",
+  "output": "lonestar/analytics/cpu/independentset/CMakeFiles/maximal-independentset-cpu.dir/IndependentSet.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/k-core",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/k-core-cpu.dir/kcore.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/k-core/kcore.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/k-core/kcore.cpp",
+  "output": "lonestar/analytics/cpu/k-core/CMakeFiles/k-core-cpu.dir/kcore.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/k-truss",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/k-truss-cpu.dir/K-Truss.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/k-truss/K-Truss.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/k-truss/K-Truss.cpp",
+  "output": "lonestar/analytics/cpu/k-truss/CMakeFiles/k-truss-cpu.dir/K-Truss.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/k-truss",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/verify-k-truss.dir/Verify.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/k-truss/Verify.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/k-truss/Verify.cpp",
+  "output": "lonestar/analytics/cpu/k-truss/CMakeFiles/verify-k-truss.dir/Verify.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/matching",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/maximum-cardinality-matching-cpu.dir/bipartite-mcm.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/matching/bipartite-mcm.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/matching/bipartite-mcm.cpp",
+  "output": "lonestar/analytics/cpu/matching/CMakeFiles/maximum-cardinality-matching-cpu.dir/bipartite-mcm.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/matrixcompletion",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -ffast-math -o CMakeFiles/matrixcompletion-cpu.dir/matrixCompletion.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/matrixcompletion/matrixCompletion.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/matrixcompletion/matrixCompletion.cpp",
+  "output": "lonestar/analytics/cpu/matrixcompletion/CMakeFiles/matrixcompletion-cpu.dir/matrixCompletion.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/pagerank",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/pagerank-pull-cpu.dir/PageRank-pull.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/pagerank/PageRank-pull.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/pagerank/PageRank-pull.cpp",
+  "output": "lonestar/analytics/cpu/pagerank/CMakeFiles/pagerank-pull-cpu.dir/PageRank-pull.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/pagerank",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/pagerank-push-cpu.dir/PageRank-push.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/pagerank/PageRank-push.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/pagerank/PageRank-push.cpp",
+  "output": "lonestar/analytics/cpu/pagerank/CMakeFiles/pagerank-push-cpu.dir/PageRank-push.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/pointstoanalysis",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/pointstoanalysis-cpu.dir/PointsTo.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/pointstoanalysis/PointsTo.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/pointstoanalysis/PointsTo.cpp",
+  "output": "lonestar/analytics/cpu/pointstoanalysis/CMakeFiles/pointstoanalysis-cpu.dir/PointsTo.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/preflowpush",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/preflowpush-cpu.dir/Preflowpush.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/preflowpush/Preflowpush.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/preflowpush/Preflowpush.cpp",
+  "output": "lonestar/analytics/cpu/preflowpush/CMakeFiles/preflowpush-cpu.dir/Preflowpush.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/sssp",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/sssp-cpu.dir/SSSP.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/sssp/SSSP.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/sssp/SSSP.cpp",
+  "output": "lonestar/analytics/cpu/sssp/CMakeFiles/sssp-cpu.dir/SSSP.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/analytics/cpu/triangle-counting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/triangle-counting-cpu.dir/Triangles.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/triangle-counting/Triangles.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/analytics/cpu/triangle-counting/Triangles.cpp",
+  "output": "lonestar/analytics/cpu/triangle-counting/CMakeFiles/triangle-counting-cpu.dir/Triangles.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/main.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/main.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/main.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/main.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/algorithms/ChoiceManager.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/ChoiceManager.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/ChoiceManager.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/algorithms/ChoiceManager.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/algorithms/CutManager.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/CutManager.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/CutManager.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/algorithms/CutManager.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/algorithms/CutPool.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/CutPool.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/CutPool.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/algorithms/CutPool.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/algorithms/NPNManager.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/NPNManager.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/NPNManager.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/algorithms/NPNManager.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/algorithms/PreCompGraphManager.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/PreCompGraphManager.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/PreCompGraphManager.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/algorithms/PreCompGraphManager.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/algorithms/PriorityCutManager.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/PriorityCutManager.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/PriorityCutManager.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/algorithms/PriorityCutManager.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/algorithms/PriorityCutPool.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/PriorityCutPool.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/PriorityCutPool.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/algorithms/PriorityCutPool.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/algorithms/ReconvDrivenCut.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/ReconvDrivenCut.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/ReconvDrivenCut.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/algorithms/ReconvDrivenCut.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/algorithms/RewriteManager.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/RewriteManager.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms/RewriteManager.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/algorithms/RewriteManager.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/functional/BitVectorPool.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional/BitVectorPool.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional/BitVectorPool.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/functional/BitVectorPool.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/functional/FunctionUtil.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional/FunctionUtil.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional/FunctionUtil.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/functional/FunctionUtil.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/misc/util/utilString.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util/utilString.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util/utilString.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/misc/util/utilString.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/parsers/AigParser.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers/AigParser.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers/AigParser.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/parsers/AigParser.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/parsers/LookupTableParser.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers/LookupTableParser.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers/LookupTableParser.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/parsers/LookupTableParser.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/parsers/semantic_error.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers/semantic_error.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers/semantic_error.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/parsers/semantic_error.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/parsers/syntax_error.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers/syntax_error.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers/syntax_error.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/parsers/syntax_error.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/parsers/unexpected_eof.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers/unexpected_eof.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers/unexpected_eof.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/parsers/unexpected_eof.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/subjectgraph/aig/Aig.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig/Aig.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig/Aig.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/subjectgraph/aig/Aig.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/writers/AigWriter.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers/AigWriter.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers/AigWriter.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/writers/AigWriter.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/aig-rewriting-cpu.dir/writers/BlifWriter.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers/BlifWriter.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers/BlifWriter.cpp",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/writers/BlifWriter.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/aig-rewriting",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/subjectgraph/aig -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/algorithms -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/parsers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/writers -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/misc/util -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/functional -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/aig-rewriting-cpu.dir/xxHash/xxhash.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash/xxhash.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/aig-rewriting/xxHash/xxhash.c",
+  "output": "lonestar/eda/cpu/aig-rewriting/CMakeFiles/aig-rewriting-cpu.dir/xxHash/xxhash.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/sproute",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/sproute-cpu.dir/main.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/main.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/main.cpp",
+  "output": "lonestar/eda/cpu/sproute/CMakeFiles/sproute-cpu.dir/main.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/sproute",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/sproute-cpu.dir/dist.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/dist.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/dist.c",
+  "output": "lonestar/eda/cpu/sproute/CMakeFiles/sproute-cpu.dir/dist.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/sproute",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/sproute-cpu.dir/dl.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/dl.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/dl.c",
+  "output": "lonestar/eda/cpu/sproute/CMakeFiles/sproute-cpu.dir/dl.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/sproute",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/sproute-cpu.dir/err.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/err.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/err.c",
+  "output": "lonestar/eda/cpu/sproute/CMakeFiles/sproute-cpu.dir/err.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/sproute",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/sproute-cpu.dir/heap.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/heap.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/heap.c",
+  "output": "lonestar/eda/cpu/sproute/CMakeFiles/sproute-cpu.dir/heap.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/sproute",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/sproute-cpu.dir/mst2.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/mst2.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/mst2.c",
+  "output": "lonestar/eda/cpu/sproute/CMakeFiles/sproute-cpu.dir/mst2.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/sproute",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/sproute-cpu.dir/neighbors.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/neighbors.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/neighbors.c",
+  "output": "lonestar/eda/cpu/sproute/CMakeFiles/sproute-cpu.dir/neighbors.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/sproute",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/sproute-cpu.dir/bookshelf_IO.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/bookshelf_IO.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/bookshelf_IO.c",
+  "output": "lonestar/eda/cpu/sproute/CMakeFiles/sproute-cpu.dir/bookshelf_IO.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/eda/cpu/sproute",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/sproute-cpu.dir/memAlloc.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/memAlloc.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/eda/cpu/sproute/memAlloc.c",
+  "output": "lonestar/eda/cpu/sproute/CMakeFiles/sproute-cpu.dir/memAlloc.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/mining/libminingbench",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/libminingbench/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/miningbench.dir/src/Start.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/libminingbench/src/Start.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/libminingbench/src/Start.cpp",
+  "output": "lonestar/mining/libminingbench/CMakeFiles/miningbench.dir/src/Start.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/mining/libminingbench",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/libminingbench/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIC -g -Wall -Wextra -march=native -o CMakeFiles/miningbench.dir/src/Input.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/libminingbench/src/Input.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/libminingbench/src/Input.cpp",
+  "output": "lonestar/mining/libminingbench/CMakeFiles/miningbench.dir/src/Input.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/mining/cpu/frequent-subgraph-mining",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/external/bliss -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/libminingbench/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/frequent-subgraph-mining-cpu.dir/fsm.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/cpu/frequent-subgraph-mining/fsm.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/cpu/frequent-subgraph-mining/fsm.cpp",
+  "output": "lonestar/mining/cpu/frequent-subgraph-mining/CMakeFiles/frequent-subgraph-mining-cpu.dir/fsm.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/mining/cpu/k-clique-listing",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/external/bliss -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/libminingbench/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/k-clique-listing-cpu.dir/kcl.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/cpu/k-clique-listing/kcl.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/cpu/k-clique-listing/kcl.cpp",
+  "output": "lonestar/mining/cpu/k-clique-listing/CMakeFiles/k-clique-listing-cpu.dir/kcl.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/mining/cpu/motif-counting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/external/bliss -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/libminingbench/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/motif-counting-cpu.dir/motif.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/cpu/motif-counting/motif.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/cpu/motif-counting/motif.cpp",
+  "output": "lonestar/mining/cpu/motif-counting/CMakeFiles/motif-counting-cpu.dir/motif.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/mining/cpu/triangle-counting",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpangolin/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/external/bliss -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/libminingbench/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/triangle-counting-mining-cpu.dir/tc_mine.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/cpu/triangle-counting/tc_mine.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/mining/cpu/triangle-counting/tc_mine.cpp",
+  "output": "lonestar/mining/cpu/triangle-counting/CMakeFiles/triangle-counting-mining-cpu.dir/tc_mine.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/barneshut",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -ffast-math -o CMakeFiles/barneshut-cpu.dir/Barneshut.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/barneshut/Barneshut.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/barneshut/Barneshut.cpp",
+  "output": "lonestar/scientific/cpu/barneshut/CMakeFiles/barneshut-cpu.dir/Barneshut.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/delaunayrefinement",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -ffast-math -o CMakeFiles/delaunayrefinement-cpu.dir/DelaunayRefinement.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/delaunayrefinement/DelaunayRefinement.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/delaunayrefinement/DelaunayRefinement.cpp",
+  "output": "lonestar/scientific/cpu/delaunayrefinement/CMakeFiles/delaunayrefinement-cpu.dir/DelaunayRefinement.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/delaunaytriangulation",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -ffast-math -o CMakeFiles/delaunaytriangulation-cpu.dir/DelaunayTriangulation.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/delaunaytriangulation/DelaunayTriangulation.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/delaunaytriangulation/DelaunayTriangulation.cpp",
+  "output": "lonestar/scientific/cpu/delaunaytriangulation/CMakeFiles/delaunaytriangulation-cpu.dir/DelaunayTriangulation.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/delaunaytriangulation",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -ffast-math -o CMakeFiles/delaunaytriangulation-cpu.dir/Element.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/delaunaytriangulation/Element.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/delaunaytriangulation/Element.cpp",
+  "output": "lonestar/scientific/cpu/delaunaytriangulation/CMakeFiles/delaunaytriangulation-cpu.dir/Element.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/delaunaytriangulation",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -ffast-math -o CMakeFiles/delaunaytriangulation-deterministic-cpu.dir/DelaunayTriangulationDet.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/delaunaytriangulation/DelaunayTriangulationDet.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/delaunaytriangulation/DelaunayTriangulationDet.cpp",
+  "output": "lonestar/scientific/cpu/delaunaytriangulation/CMakeFiles/delaunaytriangulation-deterministic-cpu.dir/DelaunayTriangulationDet.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/delaunaytriangulation",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -ffast-math -o CMakeFiles/delaunaytriangulation-deterministic-cpu.dir/Element.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/delaunaytriangulation/Element.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/delaunaytriangulation/Element.cpp",
+  "output": "lonestar/scientific/cpu/delaunaytriangulation/CMakeFiles/delaunaytriangulation-deterministic-cpu.dir/Element.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/longestedge-cpu.dir/src/LongestEdge.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/LongestEdge.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/LongestEdge.cpp",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedge-cpu.dir/src/LongestEdge.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/longestedge-cpu.dir/src/model/Map.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/model/Map.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/model/Map.cpp",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedge-cpu.dir/src/model/Map.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/longestedge-cpu.dir/src/readers/SrtmReader.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/readers/SrtmReader.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/readers/SrtmReader.cpp",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedge-cpu.dir/src/readers/SrtmReader.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/longestedge-cpu.dir/src/readers/AsciiReader.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/readers/AsciiReader.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/readers/AsciiReader.cpp",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedge-cpu.dir/src/readers/AsciiReader.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/longestedge-cpu.dir/src/libmgrs/mgrs.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/mgrs.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/mgrs.c",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedge-cpu.dir/src/libmgrs/mgrs.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/longestedge-cpu.dir/src/libmgrs/polarst.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/polarst.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/polarst.c",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedge-cpu.dir/src/libmgrs/polarst.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/longestedge-cpu.dir/src/libmgrs/tranmerc.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/tranmerc.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/tranmerc.c",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedge-cpu.dir/src/libmgrs/tranmerc.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/longestedge-cpu.dir/src/libmgrs/utm.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/utm.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/utm.c",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedge-cpu.dir/src/libmgrs/utm.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/longestedge-cpu.dir/src/libmgrs/ups.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/ups.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/ups.c",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedge-cpu.dir/src/libmgrs/ups.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/longestedge-cpu.dir/src/utils/Utils.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/utils/Utils.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/utils/Utils.cpp",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedge-cpu.dir/src/utils/Utils.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/longestedge-cpu.dir/src/readers/InpReader.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/readers/InpReader.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/readers/InpReader.cpp",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedge-cpu.dir/src/readers/InpReader.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/longestedge-cpu.dir/src/writers/InpWriter.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/writers/InpWriter.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/writers/InpWriter.cpp",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedge-cpu.dir/src/writers/InpWriter.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/longestedge-cpu.dir/src/writers/TriangleFormatWriter.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/writers/TriangleFormatWriter.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/writers/TriangleFormatWriter.cpp",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedge-cpu.dir/src/writers/TriangleFormatWriter.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/longestedgeTest.dir/test/TestMain.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/test/TestMain.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/test/TestMain.cpp",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedgeTest.dir/test/TestMain.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/longestedgeTest.dir/src/model/Map.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/model/Map.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/model/Map.cpp",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedgeTest.dir/src/model/Map.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/longestedgeTest.dir/src/libmgrs/mgrs.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/mgrs.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/mgrs.c",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedgeTest.dir/src/libmgrs/mgrs.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/longestedgeTest.dir/src/libmgrs/polarst.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/polarst.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/polarst.c",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedgeTest.dir/src/libmgrs/polarst.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/longestedgeTest.dir/src/libmgrs/tranmerc.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/tranmerc.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/tranmerc.c",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedgeTest.dir/src/libmgrs/tranmerc.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/longestedgeTest.dir/src/libmgrs/utm.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/utm.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/utm.c",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedgeTest.dir/src/libmgrs/utm.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/cc  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -fPIE -march=native -o CMakeFiles/longestedgeTest.dir/src/libmgrs/ups.c.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/ups.c",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/libmgrs/ups.c",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedgeTest.dir/src/libmgrs/ups.c.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/lonestar/scientific/cpu/longestedge",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/liblonestar/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/longestedgeTest.dir/src/utils/Utils.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/utils/Utils.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/lonestar/scientific/cpu/longestedge/src/utils/Utils.cpp",
+  "output": "lonestar/scientific/cpu/longestedge/CMakeFiles/longestedgeTest.dir/src/utils/Utils.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/tools/graph-convert",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/graph-convert.dir/graph-convert.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/tools/graph-convert/graph-convert.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/tools/graph-convert/graph-convert.cpp",
+  "output": "tools/graph-convert/CMakeFiles/graph-convert.dir/graph-convert.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/tools/graph-convert",
+  "command": "/usr/bin/c++ -DBOOST_IOSTREAMS_DYN_LINK -DBOOST_IOSTREAMS_NO_LIB -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/graph-convert-huge.dir/graph-convert-huge.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/tools/graph-convert/graph-convert-huge.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/tools/graph-convert/graph-convert-huge.cpp",
+  "output": "tools/graph-convert/CMakeFiles/graph-convert-huge.dir/graph-convert-huge.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/tools/graph-remap",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/graph-remap.dir/graph-remap.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/tools/graph-remap/graph-remap.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/tools/graph-remap/graph-remap.cpp",
+  "output": "tools/graph-remap/CMakeFiles/graph-remap.dir/graph-remap.cpp.o"
+},
+{
+  "directory": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/tools/graph-stats",
+  "command": "/usr/bin/c++  -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/libgalois/include -I/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/libpygalois/include -isystem /usr/lib/llvm-14/include -O3 -DNDEBUG -std=c++17 -fPIE -g -Wall -Wextra -march=native -o CMakeFiles/graph-stats.dir/graph-stats.cpp.o -c /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/tools/graph-stats/graph-stats.cpp",
+  "file": "/root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/tools/graph-stats/graph-stats.cpp",
+  "output": "tools/graph-stats/CMakeFiles/graph-stats.dir/graph-stats.cpp.o"
+}
+]

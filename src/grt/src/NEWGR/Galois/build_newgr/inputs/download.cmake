@@ -1,0 +1,1 @@
+file(DOWNLOAD http://iss.oden.utexas.edu/projects/galois/downloads/small_inputs_for_lonestar_test.tar.gz /root/OpenROAD_New_GRT/src/grt/src/NEWGR/Galois/build_newgr/inputs/lonestar-cpu-inputs.tar.gz SHOW_PROGRESS)

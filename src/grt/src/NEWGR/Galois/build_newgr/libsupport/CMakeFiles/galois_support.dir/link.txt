@@ -1,0 +1,2 @@
+/usr/bin/ar qc libgalois_support.a CMakeFiles/galois_support.dir/src/GetEnv.cpp.o CMakeFiles/galois_support.dir/src/Logging.cpp.o
+/usr/bin/ranlib libgalois_support.a

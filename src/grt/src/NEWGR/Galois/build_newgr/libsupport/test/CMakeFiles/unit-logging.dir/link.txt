@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -march=native "CMakeFiles/unit-logging.dir/logging.cpp.o" -o unit-logging  ../libgalois_support.a /usr/lib/x86_64-linux-gnu/libfmt.so.8.1.1 -Wl,--as-needed
