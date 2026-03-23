@@ -1176,6 +1176,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   ScenarioDefinition baseline_def{"baseline", nullptr, nullptr};
   std::vector<ScenarioDefinition> scenario_defs;
+  // Runtime-focused mode: keep only a compact but diverse exploration set.
+  // This mixes FastRoute random-seed diversification with CUGR/SPRoute-style
+  // soft-cap probes, then relies on aggressive wirelength hybrids.
+  const bool compact_exploration_mode = true;
 
   auto make_soft_config
       = [&](const std::string& name,
@@ -1400,6 +1404,55 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   scenario_defs.push_back(make_critical_sweep_def(67, 8.0f));
   scenario_defs.push_back(make_critical_sweep_def(19, 6.0f));
 
+  if (compact_exploration_mode) {
+    scenario_defs.clear();
+    if (enable_softcap_scenarios) {
+      scenario_defs.push_back(make_soft_config("cugr-prob-balanced",
+                                               0.44f,
+                                               0.89f,
+                                               7.0f,
+                                               0.47f,
+                                               2,
+                                               0.58f,
+                                               0.70f,
+                                               0.05f,
+                                               0.0f,
+                                               snapshot.seed,
+                                               snapshot.critical_percentage));
+      scenario_defs.push_back(make_soft_config("mild-softcap",
+                                               0.58f,
+                                               0.97f,
+                                               4.5f,
+                                               0.38f,
+                                               1,
+                                               0.75f,
+                                               0.20f,
+                                               0.08f,
+                                               2.5f,
+                                               5,
+                                               8.0f));
+    } else if (!normalized_rudy.empty()) {
+      scenario_defs.push_back(make_soft_config("rudy-precision-direct",
+                                               0.80f,
+                                               1.02f,
+                                               2.8f,
+                                               0.24f,
+                                               1,
+                                               0.92f,
+                                               0.10f,
+                                               0.12f,
+                                               0.0f,
+                                               snapshot.seed,
+                                               4.0f));
+    }
+    scenario_defs.push_back(make_random_def(23, 5.0f, 6.0f));
+    scenario_defs.push_back(make_random_def(29, 4.0f, 5.0f));
+    scenario_defs.push_back(make_random_def(67, 0.0f, 1.0f));
+    scenario_defs.push_back(make_random_def(71, 0.0f, 8.0f));
+    scenario_defs.push_back(make_critical_sweep_def(23, 8.0f));
+    scenario_defs.push_back(make_critical_sweep_def(67, 8.0f));
+  }
+
   for (const ScenarioDefinition& def : scenario_defs) {
     ScenarioResult result = run_scenario(def, snapshot);
     scenario_results.push_back(std::move(result));
@@ -1434,7 +1487,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
 
     auto add_refinement = [&](ScenarioDefinition def) {
-      if (refinement_defs.size() >= 12) {
+      const std::size_t max_refinements = compact_exploration_mode ? 4 : 12;
+      if (refinement_defs.size() >= max_refinements) {
         return;
       }
       if (scenario_names.insert(def.name).second) {
@@ -1442,7 +1496,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     };
 
-    const int elite_count = std::min<int>(4, ranked.size());
+    const int elite_count = compact_exploration_mode
+                                ? std::min<int>(2, ranked.size())
+                                : std::min<int>(4, ranked.size());
     for (int i = 0; i < elite_count; ++i) {
       const std::string& elite_name = ranked[i]->name;
       int seed = 0;
@@ -1489,6 +1545,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // pick each net route from the best wirelength scenarios (SPRoute-style
   // diversification) and combine into one hybrid guide set.
   if (initial_overflow_free_sweep && scenario_results.size() > 2) {
+    // Keep scenario pointers stable while appending many hybrid candidates.
+    scenario_results.reserve(scenario_results.size() + 256);
+
     std::vector<const ScenarioResult*> ranked;
     ranked.reserve(scenario_results.size());
     for (const ScenarioResult& result : scenario_results) {
@@ -3003,119 +3062,150 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const long wl_feedback_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 18L);
     const long min_wl_via_weight = 0L;
-    append_hybrid("hybrid-netmix-wl", wl_source_count, 0, 0.24, 0.50, 6010);
-    append_hybrid(
-        "hybrid-netmix-ultra-wl", ultra_wl_source_count, 0, 0.40, 0.95, 6013);
-    append_length_adaptive_hybrid("hybrid-netmix-length-adaptive",
-                                  length_adaptive_source_count,
-                                  length_adaptive_via_weight,
-                                  7310);
-    append_feedback_wl_hybrid("hybrid-netmix-wl-feedback",
-                              wl_feedback_source_count,
-                              wl_feedback_via_weight,
-                              7313);
-    append_min_wl_hybrid("hybrid-netmix-min-wl",
-                         min_wl_source_count,
-                         min_wl_via_weight,
-                         0.06,
-                         0.002,
-                         0.03,
-                         7102);
-    append_min_wl_hybrid("hybrid-netmix-min-wl-wide",
-                         min_wl_wide_source_count,
-                         min_wl_via_weight,
-                         0.08,
-                         0.003,
-                         0.04,
-                         7103);
-    append_min_wl_hybrid("hybrid-netmix-min-wl-extreme",
-                         min_wl_extreme_source_count,
-                         0L,
-                         0.04,
-                         0.001,
-                         0.02,
-                         7104);
-    append_min_wl_hybrid("hybrid-netmix-smooth-wl",
-                         min_wl_source_count,
-                         0L,
-                         0.18,
-                         0.018,
-                         0.26,
-                         7106,
-                         0.55,
-                         4.8);
-    append_min_wl_hybrid("hybrid-netmix-absolute-wl",
-                         absolute_wl_source_count,
-                         0L,
-                         0.0,
-                         0.0,
-                         0.0,
-                         7105);
-    append_hybrid("hybrid-netmix-hpwl-lock",
-                  hpwl_lock_source_count,
-                  0,
-                  0.18,
-                  0.42,
-                  6021,
-                  0.010,
-                  0.12,
-                  0.45);
-    append_hybrid("hybrid-netmix-dr-shield",
-                  dr_shield_source_count,
-                  dr_shield_via_weight,
-                  0.62,
-                  0.76,
-                  6022,
-                  0.060,
-                  0.95,
-                  1.30);
-    append_dr_stable_hybrid(
-        "hybrid-netmix-dr-stable", dr_stable_source_count, dr_stable_via_weight, 7309);
-    append_hybrid("hybrid-netmix-wl-safe",
-                  wl_safe_source_count,
-                  wl_safe_via_weight,
-                  0.26,
-                  0.52,
-                  6019,
-                  0.018,
-                  0.30,
-                  0.95);
-    append_hybrid("hybrid-netmix-detour-ladder",
-                  detour_source_count,
-                  detour_via_weight,
-                  0.95,
-                  0.52,
-                  6018,
-                  0.030,
-                  0.45,
-                  1.15);
-    append_hybrid("hybrid-netmix-layer-compact",
-                  layer_compact_source_count,
-                  layer_compact_via_weight,
-                  0.78,
-                  0.72,
-                  6020,
-                  0.080,
-                  1.10,
-                  1.45);
-    append_hybrid("hybrid-netmix-balanced",
-                  balanced_source_count,
-                  balanced_via_weight,
-                  0.32,
-                  0.65,
-                  6012);
-    append_softcap_hybrid(
-        "hybrid-netmix-softcap", softcap_source_count, softcap_via_weight, 6015);
-    append_consensus_hybrid("hybrid-netmix-consensus",
-                            consensus_source_count,
-                            consensus_via_weight,
-                            0.55,
-                            0.85,
-                            6017);
-    append_pareto_softcap_hybrid("hybrid-netmix-pareto-softcap",
-                                 pareto_softcap_source_count,
-                                 pareto_softcap_via_weight,
-                                 6023);
+    if (compact_exploration_mode) {
+      const int compact_source_count = std::min<int>(12, ranked.size());
+      append_hybrid("hybrid-netmix-wl", compact_source_count, 0, 0.20, 0.45, 6010);
+      append_length_adaptive_hybrid("hybrid-netmix-length-adaptive",
+                                    compact_source_count,
+                                    length_adaptive_via_weight,
+                                    7310);
+      append_feedback_wl_hybrid("hybrid-netmix-wl-feedback",
+                                compact_source_count,
+                                wl_feedback_via_weight,
+                                7313);
+      append_min_wl_hybrid("hybrid-netmix-min-wl-wide",
+                           compact_source_count,
+                           min_wl_via_weight,
+                           0.04,
+                           0.001,
+                           0.02,
+                           7103);
+      append_min_wl_hybrid("hybrid-netmix-absolute-wl",
+                           compact_source_count,
+                           0L,
+                           0.0,
+                           0.0,
+                           0.0,
+                           7105);
+      append_pareto_softcap_hybrid("hybrid-netmix-pareto-softcap",
+                                   compact_source_count,
+                                   pareto_softcap_via_weight,
+                                   6023);
+    } else {
+      append_hybrid("hybrid-netmix-wl", wl_source_count, 0, 0.24, 0.50, 6010);
+      append_hybrid(
+          "hybrid-netmix-ultra-wl", ultra_wl_source_count, 0, 0.40, 0.95, 6013);
+      append_length_adaptive_hybrid("hybrid-netmix-length-adaptive",
+                                    length_adaptive_source_count,
+                                    length_adaptive_via_weight,
+                                    7310);
+      append_feedback_wl_hybrid("hybrid-netmix-wl-feedback",
+                                wl_feedback_source_count,
+                                wl_feedback_via_weight,
+                                7313);
+      append_min_wl_hybrid("hybrid-netmix-min-wl",
+                           min_wl_source_count,
+                           min_wl_via_weight,
+                           0.06,
+                           0.002,
+                           0.03,
+                           7102);
+      append_min_wl_hybrid("hybrid-netmix-min-wl-wide",
+                           min_wl_wide_source_count,
+                           min_wl_via_weight,
+                           0.08,
+                           0.003,
+                           0.04,
+                           7103);
+      append_min_wl_hybrid("hybrid-netmix-min-wl-extreme",
+                           min_wl_extreme_source_count,
+                           0L,
+                           0.04,
+                           0.001,
+                           0.02,
+                           7104);
+      append_min_wl_hybrid("hybrid-netmix-smooth-wl",
+                           min_wl_source_count,
+                           0L,
+                           0.18,
+                           0.018,
+                           0.26,
+                           7106,
+                           0.55,
+                           4.8);
+      append_min_wl_hybrid("hybrid-netmix-absolute-wl",
+                           absolute_wl_source_count,
+                           0L,
+                           0.0,
+                           0.0,
+                           0.0,
+                           7105);
+      append_hybrid("hybrid-netmix-hpwl-lock",
+                    hpwl_lock_source_count,
+                    0,
+                    0.18,
+                    0.42,
+                    6021,
+                    0.010,
+                    0.12,
+                    0.45);
+      append_hybrid("hybrid-netmix-dr-shield",
+                    dr_shield_source_count,
+                    dr_shield_via_weight,
+                    0.62,
+                    0.76,
+                    6022,
+                    0.060,
+                    0.95,
+                    1.30);
+      append_dr_stable_hybrid(
+          "hybrid-netmix-dr-stable", dr_stable_source_count, dr_stable_via_weight, 7309);
+      append_hybrid("hybrid-netmix-wl-safe",
+                    wl_safe_source_count,
+                    wl_safe_via_weight,
+                    0.26,
+                    0.52,
+                    6019,
+                    0.018,
+                    0.30,
+                    0.95);
+      append_hybrid("hybrid-netmix-detour-ladder",
+                    detour_source_count,
+                    detour_via_weight,
+                    0.95,
+                    0.52,
+                    6018,
+                    0.030,
+                    0.45,
+                    1.15);
+      append_hybrid("hybrid-netmix-layer-compact",
+                    layer_compact_source_count,
+                    layer_compact_via_weight,
+                    0.78,
+                    0.72,
+                    6020,
+                    0.080,
+                    1.10,
+                    1.45);
+      append_hybrid("hybrid-netmix-balanced",
+                    balanced_source_count,
+                    balanced_via_weight,
+                    0.32,
+                    0.65,
+                    6012);
+      append_softcap_hybrid(
+          "hybrid-netmix-softcap", softcap_source_count, softcap_via_weight, 6015);
+      append_consensus_hybrid("hybrid-netmix-consensus",
+                              consensus_source_count,
+                              consensus_via_weight,
+                              0.55,
+                              0.85,
+                              6017);
+      append_pareto_softcap_hybrid("hybrid-netmix-pareto-softcap",
+                                   pareto_softcap_source_count,
+                                   pareto_softcap_via_weight,
+                                   6023);
+    }
 
     auto find_scenario = [&](const std::string& name) -> const ScenarioResult* {
       for (const ScenarioResult& result : scenario_results) {
@@ -3291,6 +3381,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = find_scenario_by_name("hybrid-netmix-wl-feedback");
     const ScenarioResult* length_adaptive_ptr
         = find_scenario_by_name("hybrid-netmix-length-adaptive");
+    const ScenarioResult* min_wl_wide_ptr
+        = find_scenario_by_name("hybrid-netmix-min-wl-wide");
+    const ScenarioResult* absolute_wl_ptr
+        = find_scenario_by_name("hybrid-netmix-absolute-wl");
     const ScenarioResult* preferred_wl_ptr = nullptr;
 
     if (wl_anchor != nullptr && wl_feedback_ptr != nullptr) {
@@ -3395,12 +3489,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
 
     std::vector<const ScenarioResult*> wl_champion_pool;
-    wl_champion_pool.reserve(8);
-    for (const char* name : std::array<const char*, 8>{
+    wl_champion_pool.reserve(10);
+    for (const char* name : std::array<const char*, 10>{
              "hybrid-netmix-length-adaptive",
              "hybrid-netmix-wl-feedback",
              "hybrid-netmix-smooth-wl",
              "hybrid-netmix-ultra-wl",
+             "hybrid-netmix-min-wl-wide",
+             "hybrid-netmix-absolute-wl",
              "hybrid-netmix-wl-safe",
              "hybrid-netmix-dr-stable",
              "hybrid-netmix-hpwl-lock",
@@ -3418,6 +3514,39 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           });
     } else {
       forced_wl_ptr = wl_anchor;
+    }
+    if (compact_exploration_mode) {
+      const ScenarioResult* aggressive_wl_ptr = forced_wl_ptr;
+      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 2>{
+               absolute_wl_ptr, min_wl_wide_ptr}) {
+        if (candidate == nullptr) {
+          continue;
+        }
+        if (aggressive_wl_ptr == nullptr
+            || wirelength_first_better(*candidate, *aggressive_wl_ptr)) {
+          aggressive_wl_ptr = candidate;
+        }
+      }
+      if (aggressive_wl_ptr != nullptr
+          && (forced_wl_ptr == nullptr
+              || aggressive_wl_ptr != forced_wl_ptr)) {
+        logger_->info(
+            GNR,
+            6034,
+            "NEWGR compact mode selecting aggressive WL champion '{}' over '{}'"
+            " (wl delta {}, via delta {}).",
+            aggressive_wl_ptr->name,
+            forced_wl_ptr != nullptr ? forced_wl_ptr->name : std::string("none"),
+            forced_wl_ptr != nullptr
+                ? aggressive_wl_ptr->metrics.wirelength_dbu
+                      - forced_wl_ptr->metrics.wirelength_dbu
+                : 0L,
+            forced_wl_ptr != nullptr
+                ? aggressive_wl_ptr->metrics.via_count
+                      - forced_wl_ptr->metrics.via_count
+                : 0);
+      }
+      forced_wl_ptr = aggressive_wl_ptr;
     }
     if (preferred_wl_ptr != nullptr) {
       forced_wl_ptr = preferred_wl_ptr;
