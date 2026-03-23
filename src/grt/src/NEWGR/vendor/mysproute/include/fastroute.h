@@ -611,21 +611,21 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
       lefdef_mode = true;
     }
 
-	LB=0.9;
-	UB=1.3;
+	LB=0.95;
+	UB=1.2;
 
 
 	SLOPE=5;
 	THRESH_M=20;
-	ENLARGE=115;//5
-	ESTEP1=30;//10
-	ESTEP2=30;//5
-	ESTEP3=30;//5
-	CSTEP1=2;//5
-	CSTEP2=2;//3
-	CSTEP3=5;//15
+	ENLARGE=70;//5
+	ESTEP1=16;//10
+	ESTEP2=12;//5
+	ESTEP3=10;//5
+	CSTEP1=1;//5
+	CSTEP2=1;//3
+	CSTEP3=3;//15
 	CSTEP4 = 1000;
-	COSHEIGHT=40;
+	COSHEIGHT=20;
 	L=0;
 	VIA=2;
 	L_afterSTOP=1;
@@ -637,7 +637,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	thStep2 = 4;
 	healingNeed = FALSE;
 	updateType = 0;
-	LVIter = 3;
+	LVIter = 2;
 	extremeNeeded = FALSE;
 	mazeRound = maxMazeRound;
 	bmfl = BIG_INT;
