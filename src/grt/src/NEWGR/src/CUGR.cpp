@@ -176,7 +176,7 @@ bool isCompactionScoreBetter(const RouteScore& candidate,
     const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
     // Keep overflow relief but enforce near wirelength neutrality.
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 2ULL;
+        = static_cast<uint64_t>(overflowGain);
     if (candidate.wire_length > baseline.wire_length + allowedIncrease) {
       return false;
     }
@@ -189,7 +189,7 @@ bool isCompactionScoreBetter(const RouteScore& candidate,
     const uint64_t wireGain = baseline.wire_length - candidate.wire_length;
     const int viaIncrease = candidate.via_count - baseline.via_count;
     return viaIncrease > 0
-           && wireGain >= static_cast<uint64_t>(viaIncrease) * 12ULL;
+           && wireGain >= static_cast<uint64_t>(viaIncrease) * 10ULL;
   }
   if (candidate.wire_length > baseline.wire_length) {
     return false;
@@ -773,7 +773,8 @@ void CUGR::finalPatternTighten()
 
 void CUGR::globalCompaction()
 {
-  logger_->report("stage 6: global compaction with strict score gating");
+  logger_->report("stage 6: multi-round global compaction with strict score "
+                  "gating");
   std::vector<int> netIndices;
   netIndices.reserve(gr_nets_.size());
   for (const auto& net : gr_nets_) {
@@ -783,47 +784,6 @@ void CUGR::globalCompaction()
     return;
   }
 
-  std::vector<RouteScore> routedScores(gr_nets_.size());
-  for (const int netIndex : netIndices) {
-    routedScores[netIndex]
-        = evaluateRouteScore(gr_nets_[netIndex]->getRoutingTree(),
-                             grid_graph_.get());
-  }
-  std::sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
-    if (routedScores[lhs].overflow_edges != routedScores[rhs].overflow_edges) {
-      return routedScores[lhs].overflow_edges > routedScores[rhs].overflow_edges;
-    }
-    if (routedScores[lhs].wire_length != routedScores[rhs].wire_length) {
-      return routedScores[lhs].wire_length > routedScores[rhs].wire_length;
-    }
-    if (routedScores[lhs].via_count != routedScores[rhs].via_count) {
-      return routedScores[lhs].via_count > routedScores[rhs].via_count;
-    }
-    return lhs < rhs;
-  });
-
-  const int longNetRank
-      = std::min(static_cast<int>(netIndices.size()) - 1,
-                 std::max(0, static_cast<int>(netIndices.size() / 6)));
-  const uint64_t longWireThreshold
-      = routedScores[netIndices[longNetRank]].wire_length;
-  const int compactionBudget
-      = std::min(static_cast<int>(netIndices.size()),
-                 std::max(4096, static_cast<int>(netIndices.size() / 3)));
-  const int denseMazeBudget
-      = std::min(compactionBudget,
-                 std::max(1024, static_cast<int>(compactionBudget / 2)));
-  std::vector<int> scheduledNetIndices = buildSpatialCompactionOrder(
-      netIndices,
-      gr_nets_,
-      compactionBudget,
-      /*use_x_axis=*/true);
-  if (scheduledNetIndices.empty()) {
-    scheduledNetIndices.assign(netIndices.begin(),
-                               netIndices.begin() + compactionBudget);
-  }
-  logger_->report("stage 6 scheduled {} nets with spatial round-robin order.",
-                  scheduledNetIndices.size());
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
 
@@ -834,107 +794,188 @@ void CUGR::globalCompaction()
     Maze
   };
 
-  int accepted = 0;
-  int acceptedPattern = 0;
-  int acceptedMaze = 0;
-  const int scheduledCount = static_cast<int>(scheduledNetIndices.size());
-  for (int rank = 0; rank < scheduledCount; rank++) {
-    const int netIndex = scheduledNetIndices[rank];
-    GRNet* net = gr_nets_[netIndex].get();
-    const auto oldTree = net->getRoutingTree();
-    if (!oldTree) {
+  struct CompactionRound
+  {
+    int budget_divisor;
+    int min_budget;
+    bool use_x_axis;
+    int maze_candidate_base;
+  };
+
+  const std::vector<CompactionRound> rounds{
+      {3, 4096, true, 2},
+      {6, 2048, false, 2},
+      {12, 1024, true, 1}};
+
+  int totalAccepted = 0;
+  int totalAcceptedPattern = 0;
+  int totalAcceptedMaze = 0;
+
+  std::vector<RouteScore> routedScores(gr_nets_.size());
+  for (size_t roundIdx = 0; roundIdx < rounds.size(); roundIdx++) {
+    const auto& round = rounds[roundIdx];
+    for (const int netIndex : netIndices) {
+      routedScores[netIndex]
+          = evaluateRouteScore(gr_nets_[netIndex]->getRoutingTree(),
+                               grid_graph_.get());
+    }
+    std::sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
+      if (routedScores[lhs].overflow_edges != routedScores[rhs].overflow_edges) {
+        return routedScores[lhs].overflow_edges > routedScores[rhs].overflow_edges;
+      }
+      if (routedScores[lhs].wire_length != routedScores[rhs].wire_length) {
+        return routedScores[lhs].wire_length > routedScores[rhs].wire_length;
+      }
+      if (routedScores[lhs].via_count != routedScores[rhs].via_count) {
+        return routedScores[lhs].via_count > routedScores[rhs].via_count;
+      }
+      return lhs < rhs;
+    });
+
+    const int totalNets = static_cast<int>(netIndices.size());
+    const int compactionBudget = std::min(totalNets,
+                                          std::max(round.min_budget,
+                                                   totalNets
+                                                       / round.budget_divisor));
+    if (compactionBudget <= 0) {
       continue;
     }
-    const RouteScore oldScore = evaluateRouteScore(oldTree, grid_graph_.get());
 
-    grid_graph_->commitTree(oldTree, /*ripup*/ true);
-    grid_graph_->updateWireCostView(wireCostView, oldTree);
+    const int longNetRank
+        = std::min(compactionBudget - 1, std::max(0, compactionBudget / 6));
+    const uint64_t longWireThreshold
+        = routedScores[netIndices[longNetRank]].wire_length;
+    const int denseMazeBudget
+        = std::min(compactionBudget,
+                   std::max(256,
+                            compactionBudget
+                                / std::max(2, static_cast<int>(roundIdx) + 2)));
+    std::vector<int> scheduledNetIndices = buildSpatialCompactionOrder(
+        netIndices, gr_nets_, compactionBudget, round.use_x_axis);
+    if (scheduledNetIndices.empty()) {
+      scheduledNetIndices.assign(netIndices.begin(),
+                                 netIndices.begin() + compactionBudget);
+    }
 
-    std::shared_ptr<GRTreeNode> bestTree = oldTree;
-    RouteScore bestScore = oldScore;
-    CandidateSource bestSource = CandidateSource::Original;
-
-    auto tryCandidate = [&](const std::shared_ptr<GRTreeNode>& candidateTree,
-                            const CandidateSource source) {
-      if (!candidateTree) {
-        return;
+    int accepted = 0;
+    int acceptedPattern = 0;
+    int acceptedMaze = 0;
+    const int scheduledCount = static_cast<int>(scheduledNetIndices.size());
+    for (int rank = 0; rank < scheduledCount; rank++) {
+      const int netIndex = scheduledNetIndices[rank];
+      GRNet* net = gr_nets_[netIndex].get();
+      const auto oldTree = net->getRoutingTree();
+      if (!oldTree) {
+        continue;
       }
-      grid_graph_->commitTree(candidateTree);
-      const RouteScore candidateScore
-          = evaluateRouteScore(candidateTree, grid_graph_.get());
-      grid_graph_->commitTree(candidateTree, /*ripup*/ true);
-      if (isCompactionScoreBetter(candidateScore, bestScore)) {
-        bestTree = candidateTree;
-        bestScore = candidateScore;
-        bestSource = source;
-      }
-    };
+      const RouteScore oldScore
+          = evaluateRouteScore(oldTree, grid_graph_.get());
 
-    // FastRoute-like compact topology rebuild.
-    PatternRoute patternRoute(
-        net, grid_graph_.get(), stt_builder_, constants_, logger_);
-    patternRoute.constructSteinerTree();
-    patternRoute.constructRoutingDAG();
-    patternRoute.run();
-    tryCandidate(net->getRoutingTree(), CandidateSource::Pattern);
+      grid_graph_->commitTree(oldTree, /*ripup*/ true);
+      grid_graph_->updateWireCostView(wireCostView, oldTree);
 
-    // CUGR/SPRoute-inspired sparse maze refinement for hard nets.
-    const bool runMazeCandidate
-        = rank < denseMazeBudget || oldScore.overflow_edges > 0
-          || oldScore.wire_length >= longWireThreshold
-          || oldScore.via_count >= 8;
-    if (runMazeCandidate) {
-      int interval = 4;
-      if (rank < denseMazeBudget / 3 || oldScore.overflow_edges > 0) {
-        interval = 3;
-      }
-      const int hp = net->getBoundingBox().hp();
-      const int maxMazeCandidates
-          = (rank < denseMazeBudget / 3 || oldScore.wire_length >= longWireThreshold)
-                ? 3
-                : 2;
-      const auto candidateGrids = buildMazeCandidateGrids(interval,
-                                                          rank
-                                                              + oldScore.via_count,
-                                                          hp,
-                                                          net->getNumPins(),
-                                                          maxMazeCandidates);
-      for (const auto& compactionGrid : candidateGrids) {
-        MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
-        mazeRoute.constructSparsifiedGraph(wireCostView, compactionGrid);
-        mazeRoute.run();
-        std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();
-        if (!steinerTree) {
-          continue;
+      std::shared_ptr<GRTreeNode> bestTree = oldTree;
+      RouteScore bestScore = oldScore;
+      CandidateSource bestSource = CandidateSource::Original;
+
+      auto tryCandidate = [&](const std::shared_ptr<GRTreeNode>& candidateTree,
+                              const CandidateSource source) {
+        if (!candidateTree) {
+          return;
         }
-        PatternRoute mazeRefineRoute(
-            net, grid_graph_.get(), stt_builder_, constants_, logger_);
-        mazeRefineRoute.setSteinerTree(steinerTree);
-        mazeRefineRoute.constructRoutingDAG();
-        mazeRefineRoute.run();
-        tryCandidate(net->getRoutingTree(), CandidateSource::Maze);
+        grid_graph_->commitTree(candidateTree);
+        const RouteScore candidateScore
+            = evaluateRouteScore(candidateTree, grid_graph_.get());
+        grid_graph_->commitTree(candidateTree, /*ripup*/ true);
+        if (isCompactionScoreBetter(candidateScore, bestScore)) {
+          bestTree = candidateTree;
+          bestScore = candidateScore;
+          bestSource = source;
+        }
+      };
+
+      PatternRoute patternRoute(
+          net, grid_graph_.get(), stt_builder_, constants_, logger_);
+      patternRoute.constructSteinerTree();
+      patternRoute.constructRoutingDAG();
+      patternRoute.run();
+      tryCandidate(net->getRoutingTree(), CandidateSource::Pattern);
+
+      const bool runMazeCandidate
+          = rank < denseMazeBudget || oldScore.overflow_edges > 0
+            || oldScore.wire_length >= longWireThreshold
+            || oldScore.via_count >= (roundIdx == 0 ? 8 : 6);
+      if (runMazeCandidate) {
+        const int hp = net->getBoundingBox().hp();
+        int interval = 4;
+        if (rank < denseMazeBudget / 3 || oldScore.overflow_edges > 0) {
+          interval = 3;
+        } else if (roundIdx > 0 && net->getNumPins() <= 3 && hp <= 70) {
+          interval = 5;
+        }
+        const int maxMazeCandidates = std::clamp(
+            round.maze_candidate_base
+                + ((rank < denseMazeBudget / 3
+                    || oldScore.wire_length >= longWireThreshold)
+                       ? 1
+                       : 0),
+            1,
+            4);
+        const int seed = rank + oldScore.via_count
+                         + static_cast<int>(roundIdx) * 97;
+        const auto candidateGrids
+            = buildMazeCandidateGrids(
+                interval, seed, hp, net->getNumPins(), maxMazeCandidates);
+        for (const auto& compactionGrid : candidateGrids) {
+          MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+          mazeRoute.constructSparsifiedGraph(wireCostView, compactionGrid);
+          mazeRoute.run();
+          std::shared_ptr<SteinerTreeNode> steinerTree
+              = mazeRoute.getSteinerTree();
+          if (!steinerTree) {
+            continue;
+          }
+          PatternRoute mazeRefineRoute(
+              net, grid_graph_.get(), stt_builder_, constants_, logger_);
+          mazeRefineRoute.setSteinerTree(steinerTree);
+          mazeRefineRoute.constructRoutingDAG();
+          mazeRefineRoute.run();
+          tryCandidate(net->getRoutingTree(), CandidateSource::Maze);
+        }
       }
+
+      if (bestTree != oldTree) {
+        accepted++;
+        if (bestSource == CandidateSource::Pattern) {
+          acceptedPattern++;
+        } else if (bestSource == CandidateSource::Maze) {
+          acceptedMaze++;
+        }
+      }
+
+      net->setRoutingTree(bestTree);
+      grid_graph_->commitTree(bestTree);
+      grid_graph_->updateWireCostView(wireCostView, bestTree);
     }
 
-    if (bestTree != oldTree) {
-      accepted++;
-      if (bestSource == CandidateSource::Pattern) {
-        acceptedPattern++;
-      } else if (bestSource == CandidateSource::Maze) {
-        acceptedMaze++;
-      }
-    }
-
-    net->setRoutingTree(bestTree);
-    grid_graph_->commitTree(bestTree);
-    grid_graph_->updateWireCostView(wireCostView, bestTree);
+    totalAccepted += accepted;
+    totalAcceptedPattern += acceptedPattern;
+    totalAcceptedMaze += acceptedMaze;
+    logger_->report("stage 6 round {} scheduled {} nets (axis={}): accepted "
+                    "{} ({} pattern / {} maze).",
+                    roundIdx + 1,
+                    scheduledCount,
+                    round.use_x_axis ? "x" : "y",
+                    accepted,
+                    acceptedPattern,
+                    acceptedMaze);
   }
 
-  logger_->report("global compaction accepted {} net updates ({} pattern / {} "
-                  "maze).",
-                  accepted,
-                  acceptedPattern,
-                  acceptedMaze);
+  logger_->report("global compaction accepted {} net updates total ({} pattern "
+                  "/ {} maze).",
+                  totalAccepted,
+                  totalAcceptedPattern,
+                  totalAcceptedMaze);
 }
 
 void CUGR::route()

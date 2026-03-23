@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -214,8 +215,23 @@ void MazeRoute::run()
 
   solutions_.reserve(numPseudoPins);
 
+  const auto& box = net_->getBoundingBox();
+  const PointT center(box.cx(), box.cy());
+  int startPinIndex = 0;
+  int64_t bestCenterDistance = std::numeric_limits<int64_t>::max();
+  for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
+    const auto& pseudoPin = graph_.getPseudoPin(pinIndex);
+    const int64_t distance = std::llabs(static_cast<int64_t>(pseudoPin.point.x())
+                                        - center.x())
+                             + std::llabs(static_cast<int64_t>(pseudoPin.point.y())
+                                          - center.y());
+    if (distance < bestCenterDistance) {
+      bestCenterDistance = distance;
+      startPinIndex = pinIndex;
+    }
+  }
+
   std::vector<bool> visited(numPseudoPins, false);
-  const int startPinIndex = 0;
   visited[startPinIndex] = true;
   int numDetached = numPseudoPins - 1;
   updateSolution(std::make_shared<Solution>(
