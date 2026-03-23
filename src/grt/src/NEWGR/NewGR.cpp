@@ -742,11 +742,14 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
       const float usage_ratio
           = static_cast<float>(usage) / static_cast<float>(capacity);
 
-      if (usage_ratio < 0.60f && overflow == 0) {
+      // Keep patching focused on severe regions. Patching low-pressure edges
+      // can broaden guides and invite unnecessary detailed-route detours.
+      if (overflow == 0 && usage_ratio < 0.95f) {
         continue;
       }
 
-      const float severity = usage_ratio + 0.08f * static_cast<float>(overflow);
+      const float severity
+          = usage_ratio + 0.22f * static_cast<float>(overflow);
       candidates.push_back({&info, severity});
     }
   };
@@ -765,10 +768,10 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
         return lhs.severity > rhs.severity;
       });
 
-  const int edge_budget = 90;
-  const int sources_per_edge = 2;
-  const int patches_per_net = 6;
-  const int total_patch_budget = 1800;
+  const int edge_budget = 36;
+  const int sources_per_edge = 1;
+  const int patches_per_net = 3;
+  const int total_patch_budget = 540;
 
   int patched_edges = 0;
   int added_segments = 0;
@@ -857,81 +860,85 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
     }
   }
 
-  // CUGR-inspired long segment patching: add nearby adjacent-layer guide
-  // alternatives for long wires to reduce detailed-route detours.
-  const int long_seg_threshold = 2 * tile_size;
-  const int long_seg_patches_per_net = 8;
-  const int long_seg_segment_budget = 2200;
+  // Add long-segment alternatives only when there are enough severe hotspots
+  // to justify extra guide flexibility.
+  const bool enable_long_seg_patching = patched_edges >= (edge_budget / 3);
+  const int long_seg_threshold = 4 * tile_size;
+  const int long_seg_patches_per_net = 2;
+  const int long_seg_segment_budget = 240;
   int long_seg_added_segments = 0;
   std::map<odb::dbNet*, int> long_seg_patch_count;
 
-  for (auto& [db_net, route] : routes) {
-    if (added_segments >= total_patch_budget
-        || long_seg_added_segments >= long_seg_segment_budget) {
-      break;
-    }
-    int& net_budget = long_seg_patch_count[db_net];
-    if (net_budget >= long_seg_patches_per_net) {
-      continue;
-    }
-
-    const GRoute original_route = route;
-    for (const GSegment& base : original_route) {
+  if (enable_long_seg_patching) {
+    for (auto& [db_net, route] : routes) {
       if (added_segments >= total_patch_budget
           || long_seg_added_segments >= long_seg_segment_budget
-          || net_budget >= long_seg_patches_per_net) {
+          ) {
         break;
       }
-      if (base.isVia() || base.length() < long_seg_threshold) {
-        continue;
-      }
-      if (base.init_layer != base.final_layer) {
-        continue;
-      }
-
-      const int base_layer = base.init_layer;
-      if (base_layer < min_routing_layer || base_layer > max_routing_layer) {
-        continue;
-      }
-      const int alt_layer = (base_layer < max_routing_layer) ? base_layer + 1
-                                                              : base_layer - 1;
-      if (alt_layer < min_routing_layer || alt_layer > max_routing_layer
-          || alt_layer == base_layer) {
+      int& net_budget = long_seg_patch_count[db_net];
+      if (net_budget >= long_seg_patches_per_net) {
         continue;
       }
 
-      const int low_layer = std::min(base_layer, alt_layer);
-      const int high_layer = std::max(base_layer, alt_layer);
-      const size_t route_size_before = route.size();
+      const GRoute original_route = route;
+      for (const GSegment& base : original_route) {
+        if (added_segments >= total_patch_budget
+            || long_seg_added_segments >= long_seg_segment_budget
+            || net_budget >= long_seg_patches_per_net) {
+          break;
+        }
+        if (base.isVia() || base.length() < long_seg_threshold) {
+          continue;
+        }
+        if (base.init_layer != base.final_layer) {
+          continue;
+        }
 
-      appendUniqueRouteSegment(route,
-                               GSegment(base.init_x,
-                                        base.init_y,
-                                        alt_layer,
-                                        base.final_x,
-                                        base.final_y,
-                                        alt_layer));
-      appendUniqueRouteSegment(route,
-                               GSegment(base.init_x,
-                                        base.init_y,
-                                        low_layer,
-                                        base.init_x,
-                                        base.init_y,
-                                        high_layer));
-      appendUniqueRouteSegment(route,
-                               GSegment(base.final_x,
-                                        base.final_y,
-                                        low_layer,
-                                        base.final_x,
-                                        base.final_y,
-                                        high_layer));
+        const int base_layer = base.init_layer;
+        if (base_layer < min_routing_layer || base_layer > max_routing_layer) {
+          continue;
+        }
+        const int alt_layer = (base_layer < max_routing_layer) ? base_layer + 1
+                                                                : base_layer - 1;
+        if (alt_layer < min_routing_layer || alt_layer > max_routing_layer
+            || alt_layer == base_layer) {
+          continue;
+        }
 
-      const int new_segments
-          = static_cast<int>(route.size() - route_size_before);
-      if (new_segments > 0) {
-        added_segments += new_segments;
-        long_seg_added_segments += new_segments;
-        net_budget++;
+        const int low_layer = std::min(base_layer, alt_layer);
+        const int high_layer = std::max(base_layer, alt_layer);
+        const size_t route_size_before = route.size();
+
+        appendUniqueRouteSegment(route,
+                                 GSegment(base.init_x,
+                                          base.init_y,
+                                          alt_layer,
+                                          base.final_x,
+                                          base.final_y,
+                                          alt_layer));
+        appendUniqueRouteSegment(route,
+                                 GSegment(base.init_x,
+                                          base.init_y,
+                                          low_layer,
+                                          base.init_x,
+                                          base.init_y,
+                                          high_layer));
+        appendUniqueRouteSegment(route,
+                                 GSegment(base.final_x,
+                                          base.final_y,
+                                          low_layer,
+                                          base.final_x,
+                                          base.final_y,
+                                          high_layer));
+
+        const int new_segments
+            = static_cast<int>(route.size() - route_size_before);
+        if (new_segments > 0) {
+          added_segments += new_segments;
+          long_seg_added_segments += new_segments;
+          net_budget++;
+        }
       }
     }
   }
@@ -1134,11 +1141,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->setPerturbationAmount(0);
     grouter_->setAllowCongestion(true);
     grouter_->setSeed(seed);
-    grouter_->fastroute_->setCriticalNetsPercentage(18.0f);
+    grouter_->fastroute_->setCriticalNetsPercentage(24.0f);
   };
   sporder_shortest_def.order_nets = [](std::vector<Net*>& scenario_nets) {
     reorderNetsByWirelengthPriority(scenario_nets);
   };
+  sporder_shortest_def.post_init
+      = [this, &hotspots, min_routing_layer, max_routing_layer]() {
+          applyUniformCapacityBoost(
+              grouter_, min_routing_layer, max_routing_layer, 1.02f);
+          applyHotspotPenalties(grouter_,
+                                hotspots,
+                                min_routing_layer,
+                                max_routing_layer,
+                                0,
+                                0.99f,
+                                0.03f);
+        };
   sporder_shortest_def.aggressive = false;
   scenario_defs.push_back(std::move(sporder_shortest_def));
 
@@ -1149,7 +1168,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->setPerturbationAmount(0);
     grouter_->setAllowCongestion(true);
     grouter_->setSeed(seed);
-    grouter_->fastroute_->setCriticalNetsPercentage(19.0f);
+    grouter_->fastroute_->setCriticalNetsPercentage(20.0f);
   };
   bsp_scheduler_def.order_nets = [](std::vector<Net*>& scenario_nets) {
     reorderNetsByBspScheduler(scenario_nets);
@@ -1158,13 +1177,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   scenario_defs.push_back(std::move(bsp_scheduler_def));
 
   ScenarioDefinition spatial_round_robin_def;
-  spatial_round_robin_def.name = "spatial-roundrobin-lite";
+  spatial_round_robin_def.name = "spatial-roundrobin-turbo";
   spatial_round_robin_def.pre_init = [this, seed = 47]() {
     grouter_->setCapacitiesPerturbationPercentage(0.0f);
     grouter_->setPerturbationAmount(0);
     grouter_->setAllowCongestion(true);
     grouter_->setSeed(seed);
-    grouter_->fastroute_->setCriticalNetsPercentage(18.0f);
+    grouter_->fastroute_->setCriticalNetsPercentage(26.0f);
   };
   spatial_round_robin_def.order_nets = [](std::vector<Net*>& scenario_nets) {
     reorderNetsBySpatialRoundRobin(scenario_nets);
@@ -1172,65 +1191,67 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   spatial_round_robin_def.post_init
       = [this, &hotspots, min_routing_layer, max_routing_layer]() {
           applyUniformCapacityBoost(
-              grouter_, min_routing_layer, max_routing_layer, 1.015f);
+              grouter_, min_routing_layer, max_routing_layer, 1.06f);
           applyHotspotPenalties(grouter_,
                                 hotspots,
                                 min_routing_layer,
                                 max_routing_layer,
-                                1,
-                                0.95f,
-                                0.10f);
+                                0,
+                                0.985f,
+                                0.06f);
         };
   spatial_round_robin_def.aggressive = true;
   scenario_defs.push_back(std::move(spatial_round_robin_def));
 
   if (!normalized_rudy.empty()) {
-    ScenarioDefinition cugr_softcap_bsp_def;
-    cugr_softcap_bsp_def.name = "cugr-softcap-bsp";
-    cugr_softcap_bsp_def.pre_init = [this, seed = 67]() {
+    ScenarioDefinition cugr_softcap_wl_def;
+    cugr_softcap_wl_def.name = "cugr-softcap-wirelength";
+    cugr_softcap_wl_def.pre_init = [this, seed = 67]() {
       grouter_->setCapacitiesPerturbationPercentage(0.0f);
       grouter_->setPerturbationAmount(0);
       grouter_->setAllowCongestion(true);
       grouter_->setSeed(seed);
-      grouter_->fastroute_->setCriticalNetsPercentage(16.0f);
+      grouter_->fastroute_->setCriticalNetsPercentage(24.0f);
     };
-    cugr_softcap_bsp_def.order_nets = [](std::vector<Net*>& scenario_nets) {
-      reorderNetsByBspScheduler(scenario_nets);
+    cugr_softcap_wl_def.order_nets = [](std::vector<Net*>& scenario_nets) {
+      reorderNetsByWirelengthPriority(scenario_nets);
     };
-    cugr_softcap_bsp_def.post_init = [this,
-                                      &normalized_rudy,
-                                      &hotspots,
-                                      min_routing_layer,
-                                      max_routing_layer]() {
+    cugr_softcap_wl_def.post_init = [this,
+                                     &normalized_rudy,
+                                     &hotspots,
+                                     min_routing_layer,
+                                     max_routing_layer]() {
       applyHybridCapacityRemap(grouter_,
                                normalized_rudy,
                                hotspots,
                                min_routing_layer,
                                max_routing_layer,
-                               0.84f,
-                               1.02f,
-                               3.8f,
-                               0.66f,
-                               0.16f,
-                               1);
+                               0.94f,
+                               1.08f,
+                               3.1f,
+                               0.75f,
+                               0.28f,
+                               0);
       applySoftCapacityScaling(grouter_,
                                normalized_rudy,
                                min_routing_layer,
                                max_routing_layer,
-                               0.82f,
-                               1.01f,
-                               3.4f,
-                               0.70f);
+                               0.90f,
+                               0.98f,
+                               2.2f,
+                               0.84f);
+      applyUniformCapacityBoost(
+          grouter_, min_routing_layer, max_routing_layer, 1.025f);
       applyHotspotPenalties(grouter_,
                             hotspots,
                             min_routing_layer,
                             max_routing_layer,
-                            1,
-                            0.94f,
-                            0.12f);
+                            0,
+                            0.99f,
+                            0.05f);
     };
-    cugr_softcap_bsp_def.aggressive = true;
-    scenario_defs.push_back(std::move(cugr_softcap_bsp_def));
+    cugr_softcap_wl_def.aggressive = true;
+    scenario_defs.push_back(std::move(cugr_softcap_wl_def));
   }
 
   for (const ScenarioDefinition& def : scenario_defs) {
@@ -1239,79 +1260,37 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   const long baseline_vias = baseline.metrics.via_count;
-  auto scenario_stability_penalty = [baseline_vias](const ScenarioResult& result) {
-    if (baseline_vias <= 0) {
-      return 0;
+  auto better_result = [baseline_vias](const ScenarioResult& lhs,
+                                       const ScenarioResult& rhs) {
+    const long lhs_wl = lhs.metrics.wirelength_dbu;
+    const long rhs_wl = rhs.metrics.wirelength_dbu;
+    const long wl_tie_window
+        = std::max<long>(120000, std::max(lhs_wl, rhs_wl) / 8000);
+    if (std::abs(lhs_wl - rhs_wl) > wl_tie_window) {
+      return lhs_wl < rhs_wl;
     }
-    const long min_stable_vias
-        = static_cast<long>(std::floor(0.995 * baseline_vias));
-    const long max_stable_vias
-        = static_cast<long>(std::ceil(1.06 * baseline_vias));
-    if (result.metrics.via_count < min_stable_vias
-        || result.metrics.via_count > max_stable_vias) {
-      return 1;
-    }
-    return 0;
-  };
 
-  auto better_result = [&](const ScenarioResult& lhs, const ScenarioResult& rhs) {
-    const int lhs_penalty = scenario_stability_penalty(lhs);
-    const int rhs_penalty = scenario_stability_penalty(rhs);
-    if (lhs_penalty != rhs_penalty) {
-      return lhs_penalty < rhs_penalty;
+    if (baseline_vias > 0) {
+      const long max_reasonable_via
+          = static_cast<long>(std::ceil(1.12 * baseline_vias));
+      const bool lhs_via_ok = lhs.metrics.via_count <= max_reasonable_via;
+      const bool rhs_via_ok = rhs.metrics.via_count <= max_reasonable_via;
+      if (lhs_via_ok != rhs_via_ok) {
+        return lhs_via_ok;
+      }
     }
-    if (lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
-      return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
-    }
+
     if (lhs.metrics.via_count != rhs.metrics.via_count) {
       return lhs.metrics.via_count < rhs.metrics.via_count;
     }
     return lhs.metrics.score < rhs.metrics.score;
   };
 
-  auto is_aggressive_scenario = [&](const std::string& scenario_name) {
-    for (const ScenarioDefinition& def : scenario_defs) {
-      if (def.name == scenario_name) {
-        return def.aggressive;
-      }
-    }
-    return false;
-  };
-
   auto best_iter
       = std::min_element(scenario_results.begin(), scenario_results.end(), better_result);
-  auto best_conservative_iter = scenario_results.end();
-  for (auto it = scenario_results.begin(); it != scenario_results.end(); ++it) {
-    if (is_aggressive_scenario(it->name)) {
-      continue;
-    }
-    if (best_conservative_iter == scenario_results.end()
-        || better_result(*it, *best_conservative_iter)) {
-      best_conservative_iter = it;
-    }
-  }
 
   if (best_iter == scenario_results.end()) {
     return {};
-  }
-
-  if (is_aggressive_scenario(best_iter->name)
-      && best_conservative_iter != scenario_results.end()) {
-    const long conservative_wl = best_conservative_iter->metrics.wirelength_dbu;
-    const long aggressive_wl = best_iter->metrics.wirelength_dbu;
-    const long wl_gain = conservative_wl - aggressive_wl;
-    const long min_confident_gain = std::max<long>(120, conservative_wl / 5000);
-    const long via_guard = static_cast<long>(
-        std::ceil(best_conservative_iter->metrics.via_count * 1.004));
-    if (wl_gain < min_confident_gain || best_iter->metrics.via_count > via_guard) {
-      logger_->info(
-          GNR,
-          6008,
-          "NEWGR confidence gate: choosing conservative scenario '{}' over '{}'",
-          best_conservative_iter->name,
-          best_iter->name);
-      best_iter = best_conservative_iter;
-    }
   }
 
   ScenarioResult final_result = *best_iter;
@@ -1340,11 +1319,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 final_result.metrics.wirelength_um,
                 final_result.metrics.via_count);
 
-  applyCugrStyleGuidePatching(grouter_,
-                              final_result.routes,
-                              min_routing_layer,
-                              max_routing_layer,
-                              logger_);
+  if (final_result.name == "cugr-softcap-wirelength") {
+    applyCugrStyleGuidePatching(grouter_,
+                                final_result.routes,
+                                min_routing_layer,
+                                max_routing_layer,
+                                logger_);
+  }
 
   return std::move(final_result.routes);
 }
