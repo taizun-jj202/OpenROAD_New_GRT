@@ -1,6 +1,7 @@
 #include "NEWGR/NewGR.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -1500,6 +1501,347 @@ GlobalPortal computeLowRudyPortal(const RudyGrid& normalized_rudy, Grid* grid)
   return portal;
 }
 
+float estimatePathRudy(const RudyGrid& normalized_rudy,
+                       int gx0,
+                       int gy0,
+                       int gx1,
+                       int gy1,
+                       bool horizontal_first);
+
+GlobalPortal computeQuadrantLowRudyPortal(const RudyGrid& normalized_rudy,
+                                          Grid* grid,
+                                          bool east_half,
+                                          bool north_half)
+{
+  GlobalPortal portal;
+  if (grid == nullptr) {
+    return portal;
+  }
+
+  const int tile = std::max(grid->getTileSize(), 1);
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+  const int x_grids = std::max(grid->getXGrids(), 1);
+  const int y_grids = std::max(grid->getYGrids(), 1);
+  const int mid_x = x_grids / 2;
+  const int mid_y = y_grids / 2;
+  const int fallback_gx = east_half ? std::max(mid_x + x_grids / 4, 0)
+                                    : std::max(mid_x - x_grids / 4, 0);
+  const int fallback_gy = north_half ? std::max(mid_y + y_grids / 4, 0)
+                                     : std::max(mid_y - y_grids / 4, 0);
+
+  if (normalized_rudy.empty() || normalized_rudy.front().empty()) {
+    portal.x = x_min + std::clamp(fallback_gx, 0, x_grids - 1) * tile;
+    portal.y = y_min + std::clamp(fallback_gy, 0, y_grids - 1) * tile;
+    portal.valid = true;
+    return portal;
+  }
+
+  const int x_tiles = normalized_rudy.size();
+  const int y_tiles = normalized_rudy.front().size();
+  const int x_mid = x_tiles / 2;
+  const int y_mid = y_tiles / 2;
+  const int x_start = east_half ? x_mid : 0;
+  const int x_end = east_half ? x_tiles : std::max(x_mid, 1);
+  const int y_start = north_half ? y_mid : 0;
+  const int y_end = north_half ? y_tiles : std::max(y_mid, 1);
+
+  if (x_start >= x_end || y_start >= y_end) {
+    portal.x = x_min + std::clamp(fallback_gx, 0, x_grids - 1) * tile;
+    portal.y = y_min + std::clamp(fallback_gy, 0, y_grids - 1) * tile;
+    portal.valid = true;
+    return portal;
+  }
+
+  const float quadrant_cx
+      = 0.5f * static_cast<float>(x_start + std::max(x_end - 1, x_start));
+  const float quadrant_cy
+      = 0.5f * static_cast<float>(y_start + std::max(y_end - 1, y_start));
+  int best_x = x_start;
+  int best_y = y_start;
+  float best_score = std::numeric_limits<float>::max();
+  const float norm_x = std::max(static_cast<float>(x_end - x_start), 1.0f);
+  const float norm_y = std::max(static_cast<float>(y_end - y_start), 1.0f);
+
+  for (int x = x_start; x < x_end; ++x) {
+    for (int y = y_start; y < y_end; ++y) {
+      const float rudy = normalized_rudy[x][y];
+      const float dx = std::abs(static_cast<float>(x) - quadrant_cx) / norm_x;
+      const float dy = std::abs(static_cast<float>(y) - quadrant_cy) / norm_y;
+      const float score = rudy + 0.09f * (dx + dy);
+      if (score < best_score) {
+        best_score = score;
+        best_x = x;
+        best_y = y;
+      }
+    }
+  }
+
+  portal.x = x_min + std::clamp(best_x, 0, x_grids - 1) * tile;
+  portal.y = y_min + std::clamp(best_y, 0, y_grids - 1) * tile;
+  portal.valid = true;
+  return portal;
+}
+
+void applyQuadrantPortalHypergraphRebuild(GlobalRouter* grouter,
+                                          NetRouteMap& routes,
+                                          const RudyGrid& normalized_rudy,
+                                          int min_unique_nodes,
+                                          int max_unique_nodes,
+                                          int coverage_percent,
+                                          int min_layer,
+                                          int max_layer)
+{
+  if (grouter == nullptr || grouter->grid() == nullptr || routes.empty()) {
+    return;
+  }
+
+  Grid* grid = grouter->grid();
+  const int tile = std::max(grid->getTileSize(), 1);
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+  const int x_max = grid->getXMax();
+  const int y_max = grid->getYMax();
+  const int x_tiles
+      = normalized_rudy.empty() ? 0 : static_cast<int>(normalized_rudy.size());
+  const int y_tiles = normalized_rudy.empty() ? 0
+                                              : static_cast<int>(
+                                                    normalized_rudy.front().size());
+
+  auto to_grid_x = [&](int x) {
+    if (x_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((x - x_min) / tile, 0, x_tiles - 1);
+  };
+  auto to_grid_y = [&](int y) {
+    if (y_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((y - y_min) / tile, 0, y_tiles - 1);
+  };
+
+  min_unique_nodes = std::max(min_unique_nodes, 3);
+  max_unique_nodes = std::max(max_unique_nodes, min_unique_nodes);
+  coverage_percent = std::clamp(coverage_percent, 1, 100);
+  min_layer = std::max(min_layer, 0);
+  max_layer = std::max(max_layer, min_layer);
+
+  std::array<GlobalPortal, 4> portals{
+      computeQuadrantLowRudyPortal(normalized_rudy, grid, false, false),
+      computeQuadrantLowRudyPortal(normalized_rudy, grid, true, false),
+      computeQuadrantLowRudyPortal(normalized_rudy, grid, false, true),
+      computeQuadrantLowRudyPortal(normalized_rudy, grid, true, true)};
+
+  for (auto& [db_net, route] : routes) {
+    if (route.empty()) {
+      continue;
+    }
+
+    const auto net_key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    if (static_cast<int>(net_key % 100ULL) >= coverage_percent) {
+      continue;
+    }
+
+    const std::vector<RouteNode> nodes = collectUniqueRouteNodes(route);
+    if (static_cast<int>(nodes.size()) < min_unique_nodes
+        || static_cast<int>(nodes.size()) > max_unique_nodes) {
+      continue;
+    }
+
+    long cx_acc = 0;
+    long cy_acc = 0;
+    int min_x = nodes.front().x;
+    int max_x = nodes.front().x;
+    int min_y = nodes.front().y;
+    int max_y = nodes.front().y;
+    for (const RouteNode& node : nodes) {
+      cx_acc += node.x;
+      cy_acc += node.y;
+      min_x = std::min(min_x, node.x);
+      max_x = std::max(max_x, node.x);
+      min_y = std::min(min_y, node.y);
+      max_y = std::max(max_y, node.y);
+    }
+    const int node_count = std::max(static_cast<int>(nodes.size()), 1);
+    const int centroid_x = static_cast<int>(cx_acc / node_count);
+    const int centroid_y = static_cast<int>(cy_acc / node_count);
+    const int trunk_layer = chooseDominantLayer(nodes, min_layer, max_layer);
+
+    std::vector<GSegment> rebuilt;
+    rebuilt.reserve(nodes.size() * 5 + 16);
+    std::array<bool, 4> portal_used{false, false, false, false};
+
+    for (size_t idx = 0; idx < nodes.size(); ++idx) {
+      int cur_x = std::clamp(nodes[idx].x, x_min, x_max);
+      int cur_y = std::clamp(nodes[idx].y, y_min, y_max);
+      int cur_layer = nodes[idx].layer;
+
+      if (cur_layer != trunk_layer) {
+        const int step = (trunk_layer > cur_layer) ? 1 : -1;
+        while (cur_layer != trunk_layer) {
+          const int next_layer = cur_layer + step;
+          appendSegment(
+              rebuilt, cur_x, cur_y, cur_layer, cur_x, cur_y, next_layer);
+          cur_layer = next_layer;
+        }
+      }
+
+      const bool east = cur_x >= centroid_x;
+      const bool north = cur_y >= centroid_y;
+      const int preferred_portal = (east ? 1 : 0) + (north ? 2 : 0);
+      int selected_portal = preferred_portal;
+      double best_cost = std::numeric_limits<double>::max();
+      bool best_horizontal_first = true;
+      for (int p = 0; p < static_cast<int>(portals.size()); ++p) {
+        const GlobalPortal& portal = portals[p];
+        if (!portal.valid) {
+          continue;
+        }
+        const long dist = std::abs(cur_x - portal.x) + std::abs(cur_y - portal.y);
+        const float h_rudy = estimatePathRudy(normalized_rudy,
+                                              to_grid_x(cur_x),
+                                              to_grid_y(cur_y),
+                                              to_grid_x(portal.x),
+                                              to_grid_y(portal.y),
+                                              true);
+        const float v_rudy = estimatePathRudy(normalized_rudy,
+                                              to_grid_x(cur_x),
+                                              to_grid_y(cur_y),
+                                              to_grid_x(portal.x),
+                                              to_grid_y(portal.y),
+                                              false);
+        const float edge_rudy = std::min(h_rudy, v_rudy);
+        double cost = static_cast<double>(dist)
+                      + static_cast<double>(tile) * 3.2
+                            * static_cast<double>(edge_rudy);
+        if (p == preferred_portal) {
+          cost -= static_cast<double>(tile) * 2.2;
+        }
+        if (cost + 1e-9 < best_cost) {
+          best_cost = cost;
+          selected_portal = p;
+          best_horizontal_first = h_rudy <= v_rudy;
+        }
+      }
+
+      const GlobalPortal& portal = portals[selected_portal];
+      if (!portal.valid) {
+        continue;
+      }
+
+      portal_used[selected_portal] = true;
+      const bool horizontal_first
+          = ((net_key + static_cast<std::uint64_t>(idx) * 41ULL) & 1ULL) == 0ULL
+                ? best_horizontal_first
+                : !best_horizontal_first;
+      if (horizontal_first) {
+        appendSegment(
+            rebuilt, cur_x, cur_y, trunk_layer, portal.x, cur_y, trunk_layer);
+        appendSegment(rebuilt,
+                      portal.x,
+                      cur_y,
+                      trunk_layer,
+                      portal.x,
+                      portal.y,
+                      trunk_layer);
+      } else {
+        appendSegment(
+            rebuilt, cur_x, cur_y, trunk_layer, cur_x, portal.y, trunk_layer);
+        appendSegment(rebuilt,
+                      cur_x,
+                      portal.y,
+                      trunk_layer,
+                      portal.x,
+                      portal.y,
+                      trunk_layer);
+      }
+    }
+
+    std::vector<int> used_x;
+    std::vector<int> used_y;
+    used_x.reserve(portals.size());
+    used_y.reserve(portals.size());
+    for (int p = 0; p < static_cast<int>(portals.size()); ++p) {
+      if (portal_used[p] && portals[p].valid) {
+        used_x.push_back(portals[p].x);
+        used_y.push_back(portals[p].y);
+      }
+    }
+    if (used_x.empty()) {
+      continue;
+    }
+
+    std::nth_element(used_x.begin(), used_x.begin() + used_x.size() / 2, used_x.end());
+    std::nth_element(used_y.begin(), used_y.begin() + used_y.size() / 2, used_y.end());
+    const int switch_x = std::clamp(used_x[used_x.size() / 2], x_min, x_max);
+    const int switch_y = std::clamp(used_y[used_y.size() / 2], y_min, y_max);
+
+    for (int p = 0; p < static_cast<int>(portals.size()); ++p) {
+      if (!portal_used[p] || !portals[p].valid) {
+        continue;
+      }
+      const GlobalPortal& portal = portals[p];
+      const float h_rudy = estimatePathRudy(normalized_rudy,
+                                            to_grid_x(portal.x),
+                                            to_grid_y(portal.y),
+                                            to_grid_x(switch_x),
+                                            to_grid_y(switch_y),
+                                            true);
+      const float v_rudy = estimatePathRudy(normalized_rudy,
+                                            to_grid_x(portal.x),
+                                            to_grid_y(portal.y),
+                                            to_grid_x(switch_x),
+                                            to_grid_y(switch_y),
+                                            false);
+      if (h_rudy <= v_rudy) {
+        appendSegment(rebuilt,
+                      portal.x,
+                      portal.y,
+                      trunk_layer,
+                      switch_x,
+                      portal.y,
+                      trunk_layer);
+        appendSegment(rebuilt,
+                      switch_x,
+                      portal.y,
+                      trunk_layer,
+                      switch_x,
+                      switch_y,
+                      trunk_layer);
+      } else {
+        appendSegment(rebuilt,
+                      portal.x,
+                      portal.y,
+                      trunk_layer,
+                      portal.x,
+                      switch_y,
+                      trunk_layer);
+        appendSegment(rebuilt,
+                      portal.x,
+                      switch_y,
+                      trunk_layer,
+                      switch_x,
+                      switch_y,
+                      trunk_layer);
+      }
+    }
+
+    appendSegment(rebuilt, min_x, switch_y, trunk_layer, max_x, switch_y, trunk_layer);
+    appendSegment(rebuilt, switch_x, min_y, trunk_layer, switch_x, max_y, trunk_layer);
+
+    std::vector<GSegment> compressed;
+    compressed.reserve(rebuilt.size());
+    for (const GSegment& segment : rebuilt) {
+      appendCompressedSegment(compressed, segment);
+    }
+    if (!compressed.empty()) {
+      route.swap(compressed);
+    }
+  }
+}
+
 void applyGlobalPortalRebuild(GlobalRouter* grouter,
                               NetRouteMap& routes,
                               const RudyGrid& normalized_rudy,
@@ -2970,6 +3312,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   applyGuideCompression(selected.routes, std::max(12 * tile_size, 1));
   applyViaExcursionCollapse(selected.routes, std::max(6 * tile_size, 1));
 
+  const RouteMetrics pre_quadrant_metrics = compute_metrics(selected.routes);
+  applyQuadrantPortalHypergraphRebuild(grouter_,
+                                       selected.routes,
+                                       baseline_rudy,
+                                       6,
+                                       300,
+                                       92,
+                                       min_routing_layer,
+                                       max_routing_layer);
+  applyAggressiveDoglegShortcuts(selected.routes,
+                                 std::max(12 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(selected.routes, std::max(14 * tile_size, 1));
+  applyViaExcursionCollapse(selected.routes, std::max(7 * tile_size, 1));
+
   selected.metrics = compute_metrics(selected.routes);
   logger_->warn(GNR,
                 6021,
@@ -3001,6 +3358,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 "{:+d}.",
                 selected.metrics.wirelength_um - pre_bipolar_metrics.wirelength_um,
                 selected.metrics.via_count - pre_bipolar_metrics.via_count);
+  logger_->warn(GNR,
+                6031,
+                "NEWGR quadrant portal hypergraph: wl delta {:+.0f} um, via "
+                "delta {:+d}.",
+                selected.metrics.wirelength_um - pre_quadrant_metrics.wirelength_um,
+                selected.metrics.via_count - pre_quadrant_metrics.via_count);
 
   const double compact_delta_wl
       = compact.metrics.wirelength_um - baseline.metrics.wirelength_um;
