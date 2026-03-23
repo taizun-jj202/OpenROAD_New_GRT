@@ -2958,6 +2958,104 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(stabilized));
   }
 
+  if (has_best_wirelength) {
+    ScenarioResult spine_balance;
+    spine_balance.name = "router-spine-balance-fusion";
+    if (ScenarioResult* collapse = find_scenario_result("consensus-collapse-fusion")) {
+      spine_balance.routes = collapse->routes;
+    } else if (ScenarioResult* extreme = find_scenario_result("extreme-wirelength-stitch")) {
+      spine_balance.routes = extreme->routes;
+    } else if (ScenarioResult* radical = find_scenario_result("radical-shortpath-fusion")) {
+      spine_balance.routes = radical->routes;
+    } else if (ScenarioResult* cross = find_scenario_result("cross-router-wirelength-fusion")) {
+      spine_balance.routes = cross->routes;
+    } else {
+      spine_balance.routes = best_wirelength_routes;
+    }
+
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+
+    std::vector<const NetRouteMap*> donor_routes;
+    donor_routes.reserve(12);
+    for (const char* donor_name : {"cugr-router-donor",
+                                   "sproute-router-donor",
+                                   "consensus-collapse-fusion",
+                                   "extreme-wirelength-stitch",
+                                   "radical-shortpath-fusion",
+                                   "cross-router-wirelength-fusion",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting",
+                                   "wl-direct-focused",
+                                   "spatial-roundrobin-turbo",
+                                   "sporder-shortest",
+                                   "baseline"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        donor_routes.push_back(&donor->routes);
+      }
+    }
+
+    const int donor_swaps = applyRouterDonorMinWirelengthFusion(
+        spine_balance.routes,
+        donor_routes,
+        tile_size,
+        x_min,
+        y_min,
+        x_grids,
+        y_grids,
+        hotspot_map,
+        std::max(tile_size / 7, 1),
+        0.003,
+        3,
+        12,
+        0.30,
+        1.70,
+        1.10,
+        2.15);
+
+    std::vector<const NetRouteMap*> stabilization_donors;
+    stabilization_donors.reserve(10);
+    for (const char* donor_name : {"stabilized-dr-fusion",
+                                   "consensus-collapse-fusion",
+                                   "extreme-wirelength-stitch",
+                                   "radical-shortpath-fusion",
+                                   "cross-router-wirelength-fusion",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting",
+                                   "ultra-compact-bsp",
+                                   "sporder-shortest",
+                                   "baseline"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        stabilization_donors.push_back(&donor->routes);
+      }
+    }
+
+    const int stabilized_swaps = applyViaAwareStabilizationFusion(
+        spine_balance.routes,
+        stabilization_donors,
+        tile_size,
+        x_min,
+        y_min,
+        x_grids,
+        y_grids,
+        hotspot_map);
+
+    spine_balance.metrics = compute_metrics(spine_balance.routes);
+    logger_->info(
+        GNR,
+        6024,
+        "NEWGR scenario {} [router-spine]: wirelength {:.0f} um, vias {}, donor swaps {}, stabilization swaps {}",
+        spine_balance.name,
+        spine_balance.metrics.wirelength_um,
+        spine_balance.metrics.via_count,
+        donor_swaps,
+        stabilized_swaps);
+    scenario_results.push_back(std::move(spine_balance));
+  }
+
   if (false && has_best_wirelength) {
     ScenarioResult longnet_fusion;
     longnet_fusion.name = "longnet-priority-fusion";
