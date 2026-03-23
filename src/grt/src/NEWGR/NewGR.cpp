@@ -4075,7 +4075,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                                  static_cast<long>(std::ceil(
                                                      static_cast<double>(
                                                          wl_anchor->metrics.wirelength_dbu)
-                                                     * 0.00040)))
+                                                     * 0.00070)))
                                            : 0L;
     const long deep_via_drop_detour_bonus = std::max<long>(
         9000L, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1) * 18L));
@@ -4111,6 +4111,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const bool strict_pareto_upgrade
           = candidate->metrics.wirelength_dbu <= wl_anchor->metrics.wirelength_dbu
             && candidate->metrics.via_count <= wl_anchor->metrics.via_count
+            && wl_gain >= deep_via_drop_wl_gain
+            && via_drop <= (via_drop_guard * 3L) / 2L
             && detour_delta <= deep_via_drop_detour_bonus
             && high_layer_delta <= deep_via_drop_high_layer_bonus
             && candidate_proxy + 1e-3 < anchor_proxy * 1.020;
