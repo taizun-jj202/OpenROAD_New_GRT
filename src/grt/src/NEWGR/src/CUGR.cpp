@@ -189,7 +189,7 @@ bool isCompactionScoreBetter(const RouteScore& candidate,
     const uint64_t wireGain = baseline.wire_length - candidate.wire_length;
     const int viaIncrease = candidate.via_count - baseline.via_count;
     return viaIncrease > 0
-           && wireGain >= static_cast<uint64_t>(viaIncrease) * 10ULL;
+           && wireGain >= static_cast<uint64_t>(viaIncrease) * 14ULL;
   }
   if (candidate.wire_length > baseline.wire_length) {
     return false;
@@ -211,7 +211,7 @@ bool isStrictWirelengthScoreBetter(const RouteScore& candidate,
     // Preserve overflow relief while keeping the route close to wirelength
     // neutral.
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 2ULL;
+        = static_cast<uint64_t>(overflowGain);
     if (candidate.wire_length > baseline.wire_length + allowedIncrease) {
       return false;
     }
@@ -227,7 +227,7 @@ bool isStrictWirelengthScoreBetter(const RouteScore& candidate,
   const uint64_t wireGain = baseline.wire_length - candidate.wire_length;
   const int viaIncrease = candidate.via_count - baseline.via_count;
   return viaIncrease > 0
-         && wireGain >= static_cast<uint64_t>(viaIncrease) * 24ULL;
+         && wireGain >= static_cast<uint64_t>(viaIncrease) * 32ULL;
 }
 
 std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
@@ -1044,7 +1044,7 @@ void CUGR::strictWirelengthCompaction()
 
   const int totalNets = static_cast<int>(netIndices.size());
   const int compactionBudget
-      = std::min(totalNets, std::max(2048, totalNets / 8));
+      = std::min(totalNets, std::max(3072, totalNets / 6));
   if (compactionBudget <= 0) {
     return;
   }
@@ -1199,6 +1199,8 @@ void CUGR::route()
   grid_graph_->setStageCostScales(0.18, 0.20, 1.60);
   strictWirelengthCompaction();
   grid_graph_->setStageCostScales(0.12, 0.14, 1.75);
+  strictWirelengthCompaction();
+  grid_graph_->setStageCostScales(0.08, 0.10, 1.90);
   strictWirelengthCompaction();
 
   printStatistics();
