@@ -680,56 +680,11 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     }
   }
 
-  auto getEdgeUtilization = [&](const int layer_index, const int x, const int y) {
-    if (x < 0 || y < 0 || x >= x_size_ || y >= y_size_) {
-      return 0.0;
-    }
-    const auto& edge = graph_edges_[layer_index][x][y];
-    if (edge.capacity <= 0.0) {
-      return 1.0;
-    }
-    return edge.demand / edge.capacity;
-  };
-
-  auto getLocalLayerUtilization = [&](const PointT& point, const int layer_index) {
-    if (layer_index < constants_.min_routing_layer || layer_index >= num_layers_) {
-      return 0.0;
-    }
-    const int direction = layer_directions_[layer_index];
-    double util = getEdgeUtilization(layer_index, point.x(), point.y());
-    if (point[direction] > 0) {
-      util = std::max(
-          util,
-          getEdgeUtilization(layer_index,
-                             point.x() - 1 + direction,
-                             point.y() - direction));
-    }
-    return util;
-  };
-
-  // FastRoute-style via suppression combined with SPRoute-style congestion
-  // awareness: keep access stacks shallow in uncongested regions.
+  // Extend the fixed layers to 2 layers higher to facilitate track switching
   for (auto& accessPoint : selected_access_points) {
     IntervalT& fixedLayers = accessPoint.layers;
-    if (!fixedLayers.IsValid()) {
-      continue;
-    }
-
-    const int base_low = std::max(fixedLayers.low(), constants_.min_routing_layer);
-    const int base_high = std::max(fixedLayers.high(), constants_.min_routing_layer);
-    double local_util = 0.0;
-    for (int layer_index = base_low; layer_index <= base_high; layer_index++) {
-      local_util = std::max(local_util,
-                            getLocalLayerUtilization(accessPoint.point, layer_index));
-    }
-
-    int extension = 0;
-    if (local_util >= constants_.access_layer_hot_util) {
-      extension = std::max(0, constants_.access_layer_hot_extension);
-    } else if (local_util >= constants_.access_layer_warm_util) {
-      extension = std::max(0, constants_.access_layer_warm_extension);
-    }
-    fixedLayers.SetHigh(std::min(base_high + extension, num_layers_ - 1));
+    fixedLayers.SetHigh(
+        std::min(fixedLayers.high() + 2, (int) getNumLayers() - 1));
   }
   return selected_access_points;
 }

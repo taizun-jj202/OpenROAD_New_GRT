@@ -73,22 +73,10 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
   constexpr double kOverflowEpsilon = 1e-6;
   constexpr double kAllowedOverflowIncreaseForWlGain = 6.0;
   constexpr double kStrongOverflowDropThreshold = 20.0;
-  constexpr int64_t kWlGainPerExtraVia = 3;
-  constexpr int64_t kMinMeaningfulWlGain = 6;
 
   // Wirelength-first objective:
   // keep shorter candidates as long as they don't cause a large overflow jump.
-  // For very small WL wins, avoid trading into significantly more vias.
   if (candidate.wirelength < current_best.wirelength) {
-    const int64_t wl_gain = static_cast<int64_t>(current_best.wirelength)
-                            - static_cast<int64_t>(candidate.wirelength);
-    const int via_increase = candidate.vias - current_best.vias;
-    if (via_increase > 0
-        && wl_gain
-               < std::max(kMinMeaningfulWlGain,
-                          kWlGainPerExtraVia * static_cast<int64_t>(via_increase))) {
-      return false;
-    }
     return candidate.total_overflow
            <= current_best.total_overflow + kAllowedOverflowIncreaseForWlGain;
   }
