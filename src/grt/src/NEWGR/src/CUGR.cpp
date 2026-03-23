@@ -387,6 +387,11 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     if (aggressive_wirelength_mode && !overflow_driven) {
       stage3_cfg_budget++;
     }
+    if (!overflow_driven
+        && hpwl >= constants_.stage3_wl_only_hpwl_threshold
+        && net->getNumPins() <= 36) {
+      stage3_cfg_budget++;
+    }
     stage3_cfg_budget
         = std::max(2,
                    std::min(stage3_cfg_budget, static_cast<int>(maze_configs.size())));

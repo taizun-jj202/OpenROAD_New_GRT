@@ -74,10 +74,10 @@ struct Constants
   bool stage3_try_offset = true;
   bool stage3_full_offset_sweep = false;
   int stage3_full_offset_hpwl_threshold = 180;
-  int stage3_max_maze_configs = 6;
+  int stage3_max_maze_configs = 7;
   bool stage3_use_wirelength_maze = true;
   int stage3_wl_only_hpwl_threshold = 140;
-  int stage3_wl_config_limit = 3;
+  int stage3_wl_config_limit = 4;
   double stage3_wl_via_cost_scale = 0.20;
   bool stage3_use_full_grid_wl_maze = true;
   int stage3_full_grid_hpwl_threshold = 220;
