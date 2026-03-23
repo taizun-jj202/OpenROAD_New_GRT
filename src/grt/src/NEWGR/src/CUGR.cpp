@@ -120,9 +120,19 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
   sortNetIndices(netIndices);
-  SparseGrid grid(10, 10, 0, 0);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
+    const int hp = std::max(net->getBoundingBox().hp(), 1);
+    const int maxShrink = std::max(constants_.maze_base_interval
+                                       - constants_.maze_min_interval,
+                                   0);
+    const int adaptiveInterval = std::max(
+        constants_.maze_min_interval,
+        constants_.maze_base_interval - std::min(maxShrink, hp / 30));
+    const int xOffset = (netIndex + hp) % adaptiveInterval;
+    const int yOffset = (netIndex / 2 + hp) % adaptiveInterval;
+    SparseGrid grid(
+        adaptiveInterval, adaptiveInterval, std::max(xOffset, 0), yOffset);
     MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
     mazeRoute.constructSparsifiedGraph(wireCostView, grid);
     mazeRoute.run();
@@ -137,10 +147,76 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
     grid_graph_->commitTree(net->getRoutingTree());
     grid_graph_->updateWireCostView(wireCostView, net->getRoutingTree());
-    grid.step();
   }
 
   updateOverflowNets(netIndices);
+}
+
+void CUGR::globalRebalanceRoute(const std::vector<int>& allNetIndices)
+{
+  if (allNetIndices.empty() || constants_.global_rebalance_rounds <= 0) {
+    return;
+  }
+
+  logger_->report(
+      "stage 4: global full-net maze rebalance ({} rounds)",
+      constants_.global_rebalance_rounds);
+  std::vector<int> rerouteIndices = allNetIndices;
+  for (int round = 0; round < constants_.global_rebalance_rounds; round++) {
+    // Large nets first to reserve cleaner long corridors.
+    sort(rerouteIndices.begin(), rerouteIndices.end(), [&](int lhs, int rhs) {
+      const int lhsHp = gr_nets_[lhs]->getBoundingBox().hp();
+      const int rhsHp = gr_nets_[rhs]->getBoundingBox().hp();
+      if (lhsHp != rhsHp) {
+        return lhsHp > rhsHp;
+      }
+      return gr_nets_[lhs]->getNumPins() > gr_nets_[rhs]->getNumPins();
+    });
+
+    for (const int netIndex : rerouteIndices) {
+      grid_graph_->commitTree(gr_nets_[netIndex]->getRoutingTree(), true);
+    }
+
+    GridGraphView<CostT> wireCostView;
+    grid_graph_->extractWireCostView(wireCostView);
+    int order = 0;
+    for (const int netIndex : rerouteIndices) {
+      GRNet* net = gr_nets_[netIndex].get();
+      const int hp = std::max(net->getBoundingBox().hp(), 1);
+      const int maxShrink = std::max(constants_.maze_base_interval
+                                         - constants_.maze_min_interval,
+                                     0);
+      const int adaptiveInterval = std::max(
+          constants_.maze_min_interval,
+          constants_.maze_base_interval - std::min(maxShrink, hp / 25));
+      const int xOffset = (round + order) % adaptiveInterval;
+      const int yOffset = (round * 3 + netIndex) % adaptiveInterval;
+
+      SparseGrid grid(adaptiveInterval, adaptiveInterval, xOffset, yOffset);
+      MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+      mazeRoute.constructSparsifiedGraph(wireCostView, grid);
+      mazeRoute.run();
+
+      std::shared_ptr<SteinerTreeNode> tree = mazeRoute.getSteinerTree();
+      assert(tree != nullptr);
+      PatternRoute patternRoute(
+          net, grid_graph_.get(), stt_builder_, constants_, logger_);
+      patternRoute.setSteinerTree(tree);
+      patternRoute.constructRoutingDAG();
+      patternRoute.run();
+
+      grid_graph_->commitTree(net->getRoutingTree());
+      grid_graph_->updateWireCostView(wireCostView, net->getRoutingTree());
+      order++;
+    }
+
+    std::vector<int> overflowIndices;
+    updateOverflowNets(overflowIndices);
+    logger_->report(
+        "rebalance round {} complete, {} overflow nets remain",
+        round + 1,
+        overflowIndices.size());
+  }
 }
 
 void CUGR::route()
@@ -150,12 +226,18 @@ void CUGR::route()
   for (const auto& net : gr_nets_) {
     netIndices.push_back(net->getIndex());
   }
+  const std::vector<int> allNetIndices = netIndices;
 
   patternRoute(netIndices);
 
   patternRouteWithDetours(netIndices);
 
   mazeRoute(netIndices);
+
+  globalRebalanceRoute(allNetIndices);
+
+  updateOverflowNets(netIndices);
+  patternRouteWithDetours(netIndices);
 
   printStatistics();
   if (constants_.write_heatmap) {

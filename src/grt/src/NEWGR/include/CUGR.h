@@ -44,6 +44,9 @@ struct Constants
   double via_multiplier = 2.0;
 
   double maze_logistic_slope = 0.5;
+  int maze_base_interval = 8;
+  int maze_min_interval = 3;
+  int global_rebalance_rounds = 2;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
@@ -71,6 +74,7 @@ class CUGR
   void patternRoute(std::vector<int>& netIndices);
   void patternRouteWithDetours(std::vector<int>& netIndices);
   void mazeRoute(std::vector<int>& netIndices);
+  void globalRebalanceRoute(const std::vector<int>& allNetIndices);
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
