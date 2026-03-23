@@ -3921,8 +3921,255 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 radical38_pick_ring,
                 radical38_pick_rmst);
 
+  // Iteration 39 radical mode:
+  // Build two highly disruptive topology donors from radical38 output:
+  // 1) superring: perimeter/ring + portal + long wavefront detours.
+  // 2) trunkstorm: rmst trunk + bipolar portals + dual-backbone warp.
+  // Then force deterministic net buckets onto these donors (with broad caps)
+  // so the run exits compact-route fixed points and materially moves wirelength.
+  ScenarioResult radical39_superring = radical38_selected;
+  radical39_superring.name = "radical39_superring";
+  applyPerimeterRingCollapse(grouter_,
+                             radical39_superring.routes,
+                             baseline_rudy,
+                             3,
+                             100,
+                             18,
+                             min_routing_layer,
+                             max_routing_layer);
+  applyGlobalPortalRebuild(grouter_,
+                           radical39_superring.routes,
+                           baseline_rudy,
+                           3,
+                           100,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical39_superring.routes,
+                        baseline_rudy,
+                        std::max(tile_size, 1),
+                        std::max(22 * tile_size, 1),
+                        140);
+  applyAggressiveDoglegShortcuts(radical39_superring.routes,
+                                 std::max(24 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical39_superring.routes, std::max(6 * tile_size, 1));
+  applyViaExcursionCollapse(radical39_superring.routes,
+                            std::max(3 * tile_size, 1));
+  radical39_superring.metrics = compute_metrics(radical39_superring.routes);
+
+  ScenarioResult radical39_trunkstorm = radical38_selected;
+  radical39_trunkstorm.name = "radical39_trunkstorm";
+  applyRmstTrunkRebuild(grouter_,
+                        radical39_trunkstorm.routes,
+                        baseline_rudy,
+                        4,
+                        8192,
+                        120,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyBipolarPortalBackboneRebuild(grouter_,
+                                    radical39_trunkstorm.routes,
+                                    baseline_rudy,
+                                    4,
+                                    8192,
+                                    120,
+                                    min_routing_layer,
+                                    max_routing_layer);
+  applyDualBackboneWarp(grouter_,
+                        radical39_trunkstorm.routes,
+                        baseline_rudy,
+                        4,
+                        120,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical39_trunkstorm.routes,
+                        baseline_rudy,
+                        std::max(2 * tile_size, 1),
+                        std::max(20 * tile_size, 1),
+                        128);
+  applyAggressiveDoglegShortcuts(radical39_trunkstorm.routes,
+                                 std::max(28 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical39_trunkstorm.routes, std::max(7 * tile_size, 1));
+  applyViaExcursionCollapse(radical39_trunkstorm.routes,
+                            std::max(3 * tile_size, 1));
+  radical39_trunkstorm.metrics = compute_metrics(radical39_trunkstorm.routes);
+
+  ScenarioResult radical39_selected = radical38_selected;
+  radical39_selected.name = "radical39_forced_mix";
+  long radical39_pick_superring = 0;
+  long radical39_pick_trunkstorm = 0;
+  long radical39_forced_superring = 0;
+  long radical39_forced_trunkstorm = 0;
+
+  auto radical39_objective = [&](const GRoute& route) {
+    const auto [route_wl, route_vias] = radical38_stats(route);
+    const double via_weight = static_cast<double>(tile_size) * 0.34;
+    return static_cast<double>(route_wl)
+           + via_weight * static_cast<double>(route_vias);
+  };
+  auto radical39_admissible = [&](const GRoute& candidate,
+                                  const GRoute& reference,
+                                  int node_count,
+                                  bool forced) {
+    const auto [cand_wl, cand_vias] = radical38_stats(candidate);
+    const auto [ref_wl, ref_vias] = radical38_stats(reference);
+    if (ref_wl <= 0) {
+      return true;
+    }
+    const bool large = node_count >= 12;
+    const double wl_mult = forced ? (large ? 3.60 : 2.85) : (large ? 2.60 : 2.10);
+    const double via_mult
+        = forced ? (large ? 10.00 : 7.50) : (large ? 6.00 : 4.80);
+    const long wl_cap
+        = std::max(ref_wl + static_cast<long>((forced ? 36 : 24) * tile_size),
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_wl) * wl_mult)));
+    const long via_cap
+        = std::max(ref_vias + static_cast<long>(forced ? 42 : 28),
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_vias) * via_mult + 32.0)));
+    return cand_wl <= wl_cap && cand_vias <= via_cap;
+  };
+
+  for (const auto& [db_net, base_route] : radical38_selected.routes) {
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(base_route).size());
+
+    const GRoute* chosen_route = &base_route;
+    double best_score = radical39_objective(base_route);
+    int chosen_donor = 0;
+
+    auto force_candidate = [&](const NetRouteMap& donor_routes,
+                               int donor_id,
+                               long& forced_counter) {
+      const auto donor_it = donor_routes.find(db_net);
+      if (donor_it == donor_routes.end()) {
+        return false;
+      }
+      const GRoute& donor_route = donor_it->second;
+      if (!radical38_has_planar(donor_route)) {
+        return false;
+      }
+      if (!radical39_admissible(donor_route, base_route, node_count, true)) {
+        return false;
+      }
+      chosen_route = &donor_route;
+      chosen_donor = donor_id;
+      forced_counter++;
+      return true;
+    };
+
+    bool forced_pick = false;
+    if (node_count >= 10 && ((key % 7ULL) == 2ULL || (key % 11ULL) == 6ULL)) {
+      forced_pick = force_candidate(
+          radical39_superring.routes, 1, radical39_forced_superring);
+    }
+    if (!forced_pick
+        && node_count >= 9
+        && ((key % 9ULL) == 4ULL || (key % 13ULL) == 3ULL)) {
+      forced_pick = force_candidate(
+          radical39_trunkstorm.routes, 2, radical39_forced_trunkstorm);
+    }
+
+    if (!forced_pick) {
+      auto consider_candidate = [&](const NetRouteMap& donor_routes, int donor_id) {
+        const auto donor_it = donor_routes.find(db_net);
+        if (donor_it == donor_routes.end()) {
+          return;
+        }
+        const GRoute& donor_route = donor_it->second;
+        if (!radical38_has_planar(donor_route)) {
+          return;
+        }
+        if (!radical39_admissible(donor_route, base_route, node_count, false)) {
+          return;
+        }
+
+        double score = radical39_objective(donor_route);
+        if (donor_id == 1 && node_count >= 8 && (key % 5ULL) == 1ULL) {
+          score *= 0.88;
+        }
+        if (donor_id == 2 && node_count >= 12 && (key % 6ULL) == 0ULL) {
+          score *= 0.84;
+        }
+        if (score + 1e-3 < best_score) {
+          best_score = score;
+          chosen_route = &donor_route;
+          chosen_donor = donor_id;
+        }
+      };
+
+      consider_candidate(radical39_superring.routes, 1);
+      consider_candidate(radical39_trunkstorm.routes, 2);
+    }
+
+    radical39_selected.routes[db_net] = *chosen_route;
+    if (chosen_donor == 1) {
+      radical39_pick_superring++;
+    } else if (chosen_donor == 2) {
+      radical39_pick_trunkstorm++;
+    }
+  }
+
+  applyGuideCompression(radical39_selected.routes, std::max(6 * tile_size, 1));
+  applyViaExcursionCollapse(radical39_selected.routes,
+                            std::max(3 * tile_size, 1));
+  radical39_selected.metrics = compute_metrics(radical39_selected.routes);
+
+  long radical39_changed_nets = 0;
+  for (const auto& [db_net, route38] : radical38_selected.routes) {
+    const auto it39 = radical39_selected.routes.find(db_net);
+    if (it39 == radical39_selected.routes.end()) {
+      continue;
+    }
+    const auto [wl38, vias38] = radical38_stats(route38);
+    const auto [wl39, vias39] = radical38_stats(it39->second);
+    if (wl38 != wl39 || vias38 != vias39) {
+      radical39_changed_nets++;
+    }
+  }
+
+  const double radical39_delta_wl
+      = radical39_selected.metrics.wirelength_um - baseline.metrics.wirelength_um;
+  const long radical39_delta_vias
+      = radical39_selected.metrics.via_count - baseline.metrics.via_count;
+  const double radical39_stage_delta_wl
+      = radical39_selected.metrics.wirelength_um
+        - radical38_selected.metrics.wirelength_um;
+  const long radical39_stage_delta_vias
+      = radical39_selected.metrics.via_count - radical38_selected.metrics.via_count;
+  logger_->warn(GNR,
+                6052,
+                "NEWGR radical39 selected {}: baseline {:.0f} um/{} vias -> "
+                "{:.0f} um/{} vias (delta wl {:+.0f} um, delta vias {:+d}); "
+                "vs radical38 (delta wl {:+.0f} um, delta vias {:+d}).",
+                radical39_selected.name,
+                baseline.metrics.wirelength_um,
+                baseline.metrics.via_count,
+                radical39_selected.metrics.wirelength_um,
+                radical39_selected.metrics.via_count,
+                radical39_delta_wl,
+                radical39_delta_vias,
+                radical39_stage_delta_wl,
+                radical39_stage_delta_vias);
+  logger_->warn(
+      GNR,
+      6053,
+      "NEWGR radical39 picks: superring {} trunkstorm {} forced_superring {} "
+      "forced_trunkstorm {} changed_nets {}.",
+      radical39_pick_superring,
+      radical39_pick_trunkstorm,
+      radical39_forced_superring,
+      radical39_forced_trunkstorm,
+      radical39_changed_nets);
+
   restore_snapshot(snapshot);
-  return radical38_selected.routes;
+  return radical39_selected.routes;
 
   // Candidate B: reroute with strong but wirelength-oriented capacity sculpting.
   ScenarioResult sculpted = compact;
