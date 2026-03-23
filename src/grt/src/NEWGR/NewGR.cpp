@@ -11,6 +11,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -242,6 +243,358 @@ RouteEdgeStats collectRouteEdgeStats(const GRoute& route, Grid* grid)
 
   if (min_wire_layer <= max_wire_layer) {
     stats.layer_span = max_wire_layer - min_wire_layer;
+  }
+
+  return stats;
+}
+
+using HotspotMask = std::vector<std::vector<uint8_t>>;
+using NodeDegreeMap = std::unordered_map<uint64_t, int>;
+
+struct GuidePatchStats
+{
+  int nets_touched = 0;
+  int endpoint_segments_added = 0;
+  int long_segment_patches = 0;
+  int via_patches_added = 0;
+};
+
+uint64_t packRouteNodeKey(int x, int y, int layer)
+{
+  const uint64_t ux = static_cast<uint64_t>(std::max(x, 0)) & 0x1FFFFFULL;
+  const uint64_t uy = static_cast<uint64_t>(std::max(y, 0)) & 0x1FFFFFULL;
+  const uint64_t ul = static_cast<uint64_t>(std::max(layer, 0)) & 0xFFULL;
+  return ux | (uy << 21) | (ul << 42);
+}
+
+bool addUniqueGuideSegment(
+    GRoute& route,
+    std::unordered_set<GSegment, GSegmentHash>& seen,
+    const GSegment& segment)
+{
+  if (segment.init_layer <= 0 || segment.final_layer <= 0) {
+    return false;
+  }
+  if (!segment.isVia() && segment.length() <= 0) {
+    return false;
+  }
+  auto [it, inserted] = seen.insert(segment);
+  if (!inserted) {
+    return false;
+  }
+  route.push_back(segment);
+  return true;
+}
+
+NodeDegreeMap collectRouteNodeDegrees(const GRoute& route)
+{
+  NodeDegreeMap degrees;
+  degrees.reserve(std::max<std::size_t>(route.size() * 2, 8));
+  for (const GSegment& segment : route) {
+    if (segment.isVia()) {
+      degrees[packRouteNodeKey(
+          segment.init_x, segment.init_y, segment.init_layer)]++;
+      degrees[packRouteNodeKey(
+          segment.final_x, segment.final_y, segment.final_layer)]++;
+      continue;
+    }
+    degrees[packRouteNodeKey(
+        segment.init_x, segment.init_y, segment.init_layer)]++;
+    degrees[packRouteNodeKey(
+        segment.final_x, segment.final_y, segment.final_layer)]++;
+  }
+  return degrees;
+}
+
+HotspotMask buildHotspotMask(const std::vector<Hotspot>& hotspots,
+                             int x_grids,
+                             int y_grids,
+                             float severity_threshold = 0.85f)
+{
+  HotspotMask mask;
+  if (x_grids <= 0 || y_grids <= 0) {
+    return mask;
+  }
+  mask.assign(x_grids, std::vector<uint8_t>(y_grids, 0));
+  for (const Hotspot& hotspot : hotspots) {
+    if (hotspot.severity < severity_threshold) {
+      continue;
+    }
+    if (hotspot.gx < 0 || hotspot.gy < 0 || hotspot.gx >= x_grids
+        || hotspot.gy >= y_grids) {
+      continue;
+    }
+    mask[hotspot.gx][hotspot.gy] = 1;
+  }
+  return mask;
+}
+
+bool segmentTouchesHotspot(const GSegment& segment,
+                           const HotspotMask& hotspot_mask,
+                           Grid* grid)
+{
+  if (grid == nullptr || hotspot_mask.empty() || segment.isVia()) {
+    return false;
+  }
+
+  const int x_grids = grid->getXGrids();
+  const int y_grids = grid->getYGrids();
+  if (x_grids <= 0 || y_grids <= 0) {
+    return false;
+  }
+
+  const int tile_size = std::max(grid->getTileSize(), 1);
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+  const int max_x_idx = std::max(0, x_grids - 1);
+  const int max_y_idx = std::max(0, y_grids - 1);
+
+  auto coord_to_grid = [&](int coord, int min_coord, int max_index) {
+    if (max_index <= 0) {
+      return 0;
+    }
+    return std::clamp((coord - min_coord) / tile_size, 0, max_index);
+  };
+
+  if (segment.init_y == segment.final_y) {
+    const int gy = coord_to_grid(segment.init_y, y_min, max_y_idx);
+    const int gx0 = coord_to_grid(segment.init_x, x_min, max_x_idx);
+    const int gx1 = coord_to_grid(segment.final_x, x_min, max_x_idx);
+    for (int gx = gx0; gx < gx1; ++gx) {
+      if (gx < 0 || gy < 0 || gx >= x_grids || gy >= y_grids) {
+        continue;
+      }
+      if (hotspot_mask[gx][gy] != 0) {
+        return true;
+      }
+    }
+  } else if (segment.init_x == segment.final_x) {
+    const int gx = coord_to_grid(segment.init_x, x_min, max_x_idx);
+    const int gy0 = coord_to_grid(segment.init_y, y_min, max_y_idx);
+    const int gy1 = coord_to_grid(segment.final_y, y_min, max_y_idx);
+    for (int gy = gy0; gy < gy1; ++gy) {
+      if (gx < 0 || gy < 0 || gx >= x_grids || gy >= y_grids) {
+        continue;
+      }
+      if (hotspot_mask[gx][gy] != 0) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+bool buildMidpointPatchSegment(const GSegment& base_segment,
+                               int patch_layer,
+                               Grid* grid,
+                               GSegment& out_segment)
+{
+  if (grid == nullptr || base_segment.isVia() || base_segment.length() <= 0) {
+    return false;
+  }
+
+  const int tile_size = std::max(grid->getTileSize(), 1);
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+  const int x_max = x_min + std::max(0, grid->getXGrids() - 1) * tile_size;
+  const int y_max = y_min + std::max(0, grid->getYGrids() - 1) * tile_size;
+
+  if (base_segment.init_y == base_segment.final_y) {
+    const int span_steps = std::max(
+        1, (base_segment.final_x - base_segment.init_x) / tile_size);
+    if (span_steps < 2) {
+      return false;
+    }
+    const int mid_step = span_steps / 2;
+    int x0 = base_segment.init_x + mid_step * tile_size;
+    int x1 = std::min(base_segment.final_x, x0 + tile_size);
+    if (x1 <= x0) {
+      x0 = std::max(base_segment.init_x, x0 - tile_size);
+      x1 = std::min(base_segment.final_x, x0 + tile_size);
+      if (x1 <= x0) {
+        return false;
+      }
+    }
+    const int y = std::clamp(base_segment.init_y, y_min, y_max);
+    x0 = std::clamp(x0, x_min, x_max);
+    x1 = std::clamp(x1, x_min, x_max);
+    if (x1 <= x0) {
+      return false;
+    }
+    out_segment = GSegment(x0, y, patch_layer, x1, y, patch_layer);
+    return true;
+  }
+
+  if (base_segment.init_x == base_segment.final_x) {
+    const int span_steps = std::max(
+        1, (base_segment.final_y - base_segment.init_y) / tile_size);
+    if (span_steps < 2) {
+      return false;
+    }
+    const int mid_step = span_steps / 2;
+    int y0 = base_segment.init_y + mid_step * tile_size;
+    int y1 = std::min(base_segment.final_y, y0 + tile_size);
+    if (y1 <= y0) {
+      y0 = std::max(base_segment.init_y, y0 - tile_size);
+      y1 = std::min(base_segment.final_y, y0 + tile_size);
+      if (y1 <= y0) {
+        return false;
+      }
+    }
+    const int x = std::clamp(base_segment.init_x, x_min, x_max);
+    y0 = std::clamp(y0, y_min, y_max);
+    y1 = std::clamp(y1, y_min, y_max);
+    if (y1 <= y0) {
+      return false;
+    }
+    out_segment = GSegment(x, y0, patch_layer, x, y1, patch_layer);
+    return true;
+  }
+
+  return false;
+}
+
+GuidePatchStats applyCugrGuidePatches(
+    NetRouteMap& base_routes,
+    const NetRouteMap* alt_routes_a,
+    const NetRouteMap* alt_routes_b,
+    const std::vector<Hotspot>& hotspots,
+    Grid* grid,
+    int min_layer,
+    int max_layer)
+{
+  GuidePatchStats stats;
+  if (grid == nullptr || base_routes.empty()) {
+    return stats;
+  }
+
+  const int tile_size = std::max(grid->getTileSize(), 1);
+  const HotspotMask hotspot_mask
+      = buildHotspotMask(hotspots, grid->getXGrids(), grid->getYGrids(), 0.80f);
+
+  for (auto& [db_net, route] : base_routes) {
+    if (db_net == nullptr || route.empty()) {
+      continue;
+    }
+
+    const std::size_t original_size = route.size();
+    std::unordered_set<GSegment, GSegmentHash> seen(route.begin(), route.end());
+    NodeDegreeMap node_degrees = collectRouteNodeDegrees(route);
+    std::vector<GSegment> base_snapshot = route;
+    int endpoint_added_for_net = 0;
+    int long_patch_added_for_net = 0;
+
+    auto add_endpoint_relief = [&](const NetRouteMap* alt_routes) {
+      if (alt_routes == nullptr || endpoint_added_for_net >= 4) {
+        return;
+      }
+      const auto alt_it = alt_routes->find(db_net);
+      if (alt_it == alt_routes->end()) {
+        return;
+      }
+      for (const GSegment& candidate : alt_it->second) {
+        if (endpoint_added_for_net >= 4) {
+          break;
+        }
+        if (candidate.isVia() || candidate.init_layer != candidate.final_layer) {
+          continue;
+        }
+        if (candidate.length() <= 0 || candidate.length() > tile_size * 3) {
+          continue;
+        }
+        const uint64_t node0 = packRouteNodeKey(
+            candidate.init_x, candidate.init_y, candidate.init_layer);
+        const uint64_t node1 = packRouteNodeKey(
+            candidate.final_x, candidate.final_y, candidate.final_layer);
+        const auto degree0_it = node_degrees.find(node0);
+        const auto degree1_it = node_degrees.find(node1);
+        const int degree0 = degree0_it != node_degrees.end() ? degree0_it->second : 0;
+        const int degree1 = degree1_it != node_degrees.end() ? degree1_it->second : 0;
+        if (degree0 <= 0 || degree1 <= 0) {
+          continue;
+        }
+        if (degree0 > 1 && degree1 > 1) {
+          continue;
+        }
+        if (addUniqueGuideSegment(route, seen, candidate)) {
+          endpoint_added_for_net++;
+          node_degrees[node0]++;
+          node_degrees[node1]++;
+        }
+      }
+    };
+
+    // CUGR-inspired pin-region patching:
+    // inject local alternatives from DR-stable/layer-compact candidates near
+    // low-degree endpoints to improve detailed-route pin accessibility.
+    add_endpoint_relief(alt_routes_a);
+    add_endpoint_relief(alt_routes_b);
+
+    // CUGR long-segment patching:
+    // add short adjacent-layer guides over hotspot-crossing trunks.
+    for (const GSegment& segment : base_snapshot) {
+      if (long_patch_added_for_net >= 2) {
+        break;
+      }
+      if (segment.isVia() || segment.init_layer != segment.final_layer) {
+        continue;
+      }
+      if (segment.length() < tile_size * 4) {
+        continue;
+      }
+      if (!segmentTouchesHotspot(segment, hotspot_mask, grid)) {
+        continue;
+      }
+
+      int patch_layer = -1;
+      if (segment.init_layer < max_layer) {
+        patch_layer = segment.init_layer + 1;
+      } else if (segment.init_layer > min_layer) {
+        patch_layer = segment.init_layer - 1;
+      }
+      if (patch_layer < min_layer || patch_layer > max_layer) {
+        continue;
+      }
+
+      GSegment patch_segment;
+      if (!buildMidpointPatchSegment(segment, patch_layer, grid, patch_segment)) {
+        continue;
+      }
+      if (!addUniqueGuideSegment(route, seen, patch_segment)) {
+        continue;
+      }
+      long_patch_added_for_net++;
+      stats.long_segment_patches++;
+
+      if (patch_layer != segment.init_layer) {
+        const int low_layer = std::min(segment.init_layer, patch_layer);
+        const int high_layer = std::max(segment.init_layer, patch_layer);
+        const GSegment via0(patch_segment.init_x,
+                            patch_segment.init_y,
+                            low_layer,
+                            patch_segment.init_x,
+                            patch_segment.init_y,
+                            high_layer);
+        const GSegment via1(patch_segment.final_x,
+                            patch_segment.final_y,
+                            low_layer,
+                            patch_segment.final_x,
+                            patch_segment.final_y,
+                            high_layer);
+        if (addUniqueGuideSegment(route, seen, via0)) {
+          stats.via_patches_added++;
+        }
+        if (addUniqueGuideSegment(route, seen, via1)) {
+          stats.via_patches_added++;
+        }
+      }
+    }
+
+    stats.endpoint_segments_added += endpoint_added_for_net;
+    if (route.size() > original_size) {
+      stats.nets_touched++;
+    }
   }
 
   return stats;
@@ -519,7 +872,8 @@ bool isPreferredWirelengthScenario(const std::string& name)
 {
   // Favor DR-stable wirelength hybrids over ultra-min guide-WL variants.
   return name == "hybrid-netmix-wl" || name == "hybrid-netmix-wl-safe"
-         || name == "hybrid-netmix-dr-stable";
+         || name == "hybrid-netmix-dr-stable"
+         || name == "hybrid-netmix-cugr-patched";
 }
 
 bool isAggressiveWirelengthScenario(const std::string& name)
@@ -529,6 +883,11 @@ bool isAggressiveWirelengthScenario(const std::string& name)
          || name == "hybrid-netmix-min-wl-extreme"
          || name == "hybrid-netmix-min-wl-wide"
          || name == "hybrid-netmix-min-wl";
+}
+
+bool isGuidePatchedScenario(const std::string& name)
+{
+  return name == "hybrid-netmix-cugr-patched";
 }
 
 int getSoftCapacityForEdge(uint64_t key,
@@ -2300,6 +2659,58 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  pareto_softcap_source_count,
                                  pareto_softcap_via_weight,
                                  6023);
+
+    auto find_scenario = [&](const std::string& name) -> const ScenarioResult* {
+      for (const ScenarioResult& result : scenario_results) {
+        if (result.name == name) {
+          return &result;
+        }
+      }
+      return nullptr;
+    };
+
+    // CUGR-inspired post routing patching:
+    // start from wirelength-first hybrid and add local endpoint and hotspot
+    // guide patches taken from alternate hybrids.
+    const ScenarioResult* wl_hybrid = find_scenario("hybrid-netmix-wl");
+    const ScenarioResult* dr_stable_hybrid
+        = find_scenario("hybrid-netmix-dr-stable");
+    const ScenarioResult* layer_compact_hybrid
+        = find_scenario("hybrid-netmix-layer-compact");
+    if (wl_hybrid != nullptr) {
+      ScenarioResult patched_result;
+      patched_result.name = "hybrid-netmix-cugr-patched";
+      patched_result.routes = wl_hybrid->routes;
+      const GuidePatchStats patch_stats = applyCugrGuidePatches(
+          patched_result.routes,
+          dr_stable_hybrid != nullptr ? &dr_stable_hybrid->routes : nullptr,
+          layer_compact_hybrid != nullptr ? &layer_compact_hybrid->routes : nullptr,
+          hotspots,
+          grouter_->grid_,
+          min_routing_layer,
+          max_routing_layer);
+
+      if (patch_stats.nets_touched > 0) {
+        patched_result.metrics = wl_hybrid->metrics;
+        const double patch_credit = std::min(
+            3500.0, static_cast<double>(patch_stats.nets_touched) * 0.12);
+        patched_result.metrics.score
+            = std::max(0.0, patched_result.metrics.score - patch_credit);
+        logger_->info(GNR,
+                      6030,
+                      "NEWGR hybrid-netmix-cugr-patched from wl hybrid: "
+                      "patched nets {}, endpoint guides {}, long patches {}, "
+                      "patch vias {}",
+                      patch_stats.nets_touched,
+                      patch_stats.endpoint_segments_added,
+                      patch_stats.long_segment_patches,
+                      patch_stats.via_patches_added);
+        scenario_results.push_back(std::move(patched_result));
+      } else {
+        logger_->info(
+            GNR, 6031, "NEWGR skipped hybrid-netmix-cugr-patched (no patches).");
+      }
+    }
   }
 
   auto robust_better = [](const ScenarioResult& lhs,
@@ -2382,6 +2793,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                                   const ScenarioResult& rhs) {
     const long wl_gap = std::llabs(lhs.metrics.wirelength_dbu
                                    - rhs.metrics.wirelength_dbu);
+    if (wl_gap <= tie_proxy_wl_band) {
+      const bool lhs_patched = isGuidePatchedScenario(lhs.name);
+      const bool rhs_patched = isGuidePatchedScenario(rhs.name);
+      if (lhs_patched != rhs_patched) {
+        return lhs_patched;
+      }
+    }
     const bool lhs_pref = isPreferredWirelengthScenario(lhs.name);
     const bool rhs_pref = isPreferredWirelengthScenario(rhs.name);
     if (lhs_pref != rhs_pref && wl_gap <= tie_preferred_wl_band) {
@@ -2416,7 +2834,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const ScenarioResult* forced_wl_ptr = nullptr;
   if (overflow_free_sweep) {
     for (const ScenarioResult& result : scenario_results) {
-      if (result.name == "hybrid-netmix-wl") {
+      if (result.name == "hybrid-netmix-cugr-patched") {
         forced_wl_ptr = &result;
         break;
       }
