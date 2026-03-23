@@ -4111,7 +4111,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const bool strict_pareto_upgrade
           = candidate->metrics.wirelength_dbu <= wl_anchor->metrics.wirelength_dbu
             && candidate->metrics.via_count <= wl_anchor->metrics.via_count
-            && wl_gain >= deep_via_drop_wl_gain
             && via_drop <= (via_drop_guard * 3L) / 2L
             && detour_delta <= deep_via_drop_detour_bonus
             && high_layer_delta <= deep_via_drop_high_layer_bonus
@@ -4448,6 +4447,78 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             anchor_proxy > 1e-9 ? challenger_proxy / anchor_proxy : 1.0);
       }
     }
+    if (forced_wl_ptr == wl_anchor && wl_anchor != nullptr) {
+      // Radical WL-first override: if the absolute/min-WL hybrids
+      // simultaneously reduce WL+vias and stay structurally close,
+      // prefer them over conservative anchor retention.
+      auto candidate_is_viable_wl_upgrade = [&](const ScenarioResult* candidate) {
+        if (candidate == nullptr || candidate == wl_anchor) {
+          return false;
+        }
+        if (candidate->metrics.overflow_edges > wl_anchor->metrics.overflow_edges) {
+          return false;
+        }
+        const long wl_gain
+            = wl_anchor->metrics.wirelength_dbu - candidate->metrics.wirelength_dbu;
+        const long via_gain
+            = wl_anchor->metrics.via_count - candidate->metrics.via_count;
+        const long min_wl_gain = std::max<long>(
+            80L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00030)));
+        const long min_via_gain = std::max<long>(120L, grouter_->grid_->getTileSize() * 4L);
+        if (wl_gain < min_wl_gain || via_gain < min_via_gain) {
+          return false;
+        }
+        const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+        const long detour_guard = std::max<long>(15000L, tile_size * 36L);
+        const long high_layer_guard = std::max<long>(
+            tile_size * 44L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.14)));
+        if (candidate->metrics.detour_dbu > wl_anchor->metrics.detour_dbu + detour_guard
+            || candidate->metrics.high_layer_dbu
+                   > wl_anchor->metrics.high_layer_dbu + high_layer_guard) {
+          return false;
+        }
+        const double anchor_proxy = estimateDetailedRouteProxyCost(wl_anchor->metrics);
+        const double candidate_proxy
+            = estimateDetailedRouteProxyCost(candidate->metrics);
+        const bool proxy_ok
+            = candidate_proxy + 1e-3 < anchor_proxy * 1.030
+              || (wl_gain >= min_wl_gain * 2L && via_gain >= min_via_gain * 2L);
+        return proxy_ok;
+      };
+
+      const ScenarioResult* strong_wl_upgrade = nullptr;
+      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 2>{
+               absolute_wl_ptr, min_wl_wide_ptr}) {
+        if (!candidate_is_viable_wl_upgrade(candidate)) {
+          continue;
+        }
+        if (strong_wl_upgrade == nullptr
+            || wirelength_first_better(*candidate, *strong_wl_upgrade)) {
+          strong_wl_upgrade = candidate;
+        }
+      }
+
+      if (strong_wl_upgrade != nullptr) {
+        logger_->info(
+            GNR,
+            6035,
+            "NEWGR WL-first override selecting '{}' over anchor '{}' "
+            "(wl gain {}, via gain {}, detour delta {}, high-layer delta {}).",
+            strong_wl_upgrade->name,
+            wl_anchor->name,
+            wl_anchor->metrics.wirelength_dbu
+                - strong_wl_upgrade->metrics.wirelength_dbu,
+            wl_anchor->metrics.via_count - strong_wl_upgrade->metrics.via_count,
+            strong_wl_upgrade->metrics.detour_dbu - wl_anchor->metrics.detour_dbu,
+            strong_wl_upgrade->metrics.high_layer_dbu
+                - wl_anchor->metrics.high_layer_dbu);
+        forced_wl_ptr = strong_wl_upgrade;
+      }
+    }
 
     // Keep FastRoute-like short guides as the baseline final choice; only
     // upgrade to patched guides when patching stays near anchor WL and wins
@@ -4469,6 +4540,30 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         if (patched_proxy + 1e-3 < anchor_proxy) {
           forced_wl_ptr = patched_ptr;
         }
+      }
+    }
+    if (wl_anchor != nullptr && absolute_wl_ptr != nullptr) {
+      const long wl_gain
+          = wl_anchor->metrics.wirelength_dbu - absolute_wl_ptr->metrics.wirelength_dbu;
+      const long via_gain = wl_anchor->metrics.via_count - absolute_wl_ptr->metrics.via_count;
+      const long min_wl_gain = std::max<long>(
+          60L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00022)));
+      const long min_via_gain = std::max<long>(140L, grouter_->grid_->getTileSize() * 5L);
+      const bool overflow_ok = absolute_wl_ptr->metrics.overflow_edges
+                               <= wl_anchor->metrics.overflow_edges;
+      if (overflow_ok && wl_gain >= min_wl_gain && via_gain >= min_via_gain) {
+        logger_->info(
+            GNR,
+            6036,
+            "NEWGR forcing absolute WL champion '{}' over anchor '{}' "
+            "(wl gain {}, via gain {}).",
+            absolute_wl_ptr->name,
+            wl_anchor->name,
+            wl_gain,
+            via_gain);
+        forced_wl_ptr = absolute_wl_ptr;
       }
     }
   }
