@@ -452,6 +452,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   engine_->init(grouter_->sproute_grid_data_, grouter_->sproute_nets_);
   NetRouteMap routes = engine_->run();
   NetRouteMap wirelength_routes = engine_->runWirelengthFirst();
+  NetRouteMap data_wirelength_routes = engine_->runDataDrivenWirelength();
 
   const SprouteGridData& grid = grouter_->sproute_grid_data_;
   const int origin_x = grid.origin.x();
@@ -506,7 +507,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   int selected_from_balanced = 0;
   int selected_from_wl = 0;
+  int selected_from_data_wl = 0;
   int inserted_from_wl = 0;
+  int inserted_from_data_wl = 0;
 
   EdgeUsageMap selected_usage;
   selected_usage.reserve(baseline_demand.size());
@@ -629,13 +632,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     const int64_t wirelength_min_wl_drop
         = policy.long_net
-              ? std::max<int64_t>(1, tile_size / 12)
-              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 10)
-                                   : std::max<int64_t>(1, tile_size / 7));
+              ? std::max<int64_t>(1, tile_size / 18)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 14)
+                                   : std::max<int64_t>(1, tile_size / 10));
+    const int64_t data_min_wl_drop
+        = policy.long_net
+              ? std::max<int64_t>(1, tile_size / 14)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 12)
+                                   : std::max<int64_t>(1, tile_size / 9));
     consider(wirelength_routes,
              RouteSource::kNewgrWirelength,
              wirelength_min_wl_drop,
              false);
+    consider(data_wirelength_routes,
+             RouteSource::kNewgrDataWirelength,
+             data_min_wl_drop,
+             true);
 
     // Wirelength champion pass: if one candidate has a material WL gain and
     // stays within manageable congestion/via deltas, force-select it.
@@ -673,6 +685,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
 
     maybeUpdateChampion(wirelength_routes, RouteSource::kNewgrWirelength);
+    maybeUpdateChampion(data_wirelength_routes, RouteSource::kNewgrDataWirelength);
 
     if (wl_champion_route != selected_route) {
       const int64_t wl_drop_vs_best
@@ -736,6 +749,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     if (selected_source == RouteSource::kNewgrWirelength) {
       selected_from_wl++;
+    } else if (selected_source == RouteSource::kNewgrDataWirelength) {
+      selected_from_data_wl++;
     } else {
       selected_from_balanced++;
     }
@@ -747,15 +762,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       inserted_from_wl++;
     }
   }
+  for (const auto& [db_net, route] : data_wirelength_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_data_wl++;
+    }
+  }
 
   logger_->info(utl::GRT,
                 6004,
-                "NEWGR 2-pass hybrid selected balanced={} wl={} (+wl={}). "
+                "NEWGR 3-pass hybrid selected balanced={} wl={} data={} "
+                "(+wl={} +data={}). "
                 "Global WL gain={} "
                 "extra-vias={} (base via budget={} + gain/{}) out of {} total.",
                 selected_from_balanced,
                 selected_from_wl,
+                selected_from_data_wl,
                 inserted_from_wl,
+                inserted_from_data_wl,
                 cumulative_wl_gain,
                 cumulative_extra_vias,
                 global_base_via_budget,
