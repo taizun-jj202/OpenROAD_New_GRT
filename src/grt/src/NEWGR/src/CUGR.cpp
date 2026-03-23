@@ -229,7 +229,7 @@ bool isStrictWirelengthScoreBetter(const RouteScore& candidate,
   const uint64_t wireGain = baseline.wire_length - candidate.wire_length;
   const int viaIncrease = candidate.via_count - baseline.via_count;
   return viaIncrease > 0
-         && wireGain >= static_cast<uint64_t>(viaIncrease) * 14ULL;
+         && wireGain >= static_cast<uint64_t>(viaIncrease) * 10ULL;
 }
 
 std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
@@ -1371,7 +1371,7 @@ void CUGR::route()
   // Replace the previous heavy late multi-pass loop with one compact
   // wirelength-focused pass on top detour nets.
   grid_graph_->setSoftCapacityEnabled(false);
-  grid_graph_->setStageCostScales(0.14, 0.16, 0.98);
+  grid_graph_->setStageCostScales(0.12, 0.14, 0.90);
   strictWirelengthCompaction();
   updateOverflowNets(netIndices);
 
