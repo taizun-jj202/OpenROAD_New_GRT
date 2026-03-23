@@ -211,10 +211,49 @@ void MazeRoute::run()
     std::vector<std::shared_ptr<Solution>> solutions;
     CostT total_cost = std::numeric_limits<CostT>::max();
     int via_steps = std::numeric_limits<int>::max();
+    uint64_t unique_wirelength = std::numeric_limits<uint64_t>::max();
+    int unique_vias = std::numeric_limits<int>::max();
     bool valid = false;
   };
 
   constexpr CostT kCostEpsilon = static_cast<CostT>(1e-6);
+  auto computeRouteGeometry
+      = [&](const std::vector<std::shared_ptr<Solution>>& solutions) {
+          uint64_t wirelength = 0;
+          int vias = 0;
+          robin_hood::unordered_set<uint64_t> seen_edges;
+          for (const auto& solution : solutions) {
+            std::shared_ptr<Solution> temp = solution;
+            while (temp && temp->prev) {
+              const int a = std::min(temp->vertex, temp->prev->vertex);
+              const int b = std::max(temp->vertex, temp->prev->vertex);
+              const uint64_t key
+                  = (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
+              if (seen_edges.emplace(key).second) {
+                const auto lhs = graph_.getPoint(temp->vertex);
+                const auto rhs = graph_.getPoint(temp->prev->vertex);
+                if (lhs.getLayerIdx() == rhs.getLayerIdx()) {
+                  wirelength += static_cast<uint64_t>(std::abs(lhs.x() - rhs.x())
+                                                      + std::abs(lhs.y() - rhs.y()));
+                } else {
+                  vias += std::abs(lhs.getLayerIdx() - rhs.getLayerIdx());
+                }
+              }
+              temp = temp->prev;
+            }
+          }
+          return std::pair<uint64_t, int>{wirelength, vias};
+        };
+
+  auto finalizeResult = [&](RunResult& result) {
+    if (!result.valid) {
+      return;
+    }
+    const auto [wirelength, vias] = computeRouteGeometry(result.solutions);
+    result.unique_wirelength = wirelength;
+    result.unique_vias = vias;
+  };
+
   auto isBetterResult = [&](const RunResult& candidate,
                             const RunResult& current_best) {
     if (!candidate.valid) {
@@ -223,11 +262,35 @@ void MazeRoute::run()
     if (!current_best.valid) {
       return true;
     }
+    // Wirelength-first tie breaking with bounded congestion-cost regression.
+    constexpr uint64_t kStrongWireGain = 20;
+    constexpr double kCostSlackForWireGain = 1.15;
+    if (candidate.unique_wirelength + kStrongWireGain
+            < current_best.unique_wirelength
+        && candidate.total_cost <= current_best.total_cost * kCostSlackForWireGain) {
+      return true;
+    }
     if (candidate.total_cost + kCostEpsilon < current_best.total_cost) {
       return true;
     }
     if (std::abs(candidate.total_cost - current_best.total_cost) <= kCostEpsilon
+        && candidate.unique_wirelength < current_best.unique_wirelength) {
+      return true;
+    }
+    if (std::abs(candidate.total_cost - current_best.total_cost) <= kCostEpsilon
+        && candidate.unique_wirelength == current_best.unique_wirelength
+        && candidate.unique_vias < current_best.unique_vias) {
+      return true;
+    }
+    if (std::abs(candidate.total_cost - current_best.total_cost) <= kCostEpsilon
+        && candidate.unique_wirelength == current_best.unique_wirelength
+        && candidate.unique_vias == current_best.unique_vias
         && candidate.via_steps < current_best.via_steps) {
+      return true;
+    }
+    if (candidate.unique_wirelength < current_best.unique_wirelength
+        && candidate.total_cost <= current_best.total_cost * 1.05
+        && candidate.unique_vias <= current_best.unique_vias + 2) {
       return true;
     }
     return false;
@@ -329,6 +392,7 @@ void MazeRoute::run()
     }
 
     result.valid = true;
+    finalizeResult(result);
     return result;
   };
 
@@ -520,6 +584,7 @@ void MazeRoute::run()
     }
 
     result.valid = true;
+    finalizeResult(result);
     return result;
   };
 
@@ -692,6 +757,7 @@ void MazeRoute::run()
       result.total_cost += edge_cost;
     }
     result.valid = true;
+    finalizeResult(result);
     return result;
   };
 
