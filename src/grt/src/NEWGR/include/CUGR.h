@@ -63,20 +63,20 @@ struct Constants
   bool wirelength_first_refinement = true;
   int refinement_overflow_threshold = 1;
   int refinement_hpwl_threshold = 80;
-  double detour_refine_ratio = 0.90;
-  double maze_refine_ratio = 0.72;
+  double detour_refine_ratio = 0.95;
+  double maze_refine_ratio = 0.88;
 
   // FastRoute-style post-processing pass: reroute a subset of long,
   // overflow-free nets and keep only wirelength-improving solutions.
   bool enable_wirelength_recovery = true;
   bool recovery_use_maze = true;
   int recovery_hpwl_threshold = 72;
-  double recovery_refine_ratio = 0.74;
-  int recovery_max_passes = 2;
+  double recovery_refine_ratio = 0.82;
+  int recovery_max_passes = 3;
   double recovery_pass_decay = 0.86;
-  int recovery_maze_sparse_x = 4;
-  int recovery_maze_sparse_y = 4;
-  double recovery_deep_ratio = 0.45;
+  int recovery_maze_sparse_x = 3;
+  int recovery_maze_sparse_y = 3;
+  double recovery_deep_ratio = 0.6;
   int recovery_deep_hpwl_threshold = 140;
   int recovery_aniso_sparse_long = 7;
   int recovery_aniso_sparse_short = 3;

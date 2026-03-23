@@ -28,6 +28,70 @@
 
 namespace grt::newgr {
 
+namespace {
+
+struct RouteStats
+{
+  uint64_t wirelength = 0;
+  int vias = 0;
+  int overflow = 0;
+};
+
+RouteStats measureRouteStats(const GridGraph* grid_graph,
+                             const std::shared_ptr<GRTreeNode>& tree)
+{
+  RouteStats stats;
+  if (!tree) {
+    return stats;
+  }
+
+  GRTreeNode::preorder(
+      tree, [&](const std::shared_ptr<GRTreeNode>& node) {
+        for (const auto& child : node->getChildren()) {
+          if (node->getLayerIdx() == child->getLayerIdx()) {
+            const int direction
+                = grid_graph->getLayerDirection(node->getLayerIdx());
+            const int l = std::min((*node)[direction], (*child)[direction]);
+            const int h = std::max((*node)[direction], (*child)[direction]);
+            for (int c = l; c < h; c++) {
+              stats.wirelength += grid_graph->getEdgeLength(direction, c);
+            }
+          } else {
+            stats.vias += abs(node->getLayerIdx() - child->getLayerIdx());
+          }
+        }
+      });
+  stats.overflow = grid_graph->checkOverflow(tree);
+  return stats;
+}
+
+bool isBetterStage3Candidate(const RouteStats& candidate,
+                             const RouteStats& current_best,
+                             const int baseline_overflow)
+{
+  // When the baseline still has overflow, prioritize relieving it.
+  if (baseline_overflow > 0) {
+    if (candidate.overflow != current_best.overflow) {
+      return candidate.overflow < current_best.overflow;
+    }
+    if (candidate.wirelength != current_best.wirelength) {
+      return candidate.wirelength < current_best.wirelength;
+    }
+    return candidate.vias < current_best.vias;
+  }
+
+  // Once overflow-free, prioritize wirelength and then vias.
+  if (candidate.wirelength != current_best.wirelength) {
+    return candidate.wirelength < current_best.wirelength;
+  }
+  if (candidate.vias != current_best.vias) {
+    return candidate.vias < current_best.vias;
+  }
+  return candidate.overflow < current_best.overflow;
+}
+
+}  // namespace
+
 CUGR::CUGR(odb::dbDatabase* db,
            utl::Logger* log,
            stt::SteinerTreeBuilder* stt_builder)
@@ -113,33 +177,156 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     return;
   }
   logger_->report("stage 3: maze routing on sparsified routing graph");
+
+  std::vector<std::shared_ptr<GRTreeNode>> baseline_trees(gr_nets_.size(),
+                                                           nullptr);
+  std::vector<RouteStats> baseline_stats(gr_nets_.size());
   for (const int netIndex : netIndices) {
-    grid_graph_->commitTree(gr_nets_[netIndex]->getRoutingTree(),
-                            /*ripup*/ true);
+    baseline_trees[netIndex] = gr_nets_[netIndex]->getRoutingTree();
+    baseline_stats[netIndex]
+        = measureRouteStats(grid_graph_.get(), baseline_trees[netIndex]);
+    if (baseline_trees[netIndex]) {
+      grid_graph_->commitTree(baseline_trees[netIndex], /*ripup*/ true);
+    }
   }
+
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
   sortNetIndices(netIndices);
-  SparseGrid grid(7, 7, 0, 0);
+
+  struct MazeConfig
+  {
+    int sparse_x;
+    int sparse_y;
+    int offset_x;
+    int offset_y;
+  };
+
+  int improved_nets = 0;
+  int fallback_nets = 0;
+  int evaluated_candidates = 0;
+
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
-    MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
-    mazeRoute.constructSparsifiedGraph(wireCostView, grid);
-    mazeRoute.run();
-    std::shared_ptr<SteinerTreeNode> tree = mazeRoute.getSteinerTree();
-    assert(tree != nullptr);
+    const int baseline_overflow = baseline_stats[netIndex].overflow;
+    const auto baseline_tree = baseline_trees[netIndex];
+    RouteStats best_stats = baseline_stats[netIndex];
+    std::shared_ptr<GRTreeNode> best_tree = baseline_tree;
+    bool changed = false;
 
-    PatternRoute patternRoute(
-        net, grid_graph_.get(), stt_builder_, constants_, logger_);
-    patternRoute.setSteinerTree(tree);
-    patternRoute.constructRoutingDAG();
-    patternRoute.run();
+    std::vector<MazeConfig> maze_configs;
+    maze_configs.reserve(12);
+    auto addMazeConfig = [&](int sparse_x,
+                             int sparse_y,
+                             int offset_x,
+                             int offset_y) {
+      sparse_x = std::max(2, sparse_x);
+      sparse_y = std::max(2, sparse_y);
+      offset_x = std::clamp(offset_x, 0, sparse_x - 1);
+      offset_y = std::clamp(offset_y, 0, sparse_y - 1);
+      for (const auto& cfg : maze_configs) {
+        if (cfg.sparse_x == sparse_x && cfg.sparse_y == sparse_y
+            && cfg.offset_x == offset_x && cfg.offset_y == offset_y) {
+          return;
+        }
+      }
+      maze_configs.push_back({sparse_x, sparse_y, offset_x, offset_y});
+    };
 
-    grid_graph_->commitTree(net->getRoutingTree());
-    grid_graph_->updateWireCostView(wireCostView, net->getRoutingTree());
-    grid.step();
+    const BoxT& bbox = net->getBoundingBox();
+    const int hpwl = bbox.hp();
+    const bool wide_bbox = bbox.width() >= bbox.height();
+    const int base_sparse = std::clamp(hpwl >= 240 ? 8 : (hpwl >= 120 ? 7 : 6),
+                                       4,
+                                       9);
+    const int dense_sparse = hpwl >= 80 ? 3 : 4;
+    const int anis_long = std::min(10, base_sparse + 2);
+    const int anis_short = std::max(3, base_sparse - 2);
+
+    // Mix FastRoute-style shifted sparse grids with SPRoute-style denser local
+    // search and anisotropic grids for elongated nets.
+    addMazeConfig(base_sparse, base_sparse, 0, 0);
+    addMazeConfig(dense_sparse, dense_sparse, 0, 0);
+    if (wide_bbox) {
+      addMazeConfig(anis_long, anis_short, 0, 0);
+      addMazeConfig(anis_long, anis_short, anis_long / 2, anis_short / 2);
+    } else {
+      addMazeConfig(anis_short, anis_long, 0, 0);
+      addMazeConfig(anis_short, anis_long, anis_short / 2, anis_long / 2);
+    }
+    addMazeConfig(base_sparse, base_sparse, base_sparse / 2, base_sparse / 2);
+    if (hpwl >= 220) {
+      addMazeConfig(base_sparse - 1,
+                    base_sparse + 1,
+                    (base_sparse - 1) / 2,
+                    (base_sparse + 1) / 2);
+      addMazeConfig(base_sparse + 1,
+                    base_sparse - 1,
+                    (base_sparse + 1) / 2,
+                    (base_sparse - 1) / 2);
+    }
+
+    auto considerCandidate = [&](const std::shared_ptr<GRTreeNode>& tree) {
+      if (!tree) {
+        return;
+      }
+      grid_graph_->commitTree(tree);
+      const RouteStats candidate_stats = measureRouteStats(grid_graph_.get(), tree);
+      grid_graph_->commitTree(tree, /*ripup*/ true);
+      if (candidate_stats.overflow > baseline_overflow) {
+        return;
+      }
+      if (!best_tree
+          || isBetterStage3Candidate(
+              candidate_stats, best_stats, baseline_overflow)) {
+        best_tree = tree;
+        best_stats = candidate_stats;
+        changed = true;
+      }
+    };
+
+    for (const auto& cfg : maze_configs) {
+      MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+      SparseGrid sparse_grid(cfg.sparse_x, cfg.sparse_y, cfg.offset_x, cfg.offset_y);
+      mazeRoute.constructSparsifiedGraph(wireCostView, sparse_grid);
+      mazeRoute.run();
+      const std::shared_ptr<SteinerTreeNode> tree = mazeRoute.getSteinerTree();
+      if (!tree) {
+        continue;
+      }
+
+      PatternRoute patternRoute(
+          net, grid_graph_.get(), stt_builder_, constants_, logger_);
+      patternRoute.setSteinerTree(tree);
+      patternRoute.constructRoutingDAG();
+      patternRoute.run();
+      considerCandidate(net->getRoutingTree());
+      evaluated_candidates++;
+    }
+
+    if (!best_tree && baseline_tree) {
+      best_tree = baseline_tree;
+      best_stats = baseline_stats[netIndex];
+    }
+
+    if (best_tree) {
+      net->setRoutingTree(best_tree);
+      grid_graph_->commitTree(best_tree);
+      grid_graph_->updateWireCostView(wireCostView, best_tree);
+      if (changed && best_stats.wirelength < baseline_stats[netIndex].wirelength) {
+        improved_nets++;
+      }
+    } else {
+      fallback_nets++;
+      net->clearRoutingTree();
+    }
   }
 
+  logger_->report("stage 3 evaluated {} maze candidates; improved {} nets; {} "
+                  "nets had no candidate tree.",
+                  evaluated_candidates,
+                  improved_nets,
+                  fallback_nets);
   updateOverflowNets(netIndices);
 }
 
