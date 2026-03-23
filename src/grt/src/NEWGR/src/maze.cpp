@@ -1080,6 +1080,16 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
 
   std::vector<bool> pop_heap2(y_grid_ * x_range_, false);
 
+  // Edge-local detour controls. Values are updated per edge before the
+  // shortest-path expansion starts.
+  int detour_xmin = 0;
+  int detour_xmax = 0;
+  int detour_ymin = 0;
+  int detour_ymax = 0;
+  double detour_penalty = 0.0;
+  // Keep turn pressure active even when the legacy VIA knob is temporarily 0.
+  const double turn_penalty = 0.75;
+
   /**
    * @brief Updates the cost of an adjacent grid if the new cost is lower,
    * updating the heap accordingly. Also updates parent indexes if cost was
@@ -1158,9 +1168,24 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
     double cost1 = getCost(pos1, is_horizontal, cost_params);
 
     double tmp = d1[cur_y][cur_x] + cost1;
+    const int next_x = cur_x + d_x;
+    const int next_y = cur_y + d_y;
+
+    if (detour_penalty > 0.0) {
+      const int outside_x = next_x < detour_xmin
+                                ? (detour_xmin - next_x)
+                                : (next_x > detour_xmax ? next_x - detour_xmax
+                                                         : 0);
+      const int outside_y = next_y < detour_ymin
+                                ? (detour_ymin - next_y)
+                                : (next_y > detour_ymax ? next_y - detour_ymax
+                                                         : 0);
+      tmp += detour_penalty * (outside_x + outside_y);
+    }
 
     if (add_via && d1[cur_y][cur_x] != 0) {
       tmp += via;
+      tmp += turn_penalty;
 
       if (maybe_hyper) {
         const int pos2 = (graph2d_.*usage_red)(p2_x, p2_y)
@@ -1252,6 +1277,18 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
       const int regionY1 = std::max(ymin - effective_enlarge + decrease, 0);
       const int regionY2
           = std::min(ymax + effective_enlarge - decrease, y_grid_ - 1);
+
+      detour_xmin = xmin;
+      detour_xmax = xmax;
+      detour_ymin = ymin;
+      detour_ymax = ymax;
+      detour_penalty = 1.0 + 0.03 * std::min(manhattan_len, 120);
+      if (nets_[netID]->isCritical()) {
+        detour_penalty *= 1.4;
+      }
+      if (iter > 20) {
+        detour_penalty *= 0.85;
+      }
 
       // initialize d1[][] and d2[][] as BIG_INT
       for (int i = regionY1; i <= regionY2; i++) {
