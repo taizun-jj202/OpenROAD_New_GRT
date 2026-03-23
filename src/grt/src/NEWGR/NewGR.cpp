@@ -1318,11 +1318,11 @@ NetRouteMap buildWirelengthSweepHybrid(
 
   stats.candidate_pool_size = candidates.size();
   const size_t swap_limit = std::min<size_t>(
-      1840, std::max<size_t>(220, base_routes.size() / 12));
+      1320, std::max<size_t>(170, base_routes.size() / 15));
   const int64_t via_increase_budget = std::max<int64_t>(
-      300, static_cast<int64_t>(base_total_vias / 420));
+      220, static_cast<int64_t>(base_total_vias / 560));
   const int64_t low_layer_growth_budget = std::max<int64_t>(
-      2200000, static_cast<int64_t>(base_low_layer_wl / 14));
+      2400000, static_cast<int64_t>(base_low_layer_wl / 16));
   const uint64_t base_wirelength = computeRouteScore(base_routes).wirelength;
   const uint64_t wl_gain_target = std::max<uint64_t>(
       3000000, base_wirelength / 200);
@@ -1355,7 +1355,6 @@ NetRouteMap buildWirelengthSweepHybrid(
   }
 
   std::vector<size_t> cursor(bucket_count, 0);
-  std::vector<bool> selected_candidate(candidates.size(), false);
   int64_t consumed_via_increase = 0;
   int64_t consumed_low_layer_growth = 0;
   uint64_t consumed_wl_gain = 0;
@@ -1368,8 +1367,7 @@ NetRouteMap buildWirelengthSweepHybrid(
         continue;
       }
       consumed_any = true;
-      const size_t candidate_idx = buckets[bucket][cursor[bucket]++];
-      const Candidate& candidate = candidates[candidate_idx];
+      const Candidate& candidate = candidates[buckets[bucket][cursor[bucket]++]];
       const int64_t via_increase = std::max<int64_t>(0, candidate.via_increase);
       const int64_t low_layer_delta = std::max<int64_t>(0, candidate.low_layer_delta);
       if (via_increase > 0
@@ -1385,7 +1383,6 @@ NetRouteMap buildWirelengthSweepHybrid(
         continue;
       }
       hybrid_routes[candidate.db_net] = *candidate.donor_route;
-      selected_candidate[candidate_idx] = true;
       consumed_via_increase += via_increase;
       consumed_low_layer_growth += low_layer_delta;
       consumed_wl_gain += static_cast<uint64_t>(std::max<int64_t>(0, candidate.wl_gain));
@@ -1405,43 +1402,6 @@ NetRouteMap buildWirelengthSweepHybrid(
       break;
     }
     start_bucket = (start_bucket + 1) % bucket_count;
-  }
-
-  // Via-aware closure:
-  // after the main WL sweep, consume residual donor routes that still improve
-  // WL while reducing vias and not increasing lower-layer demand.
-  const size_t via_closure_budget = std::min<size_t>(
-      420, std::max<size_t>(48, candidates.size() / 3));
-  size_t via_closure_swaps = 0;
-  for (size_t idx = 0; idx < candidates.size() && via_closure_swaps < via_closure_budget;
-       ++idx) {
-    if (selected_candidate[idx]) {
-      continue;
-    }
-    const Candidate& candidate = candidates[idx];
-    const int64_t via_increase = std::max<int64_t>(0, candidate.via_increase);
-    const int64_t via_drop = std::max<int64_t>(0, candidate.via_drop);
-    const int64_t low_layer_delta = std::max<int64_t>(0, candidate.low_layer_delta);
-    if (via_increase > 0 || via_drop == 0) {
-      continue;
-    }
-    if (low_layer_delta > 0) {
-      continue;
-    }
-    if (candidate.wl_gain < static_cast<int64_t>(minWirelengthSweepGain(candidate.pin_count))) {
-      continue;
-    }
-    if (consumed_via_increase + via_increase > via_increase_budget
-        || consumed_low_layer_growth + low_layer_delta > low_layer_growth_budget) {
-      continue;
-    }
-    hybrid_routes[candidate.db_net] = *candidate.donor_route;
-    selected_candidate[idx] = true;
-    consumed_via_increase += via_increase;
-    consumed_low_layer_growth += low_layer_delta;
-    consumed_wl_gain += static_cast<uint64_t>(std::max<int64_t>(0, candidate.wl_gain));
-    ++stats.replaced_with_donor;
-    ++via_closure_swaps;
   }
 
   stats.consumed_wl_gain = consumed_wl_gain;
@@ -1638,7 +1598,7 @@ bool shouldPreferWirelengthSweepHybrid(int incumbent_overflow,
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
   const uint64_t min_wl_gain
-      = std::max<uint64_t>(6000, incumbent_score.wirelength / 90000);
+      = std::max<uint64_t>(70000, incumbent_score.wirelength / 18000);
   if (wl_gain < min_wl_gain) {
     return false;
   }
@@ -1745,8 +1705,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     WirelengthSweepStats extreme_sweep_stats;
     NetRouteMap extreme_sweep_hybrid = buildWirelengthSweepHybrid(
         wirelength_sweep_hybrid,
-        fastroute_backbone_hybrid,
         newgr_backbone_hybrid,
+        routes,
         grouter_->db_net_map_,
         sweep_score.vias,
         sweep_low_layer_wl,
