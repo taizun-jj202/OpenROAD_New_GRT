@@ -97,9 +97,9 @@ double combinedRouteScore(const RouteCost& cost, int tile_size, int pin_count)
 {
   const double tile_scale
       = std::sqrt(static_cast<double>(std::max(1, tile_size)));
-  const double via_weight_scale = (pin_count >= 24) ? 3.4
-                                  : (pin_count >= 12) ? 4.8
-                                                      : 6.2;
+  const double via_weight_scale = (pin_count >= 24) ? 0.95
+                                  : (pin_count >= 12) ? 1.35
+                                                      : 1.75;
   const double via_weight = tile_scale * via_weight_scale;
   return static_cast<double>(cost.wirelength)
          + static_cast<double>(cost.vias) * via_weight;
@@ -578,7 +578,12 @@ NetRouteMap NewgrEngine::extractPinFallbackRoutes(
     GRoute cross_route;
     const bool has_cross_route
         = appendFallbackCrossRoute(net, cross_route) && !cross_route.empty();
-    if (!has_mst_route && !has_backbone_route && !has_cross_route) {
+    GRoute dual_hub_route;
+    const bool has_dual_hub_route
+        = appendFallbackDualHubRoute(net, dual_hub_route)
+          && !dual_hub_route.empty();
+    if (!has_mst_route && !has_backbone_route && !has_cross_route
+        && !has_dual_hub_route) {
       continue;
     }
 
@@ -613,6 +618,17 @@ NetRouteMap NewgrEngine::extractPinFallbackRoutes(
         if (selected == nullptr || cross_score < selected_score) {
           selected = &cross_route;
           selected_cost = cross_cost;
+          selected_score = cross_score;
+        }
+      }
+      if (has_dual_hub_route) {
+        const RouteCost dual_hub_cost = estimateRouteCost(dual_hub_route);
+        const double dual_hub_score
+            = combinedRouteScore(dual_hub_cost, grid_.tile_size, pin_count);
+        if (selected == nullptr || dual_hub_score < selected_score) {
+          selected = &dual_hub_route;
+          selected_cost = dual_hub_cost;
+          selected_score = dual_hub_score;
         }
       }
       return {selected, selected_cost};
@@ -652,7 +668,7 @@ NetRouteMap NewgrEngine::extractPinFallbackRoutes(
                  < static_cast<double>(seeded_cost.wirelength) * 0.99
           && fallback_cost.vias
                  <= static_cast<double>(seeded_cost.vias) * 1.02;
-    const bool force_geometric_route = pin_count >= 3;
+    const bool force_geometric_route = pin_count >= 2;
     const bool should_replace
         = force_geometric_route || (fallback_score < seeded_score * 0.90)
           || strong_wire_improved || balanced_improved || via_strongly_improved
@@ -750,8 +766,30 @@ bool NewgrEngine::appendFallbackMstRoute(const NewgrInputNet& net,
   const bool use_layer_spine = pin_count >= 5;
 
   std::vector<bool> in_tree(pin_count, false);
+  std::vector<bool> pin_access_added(pin_count, false);
   in_tree[seed_pin] = true;
   int connected_count = 1;
+
+  auto ensurePinAccess = [&](int pin_index, int spine_layer) -> bool {
+    if (pin_index < 0 || pin_index >= pin_count) {
+      return false;
+    }
+    if (pin_access_added[pin_index]) {
+      return true;
+    }
+    const RoutePt& pin = net.pins[pin_index];
+    if (!appendManhattanBridge(pin.x(),
+                               pin.y(),
+                               pin.layer(),
+                               pin.x(),
+                               pin.y(),
+                               spine_layer,
+                               route)) {
+      return false;
+    }
+    pin_access_added[pin_index] = true;
+    return true;
+  };
 
   auto weightedDistance = [&](int lhs_idx, int rhs_idx) {
     const RoutePt& lhs = net.pins[lhs_idx];
@@ -793,26 +831,14 @@ bool NewgrEngine::appendFallbackMstRoute(const NewgrInputNet& net,
     const int src_spine_layer = use_layer_spine ? preferred_layer : src.layer();
     const int dst_spine_layer = use_layer_spine ? preferred_layer : dst.layer();
 
-    if (!appendManhattanBridge(src.x(),
-                               src.y(),
-                               src.layer(),
-                               src.x(),
-                               src.y(),
-                               src_spine_layer,
-                               route)
+    if (!ensurePinAccess(best_u, src_spine_layer)
+        || !ensurePinAccess(best_v, dst_spine_layer)
         || !appendManhattanBridge(src.x(),
                                   src.y(),
                                   src_spine_layer,
                                   dst.x(),
                                   dst.y(),
                                   dst_spine_layer,
-                                  route)
-        || !appendManhattanBridge(dst.x(),
-                                  dst.y(),
-                                  dst_spine_layer,
-                                  dst.x(),
-                                  dst.y(),
-                                  dst.layer(),
                                   route)) {
       return false;
     }
@@ -978,6 +1004,141 @@ bool NewgrEngine::appendFallbackCrossRoute(const NewgrInputNet& net,
                                preferred_layer,
                                route)) {
       return false;
+    }
+  }
+
+  return true;
+}
+
+bool NewgrEngine::appendFallbackDualHubRoute(const NewgrInputNet& net,
+                                             GRoute& route) const
+{
+  const int pin_count = static_cast<int>(net.pins.size());
+  if (pin_count < 4) {
+    return false;
+  }
+
+  std::vector<int> xs;
+  std::vector<int> ys;
+  std::vector<int> ls;
+  xs.reserve(pin_count);
+  ys.reserve(pin_count);
+  ls.reserve(pin_count);
+
+  int min_x = std::numeric_limits<int>::max();
+  int max_x = std::numeric_limits<int>::min();
+  int min_y = std::numeric_limits<int>::max();
+  int max_y = std::numeric_limits<int>::min();
+  for (const auto& pin : net.pins) {
+    xs.push_back(pin.x());
+    ys.push_back(pin.y());
+    ls.push_back(pin.layer());
+    min_x = std::min(min_x, pin.x());
+    max_x = std::max(max_x, pin.x());
+    min_y = std::min(min_y, pin.y());
+    max_y = std::max(max_y, pin.y());
+  }
+
+  std::sort(xs.begin(), xs.end());
+  std::sort(ys.begin(), ys.end());
+  std::sort(ls.begin(), ls.end());
+
+  const int q1 = (pin_count - 1) / 4;
+  const int q3 = ((pin_count - 1) * 3) / 4;
+  const int median = pin_count / 2;
+  const int preferred_layer
+      = std::clamp(ls[median], 0, std::max(0, grid_.num_layers - 1));
+  const bool dominant_x = (max_x - min_x) >= (max_y - min_y);
+
+  if (dominant_x) {
+    int hub1_x = xs[q1];
+    int hub2_x = xs[q3];
+    if (hub1_x > hub2_x) {
+      std::swap(hub1_x, hub2_x);
+    }
+    const int hub_y = ys[median];
+
+    if (!appendManhattanBridge(
+            hub1_x, hub_y, preferred_layer, hub2_x, hub_y, preferred_layer, route)) {
+      return false;
+    }
+
+    for (const auto& pin : net.pins) {
+      if (!appendManhattanBridge(pin.x(),
+                                 pin.y(),
+                                 pin.layer(),
+                                 pin.x(),
+                                 pin.y(),
+                                 preferred_layer,
+                                 route)) {
+        return false;
+      }
+
+      const int d1 = std::abs(pin.x() - hub1_x) + std::abs(pin.y() - hub_y);
+      const int d2 = std::abs(pin.x() - hub2_x) + std::abs(pin.y() - hub_y);
+      const int hub_x = (d1 <= d2) ? hub1_x : hub2_x;
+
+      if (!appendManhattanBridge(pin.x(),
+                                 pin.y(),
+                                 preferred_layer,
+                                 hub_x,
+                                 pin.y(),
+                                 preferred_layer,
+                                 route)
+          || !appendManhattanBridge(hub_x,
+                                    pin.y(),
+                                    preferred_layer,
+                                    hub_x,
+                                    hub_y,
+                                    preferred_layer,
+                                    route)) {
+        return false;
+      }
+    }
+  } else {
+    int hub1_y = ys[q1];
+    int hub2_y = ys[q3];
+    if (hub1_y > hub2_y) {
+      std::swap(hub1_y, hub2_y);
+    }
+    const int hub_x = xs[median];
+
+    if (!appendManhattanBridge(
+            hub_x, hub1_y, preferred_layer, hub_x, hub2_y, preferred_layer, route)) {
+      return false;
+    }
+
+    for (const auto& pin : net.pins) {
+      if (!appendManhattanBridge(pin.x(),
+                                 pin.y(),
+                                 pin.layer(),
+                                 pin.x(),
+                                 pin.y(),
+                                 preferred_layer,
+                                 route)) {
+        return false;
+      }
+
+      const int d1 = std::abs(pin.x() - hub_x) + std::abs(pin.y() - hub1_y);
+      const int d2 = std::abs(pin.x() - hub_x) + std::abs(pin.y() - hub2_y);
+      const int hub_y = (d1 <= d2) ? hub1_y : hub2_y;
+
+      if (!appendManhattanBridge(pin.x(),
+                                 pin.y(),
+                                 preferred_layer,
+                                 pin.x(),
+                                 hub_y,
+                                 preferred_layer,
+                                 route)
+          || !appendManhattanBridge(pin.x(),
+                                    hub_y,
+                                    preferred_layer,
+                                    hub_x,
+                                    hub_y,
+                                    preferred_layer,
+                                    route)) {
+        return false;
+      }
     }
   }
 
