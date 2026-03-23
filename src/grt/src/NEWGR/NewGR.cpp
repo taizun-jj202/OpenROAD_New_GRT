@@ -517,9 +517,13 @@ bool parsePerturbScenarioName(const std::string& name,
 
 bool isPreferredWirelengthScenario(const std::string& name)
 {
-  // Prefer smoother wirelength-first hybrids. The ultra-aggressive variants
-  // often reduce guide WL but regress detailed-route WL after legalization.
-  return name == "hybrid-netmix-wl" || name == "hybrid-netmix-wl-safe";
+  // Prioritize the explicit wirelength-lock hybrids during final tie-breaks.
+  return name == "hybrid-netmix-wl" || name == "hybrid-netmix-wl-safe"
+         || name == "hybrid-netmix-min-wl"
+         || name == "hybrid-netmix-min-wl-wide"
+         || name == "hybrid-netmix-min-wl-extreme"
+         || name == "hybrid-netmix-absolute-wl"
+         || name == "hybrid-netmix-hpwl-lock";
 }
 
 int getSoftCapacityForEdge(uint64_t key,
@@ -2139,9 +2143,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       scenario_results.begin(), scenario_results.end(), [](const auto& result) {
         return result.metrics.overflow_edges == 0;
       });
-  const double wl_guard_ratio = overflow_free_sweep ? 0.0045 : 0.0125;
-  const long wl_guard_band
-      = std::max<long>(200, static_cast<long>(std::ceil(wl_guard_ratio * shortest_wl)));
+  const double wl_guard_ratio = overflow_free_sweep ? 0.00015 : 0.0060;
+  const long wl_guard_floor = overflow_free_sweep ? 32 : 120;
+  const long wl_guard_band = std::max<long>(
+      wl_guard_floor,
+      static_cast<long>(std::ceil(wl_guard_ratio * static_cast<double>(shortest_wl))));
 
   std::vector<const ScenarioResult*> shortlist;
   shortlist.reserve(scenario_results.size());
@@ -2167,31 +2173,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return lhs.metrics.score < rhs.metrics.score;
   };
 
-  const long tie_via_wl_band
-      = std::max<long>(24, static_cast<long>(std::ceil(shortest_wl * 0.00008)));
-  const long tie_preferred_wl_band
-      = std::max<long>(160, static_cast<long>(std::ceil(shortest_wl * 0.0042)));
-  const long tie_quality_wl_band
-      = std::max<long>(180, static_cast<long>(std::ceil(shortest_wl * 0.0046)));
-  auto wirelength_with_quality_tie_better = [&](const ScenarioResult& lhs,
-                                                const ScenarioResult& rhs) {
-    const long wl_gap = std::llabs(lhs.metrics.wirelength_dbu
-                                   - rhs.metrics.wirelength_dbu);
-    const bool lhs_pref = isPreferredWirelengthScenario(lhs.name);
-    const bool rhs_pref = isPreferredWirelengthScenario(rhs.name);
-    if (lhs_pref != rhs_pref && wl_gap <= tie_preferred_wl_band) {
-      return lhs_pref;
+  auto wirelength_lock_better = [&](const ScenarioResult& lhs,
+                                    const ScenarioResult& rhs) {
+    if (lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
+      return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
     }
-    if (wl_gap <= tie_quality_wl_band) {
-      const double lhs_proxy = estimateDetailedRouteProxyCost(lhs.metrics);
-      const double rhs_proxy = estimateDetailedRouteProxyCost(rhs.metrics);
-      if (std::abs(lhs_proxy - rhs_proxy) > 1e-3) {
-        return lhs_proxy < rhs_proxy;
-      }
-    }
-    if (wl_gap <= tie_via_wl_band && lhs.metrics.via_count != rhs.metrics.via_count) {
+    if (lhs.metrics.via_count != rhs.metrics.via_count) {
       return lhs.metrics.via_count < rhs.metrics.via_count;
     }
+
+    const bool lhs_pref = isPreferredWirelengthScenario(lhs.name);
+    const bool rhs_pref = isPreferredWirelengthScenario(rhs.name);
+    if (lhs_pref != rhs_pref) {
+      return lhs_pref;
+    }
+
+    const double lhs_proxy = estimateDetailedRouteProxyCost(lhs.metrics);
+    const double rhs_proxy = estimateDetailedRouteProxyCost(rhs.metrics);
+    if (std::abs(lhs_proxy - rhs_proxy) > 1e-3) {
+      return lhs_proxy < rhs_proxy;
+    }
+
     return wirelength_first_better(lhs, rhs);
   };
 
@@ -2200,7 +2202,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       shortlist.end(),
       [&](const ScenarioResult* lhs, const ScenarioResult* rhs) {
         if (overflow_free_sweep) {
-          return wirelength_with_quality_tie_better(*lhs, *rhs);
+          return wirelength_lock_better(*lhs, *rhs);
         }
         return robust_better(*lhs, *rhs);
       });
