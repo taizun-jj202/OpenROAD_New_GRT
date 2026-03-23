@@ -52,6 +52,7 @@ struct ScenarioDefinition
   std::function<void()> pre_init;
   std::function<void()> post_init;
   std::function<void(std::vector<Net*>&)> order_nets;
+  bool aggressive = false;
 };
 
 struct Hotspot
@@ -244,6 +245,109 @@ void reorderNetsBySpatialRoundRobin(std::vector<Net*>& nets)
       progress = true;
     }
     if (!progress) {
+      break;
+    }
+  }
+}
+
+void reorderNetsByBspScheduler(std::vector<Net*>& nets)
+{
+  if (nets.size() < 2) {
+    return;
+  }
+
+  struct NetOrderEntry
+  {
+    Net* net = nullptr;
+    NetOrderFeatures features;
+  };
+
+  std::vector<NetOrderEntry> entries;
+  entries.reserve(nets.size());
+
+  int min_center_x = std::numeric_limits<int>::max();
+  int max_center_x = std::numeric_limits<int>::min();
+  int min_center_y = std::numeric_limits<int>::max();
+  int max_center_y = std::numeric_limits<int>::min();
+
+  for (Net* net : nets) {
+    NetOrderEntry entry;
+    entry.net = net;
+    entry.features = getNetOrderFeatures(net);
+    min_center_x = std::min(min_center_x, entry.features.center_x);
+    max_center_x = std::max(max_center_x, entry.features.center_x);
+    min_center_y = std::min(min_center_y, entry.features.center_y);
+    max_center_y = std::max(max_center_y, entry.features.center_y);
+    entries.push_back(entry);
+  }
+
+  const bool sort_by_x = (max_center_x - min_center_x) >= (max_center_y - min_center_y);
+  std::stable_sort(entries.begin(),
+                   entries.end(),
+                   [sort_by_x](const NetOrderEntry& lhs, const NetOrderEntry& rhs) {
+                     if (sort_by_x) {
+                       if (lhs.features.center_x != rhs.features.center_x) {
+                         return lhs.features.center_x < rhs.features.center_x;
+                       }
+                     } else {
+                       if (lhs.features.center_y != rhs.features.center_y) {
+                         return lhs.features.center_y < rhs.features.center_y;
+                       }
+                     }
+                     if (lhs.features.score != rhs.features.score) {
+                       return lhs.features.score > rhs.features.score;
+                     }
+                     if (lhs.features.hpwl != rhs.features.hpwl) {
+                       return lhs.features.hpwl > rhs.features.hpwl;
+                     }
+                     return lhs.net < rhs.net;
+                   });
+
+  // SPRoute-style deterministic round-robin binning: nearby nets are spread
+  // across bins to reduce direct contention during reroute.
+  const int bin_count = std::clamp(static_cast<int>(entries.size() / 420), 6, 22);
+  std::vector<std::vector<NetOrderEntry>> bins(bin_count);
+  for (size_t i = 0; i < entries.size(); ++i) {
+    bins[i % bin_count].push_back(entries[i]);
+  }
+
+  for (int b = 0; b < bin_count; ++b) {
+    std::stable_sort(
+        bins[b].begin(),
+        bins[b].end(),
+        [b](const NetOrderEntry& lhs, const NetOrderEntry& rhs) {
+          if (lhs.features.score != rhs.features.score) {
+            return lhs.features.score > rhs.features.score;
+          }
+          if ((b % 2) == 0) {
+            if (lhs.features.center_y != rhs.features.center_y) {
+              return lhs.features.center_y < rhs.features.center_y;
+            }
+          } else {
+            if (lhs.features.center_y != rhs.features.center_y) {
+              return lhs.features.center_y > rhs.features.center_y;
+            }
+          }
+          return lhs.net < rhs.net;
+        });
+  }
+
+  std::vector<size_t> idx(bin_count, 0);
+  nets.clear();
+  nets.reserve(entries.size());
+  size_t emitted = 0;
+  while (emitted < entries.size()) {
+    bool progressed = false;
+    for (int b = 0; b < bin_count; ++b) {
+      if (idx[b] >= bins[b].size()) {
+        continue;
+      }
+      nets.push_back(bins[b][idx[b]].net);
+      idx[b]++;
+      emitted++;
+      progressed = true;
+    }
+    if (!progressed) {
       break;
     }
   }
@@ -736,8 +840,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     RouteMetrics metrics = compute_metrics(routes);
     logger_->info(GNR,
                   6006,
-                  "NEWGR scenario {}: wirelength {:.0f} um, vias {}",
+                  "NEWGR scenario {} [{}]: wirelength {:.0f} um, vias {}",
                   scenario.name,
+                  scenario.aggressive ? "aggressive" : "conservative",
                   metrics.wirelength_um,
                   metrics.via_count);
     return ScenarioResult{scenario.name, metrics, std::move(routes)};
@@ -758,62 +863,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   std::vector<ScenarioResult> scenario_results;
   scenario_results.push_back(baseline);
 
-  ScenarioDefinition baseline_def{"baseline", nullptr, nullptr, nullptr};
+  ScenarioDefinition baseline_def{"baseline", nullptr, nullptr, nullptr, false};
   std::vector<ScenarioDefinition> scenario_defs;
-
-  auto make_soft_config
-      = [&](const std::string& name,
-            float min_base,
-            float max_base,
-            float slope,
-            float midpoint,
-            int halo,
-            float hotspot_ratio,
-            float severity_weight,
-            float perturb_pct,
-            int seed,
-            float critical_pct,
-            std::function<void(std::vector<Net*>&)> order_nets = nullptr) {
-          ScenarioDefinition def;
-          def.name = name;
-          def.pre_init = [this, perturb_pct, seed, critical_pct]() {
-            grouter_->setCapacitiesPerturbationPercentage(perturb_pct);
-            grouter_->setPerturbationAmount(perturb_pct > 0.0f ? 1 : 0);
-            grouter_->setSeed(seed);
-            grouter_->fastroute_->setCriticalNetsPercentage(critical_pct);
-          };
-          def.post_init
-              = [this,
-                 &normalized_rudy,
-                 &hotspots,
-                 min_routing_layer,
-                 max_routing_layer,
-                 min_base,
-                 max_base,
-                 slope,
-                 midpoint,
-                 halo,
-                 hotspot_ratio,
-                 severity_weight]() {
-                  applySoftCapacityScaling(grouter_,
-                                           normalized_rudy,
-                                           min_routing_layer,
-                                           max_routing_layer,
-                                           min_base,
-                                           max_base,
-                                           slope,
-                                           midpoint);
-                  applyHotspotPenalties(grouter_,
-                                        hotspots,
-                                        min_routing_layer,
-                                        max_routing_layer,
-                                        halo,
-                                        hotspot_ratio,
-                                        severity_weight);
-                };
-          def.order_nets = std::move(order_nets);
-          return def;
-        };
 
   ScenarioDefinition sporder_shortest_def;
   sporder_shortest_def.name = "sporder-shortest";
@@ -824,14 +875,29 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->setSeed(seed);
     grouter_->fastroute_->setCriticalNetsPercentage(18.0f);
   };
-  sporder_shortest_def.order_nets
-      = [](std::vector<Net*>& scenario_nets) {
-          reorderNetsByWirelengthPriority(scenario_nets);
-        };
+  sporder_shortest_def.order_nets = [](std::vector<Net*>& scenario_nets) {
+    reorderNetsByWirelengthPriority(scenario_nets);
+  };
+  sporder_shortest_def.aggressive = false;
   scenario_defs.push_back(std::move(sporder_shortest_def));
 
+  ScenarioDefinition bsp_scheduler_def;
+  bsp_scheduler_def.name = "bsp-scheduler";
+  bsp_scheduler_def.pre_init = [this, seed = 53]() {
+    grouter_->setCapacitiesPerturbationPercentage(0.0f);
+    grouter_->setPerturbationAmount(0);
+    grouter_->setAllowCongestion(true);
+    grouter_->setSeed(seed);
+    grouter_->fastroute_->setCriticalNetsPercentage(19.0f);
+  };
+  bsp_scheduler_def.order_nets = [](std::vector<Net*>& scenario_nets) {
+    reorderNetsByBspScheduler(scenario_nets);
+  };
+  bsp_scheduler_def.aggressive = false;
+  scenario_defs.push_back(std::move(bsp_scheduler_def));
+
   ScenarioDefinition spatial_round_robin_def;
-  spatial_round_robin_def.name = "spatial-roundrobin";
+  spatial_round_robin_def.name = "spatial-roundrobin-lite";
   spatial_round_robin_def.pre_init = [this, seed = 47]() {
     grouter_->setCapacitiesPerturbationPercentage(0.0f);
     grouter_->setPerturbationAmount(0);
@@ -839,115 +905,71 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     grouter_->setSeed(seed);
     grouter_->fastroute_->setCriticalNetsPercentage(18.0f);
   };
-  spatial_round_robin_def.order_nets
-      = [](std::vector<Net*>& scenario_nets) {
-          reorderNetsBySpatialRoundRobin(scenario_nets);
-        };
+  spatial_round_robin_def.order_nets = [](std::vector<Net*>& scenario_nets) {
+    reorderNetsBySpatialRoundRobin(scenario_nets);
+  };
   spatial_round_robin_def.post_init
       = [this, &hotspots, min_routing_layer, max_routing_layer]() {
           applyUniformCapacityBoost(
-              grouter_, min_routing_layer, max_routing_layer, 1.04f);
+              grouter_, min_routing_layer, max_routing_layer, 1.015f);
           applyHotspotPenalties(grouter_,
                                 hotspots,
                                 min_routing_layer,
                                 max_routing_layer,
                                 1,
-                                0.90f,
-                                0.20f);
+                                0.95f,
+                                0.10f);
         };
+  spatial_round_robin_def.aggressive = true;
   scenario_defs.push_back(std::move(spatial_round_robin_def));
 
   if (!normalized_rudy.empty()) {
-    ScenarioDefinition wirelength_corridor_lite;
-    wirelength_corridor_lite.name = "wirelength-corridor-lite";
-    wirelength_corridor_lite.pre_init = [this, seed = 37]() {
+    ScenarioDefinition cugr_softcap_bsp_def;
+    cugr_softcap_bsp_def.name = "cugr-softcap-bsp";
+    cugr_softcap_bsp_def.pre_init = [this, seed = 67]() {
       grouter_->setCapacitiesPerturbationPercentage(0.0f);
       grouter_->setPerturbationAmount(0);
       grouter_->setAllowCongestion(true);
       grouter_->setSeed(seed);
       grouter_->fastroute_->setCriticalNetsPercentage(16.0f);
     };
-    wirelength_corridor_lite.order_nets
-        = [](std::vector<Net*>& scenario_nets) {
-            reorderNetsByWirelengthPriority(scenario_nets);
-          };
-    wirelength_corridor_lite.post_init = [this,
-                                          &normalized_rudy,
-                                          &hotspots,
-                                          min_routing_layer,
-                                          max_routing_layer]() {
+    cugr_softcap_bsp_def.order_nets = [](std::vector<Net*>& scenario_nets) {
+      reorderNetsByBspScheduler(scenario_nets);
+    };
+    cugr_softcap_bsp_def.post_init = [this,
+                                      &normalized_rudy,
+                                      &hotspots,
+                                      min_routing_layer,
+                                      max_routing_layer]() {
       applyHybridCapacityRemap(grouter_,
                                normalized_rudy,
                                hotspots,
                                min_routing_layer,
                                max_routing_layer,
-                               0.74f,
+                               0.84f,
                                1.02f,
-                               4.4f,
-                               0.58f,
-                               0.40f,
+                               3.8f,
+                               0.66f,
+                               0.16f,
                                1);
-      applyHotspotPenalties(grouter_,
-                            hotspots,
-                            min_routing_layer,
-                            max_routing_layer,
-                            1,
-                            0.86f,
-                            0.18f);
-    };
-    scenario_defs.push_back(std::move(wirelength_corridor_lite));
-
-    ScenarioDefinition spatial_softcap_def;
-    spatial_softcap_def.name = "spatial-softcap";
-    spatial_softcap_def.pre_init = [this, seed = 19]() {
-      grouter_->setCapacitiesPerturbationPercentage(0.0f);
-      grouter_->setPerturbationAmount(0);
-      grouter_->setAllowCongestion(true);
-      grouter_->setSeed(seed);
-      grouter_->fastroute_->setCriticalNetsPercentage(14.0f);
-    };
-    spatial_softcap_def.order_nets
-        = [](std::vector<Net*>& scenario_nets) {
-            reorderNetsBySpatialRoundRobin(scenario_nets);
-          };
-    spatial_softcap_def.post_init = [this,
-                                     &normalized_rudy,
-                                     &hotspots,
-                                     min_routing_layer,
-                                     max_routing_layer]() {
       applySoftCapacityScaling(grouter_,
                                normalized_rudy,
                                min_routing_layer,
                                max_routing_layer,
-                               0.70f,
-                               0.98f,
-                               4.0f,
-                               0.60f);
+                               0.82f,
+                               1.01f,
+                               3.4f,
+                               0.70f);
       applyHotspotPenalties(grouter_,
                             hotspots,
                             min_routing_layer,
                             max_routing_layer,
                             1,
-                            0.88f,
-                            0.15f);
+                            0.94f,
+                            0.12f);
     };
-    scenario_defs.push_back(std::move(spatial_softcap_def));
-
-    scenario_defs.push_back(make_soft_config(
-        "guided-softcap",
-        0.68f,
-        0.99f,
-        4.2f,
-        0.56f,
-        1,
-        0.88f,
-        0.15f,
-        0.0f,
-        23,
-        16.0f,
-        [](std::vector<Net*>& scenario_nets) {
-          reorderNetsByWirelengthPriority(scenario_nets);
-        }));
+    cugr_softcap_bsp_def.aggressive = true;
+    scenario_defs.push_back(std::move(cugr_softcap_bsp_def));
   }
 
   for (const ScenarioDefinition& def : scenario_defs) {
@@ -956,24 +978,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   const long baseline_vias = baseline.metrics.via_count;
-  auto scenario_stability_penalty
-      = [baseline_vias](const ScenarioResult& result) {
-          if (baseline_vias <= 0) {
-            return 0;
-          }
-          const long min_stable_vias
-              = static_cast<long>(std::floor(0.995 * baseline_vias));
-          const long max_stable_vias
-              = static_cast<long>(std::ceil(1.12 * baseline_vias));
-          if (result.metrics.via_count < min_stable_vias
-              || result.metrics.via_count > max_stable_vias) {
-            return 1;
-          }
-          return 0;
-        };
+  auto scenario_stability_penalty = [baseline_vias](const ScenarioResult& result) {
+    if (baseline_vias <= 0) {
+      return 0;
+    }
+    const long min_stable_vias
+        = static_cast<long>(std::floor(0.995 * baseline_vias));
+    const long max_stable_vias
+        = static_cast<long>(std::ceil(1.06 * baseline_vias));
+    if (result.metrics.via_count < min_stable_vias
+        || result.metrics.via_count > max_stable_vias) {
+      return 1;
+    }
+    return 0;
+  };
 
-  auto better_result = [&](const ScenarioResult& lhs,
-                           const ScenarioResult& rhs) {
+  auto better_result = [&](const ScenarioResult& lhs, const ScenarioResult& rhs) {
     const int lhs_penalty = scenario_stability_penalty(lhs);
     const int rhs_penalty = scenario_stability_penalty(rhs);
     if (lhs_penalty != rhs_penalty) {
@@ -988,8 +1008,51 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return lhs.metrics.score < rhs.metrics.score;
   };
 
-  auto best_iter = std::min_element(
-      scenario_results.begin(), scenario_results.end(), better_result);
+  auto is_aggressive_scenario = [&](const std::string& scenario_name) {
+    for (const ScenarioDefinition& def : scenario_defs) {
+      if (def.name == scenario_name) {
+        return def.aggressive;
+      }
+    }
+    return false;
+  };
+
+  auto best_iter
+      = std::min_element(scenario_results.begin(), scenario_results.end(), better_result);
+  auto best_conservative_iter = scenario_results.end();
+  for (auto it = scenario_results.begin(); it != scenario_results.end(); ++it) {
+    if (is_aggressive_scenario(it->name)) {
+      continue;
+    }
+    if (best_conservative_iter == scenario_results.end()
+        || better_result(*it, *best_conservative_iter)) {
+      best_conservative_iter = it;
+    }
+  }
+
+  if (best_iter == scenario_results.end()) {
+    return {};
+  }
+
+  if (is_aggressive_scenario(best_iter->name)
+      && best_conservative_iter != scenario_results.end()) {
+    const long conservative_wl = best_conservative_iter->metrics.wirelength_dbu;
+    const long aggressive_wl = best_iter->metrics.wirelength_dbu;
+    const long wl_gain = conservative_wl - aggressive_wl;
+    const long min_confident_gain = std::max<long>(120, conservative_wl / 5000);
+    const long via_guard = static_cast<long>(
+        std::ceil(best_conservative_iter->metrics.via_count * 1.004));
+    if (wl_gain < min_confident_gain || best_iter->metrics.via_count > via_guard) {
+      logger_->info(
+          GNR,
+          6008,
+          "NEWGR confidence gate: choosing conservative scenario '{}' over '{}'",
+          best_conservative_iter->name,
+          best_iter->name);
+      best_iter = best_conservative_iter;
+    }
+  }
+
   ScenarioResult final_result = *best_iter;
 
   const ScenarioDefinition* replay_def = nullptr;
