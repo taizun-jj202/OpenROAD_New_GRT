@@ -10,6 +10,7 @@
 #include <numeric>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -78,6 +79,93 @@ struct CongestionSummary
   double max_usage_ratio = 0.0;
   double overflow_ratio_sum = 0.0;
 };
+
+using EdgeCountMap = std::unordered_map<uint64_t, int>;
+
+struct RouteEdgeStats
+{
+  long wirelength_dbu = 0;
+  int via_count = 0;
+  EdgeCountMap edge_counts;
+};
+
+uint64_t packEdgeKey(int x, int y, int layer, bool horizontal)
+{
+  const uint64_t orient = horizontal ? 1ULL : 0ULL;
+  const uint64_t ux = static_cast<uint64_t>(std::max(x, 0)) & 0x1FFFFFULL;
+  const uint64_t uy = static_cast<uint64_t>(std::max(y, 0)) & 0x1FFFFFULL;
+  const uint64_t ul = static_cast<uint64_t>(std::max(layer, 0)) & 0xFFULL;
+  return orient | (ux << 1) | (uy << 22) | (ul << 43);
+}
+
+void unpackEdgeKey(uint64_t key, int& x, int& y, int& layer, bool& horizontal)
+{
+  horizontal = (key & 1ULL) != 0ULL;
+  x = static_cast<int>((key >> 1) & 0x1FFFFFULL);
+  y = static_cast<int>((key >> 22) & 0x1FFFFFULL);
+  layer = static_cast<int>((key >> 43) & 0xFFULL);
+}
+
+RouteEdgeStats collectRouteEdgeStats(const GRoute& route, Grid* grid)
+{
+  RouteEdgeStats stats;
+  const int tile_size = grid != nullptr ? std::max(grid->getTileSize(), 1) : 1;
+  const int x_min = grid != nullptr ? grid->getXMin() : 0;
+  const int y_min = grid != nullptr ? grid->getYMin() : 0;
+  const int x_grids = grid != nullptr ? grid->getXGrids() : 0;
+  const int y_grids = grid != nullptr ? grid->getYGrids() : 0;
+  const int max_x_idx = std::max(0, x_grids - 1);
+  const int max_y_idx = std::max(0, y_grids - 1);
+
+  auto coord_to_grid = [&](int coord, int min_coord, int max_index) {
+    if (max_index <= 0) {
+      return 0;
+    }
+    return std::clamp((coord - min_coord) / tile_size, 0, max_index);
+  };
+
+  for (const GSegment& segment : route) {
+    if (segment.isVia()) {
+      stats.via_count++;
+      continue;
+    }
+
+    stats.wirelength_dbu += std::abs(segment.final_x - segment.init_x)
+                            + std::abs(segment.final_y - segment.init_y);
+
+    if (grid == nullptr || segment.init_layer <= 0) {
+      continue;
+    }
+
+    if (segment.init_y == segment.final_y) {
+      const int gy = coord_to_grid(segment.init_y, y_min, max_y_idx);
+      const int gx0 = coord_to_grid(
+          std::min(segment.init_x, segment.final_x), x_min, max_x_idx);
+      const int gx1 = coord_to_grid(
+          std::max(segment.init_x, segment.final_x), x_min, max_x_idx);
+      for (int gx = gx0; gx < gx1; ++gx) {
+        if (gx < 0 || gy < 0 || gx >= x_grids - 1 || gy >= y_grids) {
+          continue;
+        }
+        stats.edge_counts[packEdgeKey(gx, gy, segment.init_layer, true)]++;
+      }
+    } else if (segment.init_x == segment.final_x) {
+      const int gx = coord_to_grid(segment.init_x, x_min, max_x_idx);
+      const int gy0 = coord_to_grid(
+          std::min(segment.init_y, segment.final_y), y_min, max_y_idx);
+      const int gy1 = coord_to_grid(
+          std::max(segment.init_y, segment.final_y), y_min, max_y_idx);
+      for (int gy = gy0; gy < gy1; ++gy) {
+        if (gx < 0 || gy < 0 || gx >= x_grids || gy >= y_grids - 1) {
+          continue;
+        }
+        stats.edge_counts[packEdgeKey(gx, gy, segment.init_layer, false)]++;
+      }
+    }
+  }
+
+  return stats;
+}
 
 RudyGrid computeNormalizedRudyGrid(Rudy* rudy)
 {
@@ -345,6 +433,53 @@ bool parsePerturbScenarioName(const std::string& name,
   }
   perturb_pct = static_cast<float>(perturb_x10) / 10.0f;
   return true;
+}
+
+int getSoftCapacityForEdge(uint64_t key,
+                           FastRouteCore* core,
+                           const RudyGrid& normalized_rudy,
+                           std::unordered_map<uint64_t, int>& softcap_cache)
+{
+  if (core == nullptr) {
+    return 1;
+  }
+  const auto cache_it = softcap_cache.find(key);
+  if (cache_it != softcap_cache.end()) {
+    return cache_it->second;
+  }
+
+  int x = 0;
+  int y = 0;
+  int layer = 0;
+  bool horizontal = false;
+  unpackEdgeKey(key, x, y, layer, horizontal);
+
+  const int x2 = horizontal ? x + 1 : x;
+  const int y2 = horizontal ? y : y + 1;
+  const int hard_cap = std::max(1, core->getEdgeCapacity(x, y, x2, y2, layer));
+
+  auto get_rudy = [&](int gx, int gy) {
+    if (normalized_rudy.empty()) {
+      return 0.0f;
+    }
+    if (gx < 0 || gy < 0 || gx >= static_cast<int>(normalized_rudy.size())
+        || gy >= static_cast<int>(normalized_rudy.front().size())) {
+      return 0.0f;
+    }
+    return normalized_rudy[gx][gy];
+  };
+
+  const float rudy = 0.5f
+                     * (get_rudy(x, y)
+                        + get_rudy(horizontal ? x + 1 : x,
+                                   horizontal ? y : y + 1));
+  const float exponent = (rudy - 0.42f) * 8.5f;
+  const float ratio = std::clamp(
+      0.56f + 0.38f / (1.0f + std::exp(exponent)), 0.50f, 0.96f);
+  const int soft_cap
+      = std::max(1, static_cast<int>(std::floor(hard_cap * ratio)));
+  softcap_cache.emplace(key, soft_cap);
+  return soft_cap;
 }
 
 }  // namespace
@@ -969,16 +1104,191 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     };
 
+    auto append_softcap_hybrid = [&](const std::string& hybrid_name,
+                                     int source_count,
+                                     long via_weight,
+                                     int logger_code) {
+      source_count = std::max(1, std::min(source_count, static_cast<int>(ranked.size())));
+      ScenarioResult hybrid_result;
+      hybrid_result.name = hybrid_name;
+
+      FastRouteCore* core = grouter_->fastroute();
+      if (core == nullptr || hybrid_nets.empty()) {
+        return;
+      }
+
+      // SPRoute-style soft-capacity-aware greedy net assembly:
+      // prioritize shortest routes but penalize candidates that overfill
+      // soft capacities in high-RUDY areas.
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      const double overflow_weight = static_cast<double>(tile_size) * 45.0;
+      const double near_weight = static_cast<double>(tile_size) * 0.85;
+      std::unordered_map<uint64_t, int> edge_usage;
+      std::unordered_map<uint64_t, int> softcap_cache;
+      edge_usage.reserve(1 << 20);
+      softcap_cache.reserve(1 << 20);
+      double total_soft_penalty = 0.0;
+
+      std::vector<odb::dbNet*> ordered_nets = hybrid_nets;
+      std::unordered_map<odb::dbNet*, long> best_wl_per_net;
+      best_wl_per_net.reserve(ordered_nets.size());
+      for (odb::dbNet* db_net : ordered_nets) {
+        if (db_net == nullptr) {
+          continue;
+        }
+        long best_wl = std::numeric_limits<long>::max();
+        for (int idx = 0; idx < source_count; ++idx) {
+          const ScenarioResult* source = ranked[idx];
+          if (source == nullptr) {
+            continue;
+          }
+          const auto route_it = source->routes.find(db_net);
+          if (route_it == source->routes.end()) {
+            continue;
+          }
+          long wl = 0;
+          for (const GSegment& segment : route_it->second) {
+            if (!segment.isVia()) {
+              wl += std::abs(segment.final_x - segment.init_x)
+                    + std::abs(segment.final_y - segment.init_y);
+            }
+          }
+          best_wl = std::min(best_wl, wl);
+        }
+        best_wl_per_net.emplace(db_net, best_wl);
+      }
+      std::sort(ordered_nets.begin(),
+                ordered_nets.end(),
+                [&](odb::dbNet* lhs, odb::dbNet* rhs) {
+                  const auto lhs_it = best_wl_per_net.find(lhs);
+                  const auto rhs_it = best_wl_per_net.find(rhs);
+                  const long lhs_wl = lhs_it != best_wl_per_net.end()
+                                          ? lhs_it->second
+                                          : std::numeric_limits<long>::max();
+                  const long rhs_wl = rhs_it != best_wl_per_net.end()
+                                          ? rhs_it->second
+                                          : std::numeric_limits<long>::max();
+                  return lhs_wl > rhs_wl;
+                });
+
+      for (odb::dbNet* db_net : ordered_nets) {
+        if (db_net == nullptr) {
+          continue;
+        }
+
+        const GRoute* best_route = nullptr;
+        EdgeCountMap best_edge_counts;
+        long best_wl = std::numeric_limits<long>::max();
+        int best_vias = std::numeric_limits<int>::max();
+        double best_delta_penalty = std::numeric_limits<double>::max();
+        double best_objective = std::numeric_limits<double>::max();
+
+        for (int idx = 0; idx < source_count; ++idx) {
+          const ScenarioResult* source = ranked[idx];
+          if (source == nullptr) {
+            continue;
+          }
+          const auto route_it = source->routes.find(db_net);
+          if (route_it == source->routes.end()) {
+            continue;
+          }
+
+          const RouteEdgeStats stats
+              = collectRouteEdgeStats(route_it->second, grouter_->grid_);
+          double delta_penalty = 0.0;
+          for (const auto& [edge_key, add_usage] : stats.edge_counts) {
+            const auto usage_it = edge_usage.find(edge_key);
+            const int usage = usage_it == edge_usage.end() ? 0 : usage_it->second;
+            const int soft_cap = getSoftCapacityForEdge(
+                edge_key, core, normalized_rudy, softcap_cache);
+            const int near_cap
+                = std::max(1, static_cast<int>(std::floor(soft_cap * 0.90)));
+
+            const int over_before = std::max(0, usage - soft_cap);
+            const int over_after = std::max(0, usage + add_usage - soft_cap);
+            const int near_before = std::max(0, usage - near_cap);
+            const int near_after = std::max(0, usage + add_usage - near_cap);
+
+            delta_penalty += overflow_weight
+                             * static_cast<double>(over_after * over_after
+                                                   - over_before * over_before);
+            delta_penalty += near_weight
+                             * static_cast<double>(near_after - near_before);
+          }
+
+          const double objective
+              = static_cast<double>(stats.wirelength_dbu)
+                + static_cast<double>(via_weight) * stats.via_count
+                + delta_penalty;
+          if (objective < best_objective
+              || (objective == best_objective
+                  && stats.wirelength_dbu < best_wl)
+              || (objective == best_objective
+                  && stats.wirelength_dbu == best_wl
+                  && stats.via_count < best_vias)) {
+            best_objective = objective;
+            best_delta_penalty = delta_penalty;
+            best_wl = stats.wirelength_dbu;
+            best_vias = stats.via_count;
+            best_route = &route_it->second;
+            best_edge_counts = stats.edge_counts;
+          }
+        }
+
+        if (best_route == nullptr) {
+          continue;
+        }
+        hybrid_result.routes.emplace(db_net, *best_route);
+        total_soft_penalty += best_delta_penalty;
+        for (const auto& [edge_key, add_usage] : best_edge_counts) {
+          edge_usage[edge_key] += add_usage;
+        }
+      }
+
+      const std::size_t coverage_threshold
+          = expected_net_count > 0 ? (expected_net_count * 95) / 100 : 0;
+      if (hybrid_result.routes.size() >= coverage_threshold) {
+        hybrid_result.metrics = compute_metrics(hybrid_result.routes);
+        logger_->info(GNR,
+                      logger_code,
+                      "NEWGR {} from top {} scenarios: wirelength {:.0f} um, "
+                      "vias {}, routed nets {}/{}, soft-penalty {:.0f}",
+                      hybrid_name,
+                      source_count,
+                      hybrid_result.metrics.wirelength_um,
+                      hybrid_result.metrics.via_count,
+                      hybrid_result.routes.size(),
+                      expected_net_count,
+                      total_soft_penalty);
+        scenario_results.push_back(std::move(hybrid_result));
+      } else {
+        logger_->info(
+            GNR,
+            6014,
+            "NEWGR skipped {} due low net coverage ({}/{}).",
+            hybrid_name,
+            hybrid_result.routes.size(),
+            expected_net_count);
+      }
+    };
+
     // Drastic recombination:
     // 1) a wirelength-first hybrid (FastRoute shortest-path intent),
     // 2) a balanced hybrid that softly penalizes vias (SPRoute/CUGR flavor).
     const int wl_source_count = std::min<int>(14, ranked.size());
+    const int ultra_wl_source_count = static_cast<int>(ranked.size());
     const int balanced_source_count = std::min<int>(8, ranked.size());
+    const int softcap_source_count = std::min<int>(16, ranked.size());
     const long balanced_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 3L);
+    const long softcap_via_weight
+        = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 4L);
     append_hybrid("hybrid-netmix-wl", wl_source_count, 0, 6010);
+    append_hybrid("hybrid-netmix-ultra-wl", ultra_wl_source_count, 0, 6013);
     append_hybrid(
         "hybrid-netmix-balanced", balanced_source_count, balanced_via_weight, 6012);
+    append_softcap_hybrid(
+        "hybrid-netmix-softcap", softcap_source_count, softcap_via_weight, 6015);
   }
 
   auto robust_better = [](const ScenarioResult& lhs,
