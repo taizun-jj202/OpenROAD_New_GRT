@@ -213,6 +213,36 @@ void adjustEdgeCapacity(GlobalRouter* grouter,
   core->addAdjustment(x1, y1, x2, y2, layer, new_cap, is_reduce);
 }
 
+void applyUniformCapacityBoost(GlobalRouter* grouter,
+                               int min_layer,
+                               int max_layer,
+                               float ratio)
+{
+  Grid* grid = grouter->grid();
+  if (grid == nullptr) {
+    return;
+  }
+  const int x_grids = grid->getXGrids();
+  const int y_grids = grid->getYGrids();
+  if (x_grids <= 1 || y_grids <= 1) {
+    return;
+  }
+
+  ratio = std::clamp(ratio, 1.0f, 1.35f);
+  for (int layer = min_layer; layer <= max_layer; ++layer) {
+    for (int y = 0; y < y_grids; ++y) {
+      for (int x = 0; x < x_grids - 1; ++x) {
+        adjustEdgeCapacity(grouter, x, y, x + 1, y, layer, ratio);
+      }
+    }
+    for (int y = 0; y < y_grids - 1; ++y) {
+      for (int x = 0; x < x_grids; ++x) {
+        adjustEdgeCapacity(grouter, x, y, x, y + 1, layer, ratio);
+      }
+    }
+  }
+}
+
 void applySoftCapacityScaling(GlobalRouter* grouter,
                               const RudyGrid& normalized_rudy,
                               int min_layer,
@@ -702,6 +732,60 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         };
   scenario_defs.push_back(std::move(sporder_shortest_def));
 
+  ScenarioDefinition wirelength_balanced_def;
+  wirelength_balanced_def.name = "wirelength-balanced";
+  wirelength_balanced_def.pre_init = [this, seed = 43]() {
+    grouter_->setCapacitiesPerturbationPercentage(0.0f);
+    grouter_->setPerturbationAmount(0);
+    grouter_->setAllowCongestion(true);
+    grouter_->setSeed(seed);
+    grouter_->fastroute_->setCriticalNetsPercentage(22.0f);
+  };
+  wirelength_balanced_def.order_nets
+      = [](std::vector<Net*>& scenario_nets) {
+          reorderNetsByWirelengthPriority(scenario_nets);
+        };
+  wirelength_balanced_def.post_init
+      = [this, &hotspots, min_routing_layer, max_routing_layer]() {
+          applyUniformCapacityBoost(
+              grouter_, min_routing_layer, max_routing_layer, 1.10f);
+          applyHotspotPenalties(grouter_,
+                                hotspots,
+                                min_routing_layer,
+                                max_routing_layer,
+                                1,
+                                0.88f,
+                                0.24f);
+        };
+  scenario_defs.push_back(std::move(wirelength_balanced_def));
+
+  ScenarioDefinition wirelength_boost_def;
+  wirelength_boost_def.name = "wirelength-boost";
+  wirelength_boost_def.pre_init = [this, seed = 41]() {
+    grouter_->setCapacitiesPerturbationPercentage(0.0f);
+    grouter_->setPerturbationAmount(0);
+    grouter_->setAllowCongestion(true);
+    grouter_->setSeed(seed);
+    grouter_->fastroute_->setCriticalNetsPercentage(26.0f);
+  };
+  wirelength_boost_def.order_nets
+      = [](std::vector<Net*>& scenario_nets) {
+          reorderNetsByWirelengthPriority(scenario_nets);
+        };
+  wirelength_boost_def.post_init
+      = [this, &hotspots, min_routing_layer, max_routing_layer]() {
+          applyUniformCapacityBoost(
+              grouter_, min_routing_layer, max_routing_layer, 1.16f);
+          applyHotspotPenalties(grouter_,
+                                hotspots,
+                                min_routing_layer,
+                                max_routing_layer,
+                                1,
+                                0.90f,
+                                0.18f);
+        };
+  scenario_defs.push_back(std::move(wirelength_boost_def));
+
   if (!normalized_rudy.empty()) {
     ScenarioDefinition sporder_corridor_lift;
     sporder_corridor_lift.name = "sporder-corridor-lift";
@@ -815,8 +899,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(result));
   }
 
-  auto better_result = [](const ScenarioResult& lhs,
-                          const ScenarioResult& rhs) {
+  const long baseline_vias = baseline.metrics.via_count;
+  auto scenario_stability_penalty
+      = [baseline_vias](const ScenarioResult& result) {
+          const long min_stable_vias
+              = static_cast<long>(std::floor(0.98 * baseline_vias));
+          const long max_stable_vias
+              = static_cast<long>(std::ceil(1.20 * baseline_vias));
+          if (result.metrics.via_count < min_stable_vias
+              || result.metrics.via_count > max_stable_vias) {
+            return 1;
+          }
+          return 0;
+        };
+
+  auto better_result = [&](const ScenarioResult& lhs,
+                           const ScenarioResult& rhs) {
+    const int lhs_penalty = scenario_stability_penalty(lhs);
+    const int rhs_penalty = scenario_stability_penalty(rhs);
+    if (lhs_penalty != rhs_penalty) {
+      return lhs_penalty < rhs_penalty;
+    }
     if (lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
       return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
     }
