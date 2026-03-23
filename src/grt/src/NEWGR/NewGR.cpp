@@ -354,6 +354,32 @@ void reorderNetsByBspScheduler(std::vector<Net*>& nets)
   }
 }
 
+void reorderNetsByBspThenHpwlBurst(std::vector<Net*>& nets)
+{
+  if (nets.size() < 2) {
+    return;
+  }
+
+  reorderNetsByBspScheduler(nets);
+
+  const size_t burst_count
+      = std::min(nets.size(),
+                 static_cast<size_t>(
+                     std::clamp<int>(nets.size() / 5, 72, 1800)));
+  std::stable_sort(
+      nets.begin(), nets.begin() + burst_count, [](Net* lhs, Net* rhs) {
+        const NetOrderFeatures lhs_features = getNetOrderFeatures(lhs);
+        const NetOrderFeatures rhs_features = getNetOrderFeatures(rhs);
+        if (lhs_features.score != rhs_features.score) {
+          return lhs_features.score > rhs_features.score;
+        }
+        if (lhs_features.hpwl != rhs_features.hpwl) {
+          return lhs_features.hpwl > rhs_features.hpwl;
+        }
+        return lhs < rhs;
+      });
+}
+
 using RudyGrid = std::vector<std::vector<float>>;
 
 RudyGrid computeNormalizedRudyGrid(Rudy* rudy)
@@ -1252,6 +1278,55 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
     cugr_softcap_wl_def.aggressive = true;
     scenario_defs.push_back(std::move(cugr_softcap_wl_def));
+
+    ScenarioDefinition wl_squeeze_hybrid_def;
+    wl_squeeze_hybrid_def.name = "wl-squeeze-hybrid";
+    wl_squeeze_hybrid_def.pre_init = [this, seed = 79]() {
+      grouter_->setCapacitiesPerturbationPercentage(0.0f);
+      grouter_->setPerturbationAmount(0);
+      grouter_->setAllowCongestion(true);
+      grouter_->setSeed(seed);
+      grouter_->fastroute_->setCriticalNetsPercentage(32.0f);
+    };
+    wl_squeeze_hybrid_def.order_nets = [](std::vector<Net*>& scenario_nets) {
+      reorderNetsByBspThenHpwlBurst(scenario_nets);
+    };
+    wl_squeeze_hybrid_def.post_init = [this,
+                                       &normalized_rudy,
+                                       &hotspots,
+                                       min_routing_layer,
+                                       max_routing_layer]() {
+      applyHybridCapacityRemap(grouter_,
+                               normalized_rudy,
+                               hotspots,
+                               min_routing_layer,
+                               max_routing_layer,
+                               0.82f,
+                               1.18f,
+                               2.8f,
+                               0.68f,
+                               0.55f,
+                               1);
+      applySoftCapacityScaling(grouter_,
+                               normalized_rudy,
+                               min_routing_layer,
+                               max_routing_layer,
+                               0.78f,
+                               1.04f,
+                               2.3f,
+                               0.72f);
+      applyUniformCapacityBoost(
+          grouter_, min_routing_layer, max_routing_layer, 1.04f);
+      applyHotspotPenalties(grouter_,
+                            hotspots,
+                            min_routing_layer,
+                            max_routing_layer,
+                            1,
+                            0.95f,
+                            0.12f);
+    };
+    wl_squeeze_hybrid_def.aggressive = true;
+    scenario_defs.push_back(std::move(wl_squeeze_hybrid_def));
   }
 
   for (const ScenarioDefinition& def : scenario_defs) {
@@ -1265,14 +1340,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const long lhs_wl = lhs.metrics.wirelength_dbu;
     const long rhs_wl = rhs.metrics.wirelength_dbu;
     const long wl_tie_window
-        = std::max<long>(120000, std::max(lhs_wl, rhs_wl) / 8000);
+        = std::max<long>(18000, std::max(lhs_wl, rhs_wl) / 22000);
     if (std::abs(lhs_wl - rhs_wl) > wl_tie_window) {
       return lhs_wl < rhs_wl;
     }
 
     if (baseline_vias > 0) {
       const long max_reasonable_via
-          = static_cast<long>(std::ceil(1.12 * baseline_vias));
+          = static_cast<long>(std::ceil(1.18 * baseline_vias));
       const bool lhs_via_ok = lhs.metrics.via_count <= max_reasonable_via;
       const bool rhs_via_ok = rhs.metrics.via_count <= max_reasonable_via;
       if (lhs_via_ok != rhs_via_ok) {
