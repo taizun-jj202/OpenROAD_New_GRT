@@ -211,6 +211,10 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
+  GridGraphView<CostT> wireLengthCostView;
+  if (constants_.stage3_use_wirelength_maze) {
+    grid_graph_->extractWireLengthCostView(wireLengthCostView);
+  }
   sortNetIndices(netIndices);
 
   struct MazeConfig
@@ -371,6 +375,41 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       patternRoute.run();
       considerCandidate(net->getRoutingTree(), /*is_baseline_candidate*/ false);
       evaluated_candidates++;
+    }
+
+    // FastRoute-style wirelength-first intensification:
+    // for long nets, explore a small subset of wirelength-only sparse mazes
+    // and rely on candidate filtering to reject overflow-prone routes.
+    if (constants_.stage3_use_wirelength_maze
+        && hpwl >= constants_.stage3_wl_only_hpwl_threshold
+        && net->getNumPins() > 2) {
+      const int wl_config_limit = std::max(1, constants_.stage3_wl_config_limit);
+      const int wl_runs = std::min(static_cast<int>(maze_configs.size()),
+                                   wl_config_limit);
+      const double wl_via_cost_scale
+          = std::clamp(constants_.stage3_wl_via_cost_scale, 0.0, 1.0);
+      for (int cfg_index = 0; cfg_index < wl_runs; cfg_index++) {
+        const auto& cfg = maze_configs[cfg_index];
+        MazeRoute wlMazeRoute(net, grid_graph_.get(), logger_);
+        SparseGrid wl_sparse_grid(
+            cfg.sparse_x, cfg.sparse_y, cfg.offset_x, cfg.offset_y);
+        wlMazeRoute.constructSparsifiedGraph(
+            wireLengthCostView, wl_sparse_grid, wl_via_cost_scale);
+        wlMazeRoute.run();
+        const std::shared_ptr<SteinerTreeNode> wl_tree
+            = wlMazeRoute.getSteinerTree();
+        if (!wl_tree) {
+          continue;
+        }
+
+        PatternRoute wlPatternRoute(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        wlPatternRoute.setSteinerTree(wl_tree);
+        wlPatternRoute.constructRoutingDAG();
+        wlPatternRoute.run();
+        considerCandidate(net->getRoutingTree(), /*is_baseline_candidate*/ false);
+        evaluated_candidates++;
+      }
     }
 
     if (!best_tree && baseline_tree) {
