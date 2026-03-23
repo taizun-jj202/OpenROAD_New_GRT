@@ -61,6 +61,13 @@ struct Hotspot
 };
 
 using RudyGrid = std::vector<std::vector<float>>;
+using GridMatrix = std::vector<std::vector<float>>;
+
+struct PlanarEdgeUsage
+{
+  GridMatrix horizontal;
+  GridMatrix vertical;
+};
 
 RudyGrid computeNormalizedRudyGrid(Rudy* rudy)
 {
@@ -94,6 +101,92 @@ RudyGrid computeNormalizedRudyGrid(Rudy* rudy)
   }
 
   return normalized;
+}
+
+PlanarEdgeUsage computeNormalizedBackboneUsage(GlobalRouter* grouter,
+                                               const NetRouteMap& routes)
+{
+  PlanarEdgeUsage usage;
+  if (grouter == nullptr || grouter->grid() == nullptr) {
+    return usage;
+  }
+
+  Grid* grid = grouter->grid();
+  const int x_grids = grid->getXGrids();
+  const int y_grids = grid->getYGrids();
+  if (x_grids <= 0 || y_grids <= 0) {
+    return usage;
+  }
+
+  usage.horizontal.assign(
+      std::max(x_grids - 1, 0), std::vector<float>(y_grids, 0.0f));
+  usage.vertical.assign(
+      x_grids, std::vector<float>(std::max(y_grids - 1, 0), 0.0f));
+
+  const int tile_size = std::max(grid->getTileSize(), 1);
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+  float max_usage = 0.0f;
+
+  auto grid_x = [&](int x_dbu) {
+    return std::clamp((x_dbu - x_min) / tile_size, 0, std::max(x_grids - 1, 0));
+  };
+  auto grid_y = [&](int y_dbu) {
+    return std::clamp((y_dbu - y_min) / tile_size, 0, std::max(y_grids - 1, 0));
+  };
+
+  for (const auto& [db_net, segments] : routes) {
+    static_cast<void>(db_net);
+    for (const GSegment& segment : segments) {
+      if (segment.isVia()) {
+        continue;
+      }
+      const int gx0 = grid_x(segment.init_x);
+      const int gy0 = grid_y(segment.init_y);
+      const int gx1 = grid_x(segment.final_x);
+      const int gy1 = grid_y(segment.final_y);
+
+      if (gy0 == gy1 && gx0 != gx1 && !usage.horizontal.empty()) {
+        const int y = std::clamp(gy0, 0, std::max(y_grids - 1, 0));
+        const int start = std::min(gx0, gx1);
+        const int end = std::max(gx0, gx1);
+        for (int x = start; x < end; ++x) {
+          if (x < 0 || x >= static_cast<int>(usage.horizontal.size())) {
+            continue;
+          }
+          usage.horizontal[x][y] += 1.0f;
+          max_usage = std::max(max_usage, usage.horizontal[x][y]);
+        }
+      } else if (gx0 == gx1 && gy0 != gy1 && !usage.vertical.empty()) {
+        const int x = std::clamp(gx0, 0, std::max(x_grids - 1, 0));
+        const int start = std::min(gy0, gy1);
+        const int end = std::max(gy0, gy1);
+        for (int y = start; y < end; ++y) {
+          if (y < 0 || y >= static_cast<int>(usage.vertical[x].size())) {
+            continue;
+          }
+          usage.vertical[x][y] += 1.0f;
+          max_usage = std::max(max_usage, usage.vertical[x][y]);
+        }
+      }
+    }
+  }
+
+  if (max_usage <= std::numeric_limits<float>::epsilon()) {
+    return usage;
+  }
+
+  for (auto& col : usage.horizontal) {
+    for (float& val : col) {
+      val = std::clamp(val / max_usage, 0.0f, 1.0f);
+    }
+  }
+  for (auto& col : usage.vertical) {
+    for (float& val : col) {
+      val = std::clamp(val / max_usage, 0.0f, 1.0f);
+    }
+  }
+  return usage;
 }
 
 void adjustEdgeCapacity(GlobalRouter* grouter,
@@ -254,6 +347,93 @@ void applyAggressiveCapacityField(GlobalRouter* grouter,
                            y + 1,
                            layer,
                            edge_ratio(local_rudy, local_hotspot, false));
+      }
+    }
+  }
+}
+
+void applyBackboneCapacityReinforcement(GlobalRouter* grouter,
+                                        const RudyGrid& normalized_rudy,
+                                        const PlanarEdgeUsage& usage,
+                                        int min_layer,
+                                        int max_layer,
+                                        float low_usage_ratio,
+                                        float high_usage_ratio,
+                                        float usage_gamma)
+{
+  Grid* grid = grouter->grid();
+  if (grid == nullptr) {
+    return;
+  }
+  if (usage.horizontal.empty() && usage.vertical.empty()) {
+    return;
+  }
+
+  const int x_grids = grid->getXGrids();
+  const int y_grids = grid->getYGrids();
+  if (x_grids <= 0 || y_grids <= 0) {
+    return;
+  }
+
+  low_usage_ratio = std::clamp(low_usage_ratio, 0.10f, 1.20f);
+  high_usage_ratio = std::clamp(high_usage_ratio, low_usage_ratio, 1.60f);
+  usage_gamma = std::clamp(usage_gamma, 0.20f, 2.20f);
+
+  const int layer_span = std::max(max_layer - min_layer, 1);
+  const auto sample_rudy = [&](int x, int y) {
+    if (normalized_rudy.empty()) {
+      return 0.0f;
+    }
+    if (x < 0 || y < 0 || x >= static_cast<int>(normalized_rudy.size())
+        || y >= static_cast<int>(normalized_rudy.front().size())) {
+      return 0.0f;
+    }
+    return normalized_rudy[x][y];
+  };
+
+  auto edge_ratio = [&](float normalized_usage, float local_rudy) {
+    normalized_usage = std::clamp(normalized_usage, 0.0f, 1.0f);
+    local_rudy = std::clamp(local_rudy, 0.0f, 1.0f);
+    float ratio = low_usage_ratio
+                  + (high_usage_ratio - low_usage_ratio)
+                        * std::pow(normalized_usage, usage_gamma);
+    // Reserve resources in high-RUDY regions and open low-RUDY channels.
+    ratio *= std::clamp(1.18f - 0.72f * local_rudy, 0.30f, 1.35f);
+    return std::clamp(ratio, 0.10f, 1.60f);
+  };
+
+  for (int layer = min_layer; layer <= max_layer; ++layer) {
+    const float layer_factor
+        = static_cast<float>(layer - min_layer) / static_cast<float>(layer_span);
+    const float layer_relax = 0.90f + 0.22f * layer_factor;
+
+    for (int x = 0; x < x_grids - 1; ++x) {
+      for (int y = 0; y < y_grids; ++y) {
+        if (x >= static_cast<int>(usage.horizontal.size())
+            || y >= static_cast<int>(usage.horizontal[x].size())) {
+          continue;
+        }
+        const float local_usage = usage.horizontal[x][y];
+        const float local_rudy
+            = 0.5f * (sample_rudy(x, y) + sample_rudy(x + 1, y));
+        const float ratio = std::clamp(
+            edge_ratio(local_usage, local_rudy) * layer_relax, 0.10f, 1.60f);
+        adjustEdgeCapacity(grouter, x, y, x + 1, y, layer, ratio);
+      }
+    }
+
+    for (int x = 0; x < x_grids; ++x) {
+      for (int y = 0; y < y_grids - 1; ++y) {
+        if (x >= static_cast<int>(usage.vertical.size())
+            || y >= static_cast<int>(usage.vertical[x].size())) {
+          continue;
+        }
+        const float local_usage = usage.vertical[x][y];
+        const float local_rudy
+            = 0.5f * (sample_rudy(x, y) + sample_rudy(x, y + 1));
+        const float ratio = std::clamp(
+            edge_ratio(local_usage, local_rudy) * layer_relax, 0.10f, 1.60f);
+        adjustEdgeCapacity(grouter, x, y, x, y + 1, layer, ratio);
       }
     }
   }
@@ -551,187 +731,66 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     rudy->calculateRudy();
     normalized_rudy = computeNormalizedRudyGrid(rudy);
   }
+  PlanarEdgeUsage baseline_usage
+      = computeNormalizedBackboneUsage(grouter_, baseline.routes);
 
-  std::vector<ScenarioResult> scenario_results;
-  scenario_results.push_back(baseline);
-
-  ScenarioDefinition baseline_def{"baseline", nullptr, nullptr};
-  std::vector<ScenarioDefinition> scenario_defs;
-
-  auto make_soft_config
-      = [&](const std::string& name,
-            float min_base,
-            float max_base,
-            float slope,
-            float midpoint,
-            int halo,
-            float hotspot_ratio,
-            float severity_weight,
-            float perturb_pct,
-            int seed,
-            float critical_pct) {
-          ScenarioDefinition def;
-          def.name = name;
-          def.pre_init = [this, perturb_pct, seed, critical_pct]() {
-            grouter_->setCapacitiesPerturbationPercentage(perturb_pct);
-            grouter_->setPerturbationAmount(perturb_pct > 0.0f ? 1 : 0);
-            grouter_->setSeed(seed);
-            grouter_->fastroute_->setCriticalNetsPercentage(critical_pct);
-          };
-          def.post_init
-              = [this,
-                 &normalized_rudy,
-                 &hotspots,
-                 min_routing_layer,
-                 max_routing_layer,
-                 min_base,
-                 max_base,
-                 slope,
-                 midpoint,
-                 halo,
-                 hotspot_ratio,
-                 severity_weight]() {
-                  applySoftCapacityScaling(grouter_,
-                                           normalized_rudy,
-                                           min_routing_layer,
-                                           max_routing_layer,
-                                           min_base,
-                                           max_base,
-                                           slope,
-                                           midpoint);
-                  applyHotspotPenalties(grouter_,
-                                        hotspots,
-                                        min_routing_layer,
-                                        max_routing_layer,
-                                        halo,
-                                        hotspot_ratio,
-                                        severity_weight);
-                };
-          return def;
+  ScenarioDefinition backbone_def;
+  backbone_def.name = "backbone-channelized";
+  backbone_def.pre_init = [this]() {
+    grouter_->setCapacitiesPerturbationPercentage(10.0f);
+    grouter_->setPerturbationAmount(1);
+    grouter_->setSeed(29);
+    grouter_->setAllowCongestion(false);
+    grouter_->fastroute_->setCriticalNetsPercentage(28.0f);
+  };
+  backbone_def.post_init
+      = [this,
+         &normalized_rudy,
+         &hotspots,
+         &baseline_usage,
+         min_routing_layer,
+         max_routing_layer]() {
+          applySoftCapacityScaling(grouter_,
+                                   normalized_rudy,
+                                   min_routing_layer,
+                                   max_routing_layer,
+                                   0.56f,
+                                   0.97f,
+                                   4.4f,
+                                   0.43f);
+          applyBackboneCapacityReinforcement(grouter_,
+                                             normalized_rudy,
+                                             baseline_usage,
+                                             min_routing_layer,
+                                             max_routing_layer,
+                                             0.34f,
+                                             1.55f,
+                                             0.62f);
+          applyAggressiveCapacityField(grouter_,
+                                       normalized_rudy,
+                                       hotspots,
+                                       min_routing_layer,
+                                       max_routing_layer,
+                                       0.76f,
+                                       0.12f,
+                                       0.23f,
+                                       1.38f,
+                                       0.35f,
+                                       true);
+          applyHotspotPenalties(grouter_,
+                                hotspots,
+                                min_routing_layer,
+                                max_routing_layer,
+                                4,
+                                0.50f,
+                                0.90f);
         };
 
-  auto make_aggressive_config
-      = [&](const std::string& name,
-            float high_rudy_threshold,
-            float low_rudy_threshold,
-            float high_rudy_ratio,
-            float low_rudy_ratio,
-            float orientation_bias,
-            bool horizontal_preference,
-            int halo,
-            float hotspot_ratio,
-            float severity_weight,
-            float perturb_pct,
-            int seed,
-            float critical_pct) {
-          ScenarioDefinition def;
-          def.name = name;
-          def.pre_init = [this, perturb_pct, seed, critical_pct]() {
-            grouter_->setCapacitiesPerturbationPercentage(perturb_pct);
-            grouter_->setPerturbationAmount(perturb_pct > 0.0f ? 1 : 0);
-            grouter_->setSeed(seed);
-            grouter_->fastroute_->setCriticalNetsPercentage(critical_pct);
-            grouter_->setAllowCongestion(false);
-          };
-          def.post_init
-              = [this,
-                 &normalized_rudy,
-                 &hotspots,
-                 min_routing_layer,
-                 max_routing_layer,
-                 high_rudy_threshold,
-                 low_rudy_threshold,
-                 high_rudy_ratio,
-                 low_rudy_ratio,
-                 orientation_bias,
-                 horizontal_preference,
-                 halo,
-                 hotspot_ratio,
-                 severity_weight]() {
-                  applyAggressiveCapacityField(grouter_,
-                                               normalized_rudy,
-                                               hotspots,
-                                               min_routing_layer,
-                                               max_routing_layer,
-                                               high_rudy_threshold,
-                                               low_rudy_threshold,
-                                               high_rudy_ratio,
-                                               low_rudy_ratio,
-                                               orientation_bias,
-                                               horizontal_preference);
-                  applyHotspotPenalties(grouter_,
-                                        hotspots,
-                                        min_routing_layer,
-                                        max_routing_layer,
-                                        halo,
-                                        hotspot_ratio,
-                                        severity_weight);
-                };
-          return def;
-        };
-
-  if (!normalized_rudy.empty()) {
-    // Symmetric but orientation-opposed scenarios create radically different
-    // detour corridors and usually produce distinct WL/via tradeoffs.
-    scenario_defs.push_back(make_aggressive_config("canyon-h",
-                                                   0.70f,
-                                                   0.16f,
-                                                   0.17f,
-                                                   1.30f,
-                                                   0.22f,
-                                                   true,
-                                                   3,
-                                                   0.48f,
-                                                   0.82f,
-                                                   7.5f,
-                                                   17,
-                                                   20.0f));
-
-    scenario_defs.push_back(make_aggressive_config("canyon-v",
-                                                   0.70f,
-                                                   0.16f,
-                                                   0.17f,
-                                                   1.30f,
-                                                   0.22f,
-                                                   false,
-                                                   3,
-                                                   0.48f,
-                                                   0.82f,
-                                                   7.5f,
-                                                   41,
-                                                   20.0f));
-
-    scenario_defs.push_back(make_aggressive_config("hard-funnel",
-                                                   0.60f,
-                                                   0.22f,
-                                                   0.12f,
-                                                   1.22f,
-                                                   0.30f,
-                                                   true,
-                                                   4,
-                                                   0.38f,
-                                                   0.92f,
-                                                   9.0f,
-                                                   9,
-                                                   25.0f));
-
-    scenario_defs.push_back(make_soft_config("soft-recovery",
-                                             0.50f,
-                                             0.95f,
-                                             5.0f,
-                                             0.45f,
-                                             2,
-                                             0.66f,
-                                             0.45f,
-                                             3.0f,
-                                             31,
-                                             10.0f));
-  }
-
-  for (const ScenarioDefinition& def : scenario_defs) {
-    ScenarioResult result = run_scenario(def, snapshot);
-    scenario_results.push_back(std::move(result));
-  }
+  ScenarioResult channelized = run_scenario(backbone_def, snapshot);
+  const int channelized_overflow
+      = grouter_->fastroute() != nullptr ? grouter_->fastroute()->totalOverflow()
+                                         : 0;
+  const bool channelized_congested = channelized_overflow > 0;
 
   auto better_result = [](const ScenarioResult& lhs,
                           const ScenarioResult& rhs) {
@@ -744,35 +803,34 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return lhs.metrics.score < rhs.metrics.score;
   };
 
-  auto best_iter = std::min_element(
-      scenario_results.begin(), scenario_results.end(), better_result);
-  ScenarioResult final_result = *best_iter;
-
-  const ScenarioDefinition* replay_def = nullptr;
-  if (best_iter->name != scenario_results.back().name) {
-    if (best_iter->name == "baseline") {
-      replay_def = &baseline_def;
-    } else {
-      for (const ScenarioDefinition& def : scenario_defs) {
-        if (def.name == best_iter->name) {
-          replay_def = &def;
-          break;
-        }
-      }
-    }
-    if (replay_def != nullptr) {
-      final_result = run_scenario(*replay_def, snapshot);
-    }
-  }
-
+  const ScenarioResult& better
+      = better_result(channelized, baseline) ? channelized : baseline;
   logger_->info(GNR,
                 6007,
-                "NEWGR best scenario '{}': wirelength {:.0f} um, vias {}",
-                final_result.name,
-                final_result.metrics.wirelength_um,
-                final_result.metrics.via_count);
+                "NEWGR diagnostic best between baseline/backbone is '{}': "
+                "wirelength {:.0f} um, vias {}",
+                better.name,
+                better.metrics.wirelength_um,
+                better.metrics.via_count);
 
-  return std::move(final_result.routes);
+  if (!channelized_congested && !channelized.routes.empty()) {
+    restore_snapshot(snapshot);
+    return std::move(channelized.routes);
+  }
+
+  logger_->warn(
+      GNR,
+      6008,
+      "NEWGR backbone-channelized result has overflow {} ; replaying baseline "
+      "to guarantee routable guides.",
+      channelized_overflow);
+  ScenarioDefinition baseline_replay{"baseline-replay", nullptr, nullptr};
+  ScenarioResult fallback = run_scenario(baseline_replay, snapshot);
+  restore_snapshot(snapshot);
+  if (!fallback.routes.empty()) {
+    return std::move(fallback.routes);
+  }
+  return std::move(baseline.routes);
 }
 
 }  // namespace grt
