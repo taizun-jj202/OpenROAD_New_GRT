@@ -104,7 +104,7 @@ void adjustEdgeCapacity(GlobalRouter* grouter,
                         int layer,
                         float ratio)
 {
-  ratio = std::clamp(ratio, 0.05f, 1.0f);
+  ratio = std::clamp(ratio, 0.05f, 1.45f);
   FastRouteCore* core = grouter->fastroute();
   if (core == nullptr) {
     return;
@@ -120,6 +120,143 @@ void adjustEdgeCapacity(GlobalRouter* grouter,
   }
   const bool is_reduce = new_cap < current_cap;
   core->addAdjustment(x1, y1, x2, y2, layer, new_cap, is_reduce);
+}
+
+void applyAggressiveCapacityField(GlobalRouter* grouter,
+                                  const RudyGrid& normalized_rudy,
+                                  const std::vector<Hotspot>& hotspots,
+                                  int min_layer,
+                                  int max_layer,
+                                  float high_rudy_threshold,
+                                  float low_rudy_threshold,
+                                  float high_rudy_ratio,
+                                  float low_rudy_ratio,
+                                  float orientation_bias,
+                                  bool horizontal_preference)
+{
+  Grid* grid = grouter->grid();
+  if (normalized_rudy.empty() || grid == nullptr) {
+    return;
+  }
+
+  const int x_grids = grid->getXGrids();
+  const int y_grids = grid->getYGrids();
+  const int x_tiles = normalized_rudy.size();
+  const int y_tiles = normalized_rudy.front().size();
+  const int usable_x = std::min(x_grids, x_tiles);
+  const int usable_y = std::min(y_grids, y_tiles);
+  if (usable_x < 2 || usable_y < 2) {
+    return;
+  }
+
+  high_rudy_threshold = std::clamp(high_rudy_threshold, 0.05f, 0.95f);
+  low_rudy_threshold = std::clamp(low_rudy_threshold, 0.01f, 0.80f);
+  if (low_rudy_threshold > high_rudy_threshold) {
+    std::swap(low_rudy_threshold, high_rudy_threshold);
+  }
+
+  const int layer_span = std::max(max_layer - min_layer, 1);
+  orientation_bias = std::clamp(orientation_bias, 0.0f, 0.8f);
+
+  std::vector<float> hotspot_energy(usable_x * usable_y, 0.0f);
+  auto idx = [usable_x](int x, int y) { return y * usable_x + x; };
+  for (const Hotspot& hotspot : hotspots) {
+    const int halo = 3;
+    for (int dx = -halo; dx <= halo; ++dx) {
+      for (int dy = -halo; dy <= halo; ++dy) {
+        const int gx = hotspot.gx + dx;
+        const int gy = hotspot.gy + dy;
+        if (gx < 0 || gy < 0 || gx >= usable_x || gy >= usable_y) {
+          continue;
+        }
+        const float distance = static_cast<float>(std::abs(dx) + std::abs(dy));
+        const float decay = 1.0f / (1.0f + distance);
+        hotspot_energy[idx(gx, gy)] += hotspot.severity * decay;
+      }
+    }
+  }
+
+  float max_hotspot_energy = 0.0f;
+  for (const float energy : hotspot_energy) {
+    max_hotspot_energy = std::max(max_hotspot_energy, energy);
+  }
+
+  const auto get_rudy = [&](int x, int y) {
+    if (x < 0 || y < 0 || x >= usable_x || y >= usable_y) {
+      return 0.0f;
+    }
+    return normalized_rudy[x][y];
+  };
+  const auto get_hotspot = [&](int x, int y) {
+    if (x < 0 || y < 0 || x >= usable_x || y >= usable_y
+        || max_hotspot_energy <= std::numeric_limits<float>::epsilon()) {
+      return 0.0f;
+    }
+    return hotspot_energy[idx(x, y)] / max_hotspot_energy;
+  };
+
+  for (int layer = min_layer; layer <= max_layer; ++layer) {
+    const float layer_factor
+        = static_cast<float>(layer - min_layer) / static_cast<float>(layer_span);
+    const float layer_relax = 1.0f + 0.18f * layer_factor;
+    const float orient_boost = 1.0f + orientation_bias * (1.0f - 0.35f * layer_factor);
+    const float orient_shrink = std::max(0.2f, 1.0f - orientation_bias);
+
+    auto edge_ratio = [&](float local_rudy, float local_hotspot, bool is_horizontal) {
+      float ratio = 1.0f;
+      if (local_rudy >= high_rudy_threshold) {
+        ratio = high_rudy_ratio;
+      } else if (local_rudy <= low_rudy_threshold) {
+        ratio = low_rudy_ratio;
+      } else {
+        const float blend
+            = (local_rudy - low_rudy_threshold)
+              / std::max(high_rudy_threshold - low_rudy_threshold, 0.01f);
+        ratio = low_rudy_ratio + (high_rudy_ratio - low_rudy_ratio) * blend;
+      }
+
+      // Carve out hard "no-fly" channels around persistent hotspots.
+      ratio *= std::clamp(1.0f - 0.65f * local_hotspot, 0.15f, 1.0f);
+      ratio *= layer_relax;
+
+      if (horizontal_preference) {
+        ratio *= is_horizontal ? orient_boost : orient_shrink;
+      } else {
+        ratio *= is_horizontal ? orient_shrink : orient_boost;
+      }
+      return std::clamp(ratio, 0.08f, 1.45f);
+    };
+
+    for (int y = 0; y < usable_y; ++y) {
+      for (int x = 0; x < usable_x - 1; ++x) {
+        const float local_rudy = 0.5f * (get_rudy(x, y) + get_rudy(x + 1, y));
+        const float local_hotspot
+            = 0.5f * (get_hotspot(x, y) + get_hotspot(x + 1, y));
+        adjustEdgeCapacity(grouter,
+                           x,
+                           y,
+                           x + 1,
+                           y,
+                           layer,
+                           edge_ratio(local_rudy, local_hotspot, true));
+      }
+    }
+
+    for (int y = 0; y < usable_y - 1; ++y) {
+      for (int x = 0; x < usable_x; ++x) {
+        const float local_rudy = 0.5f * (get_rudy(x, y) + get_rudy(x, y + 1));
+        const float local_hotspot
+            = 0.5f * (get_hotspot(x, y) + get_hotspot(x, y + 1));
+        adjustEdgeCapacity(grouter,
+                           x,
+                           y,
+                           x,
+                           y + 1,
+                           layer,
+                           edge_ratio(local_rudy, local_hotspot, false));
+      }
+    }
+  }
 }
 
 void applySoftCapacityScaling(GlobalRouter* grouter,
@@ -473,58 +610,123 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           return def;
         };
 
+  auto make_aggressive_config
+      = [&](const std::string& name,
+            float high_rudy_threshold,
+            float low_rudy_threshold,
+            float high_rudy_ratio,
+            float low_rudy_ratio,
+            float orientation_bias,
+            bool horizontal_preference,
+            int halo,
+            float hotspot_ratio,
+            float severity_weight,
+            float perturb_pct,
+            int seed,
+            float critical_pct) {
+          ScenarioDefinition def;
+          def.name = name;
+          def.pre_init = [this, perturb_pct, seed, critical_pct]() {
+            grouter_->setCapacitiesPerturbationPercentage(perturb_pct);
+            grouter_->setPerturbationAmount(perturb_pct > 0.0f ? 1 : 0);
+            grouter_->setSeed(seed);
+            grouter_->fastroute_->setCriticalNetsPercentage(critical_pct);
+            grouter_->setAllowCongestion(false);
+          };
+          def.post_init
+              = [this,
+                 &normalized_rudy,
+                 &hotspots,
+                 min_routing_layer,
+                 max_routing_layer,
+                 high_rudy_threshold,
+                 low_rudy_threshold,
+                 high_rudy_ratio,
+                 low_rudy_ratio,
+                 orientation_bias,
+                 horizontal_preference,
+                 halo,
+                 hotspot_ratio,
+                 severity_weight]() {
+                  applyAggressiveCapacityField(grouter_,
+                                               normalized_rudy,
+                                               hotspots,
+                                               min_routing_layer,
+                                               max_routing_layer,
+                                               high_rudy_threshold,
+                                               low_rudy_threshold,
+                                               high_rudy_ratio,
+                                               low_rudy_ratio,
+                                               orientation_bias,
+                                               horizontal_preference);
+                  applyHotspotPenalties(grouter_,
+                                        hotspots,
+                                        min_routing_layer,
+                                        max_routing_layer,
+                                        halo,
+                                        hotspot_ratio,
+                                        severity_weight);
+                };
+          return def;
+        };
+
   if (!normalized_rudy.empty()) {
-    scenario_defs.push_back(make_soft_config("soft-cap",
-                                             0.52f,
-                                             0.94f,
-                                             5.5f,
-                                             0.42f,
-                                             1,
-                                             0.68f,
-                                             0.35f,
-                                             0.0f,
-                                             snapshot.seed,
-                                             snapshot.critical_percentage));
+    // Symmetric but orientation-opposed scenarios create radically different
+    // detour corridors and usually produce distinct WL/via tradeoffs.
+    scenario_defs.push_back(make_aggressive_config("canyon-h",
+                                                   0.70f,
+                                                   0.16f,
+                                                   0.17f,
+                                                   1.30f,
+                                                   0.22f,
+                                                   true,
+                                                   3,
+                                                   0.48f,
+                                                   0.82f,
+                                                   7.5f,
+                                                   17,
+                                                   20.0f));
 
-    scenario_defs.push_back(make_soft_config("guided-softcap",
-                                             0.48f,
-                                             0.90f,
-                                             6.5f,
-                                             0.48f,
+    scenario_defs.push_back(make_aggressive_config("canyon-v",
+                                                   0.70f,
+                                                   0.16f,
+                                                   0.17f,
+                                                   1.30f,
+                                                   0.22f,
+                                                   false,
+                                                   3,
+                                                   0.48f,
+                                                   0.82f,
+                                                   7.5f,
+                                                   41,
+                                                   20.0f));
+
+    scenario_defs.push_back(make_aggressive_config("hard-funnel",
+                                                   0.60f,
+                                                   0.22f,
+                                                   0.12f,
+                                                   1.22f,
+                                                   0.30f,
+                                                   true,
+                                                   4,
+                                                   0.38f,
+                                                   0.92f,
+                                                   9.0f,
+                                                   9,
+                                                   25.0f));
+
+    scenario_defs.push_back(make_soft_config("soft-recovery",
+                                             0.50f,
+                                             0.95f,
+                                             5.0f,
+                                             0.45f,
                                              2,
-                                             0.60f,
-                                             0.55f,
-                                             3.5f,
-                                             13,
-                                             12.0f));
-
-    scenario_defs.push_back(make_soft_config("mild-softcap",
-                                             0.58f,
-                                             0.97f,
-                                             4.5f,
-                                             0.38f,
-                                             1,
-                                             0.75f,
-                                             0.20f,
-                                             2.5f,
-                                             5,
-                                             8.0f));
+                                             0.66f,
+                                             0.45f,
+                                             3.0f,
+                                             31,
+                                             10.0f));
   }
-
-  auto make_random_def = [&](int seed, float perturb_pct) {
-    ScenarioDefinition def;
-    def.name = "perturb-seed" + std::to_string(seed);
-    def.pre_init = [this, seed, perturb_pct]() {
-      grouter_->setCapacitiesPerturbationPercentage(perturb_pct);
-      grouter_->setPerturbationAmount(perturb_pct > 0.0f ? 1 : 0);
-      grouter_->setSeed(seed);
-      grouter_->fastroute_->setCriticalNetsPercentage(5.0f);
-    };
-    return def;
-  };
-
-  scenario_defs.push_back(make_random_def(11, 6.0f));
-  scenario_defs.push_back(make_random_def(29, 4.0f));
 
   for (const ScenarioDefinition& def : scenario_defs) {
     ScenarioResult result = run_scenario(def, snapshot);
