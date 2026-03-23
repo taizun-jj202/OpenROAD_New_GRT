@@ -78,8 +78,18 @@ RouteScore evaluateRouteScore(const std::shared_ptr<GRTreeNode>& tree,
 
 bool isBetterScore(const RouteScore& candidate, const RouteScore& baseline)
 {
-  if (candidate.overflow_edges != baseline.overflow_edges) {
-    return candidate.overflow_edges < baseline.overflow_edges;
+  if (candidate.overflow_edges < baseline.overflow_edges) {
+    const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
+    // Keep overflow reduction, but bound detour growth (FastRoute-style
+    // overflow/wirelength balancing).
+    const uint64_t allowedIncrease
+        = static_cast<uint64_t>(overflowGain) * 160ULL;
+    const uint64_t allowedWireLength
+        = baseline.wire_length + allowedIncrease;
+    return candidate.wire_length <= allowedWireLength;
+  }
+  if (candidate.overflow_edges > baseline.overflow_edges) {
+    return false;
   }
   if (candidate.wire_length != baseline.wire_length) {
     return candidate.wire_length < baseline.wire_length;
@@ -93,14 +103,19 @@ bool isRecoveryScoreBetter(const RouteScore& candidate,
   if (candidate.overflow_edges > baseline.overflow_edges) {
     return false;
   }
-  if (candidate.wire_length > baseline.wire_length) {
-    return false;
+  if (candidate.overflow_edges < baseline.overflow_edges) {
+    const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
+    const uint64_t allowedIncrease
+        = static_cast<uint64_t>(overflowGain) * 80ULL;
+    const uint64_t allowedWireLength
+        = baseline.wire_length + allowedIncrease;
+    return candidate.wire_length <= allowedWireLength;
   }
   if (candidate.wire_length < baseline.wire_length) {
     return true;
   }
-  if (candidate.overflow_edges < baseline.overflow_edges) {
-    return true;
+  if (candidate.wire_length > baseline.wire_length) {
+    return false;
   }
   return candidate.via_count < baseline.via_count;
 }
@@ -330,10 +345,6 @@ void CUGR::wirelengthRecovery()
       = std::max(128, static_cast<int>(netIndices.size() / 4));
   const int denseMazeBudget
       = std::max(64, static_cast<int>(netIndices.size() / 20));
-  const int longSweepBudget
-      = std::max(48, static_cast<int>(netIndices.size() / 40));
-  const int denseLongSweepBudget
-      = std::max(16, static_cast<int>(netIndices.size() / 96));
   const int longNetRank
       = std::min(static_cast<int>(netIndices.size()) - 1,
                  std::max(0, static_cast<int>(netIndices.size() / 8)));
@@ -390,8 +401,6 @@ void CUGR::wirelengthRecovery()
         = (rank < mazeCandidateBudget || oldScore.overflow_edges > 0
            || oldScore.wire_length >= longWireThreshold);
     if (runMazeCandidate) {
-      const int hp = net->getBoundingBox().hp();
-      const int pins = net->getNumPins();
       auto runSparseMazeCandidate = [&](int interval, int xOffset, int yOffset) {
         SparseGrid recoveryGrid(interval, interval, xOffset, yOffset);
 
@@ -414,28 +423,10 @@ void CUGR::wirelengthRecovery()
       if (rank < denseMazeBudget || oldScore.wire_length >= longWireThreshold) {
         interval = 3;
       }
-      runSparseMazeCandidate(interval, rank % interval, (rank * 3) % interval);
-
-      // FastRoute-style multiple reconnection attempts: for the longest or
-      // still-overflowing nets, sweep a couple of denser sparse-grid offsets
-      // and keep only strict improvements.
-      const bool runExtraSweep
-          = rank < longSweepBudget
-            || (oldScore.overflow_edges > 0 && rank < denseMazeBudget);
-      if (runExtraSweep) {
-        const int extraTrials
-            = (rank < denseLongSweepBudget || oldScore.overflow_edges > 0) ? 2
-                                                                            : 1;
-        for (int trial = 0; trial < extraTrials; trial++) {
-          const int denseInterval = trial == 0 ? 3 : 4;
-          const int xOffset
-              = (rank * 11 + hp + trial * 7 + oldScore.overflow_edges)
-                % denseInterval;
-          const int yOffset
-              = (rank * 13 + pins + trial * 5 + hp) % denseInterval;
-          runSparseMazeCandidate(denseInterval, xOffset, yOffset);
-        }
-      }
+      runSparseMazeCandidate(
+          interval,
+          (rank * 3 + oldScore.overflow_edges) % interval,
+          (rank * 5 + net->getNumPins()) % interval);
     }
 
     if (bestTree != oldTree) {
