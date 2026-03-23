@@ -1079,6 +1079,11 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
   multi_array<double, 2> d2(boost::extents[y_range_][x_range_]);
 
   std::vector<bool> pop_heap2(y_grid_ * x_range_, false);
+  int corridor_xmin = 0;
+  int corridor_xmax = 0;
+  int corridor_ymin = 0;
+  int corridor_ymax = 0;
+  double corridor_detour_penalty = 0.0;
 
   /**
    * @brief Updates the cost of an adjacent grid if the new cost is lower,
@@ -1159,6 +1164,22 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
 
     double tmp = d1[cur_y][cur_x] + cost1;
 
+    // Elastic corridor guidance: discourage long detours outside the original
+    // two-pin bounding box, while still allowing escape when congestion
+    // requires it.
+    if (corridor_detour_penalty > 0.0) {
+      const int next_x = cur_x + d_x;
+      const int next_y = cur_y + d_y;
+      const int detour_x = std::max(0, corridor_xmin - next_x)
+                           + std::max(0, next_x - corridor_xmax);
+      const int detour_y = std::max(0, corridor_ymin - next_y)
+                           + std::max(0, next_y - corridor_ymax);
+      const int detour = detour_x + detour_y;
+      if (detour > 0) {
+        tmp += corridor_detour_penalty * detour;
+      }
+    }
+
     if (add_via && d1[cur_y][cur_x] != 0) {
       tmp += via;
 
@@ -1230,6 +1251,10 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
       // ripup the routing for the edge
       const auto [ymin, ymax] = std::minmax(n1y, n2y);
       const auto [xmin, xmax] = std::minmax(n1x, n2x);
+      corridor_xmin = xmin;
+      corridor_xmax = xmax;
+      corridor_ymin = ymin;
+      corridor_ymax = ymax;
 
       enlarge_ = std::min(origENG, (iter / 6 + 3) * treeedge->route.routelen);
       const int manhattan_len = treeedge->len;
@@ -1240,6 +1265,16 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
             + static_cast<int>(std::round(manhattan_len * expand_ratio));
       const int effective_enlarge
           = std::max(min_local_expand, std::min(enlarge_, dynamic_cap));
+
+      const bool route_stretched
+          = treeedge->route.last_routelen > 0
+            && treeedge->route.routelen
+                   > static_cast<int>(1.5 * treeedge->route.last_routelen);
+      const double base_detour_penalty
+          = nets_[netID]->isCritical() || route_stretched ? 1.1 : 0.65;
+      const double iter_relax
+          = std::clamp((iter - 1) / 40.0, 0.0, 0.5);
+      corridor_detour_penalty = base_detour_penalty * (1.0 - iter_relax);
 
       int decrease = 0;
 
