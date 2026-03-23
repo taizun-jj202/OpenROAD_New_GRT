@@ -9,6 +9,7 @@
 #include <limits>
 #include <memory>
 #include <sstream>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -539,6 +540,9 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     int index;
     int hpwl;
     double stretch;
+    uint64_t excess_wirelength;
+    int cx;
+    int cy;
   };
 
   auto measureRoute = [&](const std::shared_ptr<GRTreeNode>& tree) {
@@ -609,7 +613,13 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
           && hpwl < constants_.recovery_deep_hpwl_threshold) {
         continue;
       }
-      candidates.push_back({netIndex, hpwl, stretch});
+      const uint64_t excess_wirelength
+          = route_stats.first > approx_hpwl_dbu
+                ? route_stats.first - approx_hpwl_dbu
+                : 0;
+      const BoxT& bbox = net->getBoundingBox();
+      candidates.push_back(
+          {netIndex, hpwl, stretch, excess_wirelength, bbox.cx(), bbox.cy()});
     }
 
     if (candidates.empty()) {
@@ -619,6 +629,9 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     std::sort(candidates.begin(),
               candidates.end(),
               [](const Candidate& lhs, const Candidate& rhs) {
+                if (lhs.excess_wirelength != rhs.excess_wirelength) {
+                  return lhs.excess_wirelength > rhs.excess_wirelength;
+                }
                 constexpr double kStretchEpsilon = 1e-4;
                 if (std::abs(lhs.stretch - rhs.stretch) > kStretchEpsilon) {
                   return lhs.stretch > rhs.stretch;
@@ -642,6 +655,66 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         deep_keep, std::max(1, constants_.recovery_deep_search_cap));
     deep_keep = std::max(1, std::min(deep_keep, keep));
 
+    std::vector<Candidate> selected_candidates;
+    selected_candidates.reserve(keep);
+    if (constants_.recovery_spatial_round_robin && keep > 2) {
+      const int pool_multiplier
+          = std::max(1, constants_.recovery_spatial_pool_multiplier);
+      const int pool_size = std::min(
+          static_cast<int>(candidates.size()),
+          std::max(keep, keep * pool_multiplier));
+      std::vector<Candidate> spatial_pool(candidates.begin(),
+                                          candidates.begin() + pool_size);
+      const bool sort_by_x = pass % 2 == 0;
+      std::sort(spatial_pool.begin(),
+                spatial_pool.end(),
+                [&](const Candidate& lhs, const Candidate& rhs) {
+                  const int lhs_coord = sort_by_x ? lhs.cx : lhs.cy;
+                  const int rhs_coord = sort_by_x ? rhs.cx : rhs.cy;
+                  if (lhs_coord != rhs_coord) {
+                    return lhs_coord < rhs_coord;
+                  }
+                  if (lhs.excess_wirelength != rhs.excess_wirelength) {
+                    return lhs.excess_wirelength > rhs.excess_wirelength;
+                  }
+                  return lhs.hpwl > rhs.hpwl;
+                });
+
+      const int batch_count = std::clamp(
+          constants_.recovery_spatial_batches, 2, std::max(2, keep));
+      std::vector<std::vector<Candidate>> batches(batch_count);
+      for (int i = 0; i < pool_size; i++) {
+        batches[i % batch_count].push_back(spatial_pool[i]);
+      }
+
+      std::unordered_set<int> selected_set;
+      selected_set.reserve(keep * 2);
+      for (const auto& batch : batches) {
+        for (const auto& candidate : batch) {
+          if (static_cast<int>(selected_candidates.size()) >= keep) {
+            break;
+          }
+          if (selected_set.emplace(candidate.index).second) {
+            selected_candidates.push_back(candidate);
+          }
+        }
+        if (static_cast<int>(selected_candidates.size()) >= keep) {
+          break;
+        }
+      }
+      for (const auto& candidate : candidates) {
+        if (static_cast<int>(selected_candidates.size()) >= keep) {
+          break;
+        }
+        if (selected_set.emplace(candidate.index).second) {
+          selected_candidates.push_back(candidate);
+        }
+      }
+    } else {
+      selected_candidates.insert(
+          selected_candidates.end(), candidates.begin(), candidates.begin() + keep);
+    }
+
     logger_->report("stage 4.{}: wirelength recovery on {} / {} nets (deep "
                     "search on {} nets, top stretch {:.3f})",
                     pass + 1,
@@ -651,17 +724,20 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
                     candidates.front().stretch);
 
     int accepted_in_pass = 0;
-    for (int candidateIndex = 0; candidateIndex < keep; candidateIndex++) {
-      const int netIndex = candidates[candidateIndex].index;
+    for (int candidateIndex = 0;
+         candidateIndex < static_cast<int>(selected_candidates.size());
+         candidateIndex++) {
+      const Candidate& candidate = selected_candidates[candidateIndex];
+      const int netIndex = candidate.index;
       GRNet* net = gr_nets_[netIndex].get();
       const std::shared_ptr<GRTreeNode> original_tree = net->getRoutingTree();
       if (!original_tree) {
         continue;
       }
       const bool deep_search = candidateIndex < deep_keep
-                               || candidates[candidateIndex].hpwl
+                               || candidate.hpwl
                                       >= constants_.recovery_deep_hpwl_threshold
-                               || candidates[candidateIndex].stretch
+                               || candidate.stretch
                                       >= constants_.recovery_min_stretch + 0.12;
       const auto original_stats = measureRoute(original_tree);
       const int original_tree_overflow = grid_graph_->checkOverflow(original_tree);
@@ -787,7 +863,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
 
           const bool enable_full_offset_sweep
               = constants_.recovery_full_offset_sweep
-                && candidates[candidateIndex].hpwl
+                && candidate.hpwl
                        >= constants_.recovery_full_offset_hpwl_threshold;
           if (enable_full_offset_sweep) {
             for (int offset_x = 0;
@@ -841,7 +917,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         const bool enable_wl_only_maze
             = constants_.recovery_use_wirelength_maze
               && (deep_search || candidateIndex < keep / 2)
-              && candidates[candidateIndex].hpwl
+              && candidate.hpwl
                      >= constants_.recovery_wl_only_hpwl_threshold;
         if (enable_wl_only_maze) {
           GridGraphView<CostT> recoveryWlOnlyView;
@@ -881,9 +957,9 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
             = constants_.recovery_use_full_grid_maze
               && deep_search
               && candidateIndex < std::max(1, constants_.recovery_full_grid_top_n)
-              && candidates[candidateIndex].hpwl
+              && candidate.hpwl
                      >= constants_.recovery_full_grid_hpwl_threshold
-              && candidates[candidateIndex].stretch
+              && candidate.stretch
                      >= constants_.recovery_min_stretch;
         if (enable_full_grid_maze) {
           GridGraphView<CostT> fullGridWlOnlyView;

@@ -233,8 +233,14 @@ void MazeRoute::run()
                 const auto lhs = graph_.getPoint(temp->vertex);
                 const auto rhs = graph_.getPoint(temp->prev->vertex);
                 if (lhs.getLayerIdx() == rhs.getLayerIdx()) {
-                  wirelength += static_cast<uint64_t>(std::abs(lhs.x() - rhs.x())
-                                                      + std::abs(lhs.y() - rhs.y()));
+                  const int direction = lhs.y() == rhs.y() ? MetalLayer::H
+                                                           : MetalLayer::V;
+                  const int lo = std::min(lhs[direction], rhs[direction]);
+                  const int hi = std::max(lhs[direction], rhs[direction]);
+                  for (int edge_index = lo; edge_index < hi; edge_index++) {
+                    wirelength += static_cast<uint64_t>(
+                        grid_graph_->getEdgeLength(direction, edge_index));
+                  }
                 } else {
                   vias += std::abs(lhs.getLayerIdx() - rhs.getLayerIdx());
                 }
