@@ -81,18 +81,120 @@ std::string PatternRoutingNode::getPythonString(
 void PatternRoute::constructSteinerTree()
 {
   auto selectedAccessPoints = grid_graph_->selectAccessPoints(net_);
+  std::vector<AccessPoint> orderedAccessPoints(selectedAccessPoints.begin(),
+                                               selectedAccessPoints.end());
+  std::sort(orderedAccessPoints.begin(),
+            orderedAccessPoints.end(),
+            [](const AccessPoint& lhs, const AccessPoint& rhs) {
+              if (lhs.point.x() != rhs.point.x()) {
+                return lhs.point.x() < rhs.point.x();
+              }
+              if (lhs.point.y() != rhs.point.y()) {
+                return lhs.point.y() < rhs.point.y();
+              }
+              if (lhs.layers.low() != rhs.layers.low()) {
+                return lhs.layers.low() < rhs.layers.low();
+              }
+              return lhs.layers.high() < rhs.layers.high();
+            });
 
-  const int degree = selectedAccessPoints.size();
+  const int degree = orderedAccessPoints.size();
   if (degree == 1) {
-    const auto& accessPoint = *selectedAccessPoints.begin();
+    const auto& accessPoint = orderedAccessPoints.front();
     steiner_tree_ = std::make_shared<SteinerTreeNode>(accessPoint.point,
                                                       accessPoint.layers);
     return;
   }
 
+  // Radical topology switch for large nets:
+  // build a Prim-MST over pin access points instead of a FLUTE RSMT.
+  if (degree >= constants_.mst_topology_pin_threshold) {
+    const auto& box = net_->getBoundingBox();
+    const PointT boxCenter(box.cx(), box.cy());
+    int rootIndex = 0;
+    int rootDist = std::numeric_limits<int>::max();
+    for (int i = 0; i < degree; i++) {
+      const int dist = std::abs(orderedAccessPoints[i].point.x() - boxCenter.x())
+                       + std::abs(orderedAccessPoints[i].point.y()
+                                  - boxCenter.y());
+      if (dist < rootDist) {
+        rootDist = dist;
+        rootIndex = i;
+      }
+    }
+
+    auto edgeCost = [&](int lhs, int rhs) {
+      const PointT& u = orderedAccessPoints[lhs].point;
+      const PointT& v = orderedAccessPoints[rhs].point;
+      const int dx = std::abs(u.x() - v.x());
+      const int dy = std::abs(u.y() - v.y());
+      const CostT bendPenalty
+          = (dx > 0 && dy > 0) ? constants_.mst_bend_penalty : 0.0;
+      const CostT centerPull
+          = 0.05
+            * (std::abs(v.x() - boxCenter.x()) + std::abs(v.y() - boxCenter.y()));
+      return static_cast<CostT>(dx + dy) + bendPenalty + centerPull;
+    };
+
+    std::vector<int> parent(degree, -1);
+    std::vector<bool> inTree(degree, false);
+    std::vector<CostT> bestCost(degree, std::numeric_limits<CostT>::max());
+    bestCost[rootIndex] = 0;
+    for (int iter = 0; iter < degree; iter++) {
+      int current = -1;
+      CostT currentCost = std::numeric_limits<CostT>::max();
+      for (int i = 0; i < degree; i++) {
+        if (!inTree[i] && bestCost[i] < currentCost) {
+          currentCost = bestCost[i];
+          current = i;
+        }
+      }
+      if (current == -1) {
+        break;
+      }
+      inTree[current] = true;
+      for (int i = 0; i < degree; i++) {
+        if (inTree[i]) {
+          continue;
+        }
+        const CostT candidate = edgeCost(current, i);
+        if (candidate < bestCost[i]) {
+          bestCost[i] = candidate;
+          parent[i] = current;
+        }
+      }
+    }
+
+    for (int i = 0; i < degree; i++) {
+      if (i != rootIndex && parent[i] == -1) {
+        parent[i] = rootIndex;
+      }
+    }
+
+    std::vector<std::vector<int>> children(degree);
+    for (int i = 0; i < degree; i++) {
+      if (parent[i] != -1) {
+        children[parent[i]].push_back(i);
+      }
+    }
+
+    std::function<std::shared_ptr<SteinerTreeNode>(int)> buildTree
+        = [&](int nodeIndex) {
+            auto node = std::make_shared<SteinerTreeNode>(
+                orderedAccessPoints[nodeIndex].point,
+                orderedAccessPoints[nodeIndex].layers);
+            for (const int childIndex : children[nodeIndex]) {
+              node->addChild(buildTree(childIndex));
+            }
+            return node;
+          };
+    steiner_tree_ = buildTree(rootIndex);
+    return;
+  }
+
   std::vector<int> xs;
   std::vector<int> ys;
-  for (auto& accessPoint : selectedAccessPoints) {
+  for (const auto& accessPoint : orderedAccessPoints) {
     xs.push_back(accessPoint.point.x());
     ys.push_back(accessPoint.point.y());
   }
