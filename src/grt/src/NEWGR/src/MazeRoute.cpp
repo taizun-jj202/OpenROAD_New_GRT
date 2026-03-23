@@ -379,13 +379,44 @@ void MazeRoute::run()
   addSeed(min_y_seed);
   addSeed(max_y_seed);
 
+  std::vector<int> sorted_by_center;
+  sorted_by_center.reserve(num_pins);
+  for (int pin_index = 0; pin_index < num_pins; pin_index++) {
+    sorted_by_center.push_back(pin_index);
+  }
+  std::sort(sorted_by_center.begin(),
+            sorted_by_center.end(),
+            [&](const int lhs, const int rhs) {
+              const PointT lhs_point = graph_.getPseudoPin(lhs).point;
+              const PointT rhs_point = graph_.getPseudoPin(rhs).point;
+              const int lhs_dist = std::abs(lhs_point.x() - center.x())
+                                   + std::abs(lhs_point.y() - center.y());
+              const int rhs_dist = std::abs(rhs_point.x() - center.x())
+                                   + std::abs(rhs_point.y() - center.y());
+              if (lhs_dist != rhs_dist) {
+                return lhs_dist < rhs_dist;
+              }
+              return lhs < rhs;
+            });
+  for (const int seed : sorted_by_center) {
+    addSeed(seed);
+  }
+
+  std::vector<int> sorted_by_far = sorted_by_center;
+  std::reverse(sorted_by_far.begin(), sorted_by_far.end());
+  for (const int seed : sorted_by_far) {
+    addSeed(seed);
+  }
+
   int max_seeds = 1;
-  if (num_pins >= 10) {
-    max_seeds = 4;
-  } else if (num_pins >= 6) {
-    max_seeds = 3;
-  } else if (num_pins >= 4) {
-    max_seeds = 2;
+  if (num_pins <= 16) {
+    max_seeds = num_pins;
+  } else if (num_pins <= 32) {
+    max_seeds = 12;
+  } else if (num_pins <= 64) {
+    max_seeds = 8;
+  } else {
+    max_seeds = 6;
   }
   if (max_seeds < static_cast<int>(seeds.size())) {
     seeds.resize(max_seeds);

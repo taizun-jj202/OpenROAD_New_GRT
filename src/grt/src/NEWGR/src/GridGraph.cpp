@@ -449,37 +449,6 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   std::vector<int> selected_indices(pin_access_points.size(), -1);
   std::vector<PointT> selected_points(pin_access_points.size(), PointT(0, 0));
 
-  // First pass: accessibility-first selection near net center.
-  for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
-    const auto& access_points = pin_access_points[pin_index];
-    int best_index = -1;
-    int best_accessibility = -1;
-    int best_center_dist = std::numeric_limits<int>::max();
-    for (int index = 0; index < access_points.size(); index++) {
-      const GRPoint& point = access_points[index];
-      const int accessibility = getAccessibility(point);
-      const int center_dist
-          = std::abs(net_center.x() - point.x()) + std::abs(net_center.y() - point.y());
-      if (accessibility > best_accessibility
-          || (accessibility == best_accessibility
-              && center_dist < best_center_dist)) {
-        best_index = index;
-        best_accessibility = accessibility;
-        best_center_dist = center_dist;
-      }
-    }
-
-    if (best_accessibility <= 0) {
-      logger_->warn(utl::GRT, 7001, "pin is hard to access.");
-    }
-    if (best_index >= 0) {
-      selected_indices[pin_index] = best_index;
-      selected_points[pin_index] = access_points[best_index];
-    }
-  }
-
-  // FastRoute-style topology shaping: iteratively tighten AP choices to reduce
-  // net span while preserving accessibility preference.
   auto evaluateHpwl = [&](const int pin_to_replace, const GRPoint& replacement) {
     int min_x = std::numeric_limits<int>::max();
     int max_x = std::numeric_limits<int>::min();
@@ -512,7 +481,95 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     return (max_x - min_x) + (max_y - min_y);
   };
 
-  const int max_refine_passes = 5;
+  auto evaluateMstWire = [&](const int pin_to_replace,
+                             const GRPoint& replacement) {
+    std::vector<PointT> points;
+    points.reserve(pin_access_points.size());
+    for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
+      if (pin_index == pin_to_replace) {
+        points.emplace_back(replacement.x(), replacement.y());
+        continue;
+      }
+      const int selected_index = selected_indices[pin_index];
+      if (selected_index < 0) {
+        continue;
+      }
+      const auto& point = pin_access_points[pin_index][selected_index];
+      points.emplace_back(point.x(), point.y());
+    }
+    if (points.size() <= 1) {
+      return 0;
+    }
+
+    const int n = points.size();
+    std::vector<int> best(n, std::numeric_limits<int>::max());
+    std::vector<bool> used(n, false);
+    best[0] = 0;
+    int total = 0;
+    for (int iter = 0; iter < n; iter++) {
+      int v = -1;
+      int best_cost = std::numeric_limits<int>::max();
+      for (int i = 0; i < n; i++) {
+        if (!used[i] && best[i] < best_cost) {
+          best_cost = best[i];
+          v = i;
+        }
+      }
+      if (v < 0) {
+        break;
+      }
+      used[v] = true;
+      total += best[v];
+      for (int u = 0; u < n; u++) {
+        if (used[u]) {
+          continue;
+        }
+        const int dist = std::abs(points[v].x() - points[u].x())
+                         + std::abs(points[v].y() - points[u].y());
+        if (dist < best[u]) {
+          best[u] = dist;
+        }
+      }
+    }
+    return total;
+  };
+
+  // First pass: keep accessibility but bias toward compact net shape.
+  for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
+    const auto& access_points = pin_access_points[pin_index];
+    int best_index = -1;
+    int best_accessibility = -1;
+    int64_t best_score = std::numeric_limits<int64_t>::max();
+    for (int index = 0; index < access_points.size(); index++) {
+      const GRPoint& point = access_points[index];
+      const int accessibility = getAccessibility(point);
+      const int center_dist
+          = std::abs(net_center.x() - point.x()) + std::abs(net_center.y() - point.y());
+      const int hpwl = evaluateHpwl(pin_index, point);
+      const int mst_wire = evaluateMstWire(pin_index, point);
+      const int64_t score = static_cast<int64_t>(hpwl) * 4096
+                            + static_cast<int64_t>(mst_wire) * 1024
+                            + static_cast<int64_t>(center_dist) * 16;
+      if (accessibility > best_accessibility
+          || (accessibility == best_accessibility && score < best_score)) {
+        best_index = index;
+        best_accessibility = accessibility;
+        best_score = score;
+      }
+    }
+
+    if (best_accessibility <= 0) {
+      logger_->warn(utl::GRT, 7001, "pin is hard to access.");
+    }
+    if (best_index >= 0) {
+      selected_indices[pin_index] = best_index;
+      selected_points[pin_index] = access_points[best_index];
+    }
+  }
+
+  // FastRoute-style topology shaping with SPRoute-like accessibility guardband:
+  // allow at most one accessibility level drop to obtain shorter trees.
+  const int max_refine_passes = 7;
   for (int pass = 0; pass < max_refine_passes; pass++) {
     std::vector<int> xs;
     std::vector<int> ys;
@@ -539,33 +596,62 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       if (access_points.empty()) {
         continue;
       }
+
+      int max_pin_accessibility = -1;
+      for (const auto& point : access_points) {
+        max_pin_accessibility = std::max(max_pin_accessibility, getAccessibility(point));
+      }
+      const int min_allowed_accessibility = std::max(0, max_pin_accessibility - 1);
+
       int best_index = selected_indices[pin_index];
-      int best_accessibility = -1;
+      int best_accessibility = std::numeric_limits<int>::min();
       int best_hpwl = std::numeric_limits<int>::max();
-      int best_median_dist = std::numeric_limits<int>::max();
-      int best_center_dist = std::numeric_limits<int>::max();
+      int best_mst_wire = std::numeric_limits<int>::max();
+      int64_t best_score = std::numeric_limits<int64_t>::max();
       for (int index = 0; index < access_points.size(); index++) {
         const GRPoint& point = access_points[index];
         const int accessibility = getAccessibility(point);
+        if (accessibility < min_allowed_accessibility) {
+          continue;
+        }
         const int hpwl = evaluateHpwl(pin_index, point);
+        const int mst_wire = evaluateMstWire(pin_index, point);
         const int median_dist
             = std::abs(median_x - point.x()) + std::abs(median_y - point.y());
         const int center_dist
             = std::abs(net_center.x() - point.x()) + std::abs(net_center.y() - point.y());
-        if (accessibility > best_accessibility
-            || (accessibility == best_accessibility && hpwl < best_hpwl)
-            || (accessibility == best_accessibility && hpwl == best_hpwl
-                && median_dist < best_median_dist)
-            || (accessibility == best_accessibility && hpwl == best_hpwl
-                && median_dist == best_median_dist
-                && center_dist < best_center_dist)) {
+        const int64_t score = static_cast<int64_t>(hpwl) * 4096
+                              + static_cast<int64_t>(mst_wire) * 1024
+                              + static_cast<int64_t>(median_dist) * 32
+                              + static_cast<int64_t>(center_dist) * 8;
+        if (score < best_score
+            || (score == best_score && accessibility > best_accessibility)
+            || (score == best_score && accessibility == best_accessibility
+                && hpwl < best_hpwl)
+            || (score == best_score && accessibility == best_accessibility
+                && hpwl == best_hpwl && mst_wire < best_mst_wire)) {
           best_index = index;
           best_accessibility = accessibility;
           best_hpwl = hpwl;
-          best_median_dist = median_dist;
-          best_center_dist = center_dist;
+          best_mst_wire = mst_wire;
+          best_score = score;
         }
       }
+
+      if (best_index < 0) {
+        for (int index = 0; index < access_points.size(); index++) {
+          const GRPoint& point = access_points[index];
+          const int accessibility = getAccessibility(point);
+          const int hpwl = evaluateHpwl(pin_index, point);
+          if (accessibility > best_accessibility
+              || (accessibility == best_accessibility && hpwl < best_hpwl)) {
+            best_index = index;
+            best_accessibility = accessibility;
+            best_hpwl = hpwl;
+          }
+        }
+      }
+
       if (best_index >= 0 && best_index != selected_indices[pin_index]) {
         selected_indices[pin_index] = best_index;
         selected_points[pin_index] = access_points[best_index];
