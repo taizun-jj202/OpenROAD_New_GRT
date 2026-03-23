@@ -29,9 +29,9 @@ class BoxT;
 
 struct Constants
 {
-  double weight_wire_length = 1.0;
-  double weight_via_number = 0.8;
-  double weight_short_area = 240.0;
+  double weight_wire_length = 2.2;
+  double weight_via_number = 0.45;
+  double weight_short_area = 320.0;
 
   int min_routing_layer = 1;
 
@@ -41,19 +41,19 @@ struct Constants
   double max_detour_ratio = 0.25;
   int target_detour_count = 20;
 
-  double via_multiplier = 0.85;
-  double layer_depth_wire_penalty = 0.20;
-  double layer_depth_via_penalty = 0.35;
+  double via_multiplier = 1.25;
+  double layer_depth_wire_penalty = 0.12;
+  double layer_depth_via_penalty = 0.70;
   double layer_change_penalty = 0.75;
 
   int mst_topology_pin_threshold = 7;
   double mst_bend_penalty = 3.0;
   int hub_topology_pin_threshold = 10;
-  int pin_access_layer_extension = 1;
+  int pin_access_layer_extension = 0;
   bool enable_early_detour_stage = false;
 
-  double maze_logistic_slope = 0.5;
-  int maze_base_interval = 5;
+  double maze_logistic_slope = 1.0;
+  int maze_base_interval = 4;
   int maze_min_interval = 2;
   int global_rebalance_rounds = 1;
   bool enable_critical_compaction_stage = true;

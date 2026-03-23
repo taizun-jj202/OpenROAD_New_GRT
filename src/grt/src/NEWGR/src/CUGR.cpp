@@ -256,8 +256,26 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       patternRoute.run();
 
       const auto& candidateTree = net->getRoutingTree();
-      const RouteScore candidateScore
-          = scoreRouteTree(candidateTree, *grid_graph_, constants_);
+      const int pinCount = net->getNumPins();
+      const double hp = std::max(net->getBoundingBox().hp(), 1);
+      double wireWeight = constants_.weight_wire_length;
+      double viaWeight = constants_.weight_via_number;
+      double overflowWeight = constants_.weight_short_area;
+      // Large nets dominate total wirelength; bias candidate selection to
+      // compact geometry even at moderate via cost.
+      if (pinCount >= 8) {
+        wireWeight *= 1.6;
+        viaWeight *= 0.55;
+      }
+      if (hp >= 120.0) {
+        wireWeight *= 1.35;
+        overflowWeight *= 1.20;
+      }
+      const RouteScore candidateScore = scoreRouteTree(candidateTree,
+                                                       *grid_graph_,
+                                                       wireWeight,
+                                                       viaWeight,
+                                                       overflowWeight);
       if (candidateScore.objective < bestScore.objective) {
         bestScore = candidateScore;
         bestTree = candidateTree;
