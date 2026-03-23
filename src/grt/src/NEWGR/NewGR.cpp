@@ -236,6 +236,34 @@ int64_t maxInterleavedViaIncrease(int pin_count)
   return 7;
 }
 
+uint64_t minRadicalRefineWirelengthGain(int pin_count)
+{
+  if (pin_count <= 4) {
+    return 36;
+  }
+  if (pin_count <= 12) {
+    return 120;
+  }
+  if (pin_count <= 24) {
+    return 300;
+  }
+  return 720;
+}
+
+int64_t maxRadicalRefineViaIncrease(int pin_count)
+{
+  if (pin_count <= 4) {
+    return 2;
+  }
+  if (pin_count <= 12) {
+    return 3;
+  }
+  if (pin_count <= 24) {
+    return 4;
+  }
+  return 6;
+}
+
 bool shouldSwapToFastRoute(const RouteScore& newgr_score,
                            const RouteScore& fastroute_score,
                            int pin_count)
@@ -1408,6 +1436,239 @@ NetRouteMap buildWirelengthSweepHybrid(
   return hybrid_routes;
 }
 
+struct RadicalRefineStats
+{
+  uint64_t replaced_with_donor{0};
+  uint64_t added_missing_nets{0};
+  uint64_t considered_nets{0};
+  uint64_t candidate_pool_size{0};
+  uint64_t skipped_by_via_guard{0};
+  uint64_t skipped_by_layer_guard{0};
+  uint64_t skipped_by_budget_guard{0};
+  uint64_t consumed_wl_gain{0};
+};
+
+NetRouteMap buildRadicalRefineHybrid(
+    const NetRouteMap& base_routes,
+    const NetRouteMap& donor_routes,
+    const std::map<odb::dbNet*, Net*>& db_net_map,
+    uint64_t base_total_vias,
+    uint64_t base_low_layer_wl,
+    RadicalRefineStats& stats)
+{
+  NetRouteMap hybrid_routes = base_routes;
+
+  struct Candidate
+  {
+    odb::dbNet* db_net{nullptr};
+    const GRoute* donor_route{nullptr};
+    int pin_count{0};
+    int64_t wl_gain{0};
+    int64_t via_increase{0};
+    int64_t via_drop{0};
+    int64_t low_layer_delta{0};
+    int center_x{0};
+    int64_t priority{0};
+  };
+
+  std::vector<Candidate> candidates;
+  candidates.reserve(donor_routes.size());
+
+  for (const auto& [db_net, donor_route] : donor_routes) {
+    if (donor_route.empty()) {
+      continue;
+    }
+    const auto net_it = db_net_map.find(db_net);
+    if (net_it == db_net_map.end() || net_it->second == nullptr) {
+      continue;
+    }
+
+    const int pin_count = std::max(1, net_it->second->getNumPins());
+    auto base_it = hybrid_routes.find(db_net);
+    if (base_it == hybrid_routes.end() || base_it->second.empty()) {
+      hybrid_routes[db_net] = donor_route;
+      ++stats.added_missing_nets;
+      continue;
+    }
+
+    const RouteScore base_score = computeRouteScore(base_it->second);
+    const RouteScore donor_score = computeRouteScore(donor_route);
+    ++stats.considered_nets;
+    if (base_score.segments == 0 || donor_score.segments == 0
+        || donor_score.wirelength >= base_score.wirelength) {
+      continue;
+    }
+
+    const int64_t wl_gain = static_cast<int64_t>(base_score.wirelength)
+                            - static_cast<int64_t>(donor_score.wirelength);
+    const int64_t via_increase = static_cast<int64_t>(donor_score.vias)
+                                 - static_cast<int64_t>(base_score.vias);
+    const int64_t via_drop = static_cast<int64_t>(base_score.vias)
+                             - static_cast<int64_t>(donor_score.vias);
+    const int64_t via_increase_limit
+        = maxRadicalRefineViaIncrease(pin_count)
+          + ((pin_count <= 20) ? 1 : ((pin_count <= 40) ? 2 : 3));
+    if (via_increase > via_increase_limit) {
+      ++stats.skipped_by_via_guard;
+      continue;
+    }
+
+    const RouteLayerUsage base_usage = analyzeRouteLayerUsage(base_it->second);
+    const RouteLayerUsage donor_usage = analyzeRouteLayerUsage(donor_route);
+    const int64_t low_layer_delta
+        = static_cast<int64_t>(donor_usage.low_layer_wl)
+          - static_cast<int64_t>(base_usage.low_layer_wl);
+    if (low_layer_delta
+        > std::max<int64_t>(
+               820, wl_gain * 4 + static_cast<int64_t>(pin_count * 36))) {
+      ++stats.skipped_by_layer_guard;
+      continue;
+    }
+    const uint64_t min_gain = minRadicalRefineWirelengthGain(pin_count);
+    if (wl_gain < static_cast<int64_t>(min_gain)
+        && !(via_drop > 0 && via_increase <= 0 && low_layer_delta <= 0)) {
+      continue;
+    }
+    if (via_increase > 0
+        && wl_gain
+               < via_increase * 150 + std::max<int64_t>(0, low_layer_delta) / 8
+                     + static_cast<int64_t>(90)) {
+      ++stats.skipped_by_via_guard;
+      continue;
+    }
+
+    const int64_t via_bonus = std::max<int64_t>(0, via_drop) * 50;
+    const int64_t via_penalty = std::max<int64_t>(0, via_increase) * 320;
+    const int64_t low_layer_penalty = std::max<int64_t>(0, low_layer_delta) / 5;
+    const int64_t low_layer_bonus = std::max<int64_t>(0, -low_layer_delta) / 12;
+    const int64_t fanout_penalty = (pin_count > 32) ? pin_count * 4 : 0;
+    const int64_t priority
+        = wl_gain * 3 + via_bonus - via_penalty - low_layer_penalty
+          + low_layer_bonus - fanout_penalty;
+    candidates.push_back({db_net,
+                          &donor_route,
+                          pin_count,
+                          wl_gain,
+                          via_increase,
+                          via_drop,
+                          low_layer_delta,
+                          (donor_usage.min_x + donor_usage.max_x) / 2,
+                          priority});
+  }
+
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const Candidate& lhs, const Candidate& rhs) {
+              return std::make_tuple(lhs.priority,
+                                     lhs.wl_gain,
+                                     std::max<int64_t>(0, lhs.via_drop),
+                                     -std::max<int64_t>(0, lhs.via_increase),
+                                     -std::max<int64_t>(0, lhs.low_layer_delta))
+                     > std::make_tuple(rhs.priority,
+                                       rhs.wl_gain,
+                                       std::max<int64_t>(0, rhs.via_drop),
+                                       -std::max<int64_t>(0, rhs.via_increase),
+                                       -std::max<int64_t>(0, rhs.low_layer_delta));
+            });
+
+  stats.candidate_pool_size = candidates.size();
+  const size_t swap_limit = std::min<size_t>(
+      1900, std::max<size_t>(220, base_routes.size() / 9));
+  const int64_t via_increase_budget = std::max<int64_t>(
+      360, static_cast<int64_t>(base_total_vias / 300));
+  const int64_t low_layer_growth_budget = std::max<int64_t>(
+      8600000, static_cast<int64_t>(base_low_layer_wl / 6));
+  const uint64_t base_wirelength = computeRouteScore(base_routes).wirelength;
+  const uint64_t wl_gain_target = std::max<uint64_t>(
+      6400000, base_wirelength / 120);
+  const size_t min_swaps_before_stop = std::max<size_t>(96, swap_limit / 5);
+
+  int min_center_x = 0;
+  int max_center_x = 0;
+  if (!candidates.empty()) {
+    min_center_x = candidates.front().center_x;
+    max_center_x = candidates.front().center_x;
+    for (const Candidate& candidate : candidates) {
+      min_center_x = std::min(min_center_x, candidate.center_x);
+      max_center_x = std::max(max_center_x, candidate.center_x);
+    }
+  }
+  const int bucket_count = std::min<int>(
+      18, std::max<int>(6, static_cast<int>(candidates.size() / 140) + 6));
+  std::vector<std::vector<size_t>> buckets(bucket_count);
+  for (size_t idx = 0; idx < candidates.size(); ++idx) {
+    int bucket = 0;
+    if (max_center_x > min_center_x) {
+      const int64_t numer = static_cast<int64_t>(candidates[idx].center_x - min_center_x)
+                            * bucket_count;
+      bucket = static_cast<int>(numer / (max_center_x - min_center_x + 1));
+      if (bucket >= bucket_count) {
+        bucket = bucket_count - 1;
+      }
+    }
+    buckets[bucket].push_back(idx);
+  }
+
+  std::vector<size_t> cursor(bucket_count, 0);
+  int64_t consumed_via_increase = 0;
+  int64_t consumed_low_layer_growth = 0;
+  uint64_t consumed_wl_gain = 0;
+  int start_bucket = 0;
+  while (stats.replaced_with_donor < swap_limit) {
+    bool consumed_any = false;
+    for (int shift = 0; shift < bucket_count; ++shift) {
+      const int bucket = (start_bucket + shift) % bucket_count;
+      if (cursor[bucket] >= buckets[bucket].size()) {
+        continue;
+      }
+      consumed_any = true;
+      const Candidate& candidate = candidates[buckets[bucket][cursor[bucket]++]];
+      const int64_t via_increase = std::max<int64_t>(0, candidate.via_increase);
+      const int64_t low_layer_delta = std::max<int64_t>(0, candidate.low_layer_delta);
+      if (via_increase > 0
+          && candidate.wl_gain
+                 < via_increase * 120 + low_layer_delta / 7
+                       + static_cast<int64_t>(70)) {
+        ++stats.skipped_by_via_guard;
+        continue;
+      }
+      if (low_layer_delta > 0
+          && candidate.wl_gain
+                 < low_layer_delta / 7 + static_cast<int64_t>(120)) {
+        ++stats.skipped_by_layer_guard;
+        continue;
+      }
+      if (consumed_via_increase + via_increase > via_increase_budget
+          || consumed_low_layer_growth + low_layer_delta > low_layer_growth_budget) {
+        ++stats.skipped_by_budget_guard;
+        continue;
+      }
+      hybrid_routes[candidate.db_net] = *candidate.donor_route;
+      consumed_via_increase += via_increase;
+      consumed_low_layer_growth += low_layer_delta;
+      consumed_wl_gain += static_cast<uint64_t>(std::max<int64_t>(0, candidate.wl_gain));
+      ++stats.replaced_with_donor;
+      if (stats.replaced_with_donor >= swap_limit
+          || (consumed_wl_gain >= wl_gain_target
+              && stats.replaced_with_donor >= min_swaps_before_stop)) {
+        break;
+      }
+    }
+    if (stats.replaced_with_donor >= swap_limit
+        || (consumed_wl_gain >= wl_gain_target
+            && stats.replaced_with_donor >= min_swaps_before_stop)) {
+      break;
+    }
+    if (!consumed_any) {
+      break;
+    }
+    start_bucket = (start_bucket + 1) % bucket_count;
+  }
+
+  stats.consumed_wl_gain = consumed_wl_gain;
+  return hybrid_routes;
+}
+
 bool isBetterRoute(int overflow_a,
                    const RouteScore& score_a,
                    int overflow_b,
@@ -1619,6 +1880,64 @@ bool shouldPreferWirelengthSweepHybrid(int incumbent_overflow,
   return true;
 }
 
+bool shouldPreferRadicalRefineHybrid(int incumbent_overflow,
+                                     const RouteScore& incumbent_score,
+                                     uint64_t incumbent_low_layer_wl,
+                                     int candidate_overflow,
+                                     const RouteScore& candidate_score,
+                                     uint64_t candidate_low_layer_wl)
+{
+  if (candidate_overflow > incumbent_overflow) {
+    return false;
+  }
+  if (candidate_score.routed_nets < incumbent_score.routed_nets) {
+    return false;
+  }
+  if (candidate_overflow < incumbent_overflow) {
+    return true;
+  }
+  if (candidate_score.wirelength >= incumbent_score.wirelength) {
+    return false;
+  }
+
+  const uint64_t wl_gain = incumbent_score.wirelength - candidate_score.wirelength;
+  const int64_t via_increase = static_cast<int64_t>(candidate_score.vias)
+                               - static_cast<int64_t>(incumbent_score.vias);
+  const int64_t via_drop = static_cast<int64_t>(incumbent_score.vias)
+                           - static_cast<int64_t>(candidate_score.vias);
+  const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
+                                  - static_cast<int64_t>(incumbent_low_layer_wl);
+  const uint64_t min_wl_gain
+      = std::max<uint64_t>(120000, incumbent_score.wirelength / 9600);
+  if (wl_gain < min_wl_gain) {
+    return false;
+  }
+
+  const int64_t via_increase_budget
+      = std::max<int64_t>(360, static_cast<int64_t>(incumbent_score.vias / 300));
+  if (via_increase > via_increase_budget
+      && wl_gain
+             < static_cast<uint64_t>(via_increase * 460 + static_cast<int64_t>(180000))) {
+    return false;
+  }
+  const int64_t low_layer_budget = std::max<int64_t>(
+      2200000, static_cast<int64_t>(incumbent_low_layer_wl / 12));
+  if (via_increase <= 0 && via_drop > 0) {
+    if (low_layer_delta > low_layer_budget * 2
+        && wl_gain
+               < static_cast<uint64_t>(low_layer_delta / 4 + static_cast<int64_t>(240000))) {
+      return false;
+    }
+    return true;
+  }
+  if (low_layer_delta > low_layer_budget
+      && wl_gain
+             < static_cast<uint64_t>(low_layer_delta / 4 + static_cast<int64_t>(220000))) {
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
@@ -1715,6 +2034,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = computeRouteScore(extreme_sweep_hybrid);
     const uint64_t extreme_sweep_low_layer_wl
         = computeLowLayerWirelength(extreme_sweep_hybrid);
+    RadicalRefineStats radical_refine_stats;
+    NetRouteMap radical_refine_hybrid = buildRadicalRefineHybrid(
+        extreme_sweep_hybrid,
+        newgr_backbone_hybrid,
+        grouter_->db_net_map_,
+        extreme_sweep_score.vias,
+        extreme_sweep_low_layer_wl,
+        radical_refine_stats);
+    const RouteScore radical_refine_score
+        = computeRouteScore(radical_refine_hybrid);
+    const uint64_t radical_refine_low_layer_wl
+        = computeLowLayerWirelength(radical_refine_hybrid);
 
     logger_->info(utl::GRT,
                   6006,
@@ -1807,6 +2138,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   extreme_sweep_stats.skipped_by_layer_guard,
                   extreme_sweep_stats.skipped_by_budget_guard,
                   extreme_sweep_stats.consumed_wl_gain);
+    logger_->info(utl::GRT,
+                  6013,
+                  "NEWGR radical refine summary: "
+                  "RADICAL_REFINE(wl={}, vias={}, low_wl={}, nets={}, donor_swap={}, "
+                  "add={}, cand={}, via_guard_skip={}, layer_guard_skip={}, "
+                  "budget_skip={}, wl_gain={})",
+                  radical_refine_score.wirelength,
+                  radical_refine_score.vias,
+                  radical_refine_low_layer_wl,
+                  radical_refine_score.routed_nets,
+                  radical_refine_stats.replaced_with_donor,
+                  radical_refine_stats.added_missing_nets,
+                  radical_refine_stats.candidate_pool_size,
+                  radical_refine_stats.skipped_by_via_guard,
+                  radical_refine_stats.skipped_by_layer_guard,
+                  radical_refine_stats.skipped_by_budget_guard,
+                  radical_refine_stats.consumed_wl_gain);
 
     // Detailed-route QoR has been more stable when FastRoute is used as the
     // default backbone, and NEWGR/hybrid are only used as overflow fallback.
@@ -1887,6 +2235,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               + extreme_sweep_stats.replaced_with_donor;
       selected_added_nets = sweep_stats.added_missing_nets
                             + extreme_sweep_stats.added_missing_nets;
+      used_fastroute_last_run_ = false;
+    }
+
+    if (shouldPreferRadicalRefineHybrid(best_overflow,
+                                        best_score,
+                                        best_low_layer_wl,
+                                        last_total_overflow_,
+                                        radical_refine_score,
+                                        radical_refine_low_layer_wl)) {
+      routes = std::move(radical_refine_hybrid);
+      best_score = radical_refine_score;
+      best_overflow = last_total_overflow_;
+      best_low_layer_wl = radical_refine_low_layer_wl;
+      selected_label = "FastRoute+NEWGR radical-refine";
+      selected_hybrid = true;
+      selected_swapped_nets = sweep_stats.replaced_with_donor
+                              + extreme_sweep_stats.replaced_with_donor
+                              + radical_refine_stats.replaced_with_donor;
+      selected_added_nets = sweep_stats.added_missing_nets
+                            + extreme_sweep_stats.added_missing_nets
+                            + radical_refine_stats.added_missing_nets;
       used_fastroute_last_run_ = false;
     }
 
