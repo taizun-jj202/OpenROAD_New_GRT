@@ -595,6 +595,9 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	int max_nets_per_part = 64;
 	galois::LargeArray<bool> done;
 	float astar_weight = 1.0;
+	// These are global accumulators in mysproute; reset per candidate run.
+	acc_count = 0;
+	n_small_undone = 0;
     done.allocateBlocked(numValidNets + 1);
     for (int i = 0; i < numValidNets; i++) {
       done[i] = false;
@@ -670,6 +673,19 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			LVIter = 3;
 			VIA = 3;
 			astar_weight = 0.95f;
+		} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_3D_SHORT) {
+			// Hybrid 3D-shortest mode:
+			// start with tighter boxes, but leave room for upper-layer escape.
+			ENLARGE = 34;
+			ESTEP1 = 6;
+			ESTEP2 = 5;
+			ESTEP3 = 4;
+			CSTEP1 = 1;
+			CSTEP2 = 1;
+			CSTEP3 = 1;
+			LVIter = 2;
+			VIA = 0;
+			astar_weight = 0.62f;
 		} else {
 			ENLARGE = 40;
 			ESTEP1 = 9;
@@ -738,6 +754,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			VIA = 1;
 		} else if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_DR_FOCUSED) {
 			VIA = 3;
+		} else if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_3D_SHORT) {
+			VIA = 0;
 		}
 		//viacost = VIA;
 		viacost = 0;
@@ -893,6 +911,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 					enlarge_limit = max(6, max(xGrid, yGrid) / 11);
 				} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_DR_FOCUSED) {
 					enlarge_limit = max(8, max(xGrid, yGrid) / 7);
+				} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_3D_SHORT) {
+					enlarge_limit = max(6, max(xGrid, yGrid) / 12);
 				} else {
 					enlarge_limit = max(7, max(xGrid, yGrid) / 9);
 				}
@@ -943,7 +963,18 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			
 			//galois::runtime::profileVtune( [&] (void) {
                 round_num = i;
-				switch(algo) {
+				Algo active_algo = algo;
+				// Mix SPRoute deterministic batching and FastRoute A* in one run:
+				// use a short deterministic phase to diffuse hotspots, then switch
+				// to low-cost A* for final WL refinement.
+				if (algo == Astar
+				    && newgr_capacity_profile == NEWGR_CAP_PROFILE_3D_SHORT
+				    && i <= 2
+				    && totalOverflow > 0) {
+					active_algo = DetPart_Astar_Local;
+				}
+
+				switch(active_algo) {
 					case FineGrain: {
 						printf("finegrain\n");
 						mazeRouteMSMD_finegrain_spinlock(i,enlarge, costheight, ripup_threshold,mazeedge_Threshold, !(i%3), cost_type);
@@ -1279,7 +1310,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 						break;
 					}
 					default: {
-						cout << " unkown algo: " << algo << endl;
+						cout << " unkown algo: " << active_algo << endl;
 						exit(1);
 					}
 				}

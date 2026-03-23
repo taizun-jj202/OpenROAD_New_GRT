@@ -141,6 +141,8 @@ const char* algoName(Algo algo)
 const char* capacityProfileName(int profile)
 {
   switch (profile) {
+    case NEWGR_CAP_PROFILE_3D_SHORT:
+      return "3D_SHORT";
     case NEWGR_CAP_PROFILE_WL_FOCUSED:
       return "WL_FOCUSED";
     case NEWGR_CAP_PROFILE_DR_FOCUSED:
@@ -310,16 +312,21 @@ NetRouteMap NewgrEngine::run()
     return candidate;
   };
 
-  // Three-way hybrid (SPRoute + FastRoute + CUGR-inspired balancing):
-  // 1) DR-focused DetPart_Astar_Local for routability-centric reserve.
-  // 2) WL-focused Astar for shortest-path preference.
-  // 3) Balanced Astar with moderate reserve and expansion.
+  // Hybrid portfolio (SPRoute + FastRoute + CUGR-inspired 3D balancing):
+  // 1) DR-focused deterministic partition pass to stabilize congestion.
+  // 2) 3D-shortest A* pass that explicitly promotes upper-layer shortcuts.
+  // 3) Pure WL-focused A* pass as a fallback.
+  // 4) Balanced A* pass for robustness on hard cases.
   std::vector<CandidateResult> candidates;
-  candidates.reserve(3);
+  candidates.reserve(4);
   candidates.push_back(run_candidate(Algo::DetPart_Astar_Local,
                                      520,
                                      NEWGR_CAP_PROFILE_DR_FOCUSED,
                                      "DetPart_DR"));
+  candidates.push_back(run_candidate(Algo::Astar,
+                                     760,
+                                     NEWGR_CAP_PROFILE_3D_SHORT,
+                                     "Astar_3DShort"));
   candidates.push_back(run_candidate(Algo::Astar,
                                      700,
                                      NEWGR_CAP_PROFILE_WL_FOCUSED,
@@ -334,20 +341,6 @@ NetRouteMap NewgrEngine::run()
     if (isBetterCandidate(candidates[i], best)) {
       best = candidates[i];
     }
-  }
-
-  const CandidateResult& last_candidate = candidates.back();
-  if (best.algo != last_candidate.algo
-      || best.capacity_profile != last_candidate.capacity_profile) {
-    logger_->info(
-        utl::GRT,
-        403,
-        "Re-running selected NEWGR candidate {} [{}] to keep congestion "
-        "state aligned with output guides.",
-        candidateName(best),
-        capacityProfileName(best.capacity_profile));
-    best = run_candidate(
-        best.algo, best.maze_rounds, best.capacity_profile, best.mode_name.c_str());
   }
 
   newgr_capacity_profile = best.capacity_profile;
