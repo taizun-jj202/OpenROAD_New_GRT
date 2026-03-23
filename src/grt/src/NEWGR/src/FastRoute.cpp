@@ -1635,10 +1635,42 @@ NetRouteMap FastRouteCore::run()
   // Wirelength recovery stage:
   // once the 2D solution is overflow-free, probe a few low-detour maze
   // configurations and keep only candidates that preserve zero overflow while
-  // reducing the total 2D usage.
+  // reducing the total 2D usage and bend count.
   if (past_cong == 0) {
+    auto count_planar_bends = [&]() {
+      int bends = 0;
+      for (const int netID : net_ids_) {
+        const auto& treeedges = sttrees_[netID].edges;
+        for (const TreeEdge& edge : treeedges) {
+          if (edge.len <= 0 || edge.route.routelen < 2) {
+            continue;
+          }
+          const auto& grids = edge.route.grids;
+          for (int idx = 1; idx < edge.route.routelen; idx++) {
+            const int dx0 = grids[idx].x - grids[idx - 1].x;
+            const int dy0 = grids[idx].y - grids[idx - 1].y;
+            const int dx1 = grids[idx + 1].x - grids[idx].x;
+            const int dy1 = grids[idx + 1].y - grids[idx].y;
+            if ((dx0 == 0 && dy0 == 0) || (dx1 == 0 && dy1 == 0)) {
+              continue;
+            }
+            const bool first_vertical = dx0 == 0;
+            const bool second_vertical = dx1 == 0;
+            if (first_vertical != second_vertical) {
+              bends++;
+            }
+          }
+        }
+      }
+      return bends;
+    };
+
     const int baseline_usage = tUsage;
+    const int baseline_bends = count_planar_bends();
     int best_usage = baseline_usage;
+    int best_bends = baseline_bends;
+    constexpr int bend_weight = 4;
+    int best_score = best_usage + bend_weight * best_bends;
     copyRS();
 
     struct WlProbeConfig
@@ -1653,7 +1685,10 @@ NetRouteMap FastRouteCore::run()
     };
 
     const int base_enlarge = std::max(6, std::min(enlarge_, x_grid_ / 3));
+    const int tight_enlarge = std::max(4, base_enlarge - 3);
+    const int wide_enlarge = std::min(base_enlarge + 10, std::max(10, x_grid_ / 2));
     const std::vector<WlProbeConfig> probes = {
+        {tight_enlarge, -1, 0, true, 3, 0, CostParams(0.20f, 1.5f, 3)},
         {base_enlarge, -1, 0, true, 2, 0, CostParams(0.25f, 2.0f, 4)},
         {std::min(base_enlarge + 4, std::max(8, x_grid_ / 2)),
          -1,
@@ -1668,7 +1703,8 @@ NetRouteMap FastRouteCore::run()
          true,
          1,
          0,
-         CostParams(0.50f, 3.0f, 6)}};
+         CostParams(0.50f, 3.0f, 6)},
+        {wide_enlarge, -1, 1, false, 2, 0, CostParams(0.30f, 2.0f, 4)}};
 
     int probe_iter = std::max(1, i);
     for (const WlProbeConfig& probe : probes) {
@@ -1691,20 +1727,32 @@ NetRouteMap FastRouteCore::run()
       int candidate_usage = 0;
       const int candidate_overflow
           = getOverflow2Dmaze(&candidate_max_overflow, &candidate_usage);
-      if (candidate_overflow == 0 && candidate_usage < best_usage) {
-        best_usage = candidate_usage;
-        copyRS();
+      if (candidate_overflow == 0) {
+        const int candidate_bends = count_planar_bends();
+        const int candidate_score = candidate_usage + bend_weight * candidate_bends;
+        const bool better_score = candidate_score < best_score;
+        const bool equal_score_better_usage
+            = candidate_score == best_score && candidate_usage < best_usage;
+        if (better_score || equal_score_better_usage) {
+          best_score = candidate_score;
+          best_usage = candidate_usage;
+          best_bends = candidate_bends;
+          copyRS();
+        }
       }
     }
 
     copyBR();
     past_cong = getOverflow2Dmaze(&maxOverflow, &tUsage);
-    if (verbose_ && best_usage < baseline_usage) {
+    if (verbose_ && best_score < baseline_usage + bend_weight * baseline_bends) {
       logger_->info(GNR,
                     6025,
-                    "Wirelength recovery reduced 2D usage from {} to {}.",
+                    "Wirelength recovery improved 2D usage/bends from "
+                    "{}/{} to {}/{}.",
                     baseline_usage,
-                    best_usage);
+                    baseline_bends,
+                    best_usage,
+                    best_bends);
     }
   }
 

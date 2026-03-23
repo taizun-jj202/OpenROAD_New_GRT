@@ -117,7 +117,7 @@ void adjustEdgeCapacity(GlobalRouter* grouter,
                         int layer,
                         float ratio)
 {
-  ratio = std::clamp(ratio, 0.05f, 1.0f);
+  ratio = std::clamp(ratio, 0.05f, 1.10f);
   FastRouteCore* core = grouter->fastroute();
   if (core == nullptr) {
     return;
@@ -142,7 +142,8 @@ void applySoftCapacityScaling(GlobalRouter* grouter,
                               float min_ratio_base = 0.50f,
                               float max_ratio_base = 0.92f,
                               float slope = 6.0f,
-                              float midpoint = 0.45f)
+                              float midpoint = 0.45f,
+                              float reclaim_boost = 0.06f)
 {
   Grid* grid = grouter->grid();
   if (normalized_rudy.empty() || grid == nullptr) {
@@ -164,12 +165,23 @@ void applySoftCapacityScaling(GlobalRouter* grouter,
                                  float slope,
                                  float midpoint,
                                  float min_ratio,
-                                 float max_ratio) {
+                                 float max_ratio,
+                                 float reclaim_boost) {
     normalized = std::clamp(normalized, 0.0f, 1.0f);
-    const float exponent = -slope * (normalized - midpoint);
+    const float exponent = slope * (normalized - midpoint);
     const float logistic = 1.0f / (1.0f + std::exp(exponent));
-    const float blend = min_ratio + (max_ratio - min_ratio) * logistic;
-    return std::clamp(blend, 0.05f, 0.99f);
+    float blend = min_ratio + (max_ratio - min_ratio) * logistic;
+
+    // FastRoute-style virtual-capacity reclamation:
+    // give low-congestion regions a small capacity credit to preserve
+    // shortest-path opportunities while hotspot edges stay constrained.
+    const float low_congestion_limit = std::max(0.05f, midpoint * 0.75f);
+    if (normalized < low_congestion_limit && reclaim_boost > 0.0f) {
+      const float coolness = 1.0f - (normalized / low_congestion_limit);
+      blend += reclaim_boost * std::clamp(coolness, 0.0f, 1.0f);
+    }
+
+    return std::clamp(blend, 0.05f, 1.10f);
   };
 
   const auto getNormalized = [&](int x, int y) {
@@ -191,7 +203,12 @@ void applySoftCapacityScaling(GlobalRouter* grouter,
       for (int x = 0; x < usable_x - 1; ++x) {
         const float normalized = 0.5f * (getNormalized(x, y) + getNormalized(x + 1, y));
         const float ratio
-            = logistic_ratio(normalized, slope, midpoint, min_ratio, max_ratio);
+            = logistic_ratio(normalized,
+                             slope,
+                             midpoint,
+                             min_ratio,
+                             max_ratio,
+                             reclaim_boost);
         adjustEdgeCapacity(grouter, x, y, x + 1, y, layer, ratio);
       }
     }
@@ -200,7 +217,12 @@ void applySoftCapacityScaling(GlobalRouter* grouter,
       for (int x = 0; x < usable_x; ++x) {
         const float normalized = 0.5f * (getNormalized(x, y) + getNormalized(x, y + 1));
         const float ratio
-            = logistic_ratio(normalized, slope, midpoint, min_ratio, max_ratio);
+            = logistic_ratio(normalized,
+                             slope,
+                             midpoint,
+                             min_ratio,
+                             max_ratio,
+                             reclaim_boost);
         adjustEdgeCapacity(grouter, x, y, x, y + 1, layer, ratio);
       }
     }
@@ -510,6 +532,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             int halo,
             float hotspot_ratio,
             float severity_weight,
+            float reclaim_boost,
             float perturb_pct,
             int seed,
             float critical_pct) {
@@ -531,6 +554,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                  max_base,
                  slope,
                  midpoint,
+                 reclaim_boost,
                  halo,
                  hotspot_ratio,
                  severity_weight]() {
@@ -541,7 +565,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                            min_base,
                                            max_base,
                                            slope,
-                                           midpoint);
+                                           midpoint,
+                                           reclaim_boost);
                   applyHotspotPenalties(grouter_,
                                         hotspots,
                                         min_routing_layer,
@@ -553,7 +578,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           return def;
         };
 
-  if (!normalized_rudy.empty()) {
+  const bool enable_softcap_scenarios
+      = !normalized_rudy.empty()
+        && (baseline.metrics.overflow_edges > 0
+            || baseline.metrics.near_capacity_edges > 200
+            || baseline.metrics.max_usage_ratio > 0.92);
+
+  if (enable_softcap_scenarios) {
     scenario_defs.push_back(make_soft_config("cugr-prob-strong",
                                              0.38f,
                                              0.86f,
@@ -562,6 +593,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                              2,
                                              0.52f,
                                              0.85f,
+                                             0.02f,
                                              0.0f,
                                              snapshot.seed,
                                              snapshot.critical_percentage));
@@ -574,6 +606,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                              2,
                                              0.58f,
                                              0.70f,
+                                             0.05f,
                                              0.0f,
                                              snapshot.seed,
                                              snapshot.critical_percentage));
@@ -586,6 +619,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                              1,
                                              0.68f,
                                              0.35f,
+                                             0.07f,
                                              0.0f,
                                              snapshot.seed,
                                              snapshot.critical_percentage));
@@ -598,6 +632,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                              2,
                                              0.60f,
                                              0.55f,
+                                             0.06f,
                                              3.5f,
                                              13,
                                              12.0f));
@@ -610,9 +645,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                              1,
                                              0.75f,
                                              0.20f,
+                                             0.08f,
                                              2.5f,
                                              5,
                                              8.0f));
+  } else if (!normalized_rudy.empty()) {
+    logger_->info(GNR,
+                  6008,
+                  "NEWGR skipping soft-capacity scenarios: baseline "
+                  "congestion is already low (overflow {}, hot edges {}, "
+                  "max ratio {:.2f}).",
+                  baseline.metrics.overflow_edges,
+                  baseline.metrics.near_capacity_edges,
+                  baseline.metrics.max_usage_ratio);
   }
 
   auto make_random_def = [&](int seed,
