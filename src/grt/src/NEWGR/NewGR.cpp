@@ -3056,6 +3056,118 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(spine_balance));
   }
 
+  if (has_best_wirelength) {
+    ScenarioResult collapse_router_minwl;
+    collapse_router_minwl.name = "collapse-router-minwl-fusion";
+    if (ScenarioResult* collapse = find_scenario_result("consensus-collapse-fusion")) {
+      collapse_router_minwl.routes = collapse->routes;
+    } else if (ScenarioResult* spine = find_scenario_result("router-spine-balance-fusion")) {
+      collapse_router_minwl.routes = spine->routes;
+    } else if (ScenarioResult* extreme = find_scenario_result("extreme-wirelength-stitch")) {
+      collapse_router_minwl.routes = extreme->routes;
+    } else {
+      collapse_router_minwl.routes = best_wirelength_routes;
+    }
+
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+
+    std::vector<const NetRouteMap*> broad_donors;
+    broad_donors.reserve(12);
+    for (const char* donor_name : {"cugr-router-donor",
+                                   "sproute-router-donor",
+                                   "router-spine-balance-fusion",
+                                   "stabilized-dr-fusion",
+                                   "consensus-collapse-fusion",
+                                   "extreme-wirelength-stitch",
+                                   "radical-shortpath-fusion",
+                                   "cross-router-wirelength-fusion",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting",
+                                   "sporder-shortest",
+                                   "baseline"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        broad_donors.push_back(&donor->routes);
+      }
+    }
+
+    int fused_swaps = applyRouterDonorMinWirelengthFusion(collapse_router_minwl.routes,
+                                                           broad_donors,
+                                                           tile_size,
+                                                           x_min,
+                                                           y_min,
+                                                           x_grids,
+                                                           y_grids,
+                                                           hotspot_map,
+                                                           std::max(tile_size / 8, 1),
+                                                           0.002,
+                                                           2,
+                                                           10,
+                                                           0.18,
+                                                           1.30,
+                                                           1.08,
+                                                           1.90);
+
+    std::vector<const NetRouteMap*> specialist_donors;
+    specialist_donors.reserve(10);
+    for (const char* donor_name : {"consensus-collapse-fusion",
+                                   "router-spine-balance-fusion",
+                                   "cross-router-wirelength-fusion",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting",
+                                   "cugr-router-donor",
+                                   "sproute-router-donor",
+                                   "wl-direct-focused",
+                                   "spatial-roundrobin-turbo",
+                                   "sporder-shortest"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        specialist_donors.push_back(&donor->routes);
+      }
+    }
+
+    fused_swaps += applyRouterDonorMinWirelengthFusion(collapse_router_minwl.routes,
+                                                        specialist_donors,
+                                                        tile_size,
+                                                        x_min,
+                                                        y_min,
+                                                        x_grids,
+                                                        y_grids,
+                                                        hotspot_map,
+                                                        1,
+                                                        0.0,
+                                                        4,
+                                                        14,
+                                                        0.26,
+                                                        1.80,
+                                                        1.15,
+                                                        2.15);
+
+    const int stabilized_swaps
+        = applyViaAwareStabilizationFusion(collapse_router_minwl.routes,
+                                           specialist_donors,
+                                           tile_size,
+                                           x_min,
+                                           y_min,
+                                           x_grids,
+                                           y_grids,
+                                           hotspot_map);
+
+    collapse_router_minwl.metrics = compute_metrics(collapse_router_minwl.routes);
+    logger_->info(
+        GNR,
+        6026,
+        "NEWGR scenario {} [collapse-router]: wirelength {:.0f} um, vias {}, fused nets {}, stabilized nets {}",
+        collapse_router_minwl.name,
+        collapse_router_minwl.metrics.wirelength_um,
+        collapse_router_minwl.metrics.via_count,
+        fused_swaps,
+        stabilized_swaps);
+    scenario_results.push_back(std::move(collapse_router_minwl));
+  }
+
   if (false && has_best_wirelength) {
     ScenarioResult longnet_fusion;
     longnet_fusion.name = "longnet-priority-fusion";
@@ -3473,10 +3585,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 final_result.metrics.wirelength_um,
                 final_result.metrics.via_count);
 
+  const bool collapse_style_solution = final_result.name == "consensus-collapse-fusion"
+                                       || final_result.name == "longnet-priority-fusion"
+                                       || final_result.name == "collapse-router-minwl-fusion";
   const bool apply_patching
       = final_result.name == "cugr-softcap-wirelength"
-        || final_result.name.find("fusion") != std::string::npos
-        || final_result.name.find("stitch") != std::string::npos;
+        || (!collapse_style_solution
+            && (final_result.name.find("fusion") != std::string::npos
+                || final_result.name.find("stitch") != std::string::npos));
   if (apply_patching) {
     applyCugrStyleGuidePatching(grouter_,
                                 final_result.routes,
