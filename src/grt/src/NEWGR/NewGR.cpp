@@ -12,6 +12,7 @@
 
 #include "FastRoute.h"
 #include "Grid.h"
+#include "Net.h"
 #include "grt/Rudy.h"
 #include "utl/Logger.h"
 
@@ -1380,38 +1381,173 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const int tile_size = grouter_->grid() != nullptr
                             ? std::max(grouter_->grid()->getTileSize(), 1)
                             : 1;
-  const RudyGrid radical_rudy = compute_current_rudy();
-  ScenarioResult radical = baseline;
-  radical.name = "baseline_rewired";
+  const RudyGrid baseline_rudy = compute_current_rudy();
 
+  // Candidate A: post-route geometric rewiring.
+  ScenarioResult rewired = baseline;
+  rewired.name = "baseline_rewired";
   applyLayerHoppingDetours(grouter_,
-                           radical.routes,
-                           radical_rudy,
+                           rewired.routes,
+                           baseline_rudy,
                            min_routing_layer,
                            max_routing_layer);
-  applyBraidedDetourWeave(grouter_, radical.routes, radical_rudy);
-  applyViaExcursionCollapse(radical.routes, std::max(10 * tile_size, 1));
-  applyGuideCompression(radical.routes, std::max(14 * tile_size, 1));
-  radical.metrics = compute_metrics(radical.routes);
-  const double delta_wl_um
-      = radical.metrics.wirelength_um - baseline.metrics.wirelength_um;
-  const long delta_vias = radical.metrics.via_count - baseline.metrics.via_count;
-  logger_->warn(
-      GNR,
-      6016,
-      "NEWGR radical single-pass: baseline {:.0f} um vias {}, "
-      "radical {:.0f} um vias {} (delta wl {:+.0f} um, delta vias {:+d}, "
-      "overflow {}).",
-      baseline.metrics.wirelength_um,
-      baseline.metrics.via_count,
-      radical.metrics.wirelength_um,
-      radical.metrics.via_count,
-      delta_wl_um,
-      delta_vias,
-      baseline.overflow);
+  applyBraidedDetourWeave(grouter_, rewired.routes, baseline_rudy);
+  applyViaExcursionCollapse(rewired.routes, std::max(10 * tile_size, 1));
+  applyGuideCompression(rewired.routes, std::max(14 * tile_size, 1));
+  rewired.metrics = compute_metrics(rewired.routes);
+
+  // Candidate B: reroute after aggressive RUDY/backbone capacity sculpting.
+  ScenarioResult sculpted = rewired;
+  sculpted.name = "field_sculpted";
+  bool sculpted_available = false;
+  try {
+    for (Net* net : nets) {
+      if (net != nullptr && net->getDbNet() != nullptr) {
+        grouter_->fastroute()->clearNetRoute(net->getDbNet());
+      }
+    }
+
+    const auto hotspots = extractTopRudyHotspots(baseline_rudy, 128);
+    const PlanarEdgeUsage baseline_usage
+        = computeNormalizedBackboneUsage(grouter_, baseline.routes);
+    applyAggressiveCapacityField(grouter_,
+                                 baseline_rudy,
+                                 hotspots,
+                                 min_routing_layer,
+                                 max_routing_layer,
+                                 0.55f,
+                                 0.16f,
+                                 0.18f,
+                                 1.34f,
+                                 0.48f,
+                                 true);
+    applyLayerPolarityField(grouter_,
+                            baseline_rudy,
+                            min_routing_layer,
+                            max_routing_layer,
+                            1.36f,
+                            0.24f,
+                            0.52f);
+    applyBackboneCapacityReinforcement(grouter_,
+                                       baseline_rudy,
+                                       baseline_usage,
+                                       min_routing_layer,
+                                       max_routing_layer,
+                                       0.45f,
+                                       1.50f,
+                                       1.55f);
+    applyHotspotPenalties(grouter_,
+                          hotspots,
+                          min_routing_layer,
+                          max_routing_layer,
+                          3,
+                          0.28f,
+                          0.82f);
+    applySoftCapacityScaling(grouter_,
+                             baseline_rudy,
+                             min_routing_layer,
+                             max_routing_layer,
+                             0.26f,
+                             0.92f,
+                             8.5f,
+                             0.52f);
+
+    sculpted = run_existing_state("field_sculpted", nets);
+    applyViaExcursionCollapse(sculpted.routes, std::max(6 * tile_size, 1));
+    applyGuideCompression(sculpted.routes, std::max(10 * tile_size, 1));
+    sculpted.metrics = compute_metrics(sculpted.routes);
+    sculpted_available = !sculpted.routes.empty();
+  } catch (...) {
+    logger_->warn(GNR,
+                  6019,
+                  "NEWGR field_sculpted candidate failed; reverting to "
+                  "baseline_rewired.");
+    sculpted = rewired;
+    sculpted.name = "field_sculpted_failed";
+  }
+
+  auto prefer_wirelength_then_vias = [](const ScenarioResult& lhs,
+                                        const ScenarioResult& rhs) {
+    if (lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
+      return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
+    }
+    if (lhs.metrics.via_count != rhs.metrics.via_count) {
+      return lhs.metrics.via_count < rhs.metrics.via_count;
+    }
+    return lhs.overflow < rhs.overflow;
+  };
+
+  ScenarioResult selected = rewired;
+  if (sculpted_available) {
+    selected = prefer_wirelength_then_vias(rewired, sculpted) ? rewired
+                                                               : sculpted;
+  }
+  auto has_planar_guide = [](const GRoute& route) {
+    for (const GSegment& segment : route) {
+      if (!segment.isVia()
+          && (segment.init_x != segment.final_x
+              || segment.init_y != segment.final_y)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  for (const auto& [db_net, baseline_route] : baseline.routes) {
+    auto selected_it = selected.routes.find(db_net);
+    if (selected_it == selected.routes.end()
+        || !has_planar_guide(selected_it->second)) {
+      selected.routes[db_net] = baseline_route;
+    }
+  }
+  selected.metrics = compute_metrics(selected.routes);
+
+  const double rewired_delta_wl
+      = rewired.metrics.wirelength_um - baseline.metrics.wirelength_um;
+  const long rewired_delta_vias
+      = rewired.metrics.via_count - baseline.metrics.via_count;
+  const double sculpted_delta_wl
+      = sculpted.metrics.wirelength_um - baseline.metrics.wirelength_um;
+  const long sculpted_delta_vias
+      = sculpted.metrics.via_count - baseline.metrics.via_count;
+  const double selected_delta_wl
+      = selected.metrics.wirelength_um - baseline.metrics.wirelength_um;
+  const long selected_delta_vias
+      = selected.metrics.via_count - baseline.metrics.via_count;
+
+  logger_->warn(GNR,
+                6016,
+                "NEWGR candidate {}: wl {:.0f} um vias {} (delta wl {:+.0f} "
+                "um, delta vias {:+d}, overflow {}).",
+                rewired.name,
+                rewired.metrics.wirelength_um,
+                rewired.metrics.via_count,
+                rewired_delta_wl,
+                rewired_delta_vias,
+                rewired.overflow);
+  logger_->warn(GNR,
+                6017,
+                "NEWGR candidate {}: wl {:.0f} um vias {} (delta wl {:+.0f} "
+                "um, delta vias {:+d}, overflow {}).",
+                sculpted.name,
+                sculpted.metrics.wirelength_um,
+                sculpted.metrics.via_count,
+                sculpted_delta_wl,
+                sculpted_delta_vias,
+                sculpted.overflow);
+  logger_->warn(GNR,
+                6018,
+                "NEWGR selected {} over baseline {:.0f} um vias {} -> {:.0f} "
+                "um vias {} (delta wl {:+.0f} um, delta vias {:+d}).",
+                selected.name,
+                baseline.metrics.wirelength_um,
+                baseline.metrics.via_count,
+                selected.metrics.wirelength_um,
+                selected.metrics.via_count,
+                selected_delta_wl,
+                selected_delta_vias);
 
   restore_snapshot(snapshot);
-  return radical.routes;
+  return selected.routes;
 }
 
 }  // namespace grt
