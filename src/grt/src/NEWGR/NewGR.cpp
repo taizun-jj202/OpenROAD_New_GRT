@@ -3425,16 +3425,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
 
-  if (dr_aware_choice != nullptr && dr_aware_choice->name != final_result.name) {
-    final_result = *dr_aware_choice;
-    logger_->info(GNR,
-                  6025,
-                  "NEWGR DR-aware override '{}': wirelength {:.0f} um, vias {}",
-                  final_result.name,
-                  final_result.metrics.wirelength_um,
-                  final_result.metrics.via_count);
-  }
-
   const ScenarioDefinition* replay_def = nullptr;
   if (best_iter->name != scenario_results.back().name) {
     if (best_iter->name == "baseline") {
@@ -3462,6 +3452,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         && stabilized->metrics.via_count < final_result.metrics.via_count) {
       final_result = *stabilized;
     }
+  }
+
+  // Apply DR-aware decision after replay/fallback logic so it is not
+  // accidentally overwritten by scenario re-execution.
+  if (dr_aware_choice != nullptr && dr_aware_choice->name != final_result.name) {
+    final_result = *dr_aware_choice;
+    logger_->info(GNR,
+                  6025,
+                  "NEWGR DR-aware override '{}': wirelength {:.0f} um, vias {}",
+                  final_result.name,
+                  final_result.metrics.wirelength_um,
+                  final_result.metrics.via_count);
   }
 
   logger_->info(GNR,
