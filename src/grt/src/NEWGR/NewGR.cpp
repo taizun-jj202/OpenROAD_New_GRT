@@ -3374,6 +3374,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
 
+  // Detailed routing can penalize ultra-aggressive fusion topologies with
+  // extra late-stage detours. If the stabilized candidate is close in
+  // wirelength, prefer it to reduce guide volatility.
+  if (ScenarioResult* stabilized = find_scenario_result("stabilized-dr-fusion")) {
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const long wl_window = std::max<long>(12L * tile_size, 1L);
+    if (stabilized->metrics.wirelength_dbu <= final_result.metrics.wirelength_dbu + wl_window
+        && stabilized->metrics.via_count < final_result.metrics.via_count) {
+      final_result = *stabilized;
+    }
+  }
+
   logger_->info(GNR,
                 6007,
                 "NEWGR best scenario '{}': wirelength {:.0f} um, vias {}",
