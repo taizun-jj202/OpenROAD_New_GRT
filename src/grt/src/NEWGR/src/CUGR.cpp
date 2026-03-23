@@ -40,7 +40,9 @@ struct RouteScore
 
 RouteScore scoreRouteTree(const std::shared_ptr<GRTreeNode>& tree,
                           const GridGraph& graph,
-                          const Constants& constants)
+                          const double wireWeight,
+                          const double viaWeight,
+                          const double overflowWeight)
 {
   RouteScore score;
   if (!tree) {
@@ -72,10 +74,46 @@ RouteScore scoreRouteTree(const std::shared_ptr<GRTreeNode>& tree,
   score.wire_length
       = static_cast<double>(wire_length_dbu) / std::max(graph.getM2Pitch(), 1);
   score.overflow_edges = graph.checkOverflow(tree);
-  score.objective = constants.weight_wire_length * score.wire_length
-                    + constants.weight_via_number * score.via_count
-                    + constants.weight_short_area * score.overflow_edges;
+  score.objective = wireWeight * score.wire_length + viaWeight * score.via_count
+                    + overflowWeight * score.overflow_edges;
   return score;
+}
+
+RouteScore scoreRouteTree(const std::shared_ptr<GRTreeNode>& tree,
+                          const GridGraph& graph,
+                          const Constants& constants)
+{
+  return scoreRouteTree(tree,
+                        graph,
+                        constants.weight_wire_length,
+                        constants.weight_via_number,
+                        constants.weight_short_area);
+}
+
+struct CandidateGrid
+{
+  int interval;
+  int x_offset;
+  int y_offset;
+};
+
+void pushGridCandidate(std::vector<CandidateGrid>& candidates,
+                       int interval,
+                       int xOffset,
+                       int yOffset)
+{
+  if (interval <= 0) {
+    return;
+  }
+  xOffset = ((xOffset % interval) + interval) % interval;
+  yOffset = ((yOffset % interval) + interval) % interval;
+  for (const auto& candidate : candidates) {
+    if (candidate.interval == interval && candidate.x_offset == xOffset
+        && candidate.y_offset == yOffset) {
+      return;
+    }
+  }
+  candidates.push_back({interval, xOffset, yOffset});
 }
 
 }  // namespace
@@ -186,34 +224,17 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         = std::max(constants_.maze_min_interval, adaptiveInterval - 2);
     const int coarseInterval = adaptiveInterval + 2;
 
-    struct CandidateGrid
-    {
-      int interval;
-      int x_offset;
-      int y_offset;
-    };
     std::vector<CandidateGrid> candidateGrids;
-    auto pushCandidate = [&](int interval, int xOffset, int yOffset) {
-      if (interval <= 0) {
-        return;
-      }
-      xOffset = ((xOffset % interval) + interval) % interval;
-      yOffset = ((yOffset % interval) + interval) % interval;
-      for (const auto& candidate : candidateGrids) {
-        if (candidate.interval == interval && candidate.x_offset == xOffset
-            && candidate.y_offset == yOffset) {
-          return;
-        }
-      }
-      candidateGrids.push_back({interval, xOffset, yOffset});
-    };
-
-    pushCandidate(adaptiveInterval, netIndex + hp, netIndex / 2 + hp);
-    pushCandidate(denseInterval, netIndex * 3 + hp, netIndex * 7 + hp * 2);
-    pushCandidate(constants_.maze_min_interval,
-                  netIndex * 11 + hp * 5,
-                  netIndex * 13 + hp);
-    pushCandidate(coarseInterval, netIndex * 5 + hp * 3, netIndex + hp * 4);
+    pushGridCandidate(
+        candidateGrids, adaptiveInterval, netIndex + hp, netIndex / 2 + hp);
+    pushGridCandidate(
+        candidateGrids, denseInterval, netIndex * 3 + hp, netIndex * 7 + hp * 2);
+    pushGridCandidate(candidateGrids,
+                      constants_.maze_min_interval,
+                      netIndex * 11 + hp * 5,
+                      netIndex * 13 + hp);
+    pushGridCandidate(
+        candidateGrids, coarseInterval, netIndex * 5 + hp * 3, netIndex + hp * 4);
 
     RouteScore bestScore;
     std::shared_ptr<GRTreeNode> bestTree = nullptr;
@@ -319,6 +340,97 @@ void CUGR::globalRebalanceRoute(const std::vector<int>& allNetIndices)
   }
 }
 
+void CUGR::denseRepairRoute(const std::vector<int>& allNetIndices)
+{
+  if (!constants_.enable_dense_repair_stage || allNetIndices.empty()
+      || constants_.dense_repair_rounds <= 0) {
+    return;
+  }
+
+  logger_->report(
+      "stage 5: dense full-net repair for wirelength/via ({}) rounds",
+      constants_.dense_repair_rounds);
+  std::vector<int> rerouteIndices = allNetIndices;
+  for (int round = 0; round < constants_.dense_repair_rounds; round++) {
+    std::sort(rerouteIndices.begin(),
+              rerouteIndices.end(),
+              [&](int lhs, int rhs) {
+                const int lhsHp = gr_nets_[lhs]->getBoundingBox().hp();
+                const int rhsHp = gr_nets_[rhs]->getBoundingBox().hp();
+                if (lhsHp != rhsHp) {
+                  // Alternate between small-first and large-first ordering.
+                  return (round % 2 == 0) ? (lhsHp < rhsHp) : (lhsHp > rhsHp);
+                }
+                return gr_nets_[lhs]->getNumPins() < gr_nets_[rhs]->getNumPins();
+              });
+
+    for (const int netIndex : rerouteIndices) {
+      grid_graph_->commitTree(gr_nets_[netIndex]->getRoutingTree(), true);
+    }
+
+    GridGraphView<CostT> wireCostView;
+    grid_graph_->extractWireCostView(wireCostView);
+    int order = 0;
+    for (const int netIndex : rerouteIndices) {
+      GRNet* net = gr_nets_[netIndex].get();
+      const int hp = std::max(net->getBoundingBox().hp(), 1);
+      const int denseInterval = std::max(constants_.dense_repair_interval, 1);
+      std::vector<CandidateGrid> candidateGrids;
+      pushGridCandidate(candidateGrids, denseInterval, 0, 0);
+      pushGridCandidate(
+          candidateGrids, denseInterval + 1, netIndex + round, order + hp);
+      pushGridCandidate(candidateGrids,
+                        std::max(constants_.maze_min_interval, 1),
+                        netIndex * 2 + hp,
+                        netIndex * 3 + round);
+
+      RouteScore bestScore;
+      std::shared_ptr<GRTreeNode> bestTree = nullptr;
+      for (const auto& candidate : candidateGrids) {
+        SparseGrid grid(candidate.interval,
+                        candidate.interval,
+                        candidate.x_offset,
+                        candidate.y_offset);
+        MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+        mazeRoute.constructSparsifiedGraph(wireCostView, grid);
+        mazeRoute.run();
+        std::shared_ptr<SteinerTreeNode> tree = mazeRoute.getSteinerTree();
+        assert(tree != nullptr);
+
+        PatternRoute patternRoute(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        patternRoute.setSteinerTree(tree);
+        patternRoute.constructRoutingDAG();
+        patternRoute.run();
+
+        const auto& candidateTree = net->getRoutingTree();
+        const RouteScore candidateScore
+            = scoreRouteTree(candidateTree,
+                             *grid_graph_,
+                             1.0,
+                             0.6,
+                             constants_.dense_repair_overflow_weight);
+        if (candidateScore.objective < bestScore.objective) {
+          bestScore = candidateScore;
+          bestTree = candidateTree;
+        }
+      }
+
+      assert(bestTree != nullptr);
+      net->setRoutingTree(bestTree);
+      grid_graph_->commitTree(bestTree);
+      grid_graph_->updateWireCostView(wireCostView, bestTree);
+      order++;
+    }
+
+    std::vector<int> overflowIndices;
+    updateOverflowNets(overflowIndices);
+    logger_->report("dense repair round {} complete, {} overflow nets remain",
+                    round + 1,
+                    overflowIndices.size());
+  }
+}
+
 void CUGR::route()
 {
   std::vector<int> netIndices;
@@ -337,6 +449,7 @@ void CUGR::route()
   mazeRoute(netIndices);
 
   globalRebalanceRoute(allNetIndices);
+  denseRepairRoute(allNetIndices);
 
   updateOverflowNets(netIndices);
   if (!netIndices.empty()) {

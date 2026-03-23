@@ -53,6 +53,10 @@ struct Constants
   int maze_base_interval = 6;
   int maze_min_interval = 2;
   int global_rebalance_rounds = 1;
+  bool enable_dense_repair_stage = true;
+  int dense_repair_rounds = 1;
+  int dense_repair_interval = 1;
+  double dense_repair_overflow_weight = 2000.0;
 
   // SPRoute-inspired soft-capacity shaping.
   bool enable_soft_capacity = true;
@@ -91,6 +95,7 @@ class CUGR
   void patternRouteWithDetours(std::vector<int>& netIndices);
   void mazeRoute(std::vector<int>& netIndices);
   void globalRebalanceRoute(const std::vector<int>& allNetIndices);
+  void denseRepairRoute(const std::vector<int>& allNetIndices);
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
