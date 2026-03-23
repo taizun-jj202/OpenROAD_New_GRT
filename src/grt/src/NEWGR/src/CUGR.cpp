@@ -351,7 +351,7 @@ MazeBuildOptions buildCompactionMazeOptions(const RouteScore& oldScore,
 {
   MazeBuildOptions options;
   const bool overflowed = oldScore.overflow_edges > 0;
-  const double trigger = strict_mode ? 1.04 : 1.08;
+  const double trigger = strict_mode ? 1.02 : 1.08;
   const bool detourHeavy = old_detour_ratio >= detour_ratio_threshold * trigger;
   const bool shortNet = hp <= 70 && pins <= 3;
 
@@ -1196,9 +1196,9 @@ void CUGR::strictWirelengthCompaction()
   const bool firstStrictPass = strictPassIndex == 0;
   const int compactionBudget = firstStrictPass
                                    ? std::min(totalNets,
-                                              std::max(240, totalNets / 92))
+                                              std::max(192, totalNets / 128))
                                    : std::min(totalNets,
-                                              std::max(112, totalNets / 192));
+                                              std::max(64, totalNets / 640));
   if (compactionBudget <= 0) {
     return;
   }
@@ -1212,9 +1212,9 @@ void CUGR::strictWirelengthCompaction()
   const double detourRatioThreshold = detourRatios[netIndices[detourRank]];
   const int denseMazeBudget = firstStrictPass
                                   ? std::min(compactionBudget,
-                                             std::max(60, compactionBudget / 6))
+                                             std::max(24, compactionBudget / 12))
                                   : std::min(compactionBudget,
-                                             std::max(24, compactionBudget / 9));
+                                             std::max(28, compactionBudget / 4));
   std::vector<int> scheduledNetIndices = buildSpatialCompactionOrder(
       netIndices, gr_nets_, compactionBudget, useXAxisWavefront);
   if (scheduledNetIndices.empty()) {
@@ -1272,9 +1272,9 @@ void CUGR::strictWirelengthCompaction()
     const bool runMazeCandidate
         = rank < denseMazeBudget || oldScore.overflow_edges > 0
           || oldDetourRatio
-                 >= detourRatioThreshold * (firstStrictPass ? 1.03 : 1.01)
+                 >= detourRatioThreshold * (firstStrictPass ? 1.08 : 1.015)
           || (oldScore.wire_length >= longWireThreshold
-              && (firstStrictPass || rank < compactionBudget * 2 / 3));
+              && (firstStrictPass ? rank < compactionBudget / 2 : true));
     if (runMazeCandidate) {
       const int hp = net->getBoundingBox().hp();
       const int pins = net->getNumPins();
@@ -1286,12 +1286,12 @@ void CUGR::strictWirelengthCompaction()
           pins,
           /*strict_mode*/ true);
       MazeBuildOptions tunedMazeOptions = mazeOptions;
-      if (firstStrictPass
-          && (rank < denseMazeBudget / 10 || oldScore.overflow_edges > 0
-              || oldDetourRatio >= detourRatioThreshold * 1.10 || hp >= 180
-              || pins >= 14)) {
+      if (!firstStrictPass
+          && (rank < denseMazeBudget / 2 || oldScore.overflow_edges > 0
+              || oldDetourRatio >= detourRatioThreshold * 1.04 || hp >= 150
+              || pins >= 10)) {
         tunedMazeOptions.max_start_candidates = 3;
-      } else if (rank < denseMazeBudget / 8 || oldScore.overflow_edges > 0
+      } else if (rank < denseMazeBudget / 6 || oldScore.overflow_edges > 0
                  || oldDetourRatio >= detourRatioThreshold * 1.06) {
         tunedMazeOptions.max_start_candidates = 2;
       } else {
@@ -1299,12 +1299,12 @@ void CUGR::strictWirelengthCompaction()
       }
       const bool resetTopologyMode
           = !tunedMazeOptions.preserve_existing_topology;
-      int interval = 4;
-      if (rank < denseMazeBudget / 3 || oldScore.overflow_edges > 0) {
+      int interval = firstStrictPass ? 5 : 3;
+      if (rank < denseMazeBudget / 2 || oldScore.overflow_edges > 0) {
         interval = 3;
       }
-      if (rank < denseMazeBudget / 12
-          || (oldDetourRatio >= detourRatioThreshold * 1.10 && pins >= 6)) {
+      if (!firstStrictPass || rank < denseMazeBudget / 4
+          || (oldDetourRatio >= detourRatioThreshold * 1.07 && pins >= 6)) {
         interval = 2;
       } else if (pins <= 3 && hp <= 80) {
         interval = 5;
@@ -1312,8 +1312,9 @@ void CUGR::strictWirelengthCompaction()
       if (resetTopologyMode) {
         interval = std::max(2, interval - 1);
       }
-      const int maxMazeCandidates
-          = (firstStrictPass && rank < denseMazeBudget / 6) ? 2 : 1;
+      const int maxMazeCandidates = firstStrictPass
+                                        ? (rank < denseMazeBudget / 8 ? 2 : 1)
+                                        : (rank < denseMazeBudget / 2 ? 3 : 2);
       const auto candidateGrids
           = buildMazeCandidateGrids(interval,
                                     rank + oldScore.via_count * 3
@@ -1402,7 +1403,7 @@ void CUGR::route()
   grid_graph_->setSoftCapacityEnabled(false);
   grid_graph_->setStageCostScales(0.14, 0.16, 0.98);
   strictWirelengthCompaction();
-  grid_graph_->setStageCostScales(0.08, 0.10, 0.92);
+  grid_graph_->setStageCostScales(0.06, 0.08, 0.88);
   strictWirelengthCompaction();
   updateOverflowNets(netIndices);
 
