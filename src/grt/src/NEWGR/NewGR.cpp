@@ -6612,6 +6612,133 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     selected.metrics = compute_metrics(selected.routes);
   }
 
+  // Iteration 42 radical mode:
+  // Force a topology phase shift by weaving long planar segments and
+  // introducing controlled layer-hopping detours, then blend these donors
+  // back into the selected solution on a broad deterministic net subset.
+  ScenarioResult radical42_braid_hopper = selected;
+  radical42_braid_hopper.name = "radical42_braid_hopper";
+  applyBraidedDetourWeave(grouter_,
+                          radical42_braid_hopper.routes,
+                          baseline_rudy);
+  applyLayerHoppingDetours(grouter_,
+                           radical42_braid_hopper.routes,
+                           baseline_rudy,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyDualBackboneWarp(grouter_,
+                        radical42_braid_hopper.routes,
+                        baseline_rudy,
+                        3,
+                        100,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyQuadrantPortalHypergraphRebuild(grouter_,
+                                       radical42_braid_hopper.routes,
+                                       baseline_rudy,
+                                       3,
+                                       4096,
+                                       100,
+                                       min_routing_layer,
+                                       max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical42_braid_hopper.routes,
+                        baseline_rudy,
+                        std::max(tile_size, 1),
+                        std::max(22 * tile_size, 1),
+                        168);
+  applyAggressiveDoglegShortcuts(radical42_braid_hopper.routes,
+                                 std::max(30 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical42_braid_hopper.routes, std::max(10 * tile_size, 1));
+  applyViaExcursionCollapse(radical42_braid_hopper.routes,
+                            std::max(4 * tile_size, 1));
+  radical42_braid_hopper.metrics
+      = compute_metrics(radical42_braid_hopper.routes);
+
+  long radical42_forced_nets = 0;
+  long radical42_flux_rescue_nets = 0;
+  long radical42_compact_rescue_nets = 0;
+
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+
+    const auto radical_it = radical42_braid_hopper.routes.find(db_net);
+    if (radical_it == radical42_braid_hopper.routes.end()) {
+      continue;
+    }
+    const GRoute& radical_route = radical_it->second;
+    if (!has_planar_guide(radical_route)) {
+      continue;
+    }
+
+    const auto [cur_wl, cur_vias] = route_stats(current_route);
+    const auto [radical_wl, radical_vias] = route_stats(radical_route);
+    const double current_score
+        = route_objective(current_route, selected.overflow);
+    const double radical_score
+        = route_objective(radical_route, radical42_braid_hopper.overflow);
+
+    bool use_radical = false;
+    if (node_count >= 7 && ((key % 3ULL) == 0ULL || (key % 8ULL) == 5ULL)) {
+      use_radical = route_admissible_radical(radical_route, current_route);
+    }
+    if (!use_radical && node_count >= 11 && (key % 5ULL) == 1ULL
+        && radical_wl <= static_cast<long>(cur_wl * 2.35 + 64)
+        && radical_vias <= static_cast<long>(cur_vias * 6.90 + 48)) {
+      use_radical = true;
+    }
+    if (!use_radical && radical_score <= current_score * 1.42
+        && radical_wl <= static_cast<long>(cur_wl * 1.55 + 24)) {
+      use_radical = route_admissible_radical(radical_route, current_route);
+    }
+    if (!use_radical && node_count >= 14 && (key % 13ULL) == 4ULL) {
+      use_radical = route_admissible_radical(radical_route, current_route);
+    }
+
+    if (use_radical) {
+      selected.routes[db_net] = radical_route;
+      radical42_forced_nets++;
+      continue;
+    }
+
+    if (node_count <= 3 && (key % 7ULL) == 2ULL) {
+      const auto compact_it = compact.routes.find(db_net);
+      if (compact_it != compact.routes.end()) {
+        const GRoute& compact_route = compact_it->second;
+        if (has_planar_guide(compact_route)
+            && route_admissible(compact_route, current_route)) {
+          selected.routes[db_net] = compact_route;
+          radical42_compact_rescue_nets++;
+          continue;
+        }
+      }
+    }
+
+    if (node_count >= 10 && (key % 9ULL) == 3ULL) {
+      const auto flux_it = fluxfield.routes.find(db_net);
+      if (flux_it != fluxfield.routes.end()) {
+        const GRoute& flux_route = flux_it->second;
+        if (has_planar_guide(flux_route)
+            && route_admissible_radical(flux_route, current_route)) {
+          selected.routes[db_net] = flux_route;
+          radical42_flux_rescue_nets++;
+        }
+      }
+    }
+  }
+
+  if (radical42_forced_nets > 0 || radical42_flux_rescue_nets > 0
+      || radical42_compact_rescue_nets > 0) {
+    applyGuideCompression(selected.routes, std::max(8 * tile_size, 1));
+    applyViaExcursionCollapse(selected.routes, std::max(4 * tile_size, 1));
+    selected.name += "+rad42";
+    selected.metrics = compute_metrics(selected.routes);
+  }
+
   // Final safeguard to prevent catastrophic regressions.
   const bool catastrophic
       = static_cast<double>(selected.metrics.wirelength_dbu)
@@ -6687,6 +6814,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 fluxfield_forced_nets,
                 fluxfield_shock_nets,
                 fluxfield_compact_rescue_nets);
+  logger_->warn(GNR,
+                6037,
+                "NEWGR rad42 picks: forced {} flux_rescue {} compact_rescue {}.",
+                radical42_forced_nets,
+                radical42_flux_rescue_nets,
+                radical42_compact_rescue_nets);
 
   restore_snapshot(snapshot);
   return selected.routes;
