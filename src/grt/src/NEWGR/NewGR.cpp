@@ -7580,6 +7580,225 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     selected.metrics = compute_metrics(selected.routes);
   }
 
+  // Iteration 47 radical mode:
+  // Theory:
+  // 1) Iteration 46 still preserves many prior local trunks after donor pick.
+  // 2) Create two more extreme donors to force topological separation:
+  //    - vortexgrid: perimeter + portal hypergraph + bipolar portal backbones.
+  //    - spinefan: median/rmst spines + corridor warp + braid/layer hopping.
+  // 3) Use deterministic hash buckets with relaxed admissibility to ensure
+  //    broad net populations jump between dissimilar topology families.
+  ScenarioResult radical47_vortexgrid = selected;
+  radical47_vortexgrid.name = "radical47_vortexgrid";
+  applyPerimeterRingCollapse(grouter_,
+                             radical47_vortexgrid.routes,
+                             baseline_rudy,
+                             2,
+                             100,
+                             44,
+                             min_routing_layer,
+                             max_routing_layer);
+  applyQuadrantPortalHypergraphRebuild(grouter_,
+                                       radical47_vortexgrid.routes,
+                                       baseline_rudy,
+                                       2,
+                                       65536,
+                                       196,
+                                       min_routing_layer,
+                                       max_routing_layer);
+  applyBipolarPortalBackboneRebuild(grouter_,
+                                    radical47_vortexgrid.routes,
+                                    baseline_rudy,
+                                    2,
+                                    65536,
+                                    188,
+                                    min_routing_layer,
+                                    max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical47_vortexgrid.routes,
+                        baseline_rudy,
+                        std::max(2 * tile_size, 1),
+                        std::max(40 * tile_size, 1),
+                        240);
+  applyAggressiveDoglegShortcuts(radical47_vortexgrid.routes,
+                                 std::max(42 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical47_vortexgrid.routes, std::max(12 * tile_size, 1));
+  applyViaExcursionCollapse(radical47_vortexgrid.routes,
+                            std::max(5 * tile_size, 1));
+  radical47_vortexgrid.metrics = compute_metrics(radical47_vortexgrid.routes);
+
+  ScenarioResult radical47_spinefan = selected;
+  radical47_spinefan.name = "radical47_spinefan";
+  applyMedianSpineRebuild(
+      radical47_spinefan.routes, 2, 65536, min_routing_layer, max_routing_layer);
+  applyRmstTrunkRebuild(grouter_,
+                        radical47_spinefan.routes,
+                        baseline_rudy,
+                        2,
+                        65536,
+                        184,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyRudyCorridorBackboneRebuild(grouter_,
+                                   radical47_spinefan.routes,
+                                   baseline_rudy,
+                                   2,
+                                   184,
+                                   min_routing_layer,
+                                   max_routing_layer);
+  applyDualBackboneWarp(grouter_,
+                        radical47_spinefan.routes,
+                        baseline_rudy,
+                        2,
+                        184,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyBraidedDetourWeave(grouter_, radical47_spinefan.routes, baseline_rudy);
+  applyLayerHoppingDetours(grouter_,
+                           radical47_spinefan.routes,
+                           baseline_rudy,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical47_spinefan.routes,
+                        baseline_rudy,
+                        std::max(tile_size, 1),
+                        std::max(36 * tile_size, 1),
+                        228);
+  applyAggressiveDoglegShortcuts(radical47_spinefan.routes,
+                                 std::max(40 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical47_spinefan.routes, std::max(11 * tile_size, 1));
+  applyViaExcursionCollapse(radical47_spinefan.routes,
+                            std::max(5 * tile_size, 1));
+  radical47_spinefan.metrics = compute_metrics(radical47_spinefan.routes);
+
+  long radical47_vortex_picks = 0;
+  long radical47_spine_picks = 0;
+  long radical47_fluxfield_picks = 0;
+  long radical47_compact_picks = 0;
+  long radical47_compact_rescue = 0;
+
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+
+    const NetRouteMap* donor_routes = nullptr;
+    int donor_class = -1;
+    if (node_count >= 12) {
+      const int bucket = static_cast<int>(key % 4ULL);
+      donor_class = bucket;
+      donor_routes = bucket == 0   ? &radical47_vortexgrid.routes
+                    : bucket == 1 ? &radical47_spinefan.routes
+                    : bucket == 2 ? &fluxfield.routes
+                                  : &compact.routes;
+    } else if (node_count >= 6) {
+      const int bucket = static_cast<int>(key % 3ULL);
+      donor_class = bucket;
+      donor_routes = bucket == 0   ? &radical47_vortexgrid.routes
+                    : bucket == 1 ? &radical47_spinefan.routes
+                                  : &fluxfield.routes;
+    } else if (node_count >= 3) {
+      donor_class = (key % 2ULL) == 0ULL ? 0 : 1;
+      donor_routes = donor_class == 0 ? &radical47_vortexgrid.routes
+                                      : &radical47_spinefan.routes;
+    }
+
+    if (donor_routes == nullptr) {
+      continue;
+    }
+
+    const auto donor_it = donor_routes->find(db_net);
+    if (donor_it == donor_routes->end()) {
+      continue;
+    }
+    const GRoute& donor_route = donor_it->second;
+    if (!has_planar_guide(donor_route)) {
+      continue;
+    }
+
+    const auto [current_wl, current_vias] = route_stats(current_route);
+    const auto [donor_wl, donor_vias] = route_stats(donor_route);
+    const int donor_overflow
+        = donor_class == 0   ? radical47_vortexgrid.overflow
+          : donor_class == 1 ? radical47_spinefan.overflow
+          : donor_class == 2 ? fluxfield.overflow
+                             : compact.overflow;
+    const double current_score
+        = route_objective(current_route, selected.overflow);
+    const double donor_score = route_objective(donor_route, donor_overflow);
+
+    bool use_donor = false;
+    if (node_count >= 8
+        && ((key % 2ULL) == 1ULL || (key % 7ULL) == 3ULL)) {
+      use_donor = route_admissible_radical(donor_route, current_route);
+    }
+    if (!use_donor && donor_score <= current_score * 1.88
+        && donor_wl <= static_cast<long>(current_wl * 3.25 + 128)) {
+      use_donor = route_admissible_radical(donor_route, current_route);
+    }
+    if (!use_donor && node_count >= 14
+        && donor_wl <= static_cast<long>(current_wl * 4.25 + 220)
+        && donor_vias <= static_cast<long>(current_vias * 13.00 + 120)) {
+      use_donor = true;
+    }
+    if (!use_donor && node_count >= 5 && (key % 23ULL) == 9ULL
+        && donor_wl <= static_cast<long>(current_wl * 1.75 + 48)
+        && donor_vias <= static_cast<long>(current_vias * 3.80 + 28)) {
+      use_donor = true;
+    }
+    if (!use_donor && donor_class == 3) {
+      use_donor = route_admissible(donor_route, current_route);
+    }
+
+    if (use_donor) {
+      selected.routes[db_net] = donor_route;
+      if (donor_class == 0) {
+        radical47_vortex_picks++;
+      } else if (donor_class == 1) {
+        radical47_spine_picks++;
+      } else if (donor_class == 2) {
+        radical47_fluxfield_picks++;
+      } else {
+        radical47_compact_picks++;
+      }
+      continue;
+    }
+
+    if (node_count <= 2 && (key % 5ULL) == 2ULL) {
+      const auto compact_it = compact.routes.find(db_net);
+      if (compact_it != compact.routes.end()) {
+        const GRoute& compact_route = compact_it->second;
+        if (has_planar_guide(compact_route)
+            && route_admissible(compact_route, current_route)) {
+          selected.routes[db_net] = compact_route;
+          radical47_compact_rescue++;
+        }
+      }
+    }
+  }
+
+  if (radical47_vortex_picks > 0 || radical47_spine_picks > 0
+      || radical47_fluxfield_picks > 0 || radical47_compact_picks > 0
+      || radical47_compact_rescue > 0) {
+    applyWavefrontDetours(grouter_,
+                          selected.routes,
+                          baseline_rudy,
+                          std::max(2 * tile_size, 1),
+                          std::max(34 * tile_size, 1),
+                          210);
+    applyAggressiveDoglegShortcuts(selected.routes,
+                                   std::max(38 * tile_size, 1),
+                                   std::max(tile_size, 1));
+    applyGuideCompression(selected.routes, std::max(11 * tile_size, 1));
+    applyViaExcursionCollapse(selected.routes, std::max(5 * tile_size, 1));
+    selected.name += "+rad47";
+    selected.metrics = compute_metrics(selected.routes);
+  }
+
   // Final safeguard to prevent catastrophic regressions.
   const bool catastrophic
       = static_cast<double>(selected.metrics.wirelength_dbu)
@@ -7684,6 +7903,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 radical46_trunkgrid_picks,
                 radical46_fluxfield_picks,
                 radical46_compact_rescue);
+  logger_->warn(GNR,
+                6090,
+                "NEWGR rad47 picks: vortex {} spine {} fluxfield {} compact {} "
+                "compact_rescue {}.",
+                radical47_vortex_picks,
+                radical47_spine_picks,
+                radical47_fluxfield_picks,
+                radical47_compact_picks,
+                radical47_compact_rescue);
 
   restore_snapshot(snapshot);
   return selected.routes;
