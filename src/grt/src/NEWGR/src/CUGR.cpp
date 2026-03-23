@@ -640,6 +640,7 @@ void CUGR::wirelengthSurgery(const std::vector<int>& netIndices)
   }
 
   if (candidates.empty()) {
+    logger_->report("stage 3.5 skipped (no eligible nets).");
     return;
   }
 
