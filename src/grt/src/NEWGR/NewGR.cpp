@@ -33,6 +33,8 @@ struct RouteMetrics
   long detour_dbu = 0;
   long high_layer_dbu = 0;
   int layer_span_sum = 0;
+  int segment_count = 0;
+  int bend_count = 0;
   double wirelength_um = 0.0;
   double score = 0.0;
   int overflow_edges = 0;
@@ -91,6 +93,8 @@ struct RouteEdgeStats
   int via_count = 0;
   long high_layer_dbu = 0;
   int layer_span = 0;
+  int segment_count = 0;
+  int bend_count = 0;
   EdgeCountMap edge_counts;
 };
 
@@ -106,13 +110,16 @@ double estimateDetailedRouteProxyCost(const RouteMetrics& metrics)
   const double high_layer_term
       = static_cast<double>(metrics.high_layer_dbu) * 0.00010;
   const double span_term = static_cast<double>(metrics.layer_span_sum) * 4.0;
+  const double segment_term = static_cast<double>(metrics.segment_count) * 2.4;
+  const double bend_term = static_cast<double>(metrics.bend_count) * 14.0;
   const double hotspot_term
       = static_cast<double>(metrics.near_capacity_edges) * 12.0;
   const double overflow_term = static_cast<double>(metrics.overflow_edges) * 2000.0
                                + static_cast<double>(metrics.overflow_ratio_sum)
                                      * 6000.0;
   return static_cast<double>(metrics.wirelength_dbu) + via_term + detour_term
-         + high_layer_term + span_term + hotspot_term + overflow_term;
+         + high_layer_term + span_term + segment_term + bend_term + hotspot_term
+         + overflow_term;
 }
 
 long getRouteBBoxHpwl(const GRoute& route)
@@ -167,6 +174,8 @@ RouteEdgeStats collectRouteEdgeStats(const GRoute& route, Grid* grid)
   const int max_y_idx = std::max(0, y_grids - 1);
   int min_wire_layer = std::numeric_limits<int>::max();
   int max_wire_layer = std::numeric_limits<int>::min();
+  int prev_orient = -1;
+  int prev_layer = -1;
 
   auto coord_to_grid = [&](int coord, int min_coord, int max_index) {
     if (max_index <= 0) {
@@ -184,6 +193,7 @@ RouteEdgeStats collectRouteEdgeStats(const GRoute& route, Grid* grid)
     const long seg_wl = std::abs(segment.final_x - segment.init_x)
                         + std::abs(segment.final_y - segment.init_y);
     stats.wirelength_dbu += seg_wl;
+    stats.segment_count++;
     if (segment.init_layer > 0) {
       min_wire_layer = std::min(min_wire_layer, segment.init_layer);
       max_wire_layer = std::max(max_wire_layer, segment.init_layer);
@@ -191,6 +201,13 @@ RouteEdgeStats collectRouteEdgeStats(const GRoute& route, Grid* grid)
       const int high_layer_offset = std::max(0, segment.init_layer - 3);
       stats.high_layer_dbu += seg_wl * high_layer_offset;
     }
+    const int orient = segment.init_y == segment.final_y ? 0 : 1;
+    if (prev_orient >= 0 && prev_layer == segment.init_layer
+        && prev_orient != orient) {
+      stats.bend_count++;
+    }
+    prev_orient = orient;
+    prev_layer = segment.init_layer;
 
     if (grid == nullptr || segment.init_layer <= 0) {
       continue;
@@ -500,10 +517,10 @@ bool parsePerturbScenarioName(const std::string& name,
 
 bool isPreferredWirelengthScenario(const std::string& name)
 {
+  // Prefer smoother wirelength-first hybrids. The ultra-aggressive variants
+  // often reduce guide WL but regress detailed-route WL after legalization.
   return name == "hybrid-netmix-wl" || name == "hybrid-netmix-wl-safe"
-         || name == "hybrid-netmix-ultra-wl"
-         || name == "hybrid-netmix-hpwl-lock"
-         || name == "hybrid-netmix-dr-shield";
+         || name == "hybrid-netmix-smooth-wl";
 }
 
 int getSoftCapacityForEdge(uint64_t key,
@@ -574,8 +591,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       static_cast<void>(db_net);
       long route_wl = 0;
       long route_high_layer = 0;
+      int route_segments = 0;
+      int route_bends = 0;
       int min_wire_layer = std::numeric_limits<int>::max();
       int max_wire_layer = std::numeric_limits<int>::min();
+      int prev_orient = -1;
+      int prev_layer = -1;
       for (const GSegment& segment : segments) {
         if (segment.isVia()) {
           metrics.via_count++;
@@ -584,6 +605,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               + std::abs(segment.final_y - segment.init_y);
           metrics.wirelength_dbu += seg_wl;
           route_wl += seg_wl;
+          route_segments++;
           if (segment.init_layer > 0) {
             min_wire_layer = std::min(min_wire_layer, segment.init_layer);
             max_wire_layer = std::max(max_wire_layer, segment.init_layer);
@@ -591,11 +613,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 = std::max(0, segment.init_layer - (min_routing_layer + 1));
             route_high_layer += seg_wl * high_layer_offset;
           }
+          const int orient = segment.init_y == segment.final_y ? 0 : 1;
+          if (prev_orient >= 0 && prev_layer == segment.init_layer
+              && prev_orient != orient) {
+            route_bends++;
+          }
+          prev_orient = orient;
+          prev_layer = segment.init_layer;
         }
       }
       const long bbox_hpwl = getRouteBBoxHpwl(segments);
       metrics.detour_dbu += std::max(0L, route_wl - bbox_hpwl);
       metrics.high_layer_dbu += route_high_layer;
+      metrics.segment_count += route_segments;
+      metrics.bend_count += route_bends;
       if (min_wire_layer <= max_wire_layer) {
         metrics.layer_span_sum += (max_wire_layer - min_wire_layer);
       }
@@ -616,11 +647,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double high_layer_weight = 0.008;
     const double layer_span_weight
         = static_cast<double>(std::max(grouter_->grid_->getTileSize(), 1)) * 0.15;
+    const double segment_weight = 3.2;
+    const double bend_weight = 18.0;
     metrics.score = static_cast<double>(metrics.wirelength_dbu)
                     + via_weight * static_cast<double>(metrics.via_count)
                     + detour_weight * static_cast<double>(metrics.detour_dbu)
                     + high_layer_weight * static_cast<double>(metrics.high_layer_dbu)
-                    + layer_span_weight * static_cast<double>(metrics.layer_span_sum);
+                    + layer_span_weight * static_cast<double>(metrics.layer_span_sum)
+                    + segment_weight * static_cast<double>(metrics.segment_count)
+                    + bend_weight * static_cast<double>(metrics.bend_count);
     return metrics;
   };
 
@@ -1280,7 +1315,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                     double detour_weight,
                                     double high_layer_weight,
                                     double layer_span_weight,
-                                    int logger_code) {
+                                    int logger_code,
+                                    double segment_weight = 0.0,
+                                    double bend_weight = 0.0) {
       source_count = std::max(1, std::min(source_count, static_cast<int>(ranked.size())));
       ScenarioResult hybrid_result;
       hybrid_result.name = hybrid_name;
@@ -1334,7 +1371,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   + detour_weight * static_cast<double>(detour)
                   + high_layer_weight * static_cast<double>(stats.high_layer_dbu)
                   + layer_span_weight * static_cast<double>(tile_size)
-                        * static_cast<double>(stats.layer_span);
+                        * static_cast<double>(stats.layer_span)
+                  + segment_weight * static_cast<double>(stats.segment_count)
+                  + bend_weight * static_cast<double>(stats.bend_count);
             if (objective < best_objective
                 || (objective == best_objective
                     && stats.wirelength_dbu < best_wl)
@@ -1980,6 +2019,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                          0.001,
                          0.02,
                          7104);
+    append_min_wl_hybrid("hybrid-netmix-smooth-wl",
+                         min_wl_source_count,
+                         0L,
+                         0.18,
+                         0.018,
+                         0.26,
+                         7106,
+                         0.55,
+                         4.8);
     append_min_wl_hybrid("hybrid-netmix-absolute-wl",
                          absolute_wl_source_count,
                          0L,
