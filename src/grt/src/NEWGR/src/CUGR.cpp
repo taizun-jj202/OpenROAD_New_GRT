@@ -78,15 +78,21 @@ RouteScore evaluateRouteScore(const std::shared_ptr<GRTreeNode>& tree,
 
 bool isBetterScore(const RouteScore& candidate, const RouteScore& baseline)
 {
+  if (baseline.overflow_edges == std::numeric_limits<int>::max()) {
+    return true;
+  }
   if (candidate.overflow_edges < baseline.overflow_edges) {
     const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
-    // Keep overflow reduction, but bound detour growth (FastRoute-style
-    // overflow/wirelength balancing).
+    // Keep overflow reduction, but strongly bound detour growth.
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 160ULL;
+        = static_cast<uint64_t>(overflowGain) * 64ULL;
     const uint64_t allowedWireLength
         = baseline.wire_length + allowedIncrease;
-    return candidate.wire_length <= allowedWireLength;
+    if (candidate.wire_length > allowedWireLength) {
+      return false;
+    }
+    const int viaSlack = std::max(2, overflowGain / 4);
+    return candidate.via_count <= baseline.via_count + viaSlack;
   }
   if (candidate.overflow_edges > baseline.overflow_edges) {
     return false;
@@ -100,16 +106,23 @@ bool isBetterScore(const RouteScore& candidate, const RouteScore& baseline)
 bool isRecoveryScoreBetter(const RouteScore& candidate,
                            const RouteScore& baseline)
 {
+  if (baseline.overflow_edges == std::numeric_limits<int>::max()) {
+    return true;
+  }
   if (candidate.overflow_edges > baseline.overflow_edges) {
     return false;
   }
   if (candidate.overflow_edges < baseline.overflow_edges) {
     const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 80ULL;
+        = static_cast<uint64_t>(overflowGain) * 24ULL;
     const uint64_t allowedWireLength
         = baseline.wire_length + allowedIncrease;
-    return candidate.wire_length <= allowedWireLength;
+    if (candidate.wire_length > allowedWireLength) {
+      return false;
+    }
+    const int viaSlack = std::max(1, overflowGain / 6);
+    return candidate.via_count <= baseline.via_count + viaSlack;
   }
   if (candidate.wire_length < baseline.wire_length) {
     return true;
@@ -118,6 +131,60 @@ bool isRecoveryScoreBetter(const RouteScore& candidate,
     return false;
   }
   return candidate.via_count < baseline.via_count;
+}
+
+std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
+                                                 int rank,
+                                                 int hp,
+                                                 int pins,
+                                                 int max_candidates)
+{
+  std::vector<int> intervals{
+      base_interval,
+      std::max(3, base_interval - 1),
+      std::max(3, base_interval - 2),
+      std::min(12, base_interval + 1)};
+  if (pins >= 12 || hp >= 160) {
+    intervals.emplace_back(3);
+  }
+  if (pins <= 3 && hp <= 60) {
+    intervals.emplace_back(std::min(12, base_interval + 2));
+  }
+
+  std::vector<SparseGrid> grids;
+  grids.reserve(max_candidates);
+  auto addGrid = [&](int interval, int x_offset, int y_offset) {
+    interval = std::clamp(interval, 3, 12);
+    x_offset = ((x_offset % interval) + interval) % interval;
+    y_offset = ((y_offset % interval) + interval) % interval;
+    for (const auto& grid : grids) {
+      if (grid.interval.x() == interval && grid.interval.y() == interval
+          && grid.offset.x() == x_offset && grid.offset.y() == y_offset) {
+        return;
+      }
+    }
+    if (grids.size() < static_cast<size_t>(max_candidates)) {
+      grids.emplace_back(interval, interval, x_offset, y_offset);
+    }
+  };
+
+  for (size_t idx = 0;
+       idx < intervals.size()
+       && grids.size() < static_cast<size_t>(max_candidates);
+       idx++) {
+    const int interval = std::clamp(intervals[idx], 3, 12);
+    const int idx_int = static_cast<int>(idx);
+    const int x_offset
+        = (rank * (3 + idx_int * 2) + hp + idx_int * 5) % interval;
+    const int y_offset
+        = (rank * (5 + idx_int * 2) + pins + idx_int * 7) % interval;
+    addGrid(interval, x_offset, y_offset);
+    addGrid(interval, interval - 1 - x_offset, interval - 1 - y_offset);
+  }
+  if (grids.empty()) {
+    grids.emplace_back(4, 4, 0, 0);
+  }
+  return grids;
 }
 
 }  // namespace
@@ -244,6 +311,8 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   sortNetIndices(netIndices);
   const int base_sparse_interval = netIndices.size() < 2000 ? 6 : 10;
   int rank = 0;
+  int accepted = 0;
+  int totalCandidates = 0;
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
     const auto oldTree = net->getRoutingTree();
@@ -260,57 +329,73 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     } else if (pins >= 4 || hp >= 70) {
       interval = std::max(5, base_sparse_interval - 1);
     }
-    const int xOffset = (rank * 3 + hp) % interval;
-    const int yOffset = (rank * 5 + pins) % interval;
-    SparseGrid grid(interval, interval, xOffset, yOffset);
+    const int max_candidates = (pins >= 10 || hp >= 130) ? 5 : 4;
+    const auto candidateGrids
+        = buildMazeCandidateGrids(interval, rank, hp, pins, max_candidates);
+    totalCandidates += static_cast<int>(candidateGrids.size());
 
-    MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
-    mazeRoute.constructSparsifiedGraph(wireCostView, grid);
-    mazeRoute.run();
-    std::shared_ptr<SteinerTreeNode> tree = mazeRoute.getSteinerTree();
-    assert(tree != nullptr);
+    std::shared_ptr<GRTreeNode> bestTree = oldTree;
+    RouteScore bestScore;
+    if (oldTree) {
+      grid_graph_->commitTree(oldTree);
+      bestScore = evaluateRouteScore(oldTree, grid_graph_.get());
+      grid_graph_->commitTree(oldTree, /*ripup*/ true);
+    } else {
+      bestScore = RouteScore{};
+    }
 
-    PatternRoute patternRoute(
-        net, grid_graph_.get(), stt_builder_, constants_, logger_);
-    patternRoute.setSteinerTree(tree);
-    patternRoute.constructRoutingDAG();
-    patternRoute.run();
-    const auto candidateTree = net->getRoutingTree();
-
-    if (!oldTree || !candidateTree) {
-      if (candidateTree) {
-        grid_graph_->commitTree(candidateTree);
-        grid_graph_->updateWireCostView(wireCostView, candidateTree);
-      } else if (oldTree) {
-        net->setRoutingTree(oldTree);
-        grid_graph_->commitTree(oldTree);
-        grid_graph_->updateWireCostView(wireCostView, oldTree);
+    for (const auto& grid : candidateGrids) {
+      MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+      mazeRoute.constructSparsifiedGraph(wireCostView, grid);
+      mazeRoute.run();
+      std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();
+      if (!steinerTree) {
+        continue;
       }
-      rank++;
-      continue;
+
+      PatternRoute patternRoute(
+          net, grid_graph_.get(), stt_builder_, constants_, logger_);
+      patternRoute.setSteinerTree(steinerTree);
+      patternRoute.constructRoutingDAG();
+      patternRoute.run();
+      const auto candidateTree = net->getRoutingTree();
+      if (!candidateTree) {
+        continue;
+      }
+
+      grid_graph_->commitTree(candidateTree);
+      const RouteScore candidateScore
+          = evaluateRouteScore(candidateTree, grid_graph_.get());
+      grid_graph_->commitTree(candidateTree, /*ripup*/ true);
+      if (isBetterScore(candidateScore, bestScore)) {
+        bestTree = candidateTree;
+        bestScore = candidateScore;
+      }
     }
 
-    grid_graph_->commitTree(oldTree);
-    const RouteScore oldScore = evaluateRouteScore(oldTree, grid_graph_.get());
-    grid_graph_->commitTree(oldTree, /*ripup*/ true);
-
-    grid_graph_->commitTree(candidateTree);
-    const RouteScore candidateScore
-        = evaluateRouteScore(candidateTree, grid_graph_.get());
-
-    if (isBetterScore(candidateScore, oldScore)) {
-      grid_graph_->updateWireCostView(wireCostView, candidateTree);
-      rank++;
-      continue;
+    if (!bestTree && oldTree) {
+      bestTree = oldTree;
     }
 
-    grid_graph_->commitTree(candidateTree, /*ripup*/ true);
-    net->setRoutingTree(oldTree);
-    grid_graph_->commitTree(oldTree);
-    grid_graph_->updateWireCostView(wireCostView, oldTree);
+    if (bestTree) {
+      if (bestTree != oldTree) {
+        accepted++;
+      }
+      net->setRoutingTree(bestTree);
+      grid_graph_->commitTree(bestTree);
+      grid_graph_->updateWireCostView(wireCostView, bestTree);
+    } else if (oldTree) {
+      net->setRoutingTree(oldTree);
+      grid_graph_->commitTree(oldTree);
+      grid_graph_->updateWireCostView(wireCostView, oldTree);
+    }
     rank++;
   }
 
+  logger_->report("stage 3 accepted {} / {} nets ({} candidates tested).",
+                  accepted,
+                  netIndices.size(),
+                  totalCandidates);
   updateOverflowNets(netIndices);
 }
 
