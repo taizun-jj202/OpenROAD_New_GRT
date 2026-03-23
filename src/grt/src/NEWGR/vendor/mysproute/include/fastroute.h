@@ -1015,9 +1015,15 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 						if(max_rudy > 50 && i == 2)
 							max_nets_per_part = 128;
 
-						if(max_nets_per_part >= 16)
+						if(max_nets_per_part >= 16 && i > 1)
 							max_nets_per_part /= 2;
-						undone_filter(done);
+						if(i == 1) {
+							// First maze round routes all nets to build fuller guides.
+							acc_count = 0;
+						}
+						else {
+							undone_filter(done);
+						}
 						int nets_per_part;
 						/*if((numValidNets - acc_count) > parts * max_nets_per_part) {
 
