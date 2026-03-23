@@ -3357,6 +3357,84 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   ScenarioResult final_result = *best_iter;
 
+  const int proxy_tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+  const int proxy_x_min = grouter_->grid_->getXMin();
+  const int proxy_y_min = grouter_->grid_->getYMin();
+  const int proxy_x_grids = grouter_->grid_->getXGrids();
+  const int proxy_y_grids = grouter_->grid_->getYGrids();
+
+  const auto compute_detailed_route_proxy = [&](const NetRouteMap& routes) {
+    long total_wl = 0;
+    long total_vias = 0;
+    double total_hotspot = 0.0;
+
+    for (const auto& [db_net, route] : routes) {
+      static_cast<void>(db_net);
+      const NetRouteCost cost = computeNetRouteCost(route,
+                                                    proxy_tile_size,
+                                                    proxy_x_min,
+                                                    proxy_y_min,
+                                                    proxy_x_grids,
+                                                    proxy_y_grids,
+                                                    hotspot_map);
+      total_wl += cost.wirelength_dbu;
+      total_vias += cost.via_count;
+      total_hotspot += cost.hotspot_exposure;
+    }
+
+    // Detailed-route proxy:
+    // 1) FastRoute-like WL dominance.
+    // 2) SPRoute-like stability by suppressing via-heavy oscillatory guides.
+    // 3) CUGR-like hotspot pressure to avoid late detailed-route detours.
+    const double via_weight = static_cast<double>(proxy_tile_size) * 2.35;
+    const double hotspot_weight = static_cast<double>(proxy_tile_size) * 6.90;
+    return static_cast<double>(total_wl)
+           + via_weight * static_cast<double>(total_vias)
+           + hotspot_weight * total_hotspot;
+  };
+
+  const long best_wirelength
+      = std::min_element(
+            scenario_results.begin(),
+            scenario_results.end(),
+            [](const ScenarioResult& lhs, const ScenarioResult& rhs) {
+              return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
+            })
+            ->metrics.wirelength_dbu;
+  const long dr_window = std::max<long>(18L * proxy_tile_size, best_wirelength / 110L);
+  const long dr_via_guard = baseline_vias > 0
+                                ? static_cast<long>(std::ceil(1.03 * baseline_vias))
+                                : std::numeric_limits<long>::max();
+
+  ScenarioResult* dr_aware_choice = nullptr;
+  double best_dr_proxy = std::numeric_limits<double>::max();
+  for (ScenarioResult& candidate : scenario_results) {
+    if (candidate.metrics.wirelength_dbu > best_wirelength + dr_window) {
+      continue;
+    }
+    // Keep via growth bounded in the DR-aware tie band. This avoids selecting
+    // guide sets that look short in GR but force detailed-route inflation.
+    if (candidate.metrics.via_count > dr_via_guard) {
+      continue;
+    }
+
+    const double proxy_score = compute_detailed_route_proxy(candidate.routes);
+    if (proxy_score < best_dr_proxy) {
+      best_dr_proxy = proxy_score;
+      dr_aware_choice = &candidate;
+    }
+  }
+
+  if (dr_aware_choice != nullptr && dr_aware_choice->name != final_result.name) {
+    final_result = *dr_aware_choice;
+    logger_->info(GNR,
+                  6025,
+                  "NEWGR DR-aware override '{}': wirelength {:.0f} um, vias {}",
+                  final_result.name,
+                  final_result.metrics.wirelength_um,
+                  final_result.metrics.via_count);
+  }
+
   const ScenarioDefinition* replay_def = nullptr;
   if (best_iter->name != scenario_results.back().name) {
     if (best_iter->name == "baseline") {
