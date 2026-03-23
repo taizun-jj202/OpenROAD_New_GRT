@@ -1367,6 +1367,151 @@ void applyAggressiveDoglegShortcuts(NetRouteMap& routes,
   }
 }
 
+long applyQuantizedSerpentineDetours(GlobalRouter* grouter,
+                                     NetRouteMap& routes,
+                                     int coverage_percent,
+                                     int min_length_tiles,
+                                     int jog_tiles,
+                                     int max_rewrites_per_net)
+{
+  if (grouter == nullptr || grouter->grid() == nullptr || routes.empty()) {
+    return 0;
+  }
+
+  Grid* grid = grouter->grid();
+  const int tile = std::max(grid->getTileSize(), 1);
+  const int min_length = std::max(min_length_tiles, 1) * tile;
+  const int jog = std::max(jog_tiles, 1) * tile;
+  const int x_min = grid->getXMin();
+  const int x_max = grid->getXMax();
+  const int y_min = grid->getYMin();
+  const int y_max = grid->getYMax();
+  coverage_percent = std::clamp(coverage_percent, 1, 100);
+  max_rewrites_per_net = std::max(max_rewrites_per_net, 1);
+
+  long changed_nets = 0;
+  for (auto& [db_net, route] : routes) {
+    static_cast<void>(db_net);
+    if (route.empty()) {
+      continue;
+    }
+
+    const std::uint64_t key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    if (static_cast<int>(key % 100ULL) >= coverage_percent) {
+      continue;
+    }
+
+    int rewrites = 0;
+    std::vector<GSegment> rewritten;
+    rewritten.reserve(route.size() * 4);
+    for (size_t seg_idx = 0; seg_idx < route.size(); ++seg_idx) {
+      const GSegment& segment = route[seg_idx];
+      const bool planar
+          = !segment.isVia() && segment.init_layer == segment.final_layer;
+      const bool horizontal = planar && segment.init_y == segment.final_y
+                              && segment.init_x != segment.final_x;
+      const bool vertical = planar && segment.init_x == segment.final_x
+                            && segment.init_y != segment.final_y;
+      const long length = std::abs(segment.final_x - segment.init_x)
+                          + std::abs(segment.final_y - segment.init_y);
+      const bool eligible = (horizontal || vertical)
+                            && length >= min_length
+                            && rewrites < max_rewrites_per_net
+                            && ((key + static_cast<std::uint64_t>(seg_idx) * 29ULL)
+                                % 3ULL
+                                != 0ULL);
+      if (!eligible) {
+        rewritten.push_back(segment);
+        continue;
+      }
+
+      if (horizontal) {
+        const int x0 = segment.init_x;
+        const int x1 = segment.final_x;
+        const int y = segment.init_y;
+        int mid_x = x0 + (x1 - x0) / 2;
+        if (mid_x == x0 || mid_x == x1) {
+          mid_x = x0 + (x1 - x0) / 3;
+        }
+        int detour_y
+            = y + (((key + static_cast<std::uint64_t>(seg_idx)) & 1ULL) == 0ULL
+                       ? jog
+                       : -jog);
+        const int y_low = y_min + tile;
+        const int y_high = y_max - tile;
+        if (y_low >= y_high) {
+          rewritten.push_back(segment);
+          continue;
+        }
+        detour_y = std::clamp(detour_y, y_low, y_high);
+        if (mid_x == x0 || mid_x == x1 || detour_y == y) {
+          rewritten.push_back(segment);
+          continue;
+        }
+
+        appendSegment(rewritten, x0, y, segment.init_layer, mid_x, y, segment.init_layer);
+        appendSegment(
+            rewritten, mid_x, y, segment.init_layer, mid_x, detour_y, segment.init_layer);
+        appendSegment(rewritten,
+                      mid_x,
+                      detour_y,
+                      segment.init_layer,
+                      x1,
+                      detour_y,
+                      segment.init_layer);
+        appendSegment(
+            rewritten, x1, detour_y, segment.init_layer, x1, y, segment.init_layer);
+        rewrites++;
+        continue;
+      }
+
+      const int x = segment.init_x;
+      const int y0 = segment.init_y;
+      const int y1 = segment.final_y;
+      int mid_y = y0 + (y1 - y0) / 2;
+      if (mid_y == y0 || mid_y == y1) {
+        mid_y = y0 + (y1 - y0) / 3;
+      }
+      int detour_x
+          = x + (((key + static_cast<std::uint64_t>(seg_idx)) & 1ULL) == 0ULL
+                     ? jog
+                     : -jog);
+      const int x_low = x_min + tile;
+      const int x_high = x_max - tile;
+      if (x_low >= x_high) {
+        rewritten.push_back(segment);
+        continue;
+      }
+      detour_x = std::clamp(detour_x, x_low, x_high);
+      if (mid_y == y0 || mid_y == y1 || detour_x == x) {
+        rewritten.push_back(segment);
+        continue;
+      }
+
+      appendSegment(rewritten, x, y0, segment.init_layer, x, mid_y, segment.init_layer);
+      appendSegment(
+          rewritten, x, mid_y, segment.init_layer, detour_x, mid_y, segment.init_layer);
+      appendSegment(rewritten,
+                    detour_x,
+                    mid_y,
+                    segment.init_layer,
+                    detour_x,
+                    y1,
+                    segment.init_layer);
+      appendSegment(
+          rewritten, detour_x, y1, segment.init_layer, x, y1, segment.init_layer);
+      rewrites++;
+    }
+
+    if (rewrites > 0 && !rewritten.empty()) {
+      route.swap(rewritten);
+      changed_nets++;
+    }
+  }
+  return changed_nets;
+}
+
 struct RouteNode
 {
   int x = 0;
@@ -8748,6 +8893,53 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
 
+  // Iteration 53 radical mode:
+  // Theory:
+  // 1) Prior iterations still converge to related trunk families, which can
+  //    stall metric movement.
+  // 2) Force a broad deterministic subset of long segments through
+  //    quantized serpentine jogs after a crossbar-axis collapse, creating a
+  //    topologically different solution family with strong wirelength movement.
+  // 3) Keep existing catastrophic guards to avoid complete blowups.
+  ScenarioResult radical53_serpentine = selected;
+  radical53_serpentine.name = "radical53_crossbar_serpentine";
+  const long radical53_axis_rewired = applyCrossbarAxisCollapse(grouter_,
+                                                                radical53_serpentine.routes,
+                                                                baseline_rudy,
+                                                                4,
+                                                                320,
+                                                                72,
+                                                                min_routing_layer,
+                                                                max_routing_layer,
+                                                                8);
+  const long radical53_serpentine_rewrites = applyQuantizedSerpentineDetours(
+      grouter_, radical53_serpentine.routes, 84, 8, 3, 4);
+  applyWavefrontDetours(grouter_,
+                        radical53_serpentine.routes,
+                        baseline_rudy,
+                        std::max(2 * tile_size, 1),
+                        std::max(52 * tile_size, 1),
+                        300);
+  applyAggressiveDoglegShortcuts(radical53_serpentine.routes,
+                                 std::max(44 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical53_serpentine.routes, std::max(12 * tile_size, 1));
+  applyViaExcursionCollapse(radical53_serpentine.routes,
+                            std::max(5 * tile_size, 1));
+  radical53_serpentine.metrics = compute_metrics(radical53_serpentine.routes);
+
+  if (radical53_axis_rewired > 0 || radical53_serpentine_rewrites > 0) {
+    const bool radical53_catastrophic
+        = static_cast<double>(radical53_serpentine.metrics.wirelength_dbu)
+              > static_cast<double>(baseline.metrics.wirelength_dbu) * 4.20
+          || static_cast<double>(radical53_serpentine.metrics.via_count)
+                 > static_cast<double>(baseline.metrics.via_count) * 7.00;
+    if (!radical53_catastrophic) {
+      radical53_serpentine.name += "+rad53";
+      selected = radical53_serpentine;
+    }
+  }
+
   // Final safeguard to prevent catastrophic regressions.
   const bool catastrophic
       = static_cast<double>(selected.metrics.wirelength_dbu)
@@ -8894,6 +9086,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 radical52_forced_axis,
                 radical52_compact_rescue,
                 radical52_axis_rewired);
+  logger_->warn(GNR,
+                6095,
+                "NEWGR rad53 rewired nets: axis {} serpentine {}.",
+                radical53_axis_rewired,
+                radical53_serpentine_rewrites);
 
   restore_snapshot(snapshot);
   return selected.routes;
