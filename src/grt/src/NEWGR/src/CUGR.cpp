@@ -120,7 +120,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
   sortNetIndices(netIndices);
-  SparseGrid grid(10, 10, 0, 0);
+  SparseGrid grid(8, 8, 0, 0);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
     MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
@@ -153,14 +153,86 @@ void CUGR::route()
 
   patternRoute(netIndices);
 
-  patternRouteWithDetours(netIndices);
+  std::vector<int> detourIndices = netIndices;
+  if (constants_.wirelength_first_refinement) {
+    detourIndices
+        = selectCriticalNets(netIndices, constants_.detour_refine_ratio);
+  }
+  patternRouteWithDetours(detourIndices);
 
-  mazeRoute(netIndices);
+  std::vector<int> mazeIndices = detourIndices;
+  if (constants_.wirelength_first_refinement) {
+    mazeIndices
+        = selectCriticalNets(detourIndices, constants_.maze_refine_ratio);
+  }
+  mazeRoute(mazeIndices);
 
   printStatistics();
   if (constants_.write_heatmap) {
     grid_graph_->write();
   }
+}
+
+std::vector<int> CUGR::selectCriticalNets(
+    const std::vector<int>& candidates,
+    const double reroute_ratio) const
+{
+  if (candidates.empty()) {
+    return {};
+  }
+
+  struct ScoredNet
+  {
+    int index;
+    int overflow;
+    int hpwl;
+    bool critical;
+  };
+
+  std::vector<ScoredNet> scored;
+  scored.reserve(candidates.size());
+  for (const int netIndex : candidates) {
+    const auto& net = gr_nets_[netIndex];
+    const int overflow = grid_graph_->checkOverflow(net->getRoutingTree());
+    const int hpwl = net->getBoundingBox().hp();
+    const bool critical
+        = overflow >= constants_.refinement_overflow_threshold
+          || hpwl >= constants_.refinement_hpwl_threshold;
+    scored.push_back({netIndex, overflow, hpwl, critical});
+  }
+
+  std::sort(scored.begin(),
+            scored.end(),
+            [](const ScoredNet& lhs, const ScoredNet& rhs) {
+              if (lhs.critical != rhs.critical) {
+                return lhs.critical > rhs.critical;
+              }
+              if (lhs.overflow != rhs.overflow) {
+                return lhs.overflow > rhs.overflow;
+              }
+              return lhs.hpwl > rhs.hpwl;
+            });
+
+  int keep = static_cast<int>(std::ceil(scored.size() * reroute_ratio));
+  keep = std::max(1, std::min(keep, static_cast<int>(scored.size())));
+
+  // Always keep all critical nets to avoid starvation.
+  int critical_count = 0;
+  while (critical_count < static_cast<int>(scored.size())
+         && scored[critical_count].critical) {
+    critical_count++;
+  }
+  keep = std::max(keep, critical_count);
+
+  std::vector<int> selected;
+  selected.reserve(keep);
+  for (int i = 0; i < keep; i++) {
+    selected.push_back(scored[i].index);
+  }
+  logger_->report("wirelength-first refinement: {} -> {} nets",
+                  candidates.size(),
+                  selected.size());
+  return selected;
 }
 
 void CUGR::write(const std::string& guide_file)

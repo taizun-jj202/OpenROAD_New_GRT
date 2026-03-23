@@ -150,6 +150,8 @@ class GridGraph
   {
     return unit_length_short_costs_[layer_index];
   }
+  CapacityT getSoftCapacity(const GraphEdge& edge) const;
+  CostT getCongestionPenalty(const GraphEdge& edge, double slope) const;
 
   double logistic(const CapacityT& input, double slope) const;
   CostT getWireCost(int layer_index,

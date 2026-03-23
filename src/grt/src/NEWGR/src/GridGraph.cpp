@@ -300,6 +300,32 @@ double GridGraph::logistic(const CapacityT& input, const double slope) const
   return 1.0 / (1.0 + exp(input * slope));
 }
 
+CapacityT GridGraph::getSoftCapacity(const GraphEdge& edge) const
+{
+  if (!constants_.use_soft_capacity) {
+    return edge.capacity;
+  }
+  if (edge.capacity < 1.0) {
+    return edge.capacity;
+  }
+  const double util = edge.demand / std::max(edge.capacity, 1.0);
+  const double ratio = constants_.soft_cap_min_ratio
+                       + (constants_.soft_cap_max_ratio
+                          - constants_.soft_cap_min_ratio)
+                             / (1.0 + exp((util - constants_.soft_cap_mid_util)
+                                          * constants_.soft_cap_slope));
+  return edge.capacity * ratio;
+}
+
+CostT GridGraph::getCongestionPenalty(const GraphEdge& edge,
+                                      const double slope) const
+{
+  const CapacityT reference_capacity = getSoftCapacity(edge);
+  return reference_capacity < 1.0 ? 1.0
+                                  : logistic(reference_capacity - edge.demand,
+                                             slope);
+}
+
 CostT GridGraph::getWireCost(const int layer_index,
                              const PointT lower,
                              const CapacityT demand) const
@@ -310,9 +336,7 @@ CostT GridGraph::getWireCost(const int layer_index,
   const auto& edge = graph_edges_[layer_index][lower.x()][lower.y()];
   CostT cost = demandLength * unit_length_wire_cost_;
   cost += demandLength * unit_length_short_costs_[layer_index]
-          * (edge.capacity < 1.0 ? 1.0
-                                 : logistic(edge.capacity - edge.demand,
-                                            constants_.cost_logistic_slope));
+          * getCongestionPenalty(edge, constants_.cost_logistic_slope);
   return cost;
 }
 
@@ -671,7 +695,7 @@ void GridGraph::extractWireCostView(GridGraphView<CostT>& view) const
         CapacityT demand = 0;
         for (int layer_index : layerIndices) {
           const auto& edge = getEdge(layer_index, x, y);
-          capacity += edge.capacity;
+          capacity += getSoftCapacity(edge);
           demand += edge.demand;
         }
         const int length = getEdgeLength(direction, edge_index);
@@ -714,7 +738,7 @@ void GridGraph::updateWireCostView(
         continue;
       }
       const auto& edge = getEdge(layer_index, x, y);
-      capacity += edge.capacity;
+      capacity += getSoftCapacity(edge);
       demand += edge.demand;
     }
     const int length = getEdgeLength(direction, edge_index);

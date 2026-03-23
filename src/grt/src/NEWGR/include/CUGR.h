@@ -29,21 +29,35 @@ class BoxT;
 
 struct Constants
 {
-  double weight_wire_length = 0.5;
-  double weight_via_number = 4.0;
-  double weight_short_area = 500.0;
+  double weight_wire_length = 0.8;
+  double weight_via_number = 2.0;
+  double weight_short_area = 350.0;
 
   int min_routing_layer = 1;
 
-  double cost_logistic_slope = 1.0;
+  double cost_logistic_slope = 0.7;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.25;
-  int target_detour_count = 20;
+  double max_detour_ratio = 0.12;
+  int target_detour_count = 8;
 
-  double via_multiplier = 2.0;
+  double via_multiplier = 1.4;
 
-  double maze_logistic_slope = 0.5;
+  double maze_logistic_slope = 0.35;
+
+  // SPRoute-style soft capacity model (utilization driven)
+  bool use_soft_capacity = true;
+  double soft_cap_min_ratio = 0.78;
+  double soft_cap_max_ratio = 0.96;
+  double soft_cap_mid_util = 0.72;
+  double soft_cap_slope = 7.0;
+
+  // FastRoute-style critical-net refinement schedule
+  bool wirelength_first_refinement = true;
+  int refinement_overflow_threshold = 2;
+  int refinement_hpwl_threshold = 120;
+  double detour_refine_ratio = 0.70;
+  double maze_refine_ratio = 0.38;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
@@ -74,6 +88,8 @@ class CUGR
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
+  std::vector<int> selectCriticalNets(const std::vector<int>& candidates,
+                                      double reroute_ratio) const;
   void printStatistics() const;
 
   std::unique_ptr<Design> design_;
