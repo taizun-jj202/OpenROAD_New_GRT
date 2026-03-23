@@ -97,15 +97,15 @@ int64_t maxViaIncreaseForSwap(int pin_count)
 int64_t maxViaDropForNewgrSwap(int pin_count)
 {
   if (pin_count <= 4) {
-    return 2;
-  }
-  if (pin_count <= 12) {
-    return 4;
-  }
-  if (pin_count <= 24) {
     return 6;
   }
-  return 8;
+  if (pin_count <= 12) {
+    return 12;
+  }
+  if (pin_count <= 24) {
+    return 20;
+  }
+  return 28;
 }
 
 uint64_t minNewgrGraftWirelengthGain(int pin_count)
@@ -203,7 +203,7 @@ bool shouldSwapToNewgr(const RouteScore& fastroute_score,
     return false;
   }
   const bool high_fanout = pin_count > 28;
-  if (high_fanout && pin_count > 64) {
+  if (high_fanout && pin_count > 80) {
     return false;
   }
 
@@ -224,11 +224,12 @@ bool shouldSwapToNewgr(const RouteScore& fastroute_score,
   }
   if (high_fanout) {
     const uint64_t high_fanout_min_gain
-        = std::max<uint64_t>(min_gain * 3, minHighFanoutNewgrWirelengthGain(pin_count));
+        = std::max<uint64_t>(min_gain * 2,
+                             minHighFanoutNewgrWirelengthGain(pin_count));
     if (static_cast<uint64_t>(wl_gain) < high_fanout_min_gain) {
       return false;
     }
-    if (via_increase > 2 || via_drop > 4) {
+    if (via_increase > 3 || via_drop > 10) {
       return false;
     }
   }
@@ -357,28 +358,28 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
               const int64_t lhs_via_drop = std::max<int64_t>(0, lhs.via_drop);
               const int64_t rhs_via_drop = std::max<int64_t>(0, rhs.via_drop);
               const int64_t lhs_priority
-                  = lhs.wl_gain - lhs_via_inc * 44 - lhs_via_drop * 16;
+                  = lhs.wl_gain - lhs_via_inc * 60 + lhs_via_drop * 8;
               const int64_t rhs_priority
-                  = rhs.wl_gain - rhs_via_inc * 44 - rhs_via_drop * 16;
+                  = rhs.wl_gain - rhs_via_inc * 60 + rhs_via_drop * 8;
               return std::make_tuple(lhs_priority,
                                      lhs.wl_gain,
-                                     -lhs_via_inc,
-                                     -lhs_via_drop)
+                                     lhs_via_drop,
+                                     -lhs_via_inc)
                      > std::make_tuple(rhs_priority,
                                        rhs.wl_gain,
-                                       -rhs_via_inc,
-                                       -rhs_via_drop);
+                                       rhs_via_drop,
+                                       -rhs_via_inc);
             });
 
   stats.candidate_pool_size = candidates.size();
   const size_t swap_limit = std::min<size_t>(
-      96, std::max<size_t>(16, fastroute_routes.size() / 900));
+      160, std::max<size_t>(24, fastroute_routes.size() / 520));
   const int64_t total_via_drop_budget
-      = std::max<int64_t>(520, static_cast<int64_t>(total_fastroute_vias / 120));
+      = std::max<int64_t>(2400, static_cast<int64_t>(total_fastroute_vias / 30));
   const int64_t total_via_increase_budget
-      = std::max<int64_t>(160, static_cast<int64_t>(total_fastroute_vias / 700));
+      = std::max<int64_t>(220, static_cast<int64_t>(total_fastroute_vias / 450));
   const uint64_t wl_gain_target = std::max<uint64_t>(
-      240000, static_cast<uint64_t>(total_fastroute_wirelength / 1200));
+      900000, static_cast<uint64_t>(total_fastroute_wirelength / 420));
   int64_t consumed_via_drop = 0;
   int64_t consumed_via_increase = 0;
   uint64_t consumed_wl_gain = 0;
@@ -396,7 +397,7 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
     }
     // Accept positive-via swaps only when they are strongly wirelength-positive.
     if (via_increase > 0
-        && candidate.wl_gain < via_increase * 180 + static_cast<int64_t>(40)) {
+        && candidate.wl_gain < via_increase * 260 + static_cast<int64_t>(80)) {
       ++stats.skipped_by_via_guard;
       continue;
     }
@@ -405,7 +406,7 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
     consumed_via_increase += via_increase;
     consumed_wl_gain += static_cast<uint64_t>(std::max<int64_t>(0, candidate.wl_gain));
     ++stats.replaced_with_newgr;
-    if (consumed_wl_gain >= wl_gain_target && stats.replaced_with_newgr >= 12) {
+    if (consumed_wl_gain >= wl_gain_target && stats.replaced_with_newgr >= 24) {
       break;
     }
   }
@@ -459,14 +460,14 @@ bool shouldPreferFastRouteBackboneHybrid(int fr_overflow,
   const int64_t via_increase_budget = std::max<int64_t>(
       220, static_cast<int64_t>(fastroute_score.vias / 350));
   const int64_t via_drop_budget = std::max<int64_t>(
-      260, static_cast<int64_t>(fastroute_score.vias / 280));
+      2200, static_cast<int64_t>(fastroute_score.vias / 35));
   if (via_increase > via_increase_budget || via_drop > via_drop_budget) {
     return false;
   }
 
   const uint64_t wl_gain = fastroute_score.wirelength - hybrid_score.wirelength;
   const uint64_t min_gain = std::max<uint64_t>(
-      60000, fastroute_score.wirelength / 9000);
+      90000, fastroute_score.wirelength / 6200);
   return wl_gain >= min_gain;
 }
 
