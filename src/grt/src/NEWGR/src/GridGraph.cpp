@@ -512,7 +512,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     return (max_x - min_x) + (max_y - min_y);
   };
 
-  const int max_refine_passes = 3;
+  const int max_refine_passes = 5;
   for (int pass = 0; pass < max_refine_passes; pass++) {
     std::vector<int> xs;
     std::vector<int> ys;

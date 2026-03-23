@@ -41,7 +41,7 @@ struct Constants
   double max_detour_ratio = 0.18;
   int target_detour_count = 12;
 
-  double via_multiplier = 1.4;
+  double via_multiplier = 1.2;
 
   double maze_logistic_slope = 0.38;
 
@@ -78,13 +78,13 @@ struct Constants
   // overflow-free nets and keep only wirelength-improving solutions.
   bool enable_wirelength_recovery = true;
   bool recovery_use_maze = true;
-  int recovery_hpwl_threshold = 72;
+  int recovery_hpwl_threshold = 64;
   double recovery_refine_ratio = 0.97;
   int recovery_max_passes = 5;
   double recovery_pass_decay = 0.86;
   int recovery_maze_sparse_x = 3;
   int recovery_maze_sparse_y = 3;
-  double recovery_deep_ratio = 0.6;
+  double recovery_deep_ratio = 0.65;
   int recovery_deep_hpwl_threshold = 140;
   int recovery_aniso_sparse_long = 7;
   int recovery_aniso_sparse_short = 3;
@@ -93,7 +93,7 @@ struct Constants
   int recovery_full_offset_hpwl_threshold = 220;
   int recovery_dense_sparse_x = 2;
   int recovery_dense_sparse_y = 2;
-  int recovery_max_maze_configs = 28;
+  int recovery_max_maze_configs = 30;
   int recovery_max_via_increase = 3;
 
   double pin_patch_threshold = 20.0;
