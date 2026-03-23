@@ -285,6 +285,10 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
        && grids.size() < static_cast<size_t>(max_candidates);
        idx++) {
     const int interval = std::clamp(intervals[idx], 2, 12);
+    // Evaluate low-skew anchors first; they usually expose straighter
+    // Manhattan trunks than purely hashed offsets.
+    addGrid(interval, 0, 0);
+    addGrid(interval, interval / 2, interval / 2);
     const int idx_int = static_cast<int>(idx);
     const int x_offset
         = (rank * (3 + idx_int * 2) + hp + idx_int * 5) % interval;
@@ -1196,9 +1200,9 @@ void CUGR::strictWirelengthCompaction()
   const bool firstStrictPass = strictPassIndex == 0;
   const int compactionBudget = firstStrictPass
                                    ? std::min(totalNets,
-                                              std::max(128, totalNets / 256))
+                                              std::max(320, totalNets / 160))
                                    : std::min(totalNets,
-                                              std::max(48, totalNets / 1200));
+                                              std::max(96, totalNets / 600));
   if (compactionBudget <= 0) {
     return;
   }
@@ -1309,7 +1313,7 @@ void CUGR::strictWirelengthCompaction()
         interval = std::max(2, interval - 1);
       }
       const int maxMazeCandidates = firstStrictPass
-                                        ? 1
+                                        ? (rank < denseMazeBudget / 3 ? 2 : 1)
                                         : (rank < denseMazeBudget / 2 ? 2 : 1);
       const auto candidateGrids
           = buildMazeCandidateGrids(interval,
@@ -1396,6 +1400,8 @@ void CUGR::route()
   // Final cleanup: run two strict compaction waves. Wave 1 is broader and
   // denser; wave 2 is a lighter SPRoute-style wavefront sweep that mostly
   // targets remaining detour-heavy nets.
+  grid_graph_->setStageCostScales(0.20, 0.22, 0.96);
+  globalCompaction();
   grid_graph_->setSoftCapacityEnabled(false);
   grid_graph_->setStageCostScales(0.14, 0.16, 0.98);
   strictWirelengthCompaction();
