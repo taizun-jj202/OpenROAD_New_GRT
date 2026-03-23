@@ -73,9 +73,12 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   // each net neighborhood to suppress long global detours.
   const int pins = std::max(2, net_->getNumPins());
   const int hp = std::max(1, box.hp());
-  int margin = std::clamp(hp / (pins >= 10 ? 7 : 5), 8, 72);
+  int margin = std::clamp(hp / (pins >= 12 ? 5 : 4), 12, 96);
   if (pins <= 3) {
-    margin = std::max(margin, 14);
+    margin = std::max(margin, 18);
+  }
+  if (hp >= 180 || pins >= 16) {
+    margin += std::max(6, hp / 30);
   }
   margin += std::max(grid.interval.x(), grid.interval.y());
   int xLow = std::max(0, box.lx() - margin);
@@ -95,7 +98,7 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
           treeYL = std::min(treeYL, node->y());
           treeYH = std::max(treeYH, node->y());
         });
-    const int treePadding = std::max(4, margin / 3);
+    const int treePadding = std::max(6, margin / 2);
     xLow = std::min(xLow, std::max(0, treeXL - treePadding));
     xHigh = std::max(xHigh, std::min(xSize - 1, treeXH + treePadding));
     yLow = std::min(yLow, std::max(0, treeYL - treePadding));

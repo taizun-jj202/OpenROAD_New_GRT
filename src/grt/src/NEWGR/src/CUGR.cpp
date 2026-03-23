@@ -1193,8 +1193,6 @@ void CUGR::route()
   finalPatternTighten();
   grid_graph_->setStageCostScales(0.24, 0.26, 1.45);
   globalCompaction();
-  grid_graph_->setStageCostScales(0.16, 0.18, 1.35);
-  strictWirelengthCompaction();
 
   printStatistics();
   if (constants_.write_heatmap) {
