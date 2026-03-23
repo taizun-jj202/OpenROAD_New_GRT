@@ -185,13 +185,13 @@ bool isCompactionScoreBetter(const RouteScore& candidate,
     return candidate.via_count <= baseline.via_count + 1;
   }
   if (candidate.wire_length < baseline.wire_length) {
-    if (candidate.via_count <= baseline.via_count + 3) {
+    if (candidate.via_count <= baseline.via_count + 2) {
       return true;
     }
     const uint64_t wireGain = baseline.wire_length - candidate.wire_length;
     const int viaIncrease = candidate.via_count - baseline.via_count;
     return viaIncrease > 0
-           && wireGain >= static_cast<uint64_t>(viaIncrease) * 8ULL;
+           && wireGain >= static_cast<uint64_t>(viaIncrease) * 10ULL;
   }
   if (candidate.wire_length > baseline.wire_length) {
     return false;
@@ -223,13 +223,13 @@ bool isStrictWirelengthScoreBetter(const RouteScore& candidate,
   if (candidate.wire_length >= baseline.wire_length) {
     return false;
   }
-  if (candidate.via_count <= baseline.via_count + 5) {
+  if (candidate.via_count <= baseline.via_count + 4) {
     return true;
   }
   const uint64_t wireGain = baseline.wire_length - candidate.wire_length;
   const int viaIncrease = candidate.via_count - baseline.via_count;
   return viaIncrease > 0
-         && wireGain >= static_cast<uint64_t>(viaIncrease) * 9ULL;
+         && wireGain >= static_cast<uint64_t>(viaIncrease) * 14ULL;
 }
 
 std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
@@ -345,21 +345,17 @@ std::vector<int> buildSpatialCompactionOrder(
 MazeBuildOptions buildCompactionMazeOptions(const RouteScore& oldScore,
                                             const double old_detour_ratio,
                                             const double detour_ratio_threshold,
-                                            const int rank,
-                                            const int dense_maze_budget,
                                             const int hp,
                                             const int pins,
                                             const bool strict_mode)
 {
   MazeBuildOptions options;
   const bool overflowed = oldScore.overflow_edges > 0;
-  const double trigger = strict_mode ? 1.02 : 1.05;
+  const double trigger = strict_mode ? 1.04 : 1.08;
   const bool detourHeavy = old_detour_ratio >= detour_ratio_threshold * trigger;
-  const bool topPriorityRank
-      = rank < std::max(24, dense_maze_budget / (strict_mode ? 3 : 4));
   const bool shortNet = hp <= 70 && pins <= 3;
 
-  if (!overflowed && !shortNet && (detourHeavy || topPriorityRank)) {
+  if (!overflowed && !shortNet && detourHeavy) {
     // SPRoute-inspired topology reset in late-stage batches:
     // discard stale old-tree anchors and force shortest-topology search.
     options.preserve_existing_topology = false;
@@ -376,8 +372,8 @@ MazeBuildOptions buildCompactionMazeOptions(const RouteScore& oldScore,
   }
 
   options.preserve_existing_topology = true;
-  options.force_shortest_topology = strict_mode && detourHeavy && !overflowed;
-  options.corridor_shrink = (!overflowed && detourHeavy) ? 1 : 0;
+  options.force_shortest_topology = false;
+  options.corridor_shrink = 0;
   return options;
 }
 
@@ -1020,8 +1016,6 @@ void CUGR::globalCompaction()
             oldScore,
             oldDetourRatio,
             detourRatioThreshold,
-            rank,
-            denseMazeBudget,
             hp,
             pins,
             /*strict_mode*/ false);
@@ -1169,7 +1163,7 @@ void CUGR::strictWirelengthCompaction()
       = std::min(compactionBudget - 1, std::max(0, compactionBudget / 5));
   const double detourRatioThreshold = detourRatios[netIndices[detourRank]];
   const int denseMazeBudget
-      = std::min(compactionBudget, std::max(160, compactionBudget / 9));
+      = std::min(compactionBudget, std::max(192, compactionBudget / 8));
   std::vector<int> scheduledNetIndices = buildSpatialCompactionOrder(
       netIndices, gr_nets_, compactionBudget, useXAxisWavefront);
   if (scheduledNetIndices.empty()) {
@@ -1235,8 +1229,6 @@ void CUGR::strictWirelengthCompaction()
           oldScore,
           oldDetourRatio,
           detourRatioThreshold,
-          rank,
-          denseMazeBudget,
           hp,
           pins,
           /*strict_mode*/ true);
