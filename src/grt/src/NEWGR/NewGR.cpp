@@ -449,10 +449,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     engine_ = std::make_unique<NewgrEngine>(logger_);
   }
 
+  NetRouteMap routes = grouter_->fastroute()->run();
+
   engine_->init(grouter_->sproute_grid_data_, grouter_->sproute_nets_);
-  NetRouteMap routes = engine_->run();
+  NetRouteMap balanced_routes = engine_->run();
   NetRouteMap wirelength_routes = engine_->runWirelengthFirst();
   NetRouteMap data_wirelength_routes = engine_->runDataDrivenWirelength();
+  NetRouteMap region_aware_routes = engine_->runRegionAware();
+  NetRouteMap regular_region_routes = engine_->runRegularRegionAware();
+  NetRouteMap finegrain_routes = engine_->runFineGrainRefine();
+  NetRouteMap smallnet_routes = engine_->runSmallNetAware();
+  NetRouteMap astar_routes = engine_->runAstarClassic();
+  NetRouteMap rudy_routes = engine_->runRudyDriven();
+  NetRouteMap local_polish_routes = engine_->runLocalPolish();
 
   const SprouteGridData& grid = grouter_->sproute_grid_data_;
   const int origin_x = grid.origin.x();
@@ -508,8 +517,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int selected_from_balanced = 0;
   int selected_from_wl = 0;
   int selected_from_data_wl = 0;
+  int selected_from_region = 0;
+  int selected_from_regular_region = 0;
+  int selected_from_finegrain = 0;
+  int selected_from_smallnet = 0;
+  int selected_from_astar = 0;
+  int selected_from_rudy = 0;
+  int selected_from_polish = 0;
+  int kept_fastroute = 0;
+  int inserted_from_balanced = 0;
   int inserted_from_wl = 0;
   int inserted_from_data_wl = 0;
+  int inserted_from_region = 0;
+  int inserted_from_regular_region = 0;
+  int inserted_from_finegrain = 0;
+  int inserted_from_smallnet = 0;
+  int inserted_from_astar = 0;
+  int inserted_from_rudy = 0;
+  int inserted_from_polish = 0;
 
   EdgeUsageMap selected_usage;
   selected_usage.reserve(baseline_demand.size());
@@ -525,7 +550,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     GRoute& route = route_it->second;
     const RouteScore baseline_score = ordered_net.baseline_score;
     const SelectionPolicy policy = buildSelectionPolicy(baseline_score, tile_size);
-    const int64_t congestion_tradeoff = policy.long_net ? 0 : 1;
+    const int64_t congestion_tradeoff = policy.long_net ? 0 : (policy.medium_net ? 1 : 2);
 
     RouteScore best_score = baseline_score;
     int64_t best_congestion_cost
@@ -540,7 +565,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                   baseline_score, best_score, policy)
                               + congestion_tradeoff * best_congestion_cost;
     const GRoute* selected_route = &route;
-    RouteSource selected_source = RouteSource::kNewgrBalanced;
+    RouteSource selected_source = RouteSource::kFastRoute;
 
     auto consider = [&](const NetRouteMap& candidate_routes,
                         RouteSource source,
@@ -634,23 +659,54 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     };
 
-    const int64_t wirelength_min_wl_drop
+    const int64_t exploratory_min_wl_drop
         = policy.long_net
-              ? std::max<int64_t>(1, tile_size / 22)
-              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 16)
-                                   : std::max<int64_t>(1, tile_size / 11));
-    const int64_t data_min_wl_drop
+              ? std::max<int64_t>(1, tile_size / 10)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 8)
+                                   : std::max<int64_t>(1, tile_size / 6));
+    const int64_t aggressive_min_wl_drop
         = policy.long_net
-              ? std::max<int64_t>(1, tile_size / 18)
-              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 14)
-                                   : std::max<int64_t>(1, tile_size / 10));
+              ? std::max<int64_t>(1, tile_size / 12)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 10)
+                                   : std::max<int64_t>(1, tile_size / 7));
+    const int64_t polish_min_wl_drop
+        = policy.long_net
+              ? std::max<int64_t>(1, tile_size / 14)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 11)
+                                   : std::max<int64_t>(1, tile_size / 8));
+    consider(balanced_routes, RouteSource::kNewgrBalanced, 0, false);
     consider(wirelength_routes,
              RouteSource::kNewgrWirelength,
-             wirelength_min_wl_drop,
+             0,
              false);
     consider(data_wirelength_routes,
              RouteSource::kNewgrDataWirelength,
-             data_min_wl_drop,
+             exploratory_min_wl_drop,
+             true);
+    consider(region_aware_routes,
+             RouteSource::kNewgrRegionAware,
+             exploratory_min_wl_drop,
+             true);
+    consider(regular_region_routes,
+             RouteSource::kNewgrRegularRegion,
+             exploratory_min_wl_drop,
+             true);
+    consider(finegrain_routes,
+             RouteSource::kNewgrFineGrain,
+             aggressive_min_wl_drop,
+             true);
+    consider(smallnet_routes,
+             RouteSource::kNewgrSmallNet,
+             aggressive_min_wl_drop,
+             true);
+    consider(astar_routes,
+             RouteSource::kNewgrAstar,
+             aggressive_min_wl_drop,
+             true);
+    consider(rudy_routes, RouteSource::kNewgrRudy, aggressive_min_wl_drop, true);
+    consider(local_polish_routes,
+             RouteSource::kNewgrPolish,
+             polish_min_wl_drop,
              true);
 
     // Wirelength champion pass: if one candidate has a material WL gain and
@@ -688,8 +744,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       wl_champion_source = source;
     };
 
+    maybeUpdateChampion(balanced_routes, RouteSource::kNewgrBalanced);
     maybeUpdateChampion(wirelength_routes, RouteSource::kNewgrWirelength);
     maybeUpdateChampion(data_wirelength_routes, RouteSource::kNewgrDataWirelength);
+    maybeUpdateChampion(region_aware_routes, RouteSource::kNewgrRegionAware);
+    maybeUpdateChampion(regular_region_routes, RouteSource::kNewgrRegularRegion);
+    maybeUpdateChampion(finegrain_routes, RouteSource::kNewgrFineGrain);
+    maybeUpdateChampion(smallnet_routes, RouteSource::kNewgrSmallNet);
+    maybeUpdateChampion(astar_routes, RouteSource::kNewgrAstar);
+    maybeUpdateChampion(rudy_routes, RouteSource::kNewgrRudy);
+    maybeUpdateChampion(local_polish_routes, RouteSource::kNewgrPolish);
 
     if (wl_champion_route != selected_route) {
       const int64_t wl_drop_vs_best
@@ -699,13 +763,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const int64_t allowed_congestion_delta
           = policy.long_net ? std::max<int64_t>(10, best_congestion_cost / 4)
                             : (policy.medium_net
-                                   ? std::max<int64_t>(9, best_congestion_cost / 5)
-                                   : std::max<int64_t>(7, best_congestion_cost / 7));
+                                   ? std::max<int64_t>(8, best_congestion_cost / 6)
+                                   : std::max<int64_t>(6, best_congestion_cost / 8));
       const int64_t champion_min_wl_gain
-          = policy.long_net ? std::max<int64_t>(1, tile_size / 7)
+          = policy.long_net ? std::max<int64_t>(1, tile_size / 6)
                             : (policy.medium_net
-                                   ? std::max<int64_t>(1, tile_size / 6)
-                                   : std::max<int64_t>(1, tile_size / 5));
+                                   ? std::max<int64_t>(1, tile_size / 5)
+                                   : std::max<int64_t>(1, tile_size / 4));
       const int64_t champion_force_gain
           = policy.long_net ? std::max<int64_t>(2, tile_size / 3)
                             : std::max<int64_t>(2, tile_size / 2);
@@ -751,15 +815,49 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     cumulative_extra_vias += std::max<int64_t>(
         0, best_score.vias - baseline_score.vias);
 
-    if (selected_source == RouteSource::kNewgrWirelength) {
-      selected_from_wl++;
-    } else if (selected_source == RouteSource::kNewgrDataWirelength) {
-      selected_from_data_wl++;
-    } else {
-      selected_from_balanced++;
+    switch (selected_source) {
+      case RouteSource::kFastRoute:
+        kept_fastroute++;
+        break;
+      case RouteSource::kNewgrBalanced:
+        selected_from_balanced++;
+        break;
+      case RouteSource::kNewgrWirelength:
+        selected_from_wl++;
+        break;
+      case RouteSource::kNewgrDataWirelength:
+        selected_from_data_wl++;
+        break;
+      case RouteSource::kNewgrRegionAware:
+        selected_from_region++;
+        break;
+      case RouteSource::kNewgrRegularRegion:
+        selected_from_regular_region++;
+        break;
+      case RouteSource::kNewgrFineGrain:
+        selected_from_finegrain++;
+        break;
+      case RouteSource::kNewgrSmallNet:
+        selected_from_smallnet++;
+        break;
+      case RouteSource::kNewgrAstar:
+        selected_from_astar++;
+        break;
+      case RouteSource::kNewgrRudy:
+        selected_from_rudy++;
+        break;
+      case RouteSource::kNewgrPolish:
+        selected_from_polish++;
+        break;
     }
   }
 
+  for (const auto& [db_net, route] : balanced_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_balanced++;
+    }
+  }
   for (const auto& [db_net, route] : wirelength_routes) {
     if (routes.find(db_net) == routes.end()) {
       routes.emplace(db_net, route);
@@ -772,18 +870,78 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       inserted_from_data_wl++;
     }
   }
+  for (const auto& [db_net, route] : region_aware_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_region++;
+    }
+  }
+  for (const auto& [db_net, route] : regular_region_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_regular_region++;
+    }
+  }
+  for (const auto& [db_net, route] : finegrain_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_finegrain++;
+    }
+  }
+  for (const auto& [db_net, route] : smallnet_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_smallnet++;
+    }
+  }
+  for (const auto& [db_net, route] : astar_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_astar++;
+    }
+  }
+  for (const auto& [db_net, route] : rudy_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_rudy++;
+    }
+  }
+  for (const auto& [db_net, route] : local_polish_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_polish++;
+    }
+  }
 
   logger_->info(utl::GRT,
                 6004,
-                "NEWGR 3-pass hybrid selected balanced={} wl={} data={} "
-                "(+wl={} +data={}). "
+                "NEWGR portfolio hybrid selected balanced={} wl={} data={} "
+                "region={} regular={} fine={} small={} astar={} rudy={} polish={} "
+                "(kept FR={}; +balanced={} +wl={} +data={} +region={} +regular={} "
+                "+fine={} +small={} +astar={} +rudy={} +polish={}). "
                 "Global WL gain={} "
                 "extra-vias={} (base via budget={} + gain/{}) out of {} total.",
                 selected_from_balanced,
                 selected_from_wl,
                 selected_from_data_wl,
+                selected_from_region,
+                selected_from_regular_region,
+                selected_from_finegrain,
+                selected_from_smallnet,
+                selected_from_astar,
+                selected_from_rudy,
+                selected_from_polish,
+                kept_fastroute,
+                inserted_from_balanced,
                 inserted_from_wl,
                 inserted_from_data_wl,
+                inserted_from_region,
+                inserted_from_regular_region,
+                inserted_from_finegrain,
+                inserted_from_smallnet,
+                inserted_from_astar,
+                inserted_from_rudy,
+                inserted_from_polish,
                 cumulative_wl_gain,
                 cumulative_extra_vias,
                 global_base_via_budget,

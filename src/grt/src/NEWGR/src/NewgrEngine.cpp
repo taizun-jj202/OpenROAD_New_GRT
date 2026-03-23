@@ -74,21 +74,21 @@ void NewgrEngine::init(const SprouteGridData& grid,
 
 NetRouteMap NewgrEngine::run()
 {
-  return runWithConfig(/*max_maze_round=*/165,
+  return runWithConfig(/*max_maze_round=*/350,
                        static_cast<int>(Algo::DetPart_Astar_Local),
                        /*warn_id=*/401);
 }
 
 NetRouteMap NewgrEngine::runWirelengthFirst()
 {
-  return runWithConfig(/*max_maze_round=*/120,
+  return runWithConfig(/*max_maze_round=*/260,
                        static_cast<int>(Algo::DetPart_Astar),
                        /*warn_id=*/402);
 }
 
 NetRouteMap NewgrEngine::runDataDrivenWirelength()
 {
-  return runWithConfig(/*max_maze_round=*/95,
+  return runWithConfig(/*max_maze_round=*/280,
                        static_cast<int>(Algo::DetPart_Astar_Data),
                        /*warn_id=*/406);
 }
@@ -137,7 +137,7 @@ NetRouteMap NewgrEngine::runRudyDriven()
 
 NetRouteMap NewgrEngine::runLocalPolish()
 {
-  return runWithConfig(/*max_maze_round=*/140,
+  return runWithConfig(/*max_maze_round=*/170,
                        static_cast<int>(Algo::DetPart_Astar_Local),
                        /*warn_id=*/410);
 }
