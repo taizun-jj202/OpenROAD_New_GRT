@@ -501,7 +501,10 @@ bool parsePerturbScenarioName(const std::string& name,
 bool isPreferredWirelengthScenario(const std::string& name)
 {
   return name == "hybrid-netmix-wl" || name == "hybrid-netmix-wl-safe"
-         || name == "hybrid-netmix-ultra-wl";
+         || name == "hybrid-netmix-ultra-wl"
+         || name == "hybrid-netmix-min-wl"
+         || name == "hybrid-netmix-min-wl-wide"
+         || name == "hybrid-netmix-min-wl-extreme";
 }
 
 int getSoftCapacityForEdge(uint64_t key,
@@ -1925,7 +1928,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const int wl_source_count = std::min<int>(14, ranked.size());
     const int ultra_wl_source_count = std::min<int>(26, ranked.size());
     const int min_wl_source_count = std::min<int>(36, ranked.size());
-    const int min_wl_wide_source_count = std::min<int>(42, ranked.size());
+    const int min_wl_wide_source_count = ranked.size();
+    const int min_wl_extreme_source_count = ranked.size();
     const int hpwl_lock_source_count = std::min<int>(32, ranked.size());
     const int dr_shield_source_count = std::min<int>(30, ranked.size());
     const int wl_safe_source_count = std::min<int>(18, ranked.size());
@@ -1951,25 +1955,31 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 12L);
     const long pareto_softcap_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 14L);
-    const long min_wl_via_weight
-        = std::max<long>(0, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 20L);
+    const long min_wl_via_weight = 0L;
     append_hybrid("hybrid-netmix-wl", wl_source_count, 0, 0.24, 0.50, 6010);
     append_hybrid(
         "hybrid-netmix-ultra-wl", ultra_wl_source_count, 0, 0.40, 0.95, 6013);
     append_min_wl_hybrid("hybrid-netmix-min-wl",
                          min_wl_source_count,
                          min_wl_via_weight,
-                         0.10,
-                         0.004,
-                         0.05,
+                         0.06,
+                         0.002,
+                         0.03,
                          7102);
     append_min_wl_hybrid("hybrid-netmix-min-wl-wide",
                          min_wl_wide_source_count,
                          min_wl_via_weight,
-                         0.14,
-                         0.006,
                          0.08,
+                         0.003,
+                         0.04,
                          7103);
+    append_min_wl_hybrid("hybrid-netmix-min-wl-extreme",
+                         min_wl_extreme_source_count,
+                         0L,
+                         0.04,
+                         0.001,
+                         0.02,
+                         7104);
     append_hybrid("hybrid-netmix-hpwl-lock",
                   hpwl_lock_source_count,
                   0,
@@ -2075,7 +2085,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       scenario_results.begin(), scenario_results.end(), [](const auto& result) {
         return result.metrics.overflow_edges == 0;
       });
-  const double wl_guard_ratio = overflow_free_sweep ? 0.0035 : 0.0125;
+  const double wl_guard_ratio = overflow_free_sweep ? 0.0020 : 0.0125;
   const long wl_guard_band
       = std::max<long>(200, static_cast<long>(std::ceil(wl_guard_ratio * shortest_wl)));
 
@@ -2105,15 +2115,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   const long tie_via_wl_band
       = std::max<long>(24, static_cast<long>(std::ceil(shortest_wl * 0.00008)));
+  const long tie_preferred_wl_band
+      = std::max<long>(48, static_cast<long>(std::ceil(shortest_wl * 0.0010)));
   const long tie_quality_wl_band
-      = std::max<long>(120, static_cast<long>(std::ceil(shortest_wl * 0.0032)));
+      = std::max<long>(60, static_cast<long>(std::ceil(shortest_wl * 0.0016)));
   auto wirelength_with_quality_tie_better = [&](const ScenarioResult& lhs,
                                                 const ScenarioResult& rhs) {
     const long wl_gap = std::llabs(lhs.metrics.wirelength_dbu
                                    - rhs.metrics.wirelength_dbu);
     const bool lhs_pref = isPreferredWirelengthScenario(lhs.name);
     const bool rhs_pref = isPreferredWirelengthScenario(rhs.name);
-    if (lhs_pref != rhs_pref && wl_gap <= tie_quality_wl_band) {
+    if (lhs_pref != rhs_pref && wl_gap <= tie_preferred_wl_band) {
       return lhs_pref;
     }
     if (wl_gap <= tie_quality_wl_band) {
@@ -2129,7 +2141,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return wirelength_first_better(lhs, rhs);
   };
 
-  auto best_ptr = *std::min_element(
+  const ScenarioResult* best_ptr = *std::min_element(
       shortlist.begin(),
       shortlist.end(),
       [&](const ScenarioResult* lhs, const ScenarioResult* rhs) {
@@ -2138,6 +2150,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         }
         return robust_better(*lhs, *rhs);
       });
+  if (overflow_free_sweep) {
+    const ScenarioResult* shortest_ptr = &(*shortest_wl_iter);
+    const long wl_delta = best_ptr->metrics.wirelength_dbu
+                          - shortest_ptr->metrics.wirelength_dbu;
+    const long enforce_shortest_delta = std::max<long>(
+        80, static_cast<long>(std::ceil(shortest_wl * 0.00035)));
+    if (wl_delta > enforce_shortest_delta) {
+      best_ptr = shortest_ptr;
+    }
+  }
   auto best_iter = scenario_results.begin()
                    + static_cast<std::ptrdiff_t>(best_ptr
                                                  - &scenario_results.front());
