@@ -104,17 +104,20 @@ void FastRouteCore::ConvertToFull3DType2()
 
 static bool compareNetPins(const OrderNetPin& a, const OrderNetPin& b)
 {
-  // Sorting by NDR priority, routing difficulty, and traditional tie-breakers.
-  return std::tie(a.ndr_priority,
-                  a.difficulty,
-                  a.res_aware,
+  // Keep NDR nets first, but route harder nets earlier to protect them from
+  // late detours when resources are already fragmented.
+  if (a.ndr_priority != b.ndr_priority) {
+    return a.ndr_priority < b.ndr_priority;
+  }
+  if (a.difficulty != b.difficulty) {
+    return a.difficulty > b.difficulty;
+  }
+  return std::tie(a.res_aware,
                   a.slack,
                   a.length_per_pin,
                   a.minX,
                   a.treeIndex)
-         < std::tie(b.ndr_priority,
-                    b.difficulty,
-                    b.res_aware,
+         < std::tie(b.res_aware,
                     b.slack,
                     b.length_per_pin,
                     b.minX,

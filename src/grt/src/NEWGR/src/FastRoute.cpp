@@ -1628,11 +1628,87 @@ NetRouteMap FastRouteCore::run()
     }
   }
 
-  freeRR();
-
   removeLoops();
 
-  getOverflow2Dmaze(&maxOverflow, &tUsage);
+  past_cong = getOverflow2Dmaze(&maxOverflow, &tUsage);
+
+  // Wirelength recovery stage:
+  // once the 2D solution is overflow-free, probe a few low-detour maze
+  // configurations and keep only candidates that preserve zero overflow while
+  // reducing the total 2D usage.
+  if (past_cong == 0) {
+    const int baseline_usage = tUsage;
+    int best_usage = baseline_usage;
+    copyRS();
+
+    struct WlProbeConfig
+    {
+      int enlarge = 0;
+      int ripup_threshold = -1;
+      int maze_threshold = 0;
+      bool ordering = false;
+      int via = 1;
+      int history_weight = 0;
+      CostParams cost_params{0.0f, 1.0f, 1};
+    };
+
+    const int base_enlarge = std::max(6, std::min(enlarge_, x_grid_ / 3));
+    const std::vector<WlProbeConfig> probes = {
+        {base_enlarge, -1, 0, true, 2, 0, CostParams(0.25f, 2.0f, 4)},
+        {std::min(base_enlarge + 4, std::max(8, x_grid_ / 2)),
+         -1,
+         0,
+         false,
+         1,
+         0,
+         CostParams(0.35f, 2.5f, 5)},
+        {std::min(base_enlarge + 8, std::max(10, x_grid_ / 2)),
+         -1,
+         1,
+         true,
+         1,
+         0,
+         CostParams(0.50f, 3.0f, 6)}};
+
+    int probe_iter = std::max(1, i);
+    for (const WlProbeConfig& probe : probes) {
+      copyBR();
+
+      mazeedge_threshold_ = probe.maze_threshold;
+      float wl_slack_th = slack_th;
+      mazeRouteMSMD(probe_iter,
+                    probe.enlarge,
+                    probe.ripup_threshold,
+                    probe.maze_threshold,
+                    probe.ordering,
+                    probe.via,
+                    probe.history_weight,
+                    probe.cost_params,
+                    wl_slack_th);
+      probe_iter++;
+
+      int candidate_max_overflow = 0;
+      int candidate_usage = 0;
+      const int candidate_overflow
+          = getOverflow2Dmaze(&candidate_max_overflow, &candidate_usage);
+      if (candidate_overflow == 0 && candidate_usage < best_usage) {
+        best_usage = candidate_usage;
+        copyRS();
+      }
+    }
+
+    copyBR();
+    past_cong = getOverflow2Dmaze(&maxOverflow, &tUsage);
+    if (verbose_ && best_usage < baseline_usage) {
+      logger_->info(GNR,
+                    6025,
+                    "Wirelength recovery reduced 2D usage from {} to {}.",
+                    baseline_usage,
+                    best_usage);
+    }
+  }
+
+  freeRR();
 
   layer_assign_iter_snapshot_ = std::max(1, i - 1);
   layer_assign_total_iters_snapshot_ = std::max(1, overflow_iterations_);
