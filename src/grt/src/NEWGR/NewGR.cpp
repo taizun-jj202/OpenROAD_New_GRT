@@ -4075,7 +4075,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                                  static_cast<long>(std::ceil(
                                                      static_cast<double>(
                                                          wl_anchor->metrics.wirelength_dbu)
-                                                     * 0.00080)))
+                                                     * 0.00040)))
                                            : 0L;
     const long deep_via_drop_detour_bonus = std::max<long>(
         9000L, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1) * 18L));
@@ -4095,14 +4095,37 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       if (via_drop <= via_drop_guard) {
         return true;
       }
+
       const long wl_gain
           = wl_anchor->metrics.wirelength_dbu - candidate->metrics.wirelength_dbu;
+      const long detour_delta
+          = candidate->metrics.detour_dbu - wl_anchor->metrics.detour_dbu;
+      const long high_layer_delta
+          = candidate->metrics.high_layer_dbu - wl_anchor->metrics.high_layer_dbu;
+      const double anchor_proxy = estimateDetailedRouteProxyCost(wl_anchor->metrics);
+      const double candidate_proxy
+          = estimateDetailedRouteProxyCost(candidate->metrics);
+
+      // Accept deep via drops when the candidate is still a structural Pareto
+      // win with lower WL, lower vias, and improved DR proxy quality.
+      const bool strict_pareto_upgrade
+          = candidate->metrics.wirelength_dbu <= wl_anchor->metrics.wirelength_dbu
+            && candidate->metrics.via_count <= wl_anchor->metrics.via_count
+            && detour_delta <= deep_via_drop_detour_bonus
+            && high_layer_delta <= deep_via_drop_high_layer_bonus
+            && candidate_proxy + 1e-3 < anchor_proxy * 1.020;
+      if (strict_pareto_upgrade) {
+        return true;
+      }
+
       const bool structural_recovery
           = candidate->metrics.detour_dbu + deep_via_drop_detour_bonus
                 <= wl_anchor->metrics.detour_dbu
             && candidate->metrics.high_layer_dbu + deep_via_drop_high_layer_bonus
                    <= wl_anchor->metrics.high_layer_dbu;
-      return wl_gain >= deep_via_drop_wl_gain && structural_recovery;
+      const bool proxy_recovery = candidate_proxy + 1e-3 < anchor_proxy * 1.010;
+      return wl_gain >= deep_via_drop_wl_gain && structural_recovery
+             && proxy_recovery;
     };
 
     if (wl_anchor != nullptr && wl_feedback_ptr != nullptr) {
