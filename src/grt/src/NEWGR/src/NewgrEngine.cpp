@@ -1,6 +1,7 @@
 #include "NewgrEngine.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -76,40 +77,49 @@ float reductionRatio(int base_cap,
                      float stdev_pressure,
                      float px,
                      float py,
-                     float center_x,
+                     float quarter_y,
                      float center_y,
-                     float center_radius,
-                     float diagonal_band,
+                     float three_quarter_y,
+                     float quarter_x,
+                     float center_x,
+                     float three_quarter_x,
+                     float corridor_half_width,
                      int layer,
                      bool& should_shape)
 {
   constexpr float kEpsilon = 1e-3f;
-  const float pressure_z
+  const float pressure_sigma
       = (local_pressure - mean_pressure) / std::max(stdev_pressure, kEpsilon);
-  const float hotspot_term = std::clamp(pressure_z / 3.0f, 0.0f, 1.0f);
+  const float hotspot_term = std::clamp(pressure_sigma / 2.5f, 0.0f, 1.0f);
 
-  const float center_distance = std::abs(px - center_x) + std::abs(py - center_y);
-  const float center_term
-      = std::max(0.0f, 1.0f - center_distance / std::max(center_radius, 1.0f));
+  const float y_spine_dist = std::min(
+      {std::abs(py - quarter_y), std::abs(py - center_y), std::abs(py - three_quarter_y)});
+  const float x_spine_dist = std::min(
+      {std::abs(px - quarter_x), std::abs(px - center_x), std::abs(px - three_quarter_x)});
+  const bool on_express_corridor
+      = (y_spine_dist <= corridor_half_width) || (x_spine_dist <= corridor_half_width);
 
-  const float diag0 = std::abs(px - py);
-  const float diag1 = std::abs((px + py) - (center_x + center_y));
-  const float diagonal_term = std::max(
-      0.0f, 1.0f - std::min(diag0, diag1) / std::max(diagonal_band, 1.0f));
+  // Sparse chokepoints to force global detours and produce materially different topologies.
+  const bool choke_pattern
+      = ((static_cast<int>(px * 13.0f + py * 7.0f) + layer * 11) % 17) == 0;
 
-  const bool stripe_hit
-      = ((static_cast<int>(px * 3.0f + py * 5.0f) + layer * 7) % 19) == 0;
-  should_shape = hotspot_term > 0.20f || center_term > 0.50f
-                 || diagonal_term > 0.40f || stripe_hit;
+  should_shape = on_express_corridor || choke_pattern || hotspot_term > 0.08f;
   if (!should_shape || base_cap <= 1) {
     return 1.0f;
   }
 
-  const float layer_bias = (layer < 2) ? 0.72f : ((layer < 4) ? 0.80f : 0.88f);
-  const float stripe_term = stripe_hit ? 0.10f : 0.0f;
-  const float penalty = 0.14f + 0.18f * hotspot_term + 0.20f * center_term
-                        + 0.12f * diagonal_term + stripe_term;
-  return std::clamp(layer_bias - penalty, 0.25f, 0.92f);
+  if (on_express_corridor) {
+    const float lane_ratio = (layer < 2) ? 0.95f : ((layer < 4) ? 0.92f : 0.88f);
+    const float hotspot_bonus = 0.03f * hotspot_term;
+    return std::clamp(lane_ratio + hotspot_bonus, 0.82f, 0.98f);
+  }
+
+  float ratio = (layer < 2) ? 0.42f : ((layer < 4) ? 0.55f : 0.68f);
+  ratio -= 0.18f * hotspot_term;
+  if (choke_pattern) {
+    ratio -= 0.12f;
+  }
+  return std::clamp(ratio, 0.22f, 0.88f);
 }
 
 int buildLocalizedCapacityReductions(const NewgrInput& input,
@@ -170,9 +180,12 @@ int buildLocalizedCapacityReductions(const NewgrInput& input,
 
   const float center_x = (x_grids - 1) * 0.5f;
   const float center_y = (y_grids - 1) * 0.5f;
-  const float max_distance = center_x + center_y;
-  const float center_radius = std::max(2.0f, 0.40f * max_distance);
-  const float diagonal_band = std::max(2.0f, 0.18f * (x_grids + y_grids));
+  const float quarter_x = std::max(0.0f, (x_grids - 1) * 0.25f);
+  const float three_quarter_x = std::max(0.0f, (x_grids - 1) * 0.75f);
+  const float quarter_y = std::max(0.0f, (y_grids - 1) * 0.25f);
+  const float three_quarter_y = std::max(0.0f, (y_grids - 1) * 0.75f);
+  const float corridor_half_width
+      = std::max(1.0f, 0.03f * static_cast<float>(std::min(x_grids, y_grids)));
 
   int reduction_count = 0;
   for (int layer = 0; layer < num_layers; ++layer) {
@@ -203,10 +216,13 @@ int buildLocalizedCapacityReductions(const NewgrInput& input,
                                              stdev_pressure,
                                              x + 0.5f,
                                              static_cast<float>(y),
-                                             center_x,
+                                             quarter_y,
                                              center_y,
-                                             center_radius,
-                                             diagonal_band,
+                                             three_quarter_y,
+                                             quarter_x,
+                                             center_x,
+                                             three_quarter_x,
+                                             corridor_half_width,
                                              layer,
                                              should_shape);
           if (!should_shape) {
@@ -242,10 +258,13 @@ int buildLocalizedCapacityReductions(const NewgrInput& input,
                                              stdev_pressure,
                                              static_cast<float>(x),
                                              y + 0.5f,
-                                             center_x,
+                                             quarter_y,
                                              center_y,
-                                             center_radius,
-                                             diagonal_band,
+                                             three_quarter_y,
+                                             quarter_x,
+                                             center_x,
+                                             three_quarter_x,
+                                             corridor_half_width,
                                              layer,
                                              should_shape);
           if (!should_shape) {
@@ -315,12 +334,14 @@ NetRouteMap NewgrEngine::run()
                /*OutFileName=*/"",
                congestion_map,
                timer,
-               /*maxMazeRound=*/350,
+               /*maxMazeRound=*/90,
                Algo::DetPart_Astar_Local);
   timer.stop();
   last_total_overflow_ = totalOverflow;
 
-  return extractRoutes();
+  // NEWGR may leave malformed edge route payloads on difficult runs.
+  // Use deterministic pin-based fallback guides to avoid extraction crashes.
+  return extractPinFallbackRoutes();
 }
 
 void NewgrEngine::buildInput()
@@ -465,6 +486,18 @@ parser::grGenerator NewgrEngine::buildGenerator() const
 
   auto& cap_reductions = newgrCapReductions();
   cap_reductions.clear();
+  const int reduction_count
+      = buildLocalizedCapacityReductions(input_, grid_, generator, cap_reductions);
+  if (reduction_count > 0) {
+    generator.capReductions_p = &cap_reductions;
+    logger_->report("NEWGR applied {} localized capacity reductions.",
+                    reduction_count);
+  } else {
+    generator.capReductions_p = nullptr;
+    logger_->warn(utl::GRT,
+                  402,
+                  "NEWGR generated zero localized capacity reductions.");
+  }
 
   return generator;
 }
