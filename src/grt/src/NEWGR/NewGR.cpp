@@ -1180,6 +1180,126 @@ int applyExtremeWirelengthFusion(
   return replaced_nets;
 }
 
+int applyConsensusWirelengthCollapseFusion(
+    NetRouteMap& base_routes,
+    const std::vector<const NetRouteMap*>& donor_route_sets,
+    int tile_size,
+    int x_min,
+    int y_min,
+    int x_grids,
+    int y_grids,
+    const std::map<std::int64_t, float>& hotspot_map,
+    long min_wl_gain,
+    int base_via_slack,
+    double base_hotspot_slack,
+    double max_via_growth_ratio)
+{
+  int replaced_nets = 0;
+  tile_size = std::max(tile_size, 1);
+  min_wl_gain = std::max(min_wl_gain, 1L);
+  base_via_slack = std::max(base_via_slack, 0);
+  base_hotspot_slack = std::max(base_hotspot_slack, 0.0);
+  max_via_growth_ratio = std::max(max_via_growth_ratio, 1.0);
+
+  for (auto& [db_net, base_route] : base_routes) {
+    const NetRouteCost base_cost = computeNetRouteCost(base_route,
+                                                       tile_size,
+                                                       x_min,
+                                                       y_min,
+                                                       x_grids,
+                                                       y_grids,
+                                                       hotspot_map);
+    const bool is_long = base_cost.wirelength_dbu >= (20L * tile_size);
+    const bool is_xlong = base_cost.wirelength_dbu >= (48L * tile_size);
+
+    const GRoute* chosen_route = &base_route;
+    NetRouteCost chosen_cost = base_cost;
+
+    for (const NetRouteMap* donor_routes : donor_route_sets) {
+      if (donor_routes == nullptr) {
+        continue;
+      }
+      const auto donor_it = donor_routes->find(db_net);
+      if (donor_it == donor_routes->end()) {
+        continue;
+      }
+
+      const NetRouteCost donor_cost = computeNetRouteCost(donor_it->second,
+                                                          tile_size,
+                                                          x_min,
+                                                          y_min,
+                                                          x_grids,
+                                                          y_grids,
+                                                          hotspot_map);
+      const long wl_gain_from_base
+          = base_cost.wirelength_dbu - donor_cost.wirelength_dbu;
+      if (wl_gain_from_base <= 0) {
+        continue;
+      }
+
+      // Long-net-biased permissive via slack: borrow aggressive path
+      // shortening from CUGR/SPRoute donors when WL gain is meaningful.
+      const int via_scale = is_xlong ? 2 : (is_long ? 3 : 4);
+      const int wl_bonus_vias = static_cast<int>(
+          wl_gain_from_base / std::max(via_scale * tile_size, 1));
+      const int tier_bonus = is_xlong ? 18 : (is_long ? 10 : 4);
+      const int via_cap_by_gain
+          = base_cost.via_count + base_via_slack + wl_bonus_vias + tier_bonus;
+      const int via_cap_by_ratio = static_cast<int>(std::ceil(
+          max_via_growth_ratio * static_cast<double>(std::max(base_cost.via_count, 1L))));
+      const int allowed_vias = std::max(via_cap_by_gain, via_cap_by_ratio);
+      if (donor_cost.via_count > allowed_vias) {
+        continue;
+      }
+
+      const int hotspot_scale = is_xlong ? 6 : (is_long ? 7 : 9);
+      const double hotspot_bonus
+          = base_hotspot_slack
+            + static_cast<double>(wl_gain_from_base)
+                  / static_cast<double>(std::max(hotspot_scale * tile_size, 1))
+            + (is_xlong ? 1.0 : (is_long ? 0.45 : 0.0));
+      const double allowed_hotspot = base_cost.hotspot_exposure + hotspot_bonus;
+      if (donor_cost.hotspot_exposure > allowed_hotspot) {
+        continue;
+      }
+
+      const bool meaningful_gain = wl_gain_from_base >= min_wl_gain;
+      const long wl_gain_vs_chosen
+          = chosen_cost.wirelength_dbu - donor_cost.wirelength_dbu;
+      const bool improves_chosen = wl_gain_vs_chosen > 0;
+      if (!improves_chosen) {
+        continue;
+      }
+
+      // For marginal WL gains, demand that donor does not add via spikes.
+      if (!meaningful_gain
+          && donor_cost.via_count > (chosen_cost.via_count + std::max(2, tile_size / 2))) {
+        continue;
+      }
+
+      const bool better = donor_cost.wirelength_dbu < chosen_cost.wirelength_dbu
+                          || (donor_cost.wirelength_dbu == chosen_cost.wirelength_dbu
+                              && donor_cost.via_count < chosen_cost.via_count)
+                          || (donor_cost.wirelength_dbu == chosen_cost.wirelength_dbu
+                              && donor_cost.via_count == chosen_cost.via_count
+                              && donor_cost.hotspot_exposure < chosen_cost.hotspot_exposure);
+      if (!better) {
+        continue;
+      }
+
+      chosen_route = &donor_it->second;
+      chosen_cost = donor_cost;
+    }
+
+    if (chosen_route != &base_route) {
+      base_route = *chosen_route;
+      replaced_nets++;
+    }
+  }
+
+  return replaced_nets;
+}
+
 int applyLongNetPriorityFusion(
     NetRouteMap& base_routes,
     const std::vector<const NetRouteMap*>& donor_route_sets,
@@ -2545,9 +2665,91 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   if (has_best_wirelength) {
+    ScenarioResult collapse;
+    collapse.name = "consensus-collapse-fusion";
+    if (ScenarioResult* extreme = find_scenario_result("extreme-wirelength-stitch")) {
+      collapse.routes = extreme->routes;
+    } else if (ScenarioResult* radical = find_scenario_result("radical-shortpath-fusion")) {
+      collapse.routes = radical->routes;
+    } else if (ScenarioResult* cross = find_scenario_result("cross-router-wirelength-fusion")) {
+      collapse.routes = cross->routes;
+    } else {
+      collapse.routes = best_wirelength_routes;
+    }
+
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+
+    std::vector<const NetRouteMap*> donors;
+    donors.reserve(scenario_results.size());
+    for (const ScenarioResult& result : scenario_results) {
+      if (result.name == collapse.name) {
+        continue;
+      }
+      donors.push_back(&result.routes);
+    }
+
+    int fused_swaps = applyConsensusWirelengthCollapseFusion(collapse.routes,
+                                                             donors,
+                                                             tile_size,
+                                                             x_min,
+                                                             y_min,
+                                                             x_grids,
+                                                             y_grids,
+                                                             hotspot_map,
+                                                             std::max(tile_size / 4, 1),
+                                                             8,
+                                                             0.80,
+                                                             2.15);
+
+    std::vector<const NetRouteMap*> specialist_donors;
+    specialist_donors.reserve(7);
+    for (const char* donor_name : {"cugr-router-donor",
+                                   "sproute-router-donor",
+                                   "extreme-wirelength-stitch",
+                                   "radical-shortpath-fusion",
+                                   "cross-router-wirelength-fusion",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        specialist_donors.push_back(&donor->routes);
+      }
+    }
+
+    fused_swaps += applyConsensusWirelengthCollapseFusion(collapse.routes,
+                                                          specialist_donors,
+                                                          tile_size,
+                                                          x_min,
+                                                          y_min,
+                                                          x_grids,
+                                                          y_grids,
+                                                          hotspot_map,
+                                                          1,
+                                                          10,
+                                                          1.10,
+                                                          2.30);
+
+    collapse.metrics = compute_metrics(collapse.routes);
+    logger_->info(
+        GNR,
+        6021,
+        "NEWGR scenario {} [collapse]: wirelength {:.0f} um, vias {}, fused nets {}",
+        collapse.name,
+        collapse.metrics.wirelength_um,
+        collapse.metrics.via_count,
+        fused_swaps);
+    scenario_results.push_back(std::move(collapse));
+  }
+
+  if (has_best_wirelength) {
     ScenarioResult stabilized;
     stabilized.name = "stabilized-dr-fusion";
-    if (ScenarioResult* extreme = find_scenario_result("extreme-wirelength-stitch")) {
+    if (ScenarioResult* collapse = find_scenario_result("consensus-collapse-fusion")) {
+      stabilized.routes = collapse->routes;
+    } else if (ScenarioResult* extreme = find_scenario_result("extreme-wirelength-stitch")) {
       stabilized.routes = extreme->routes;
     } else if (ScenarioResult* radical = find_scenario_result("radical-shortpath-fusion")) {
       stabilized.routes = radical->routes;
@@ -2563,7 +2765,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     std::vector<const NetRouteMap*> stabilization_donors;
     stabilization_donors.reserve(8);
-    for (const char* donor_name : {"radical-shortpath-fusion",
+    for (const char* donor_name : {"consensus-collapse-fusion",
+                                   "radical-shortpath-fusion",
                                    "cross-router-wirelength-fusion",
                                    "multi-router-wirelength-fusion",
                                    "spatial-wirelength-grafting",
