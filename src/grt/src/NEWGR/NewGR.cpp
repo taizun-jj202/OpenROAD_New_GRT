@@ -1110,6 +1110,28 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return hotspots;
   };
 
+  auto focus_hotspots = [](const std::vector<Hotspot>& all_hotspots,
+                           size_t max_count,
+                           float min_severity) {
+    std::vector<Hotspot> filtered;
+    filtered.reserve(all_hotspots.size());
+    for (const Hotspot& hotspot : all_hotspots) {
+      if (hotspot.severity >= min_severity) {
+        filtered.push_back(hotspot);
+      }
+    }
+
+    std::stable_sort(filtered.begin(),
+                     filtered.end(),
+                     [](const Hotspot& lhs, const Hotspot& rhs) {
+                       return lhs.severity > rhs.severity;
+                     });
+    if (filtered.size() > max_count) {
+      filtered.resize(max_count);
+    }
+    return filtered;
+  };
+
   auto run_scenario = [&](const ScenarioDefinition& scenario,
                           const RouterSnapshot& snapshot) {
     restore_snapshot(snapshot);
@@ -1147,6 +1169,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   ScenarioResult baseline
       = run_existing_state("baseline", nets);
   std::vector<Hotspot> hotspots = collect_hotspots();
+  const std::vector<Hotspot> focused_hotspots
+      = focus_hotspots(hotspots, hotspots.size(), 0.6f);
 
   RudyGrid normalized_rudy;
   if (Rudy* rudy = grouter_->getRudy()) {
@@ -1173,11 +1197,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     reorderNetsByWirelengthPriority(scenario_nets);
   };
   sporder_shortest_def.post_init
-      = [this, &hotspots, min_routing_layer, max_routing_layer]() {
+      = [this, &focused_hotspots, min_routing_layer, max_routing_layer]() {
           applyUniformCapacityBoost(
               grouter_, min_routing_layer, max_routing_layer, 1.02f);
           applyHotspotPenalties(grouter_,
-                                hotspots,
+                                focused_hotspots,
                                 min_routing_layer,
                                 max_routing_layer,
                                 0,
@@ -1215,11 +1239,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     reorderNetsBySpatialRoundRobin(scenario_nets);
   };
   spatial_round_robin_def.post_init
-      = [this, &hotspots, min_routing_layer, max_routing_layer]() {
+      = [this, &focused_hotspots, min_routing_layer, max_routing_layer]() {
           applyUniformCapacityBoost(
               grouter_, min_routing_layer, max_routing_layer, 1.06f);
           applyHotspotPenalties(grouter_,
-                                hotspots,
+                                focused_hotspots,
                                 min_routing_layer,
                                 max_routing_layer,
                                 0,
@@ -1244,13 +1268,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     reorderNetsByBspThenHpwlBurst(scenario_nets);
   };
   ultra_compact_bsp_def.post_init
-      = [this, &hotspots, min_routing_layer, max_routing_layer]() {
+      = [this, &focused_hotspots, min_routing_layer, max_routing_layer]() {
           // Keep global resources slightly relaxed to preserve shortest
           // Manhattan paths unless heavy overflow appears.
           applyUniformCapacityBoost(
               grouter_, min_routing_layer, max_routing_layer, 1.12f);
           applyHotspotPenalties(grouter_,
-                                hotspots,
+                                focused_hotspots,
                                 min_routing_layer,
                                 max_routing_layer,
                                 0,
@@ -1261,6 +1285,49 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   scenario_defs.push_back(std::move(ultra_compact_bsp_def));
 
   if (!normalized_rudy.empty()) {
+    ScenarioDefinition wl_direct_focus_def;
+    wl_direct_focus_def.name = "wl-direct-focused";
+    wl_direct_focus_def.pre_init = [this, seed = 83]() {
+      grouter_->setCapacitiesPerturbationPercentage(0.0f);
+      grouter_->setPerturbationAmount(0);
+      grouter_->setAllowCongestion(true);
+      grouter_->setSeed(seed);
+      grouter_->fastroute_->setCriticalNetsPercentage(72.0f);
+    };
+    wl_direct_focus_def.order_nets = [](std::vector<Net*>& scenario_nets) {
+      reorderNetsByBspThenHpwlBurst(scenario_nets);
+    };
+    wl_direct_focus_def.post_init = [this,
+                                     &normalized_rudy,
+                                     &focused_hotspots,
+                                     min_routing_layer,
+                                     max_routing_layer]() {
+      // FastRoute-style shortest-path bias with SPRoute-style deterministic
+      // ordering and a light CUGR-inspired soft-cap remap.
+      applyUniformCapacityBoost(
+          grouter_, min_routing_layer, max_routing_layer, 1.10f);
+      applyHybridCapacityRemap(grouter_,
+                               normalized_rudy,
+                               focused_hotspots,
+                               min_routing_layer,
+                               max_routing_layer,
+                               0.96f,
+                               1.16f,
+                               2.2f,
+                               0.78f,
+                               0.42f,
+                               0);
+      applyHotspotPenalties(grouter_,
+                            focused_hotspots,
+                            min_routing_layer,
+                            max_routing_layer,
+                            0,
+                            0.97f,
+                            0.18f);
+    };
+    wl_direct_focus_def.aggressive = true;
+    scenario_defs.push_back(std::move(wl_direct_focus_def));
+
     ScenarioDefinition cugr_softcap_wl_def;
     cugr_softcap_wl_def.name = "cugr-softcap-wirelength";
     cugr_softcap_wl_def.pre_init = [this, seed = 67]() {
@@ -1275,12 +1342,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
     cugr_softcap_wl_def.post_init = [this,
                                      &normalized_rudy,
-                                     &hotspots,
+                                     &focused_hotspots,
                                      min_routing_layer,
                                      max_routing_layer]() {
       applyHybridCapacityRemap(grouter_,
                                normalized_rudy,
-                               hotspots,
+                               focused_hotspots,
                                min_routing_layer,
                                max_routing_layer,
                                0.94f,
@@ -1300,7 +1367,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       applyUniformCapacityBoost(
           grouter_, min_routing_layer, max_routing_layer, 1.025f);
       applyHotspotPenalties(grouter_,
-                            hotspots,
+                            focused_hotspots,
                             min_routing_layer,
                             max_routing_layer,
                             0,
@@ -1324,12 +1391,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
     wl_squeeze_hybrid_def.post_init = [this,
                                        &normalized_rudy,
-                                       &hotspots,
+                                       &focused_hotspots,
                                        min_routing_layer,
                                        max_routing_layer]() {
       applyHybridCapacityRemap(grouter_,
                                normalized_rudy,
-                               hotspots,
+                               focused_hotspots,
                                min_routing_layer,
                                max_routing_layer,
                                0.82f,
@@ -1349,7 +1416,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       applyUniformCapacityBoost(
           grouter_, min_routing_layer, max_routing_layer, 1.04f);
       applyHotspotPenalties(grouter_,
-                            hotspots,
+                            focused_hotspots,
                             min_routing_layer,
                             max_routing_layer,
                             1,
@@ -1372,7 +1439,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const long rhs_wl = rhs.metrics.wirelength_dbu;
     const long wl_tie_window
         = std::max<long>(120000, std::max(lhs_wl, rhs_wl) / 8000);
-    if (std::abs(lhs_wl - rhs_wl) > wl_tie_window) {
+    const long wl_delta = lhs_wl > rhs_wl ? lhs_wl - rhs_wl : rhs_wl - lhs_wl;
+    if (wl_delta > wl_tie_window) {
       return lhs_wl < rhs_wl;
     }
 
@@ -1386,6 +1454,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
 
+    if (lhs_wl != rhs_wl) {
+      return lhs_wl < rhs_wl;
+    }
     if (lhs.metrics.via_count != rhs.metrics.via_count) {
       return lhs.metrics.via_count < rhs.metrics.via_count;
     }
@@ -1425,7 +1496,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 final_result.metrics.wirelength_um,
                 final_result.metrics.via_count);
 
-  if (final_result.name == "cugr-softcap-wirelength") {
+  if (final_result.name == "cugr-softcap-wirelength"
+      || final_result.name == "sporder-shortest"
+      || final_result.name == "wl-direct-focused") {
     applyCugrStyleGuidePatching(grouter_,
                                 final_result.routes,
                                 min_routing_layer,
