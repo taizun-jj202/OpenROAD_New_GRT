@@ -617,17 +617,17 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 
 	SLOPE=5;
 	THRESH_M=20;
-	ENLARGE=115;//5
-	ESTEP1=30;//10
-	ESTEP2=30;//5
-	ESTEP3=30;//5
-	CSTEP1=2;//5
-	CSTEP2=2;//3
-	CSTEP3=5;//15
+	ENLARGE=72;// bias toward shorter detours
+	ESTEP1=16;
+	ESTEP2=14;
+	ESTEP3=10;
+	CSTEP1=1;
+	CSTEP2=1;
+	CSTEP3=3;
 	CSTEP4 = 1000;
 	COSHEIGHT=40;
 	L=0;
-	VIA=2;
+	VIA=1;
 	L_afterSTOP=1;
 	Ripvalue=-1;
 	ripupTH3D = 10;
@@ -637,7 +637,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	thStep2 = 4;
 	healingNeed = FALSE;
 	updateType = 0;
-	LVIter = 3;
+	LVIter = 2;
 	extremeNeeded = FALSE;
 	mazeRound = maxMazeRound;
 	bmfl = BIG_INT;
@@ -841,7 +841,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			}
 
 			 
-			enlarge = min (enlarge, max(xGrid, yGrid)/2);
+			const int enlarge_limit = max(8, max(xGrid, yGrid) / 7);
+			enlarge = min(enlarge, enlarge_limit);
 			//std::cout << "costheight : " << costheight << " enlarge: " << enlarge << std::endl; 
 			costheight+=cost_step;
 			//std::cout << "costheight : " << costheight << " enlarge: " << enlarge << std::endl; 
