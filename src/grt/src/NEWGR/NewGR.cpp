@@ -272,30 +272,35 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   fastroute_score.vias,
                   fastroute_score.routed_nets);
 
-    RouteScore best_score = newgr_score;
-    int best_overflow = last_total_overflow_;
-    const char* selected_label = "NEWGR-core";
+    // Detailed-route QoR has been more stable when FastRoute is used as the
+    // default backbone, and NEWGR/hybrid are only used as overflow fallback.
+    RouteScore best_score = fastroute_score;
+    int best_overflow = fastroute_overflow;
+    const char* selected_label = "FastRoute";
     bool selected_hybrid = false;
+    used_fastroute_last_run_ = true;
+    routes = std::move(fastroute_routes);
 
     if (isBetterRoute(last_total_overflow_,
                       hybrid_score,
                       best_overflow,
-                      best_score)) {
+                      best_score)
+        && last_total_overflow_ < best_overflow) {
       routes = std::move(hybrid_routes);
       best_score = hybrid_score;
+      best_overflow = last_total_overflow_;
       selected_label = "NEWGR+FastRoute net-graft";
       selected_hybrid = true;
-    }
-
-    if (isBetterRoute(fastroute_overflow,
-                      fastroute_score,
-                      best_overflow,
-                      best_score)) {
-      routes = std::move(fastroute_routes);
-      best_overflow = fastroute_overflow;
-      best_score = fastroute_score;
-      selected_label = "FastRoute";
-      used_fastroute_last_run_ = true;
+      used_fastroute_last_run_ = false;
+    } else if (isBetterRoute(last_total_overflow_,
+                             newgr_score,
+                             best_overflow,
+                             best_score)
+               && last_total_overflow_ < best_overflow) {
+      best_score = newgr_score;
+      best_overflow = last_total_overflow_;
+      selected_label = "NEWGR-core";
+      used_fastroute_last_run_ = false;
     }
 
     last_total_overflow_ = best_overflow;

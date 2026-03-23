@@ -152,14 +152,22 @@ RouteMetrics computeRouteMetrics(const SprouteGridData& grid,
   return metrics;
 }
 
+uint64_t selectionCost(const RouteMetrics& metrics)
+{
+  // Wirelength-first ranking with only a very light risk guard.
+  return metrics.wirelength + metrics.vias * 8 + metrics.congestion_risk / 3000;
+}
+
 bool isBetterCandidate(const CandidateResult& lhs, const CandidateResult& rhs)
 {
   if (lhs.overflow != rhs.overflow) {
     return lhs.overflow < rhs.overflow;
   }
 
-  if (lhs.metrics.proxy_cost != rhs.metrics.proxy_cost) {
-    return lhs.metrics.proxy_cost < rhs.metrics.proxy_cost;
+  const uint64_t lhs_cost = selectionCost(lhs.metrics);
+  const uint64_t rhs_cost = selectionCost(rhs.metrics);
+  if (lhs_cost != rhs_cost) {
+    return lhs_cost < rhs_cost;
   }
   if (lhs.metrics.wirelength != rhs.metrics.wirelength) {
     return lhs.metrics.wirelength < rhs.metrics.wirelength;
@@ -311,7 +319,6 @@ NetRouteMap NewgrEngine::run()
   }
 
   prepareLefDefMetadata();
-  parser::grGenerator generator = buildGenerator();
 
   ensureGaloisRuntime();
   if (numThreads <= 0) {
@@ -320,17 +327,18 @@ NetRouteMap NewgrEngine::run()
   galois::preAlloc(numThreads * 2);
   numThreads = galois::setActiveThreads(numThreads);
 
-  if (generator.capReductions_p == nullptr) {
-    logger_->warn(utl::GRT,
-                  401,
-                  "NEWGR generator has no localized capacity reductions; "
-                  "continuing without adjustments.");
-  }
-
   auto run_candidate = [&](Algo algo,
                            int maze_rounds,
                            int capacity_profile,
                            const char* mode_name) {
+    parser::grGenerator generator = buildGenerator();
+    if (generator.capReductions_p == nullptr) {
+      logger_->warn(utl::GRT,
+                    401,
+                    "NEWGR generator has no localized capacity reductions; "
+                    "continuing without adjustments.");
+    }
+
     CandidateResult candidate;
     candidate.algo = algo;
     candidate.mode_name = mode_name;
@@ -369,13 +377,28 @@ NetRouteMap NewgrEngine::run()
     return candidate;
   };
 
-  // Keep a single clean candidate run.
-  // The embedded SPRoute core keeps global state between invocations, so
-  // multi-candidate evaluation in one process can contaminate comparisons.
+  // NEWGR radical ensemble:
+  // - RADICAL_WL keeps shortest-path pressure high.
+  // - RADICAL_MIX adds deterministic hotspot diffusion from SPRoute ideas.
+  // - ULTRA_WL provides a tighter-box shortest-path alternative.
   CandidateResult best = run_candidate(Algo::Astar,
                                        520,
                                        NEWGR_CAP_PROFILE_RADICAL_WL,
-                                       "Astar_RadicalWL_Short");
+                                       "Astar_RadicalWL");
+  CandidateResult radical_mix = run_candidate(Algo::Astar,
+                                              500,
+                                              NEWGR_CAP_PROFILE_RADICAL_MIX,
+                                              "Astar_RadicalMix");
+  if (isBetterCandidate(radical_mix, best)) {
+    best = std::move(radical_mix);
+  }
+  CandidateResult ultra_wl = run_candidate(Algo::Astar,
+                                           460,
+                                           NEWGR_CAP_PROFILE_ULTRA_WL,
+                                           "Astar_UltraWL");
+  if (isBetterCandidate(ultra_wl, best)) {
+    best = std::move(ultra_wl);
+  }
 
   if (best.overflow > 0) {
     CandidateResult short3d = run_candidate(Algo::Astar,
