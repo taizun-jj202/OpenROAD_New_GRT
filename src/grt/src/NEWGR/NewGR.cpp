@@ -7,6 +7,7 @@
 #include <limits>
 #include <numeric>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -1174,7 +1175,6 @@ void applyGuideCompression(NetRouteMap& routes, int jog_limit)
 {
   jog_limit = std::max(jog_limit, 1);
   for (auto& [db_net, route] : routes) {
-    static_cast<void>(db_net);
     if (route.empty()) {
       continue;
     }
@@ -1362,6 +1362,161 @@ void applyAggressiveDoglegShortcuts(NetRouteMap& routes,
 
     if (changed && !current.empty()) {
       route.swap(current);
+    }
+  }
+}
+
+struct RouteNode
+{
+  int x = 0;
+  int y = 0;
+  int layer = 0;
+};
+
+std::vector<RouteNode> collectUniqueRouteNodes(const GRoute& route)
+{
+  std::vector<RouteNode> nodes;
+  nodes.reserve(route.size() * 2);
+  for (const GSegment& segment : route) {
+    nodes.push_back(RouteNode{segment.init_x, segment.init_y, segment.init_layer});
+    nodes.push_back(
+        RouteNode{segment.final_x, segment.final_y, segment.final_layer});
+  }
+  std::sort(nodes.begin(),
+            nodes.end(),
+            [](const RouteNode& lhs, const RouteNode& rhs) {
+              return std::tie(lhs.x, lhs.y, lhs.layer)
+                     < std::tie(rhs.x, rhs.y, rhs.layer);
+            });
+  nodes.erase(
+      std::unique(nodes.begin(),
+                  nodes.end(),
+                  [](const RouteNode& lhs, const RouteNode& rhs) {
+                    return lhs.x == rhs.x && lhs.y == rhs.y
+                           && lhs.layer == rhs.layer;
+                  }),
+      nodes.end());
+  return nodes;
+}
+
+int chooseDominantLayer(const std::vector<RouteNode>& nodes,
+                        int min_layer,
+                        int max_layer)
+{
+  std::vector<int> layer_votes(std::max(max_layer + 1, 0), 0);
+  for (const RouteNode& node : nodes) {
+    if (node.layer < min_layer || node.layer > max_layer
+        || node.layer >= static_cast<int>(layer_votes.size())) {
+      continue;
+    }
+    layer_votes[node.layer]++;
+  }
+
+  int best_layer = std::clamp(min_layer, min_layer, max_layer);
+  int best_votes = -1;
+  for (int layer = min_layer; layer <= max_layer; ++layer) {
+    const int votes = layer < static_cast<int>(layer_votes.size())
+                          ? layer_votes[layer]
+                          : 0;
+    if (votes > best_votes) {
+      best_votes = votes;
+      best_layer = layer;
+    }
+  }
+  return best_layer;
+}
+
+void connectNodeToMedianSpine(std::vector<GSegment>& rebuilt,
+                              const RouteNode& node,
+                              int spine_x,
+                              int spine_y,
+                              int trunk_layer)
+{
+  int cur_x = node.x;
+  int cur_y = node.y;
+  int cur_layer = node.layer;
+  if (cur_layer != trunk_layer) {
+    const int step = (trunk_layer > cur_layer) ? 1 : -1;
+    while (cur_layer != trunk_layer) {
+      const int next_layer = cur_layer + step;
+      appendSegment(
+          rebuilt, cur_x, cur_y, cur_layer, cur_x, cur_y, next_layer);
+      cur_layer = next_layer;
+    }
+  }
+  appendSegment(rebuilt, cur_x, cur_y, cur_layer, spine_x, cur_y, trunk_layer);
+  appendSegment(rebuilt, spine_x, cur_y, trunk_layer, spine_x, spine_y, trunk_layer);
+}
+
+void applyMedianSpineRebuild(NetRouteMap& routes,
+                             int min_unique_nodes,
+                             int coverage_percent,
+                             int min_layer,
+                             int max_layer)
+{
+  min_unique_nodes = std::max(min_unique_nodes, 3);
+  coverage_percent = std::clamp(coverage_percent, 1, 100);
+  min_layer = std::max(min_layer, 0);
+  max_layer = std::max(max_layer, min_layer);
+
+  for (auto& [db_net, route] : routes) {
+    static_cast<void>(db_net);
+    if (route.empty()) {
+      continue;
+    }
+
+    const auto net_key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    if (static_cast<int>(net_key % 100ULL) >= coverage_percent) {
+      continue;
+    }
+
+    const std::vector<RouteNode> nodes = collectUniqueRouteNodes(route);
+    if (static_cast<int>(nodes.size()) < min_unique_nodes) {
+      continue;
+    }
+
+    std::vector<int> xs;
+    std::vector<int> ys;
+    xs.reserve(nodes.size());
+    ys.reserve(nodes.size());
+    int min_x = nodes.front().x;
+    int max_x = nodes.front().x;
+    int min_y = nodes.front().y;
+    int max_y = nodes.front().y;
+    for (const RouteNode& node : nodes) {
+      xs.push_back(node.x);
+      ys.push_back(node.y);
+      min_x = std::min(min_x, node.x);
+      max_x = std::max(max_x, node.x);
+      min_y = std::min(min_y, node.y);
+      max_y = std::max(max_y, node.y);
+    }
+
+    std::nth_element(xs.begin(), xs.begin() + xs.size() / 2, xs.end());
+    std::nth_element(ys.begin(), ys.begin() + ys.size() / 2, ys.end());
+    const int spine_x = xs[xs.size() / 2];
+    const int spine_y = ys[ys.size() / 2];
+    const int trunk_layer = chooseDominantLayer(nodes, min_layer, max_layer);
+
+    std::vector<GSegment> rebuilt;
+    rebuilt.reserve(nodes.size() * 4);
+    for (const RouteNode& node : nodes) {
+      connectNodeToMedianSpine(rebuilt, node, spine_x, spine_y, trunk_layer);
+    }
+
+    // Reinforce central trunks so detailed routing has a strong connected backbone.
+    appendSegment(rebuilt, min_x, spine_y, trunk_layer, max_x, spine_y, trunk_layer);
+    appendSegment(rebuilt, spine_x, min_y, trunk_layer, spine_x, max_y, trunk_layer);
+
+    std::vector<GSegment> compressed;
+    compressed.reserve(rebuilt.size());
+    for (const GSegment& segment : rebuilt) {
+      appendCompressedSegment(compressed, segment);
+    }
+
+    if (!compressed.empty()) {
+      route.swap(compressed);
     }
   }
 }
@@ -1905,6 +2060,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                  std::max(tile_size, 1));
   applyGuideCompression(selected.routes, std::max(8 * tile_size, 1));
   applyViaExcursionCollapse(selected.routes, std::max(5 * tile_size, 1));
+
+  const RouteMetrics pre_spine_metrics = compute_metrics(selected.routes);
+  applyMedianSpineRebuild(selected.routes,
+                          6,
+                          72,
+                          min_routing_layer,
+                          max_routing_layer);
+  applyAggressiveDoglegShortcuts(selected.routes,
+                                 std::max(20 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(selected.routes, std::max(12 * tile_size, 1));
+  applyViaExcursionCollapse(selected.routes, std::max(6 * tile_size, 1));
+
   selected.metrics = compute_metrics(selected.routes);
   logger_->warn(GNR,
                 6021,
@@ -1912,6 +2080,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 "{:+d}.",
                 selected.metrics.wirelength_um - pre_wave_metrics.wirelength_um,
                 selected.metrics.via_count - pre_wave_metrics.via_count);
+  logger_->warn(
+      GNR,
+      6025,
+      "NEWGR median spine rebuild: wl delta {:+.0f} um, via delta {:+d}.",
+      selected.metrics.wirelength_um - pre_spine_metrics.wirelength_um,
+      selected.metrics.via_count - pre_spine_metrics.via_count);
 
   const double compact_delta_wl
       = compact.metrics.wirelength_um - baseline.metrics.wirelength_um;
