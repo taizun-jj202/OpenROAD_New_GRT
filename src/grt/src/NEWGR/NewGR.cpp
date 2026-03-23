@@ -4168,8 +4168,322 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       radical39_forced_trunkstorm,
       radical39_changed_nets);
 
+  // Iteration 40 radical mode:
+  // Theory:
+  // 1) Iteration 39 remained near a stable basin around baseline-like topology.
+  // 2) A stronger "cross-donor shock" should move wirelength by forcing a much
+  //    larger net population through structurally different donors:
+  //    - axis_blitz: median-spine + rmst trunk + global portals.
+  //    - orbital_maze: expanded perimeter rings + corridor rebuild + warp.
+  //    - portal_crucible: portal hypergraph + bipolar + rmst backbone.
+  // 3) Deterministic forcing buckets with broad admissibility caps are used to
+  //    override local minima and make this iteration materially different.
+  ScenarioResult radical40_axis_blitz = radical39_selected;
+  radical40_axis_blitz.name = "radical40_axis_blitz";
+  applyMedianSpineRebuild(radical40_axis_blitz.routes,
+                          2,
+                          100,
+                          min_routing_layer,
+                          max_routing_layer);
+  applyRmstTrunkRebuild(grouter_,
+                        radical40_axis_blitz.routes,
+                        baseline_rudy,
+                        2,
+                        16384,
+                        100,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyGlobalPortalRebuild(grouter_,
+                           radical40_axis_blitz.routes,
+                           baseline_rudy,
+                           4,
+                           100,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical40_axis_blitz.routes,
+                        baseline_rudy,
+                        std::max(tile_size, 1),
+                        std::max(24 * tile_size, 1),
+                        160);
+  applyAggressiveDoglegShortcuts(radical40_axis_blitz.routes,
+                                 std::max(30 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical40_axis_blitz.routes, std::max(5 * tile_size, 1));
+  applyViaExcursionCollapse(radical40_axis_blitz.routes,
+                            std::max(2 * tile_size, 1));
+  radical40_axis_blitz.metrics = compute_metrics(radical40_axis_blitz.routes);
+
+  ScenarioResult radical40_orbital_maze = radical39_selected;
+  radical40_orbital_maze.name = "radical40_orbital_maze";
+  applyPerimeterRingCollapse(grouter_,
+                             radical40_orbital_maze.routes,
+                             baseline_rudy,
+                             5,
+                             100,
+                             28,
+                             min_routing_layer,
+                             max_routing_layer);
+  applyRudyCorridorBackboneRebuild(grouter_,
+                                   radical40_orbital_maze.routes,
+                                   baseline_rudy,
+                                   5,
+                                   100,
+                                   min_routing_layer,
+                                   max_routing_layer);
+  applyDualBackboneWarp(grouter_,
+                        radical40_orbital_maze.routes,
+                        baseline_rudy,
+                        5,
+                        140,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical40_orbital_maze.routes,
+                        baseline_rudy,
+                        std::max(2 * tile_size, 1),
+                        std::max(26 * tile_size, 1),
+                        170);
+  applyAggressiveDoglegShortcuts(radical40_orbital_maze.routes,
+                                 std::max(32 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical40_orbital_maze.routes, std::max(5 * tile_size, 1));
+  applyViaExcursionCollapse(radical40_orbital_maze.routes,
+                            std::max(2 * tile_size, 1));
+  radical40_orbital_maze.metrics = compute_metrics(radical40_orbital_maze.routes);
+
+  ScenarioResult radical40_portal_crucible = radical39_selected;
+  radical40_portal_crucible.name = "radical40_portal_crucible";
+  applyQuadrantPortalHypergraphRebuild(grouter_,
+                                       radical40_portal_crucible.routes,
+                                       baseline_rudy,
+                                       5,
+                                       16384,
+                                       100,
+                                       min_routing_layer,
+                                       max_routing_layer);
+  applyBipolarPortalBackboneRebuild(grouter_,
+                                    radical40_portal_crucible.routes,
+                                    baseline_rudy,
+                                    5,
+                                    16384,
+                                    100,
+                                    min_routing_layer,
+                                    max_routing_layer);
+  applyRmstTrunkRebuild(grouter_,
+                        radical40_portal_crucible.routes,
+                        baseline_rudy,
+                        5,
+                        16384,
+                        100,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical40_portal_crucible.routes,
+                        baseline_rudy,
+                        std::max(tile_size, 1),
+                        std::max(28 * tile_size, 1),
+                        180);
+  applyAggressiveDoglegShortcuts(radical40_portal_crucible.routes,
+                                 std::max(34 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical40_portal_crucible.routes,
+                        std::max(6 * tile_size, 1));
+  applyViaExcursionCollapse(radical40_portal_crucible.routes,
+                            std::max(2 * tile_size, 1));
+  radical40_portal_crucible.metrics
+      = compute_metrics(radical40_portal_crucible.routes);
+
+  ScenarioResult radical40_selected = radical39_selected;
+  radical40_selected.name = "radical40_cross_donor_shock";
+  long radical40_pick_axis = 0;
+  long radical40_pick_orbital = 0;
+  long radical40_pick_portal = 0;
+  long radical40_forced_axis = 0;
+  long radical40_forced_orbital = 0;
+  long radical40_forced_portal = 0;
+
+  auto radical40_objective = [&](const GRoute& route) {
+    const auto [route_wl, route_vias] = radical38_stats(route);
+    const double via_weight = static_cast<double>(tile_size) * 0.22;
+    const double segment_penalty
+        = static_cast<double>(route.size()) * static_cast<double>(tile_size) * 0.04;
+    return static_cast<double>(route_wl)
+           + via_weight * static_cast<double>(route_vias) + segment_penalty;
+  };
+  auto radical40_admissible = [&](const GRoute& candidate,
+                                  const GRoute& reference,
+                                  int node_count,
+                                  bool forced) {
+    const auto [cand_wl, cand_vias] = radical38_stats(candidate);
+    const auto [ref_wl, ref_vias] = radical38_stats(reference);
+    if (ref_wl <= 0) {
+      return true;
+    }
+    const bool huge = node_count >= 16;
+    const double wl_mult = forced ? (huge ? 5.20 : 4.00) : (huge ? 4.40 : 3.20);
+    const double via_mult = forced ? (huge ? 14.0 : 11.0) : (huge ? 10.0 : 7.5);
+    const long wl_cap
+        = std::max(ref_wl + static_cast<long>((forced ? 52 : 34) * tile_size),
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_wl) * wl_mult)));
+    const long via_cap
+        = std::max(ref_vias + static_cast<long>(forced ? 64 : 40),
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_vias) * via_mult + 48.0)));
+    return cand_wl <= wl_cap && cand_vias <= via_cap;
+  };
+
+  for (const auto& [db_net, base_route] : radical39_selected.routes) {
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(base_route).size());
+
+    const GRoute* chosen_route = &base_route;
+    double best_score = radical40_objective(base_route);
+    int chosen_donor = 0;
+
+    auto force_candidate = [&](const NetRouteMap& donor_routes,
+                               int donor_id,
+                               long& forced_counter) {
+      const auto donor_it = donor_routes.find(db_net);
+      if (donor_it == donor_routes.end()) {
+        return false;
+      }
+      const GRoute& donor_route = donor_it->second;
+      if (!radical38_has_planar(donor_route)) {
+        return false;
+      }
+      if (!radical40_admissible(donor_route, base_route, node_count, true)) {
+        return false;
+      }
+      chosen_route = &donor_route;
+      chosen_donor = donor_id;
+      forced_counter++;
+      return true;
+    };
+
+    bool forced_pick = false;
+    if (node_count >= 8 && ((key % 4ULL) == 0ULL || (key % 7ULL) == 1ULL)) {
+      forced_pick
+          = force_candidate(radical40_axis_blitz.routes, 1, radical40_forced_axis);
+    }
+    if (!forced_pick
+        && node_count >= 7
+        && ((key % 5ULL) == 2ULL || (key % 11ULL) == 4ULL)) {
+      forced_pick = force_candidate(
+          radical40_orbital_maze.routes, 2, radical40_forced_orbital);
+    }
+    if (!forced_pick
+        && node_count >= 9
+        && ((key % 6ULL) == 3ULL || (key % 13ULL) == 5ULL)) {
+      forced_pick = force_candidate(
+          radical40_portal_crucible.routes, 3, radical40_forced_portal);
+    }
+
+    if (!forced_pick) {
+      auto consider_candidate = [&](const NetRouteMap& donor_routes, int donor_id) {
+        const auto donor_it = donor_routes.find(db_net);
+        if (donor_it == donor_routes.end()) {
+          return;
+        }
+        const GRoute& donor_route = donor_it->second;
+        if (!radical38_has_planar(donor_route)) {
+          return;
+        }
+        if (!radical40_admissible(donor_route, base_route, node_count, false)) {
+          return;
+        }
+
+        double score = radical40_objective(donor_route);
+        if (donor_id == 1 && node_count >= 10 && (key % 3ULL) == 0ULL) {
+          score *= 0.82;
+        }
+        if (donor_id == 2 && node_count >= 12 && (key % 4ULL) == 1ULL) {
+          score *= 0.78;
+        }
+        if (donor_id == 3 && node_count >= 6 && (key % 5ULL) == 0ULL) {
+          score *= 0.80;
+        }
+        if (score + 1e-3 < best_score) {
+          best_score = score;
+          chosen_route = &donor_route;
+          chosen_donor = donor_id;
+        }
+      };
+
+      consider_candidate(radical40_axis_blitz.routes, 1);
+      consider_candidate(radical40_orbital_maze.routes, 2);
+      consider_candidate(radical40_portal_crucible.routes, 3);
+    }
+
+    radical40_selected.routes[db_net] = *chosen_route;
+    if (chosen_donor == 1) {
+      radical40_pick_axis++;
+    } else if (chosen_donor == 2) {
+      radical40_pick_orbital++;
+    } else if (chosen_donor == 3) {
+      radical40_pick_portal++;
+    }
+  }
+
+  applyGuideCompression(radical40_selected.routes, std::max(5 * tile_size, 1));
+  applyViaExcursionCollapse(radical40_selected.routes,
+                            std::max(2 * tile_size, 1));
+  radical40_selected.metrics = compute_metrics(radical40_selected.routes);
+
+  long radical40_changed_nets = 0;
+  for (const auto& [db_net, route39] : radical39_selected.routes) {
+    const auto it40 = radical40_selected.routes.find(db_net);
+    if (it40 == radical40_selected.routes.end()) {
+      continue;
+    }
+    const auto [wl39, vias39] = radical38_stats(route39);
+    const auto [wl40, vias40] = radical38_stats(it40->second);
+    if (wl39 != wl40 || vias39 != vias40) {
+      radical40_changed_nets++;
+    }
+  }
+
+  const double radical40_delta_wl
+      = radical40_selected.metrics.wirelength_um - baseline.metrics.wirelength_um;
+  const long radical40_delta_vias
+      = radical40_selected.metrics.via_count - baseline.metrics.via_count;
+  const double radical40_stage_delta_wl
+      = radical40_selected.metrics.wirelength_um
+        - radical39_selected.metrics.wirelength_um;
+  const long radical40_stage_delta_vias
+      = radical40_selected.metrics.via_count - radical39_selected.metrics.via_count;
+  logger_->warn(GNR,
+                6054,
+                "NEWGR radical40 selected {}: baseline {:.0f} um/{} vias -> "
+                "{:.0f} um/{} vias (delta wl {:+.0f} um, delta vias {:+d}); "
+                "vs radical39 (delta wl {:+.0f} um, delta vias {:+d}).",
+                radical40_selected.name,
+                baseline.metrics.wirelength_um,
+                baseline.metrics.via_count,
+                radical40_selected.metrics.wirelength_um,
+                radical40_selected.metrics.via_count,
+                radical40_delta_wl,
+                radical40_delta_vias,
+                radical40_stage_delta_wl,
+                radical40_stage_delta_vias);
+  logger_->warn(
+      GNR,
+      6055,
+      "NEWGR radical40 picks: axis {} orbital {} portal {} forced_axis {} "
+      "forced_orbital {} forced_portal {} changed_nets {}.",
+      radical40_pick_axis,
+      radical40_pick_orbital,
+      radical40_pick_portal,
+      radical40_forced_axis,
+      radical40_forced_orbital,
+      radical40_forced_portal,
+      radical40_changed_nets);
+
   restore_snapshot(snapshot);
-  return radical39_selected.routes;
+  return radical40_selected.routes;
 
   // Candidate B: reroute with strong but wirelength-oriented capacity sculpting.
   ScenarioResult sculpted = compact;
