@@ -30,6 +30,8 @@ struct SelectionPolicy
   int64_t via_guard{0};
   int64_t hard_via_guard{0};
   int64_t min_wl_improve{1};
+  int64_t wl_per_extra_via{8};
+  int64_t aggressive_wl_gain{1};
   bool medium_net{false};
   bool long_net{false};
 };
@@ -39,6 +41,7 @@ enum class RouteSource
   kFastRoute,
   kNewgrBalanced,
   kNewgrWirelength,
+  kNewgrDataWirelength,
   kNewgrRegion,
   kNewgrRegularRegion,
   kNewgrFineGrain
@@ -88,42 +91,48 @@ RouteScore scoreRoute(const GRoute& route)
 
 int64_t viaGuardForNet(const RouteScore& baseline_score, int tile_size)
 {
-  const int64_t long_net_threshold = static_cast<int64_t>(tile_size) * 24;
-  const int64_t medium_net_threshold = static_cast<int64_t>(tile_size) * 12;
+  const int64_t long_net_threshold = static_cast<int64_t>(tile_size) * 20;
+  const int64_t medium_net_threshold = static_cast<int64_t>(tile_size) * 10;
   if (baseline_score.wirelength >= long_net_threshold) {
-    return std::max<int64_t>(10, baseline_score.vias / 2 + 4);
+    return std::max<int64_t>(12, baseline_score.vias / 2 + 6);
   }
   if (baseline_score.wirelength >= medium_net_threshold) {
-    return std::max<int64_t>(4, baseline_score.vias / 3 + 2);
+    return std::max<int64_t>(5, baseline_score.vias / 3 + 3);
   }
-  return std::max<int64_t>(1, baseline_score.vias / 6);
+  return std::max<int64_t>(1, baseline_score.vias / 8);
 }
 
 SelectionPolicy buildSelectionPolicy(const RouteScore& baseline_score, int tile_size)
 {
   SelectionPolicy policy;
   policy.via_tradeoff = 1;
-  policy.bend_tradeoff = std::max(1, tile_size / 72);
-  policy.via_guard = viaGuardForNet(baseline_score, tile_size) + 2;
-  policy.hard_via_guard = policy.via_guard * 3 + 2;
+  policy.bend_tradeoff = std::max(1, tile_size / 160);
+  policy.via_guard = viaGuardForNet(baseline_score, tile_size) + 4;
+  policy.hard_via_guard = policy.via_guard * 4 + 8;
   policy.min_wl_improve = 1;
+  policy.wl_per_extra_via = 12;
+  policy.aggressive_wl_gain = std::max<int64_t>(4, tile_size / 3);
 
   const int64_t medium_net_threshold = static_cast<int64_t>(tile_size) * 8;
   const int64_t long_net_threshold = static_cast<int64_t>(tile_size) * 16;
   if (baseline_score.wirelength >= long_net_threshold) {
     policy.long_net = true;
     policy.via_tradeoff = 1;
-    policy.bend_tradeoff = std::max(1, tile_size / 180);
-    policy.via_guard = policy.via_guard * 4 + 12;
-    policy.hard_via_guard = policy.via_guard * 2 + 16;
+    policy.bend_tradeoff = std::max(1, tile_size / 220);
+    policy.via_guard = policy.via_guard * 5 + 20;
+    policy.hard_via_guard = policy.via_guard * 2 + 28;
     policy.min_wl_improve = 1;
+    policy.wl_per_extra_via = 4;
+    policy.aggressive_wl_gain = std::max<int64_t>(2, tile_size / 4);
   } else if (baseline_score.wirelength >= medium_net_threshold) {
     policy.medium_net = true;
     policy.via_tradeoff = 1;
-    policy.bend_tradeoff = std::max(1, tile_size / 120);
-    policy.via_guard += 8;
-    policy.hard_via_guard = policy.via_guard * 3 + 12;
+    policy.bend_tradeoff = std::max(1, tile_size / 180);
+    policy.via_guard = policy.via_guard * 2 + 12;
+    policy.hard_via_guard = policy.via_guard * 3 + 18;
     policy.min_wl_improve = 1;
+    policy.wl_per_extra_via = 8;
+    policy.aggressive_wl_gain = std::max<int64_t>(3, tile_size / 3);
   }
 
   return policy;
@@ -136,11 +145,22 @@ int64_t effectiveWirelengthCost(const RouteScore& baseline_score,
   const int64_t extra_vias
       = std::max<int64_t>(0, candidate_score.vias - baseline_score.vias);
   const int64_t penalized_vias
-      = std::max<int64_t>(0, extra_vias - policy.via_guard);
+      = std::max<int64_t>(0, extra_vias - policy.via_guard / 2);
   const int64_t extra_bends
       = std::max<int64_t>(0, candidate_score.bends - baseline_score.bends);
   return candidate_score.wirelength + penalized_vias * policy.via_tradeoff
          + extra_bends * policy.bend_tradeoff;
+}
+
+int64_t extraViaBudget(const SelectionPolicy& policy,
+                       int64_t current_extra_vias,
+                       int64_t wl_gain_vs_current)
+{
+  const int64_t wl_credit
+      = wl_gain_vs_current / std::max<int64_t>(1, policy.wl_per_extra_via);
+  return std::min<int64_t>(
+      policy.hard_via_guard,
+      current_extra_vias + policy.via_guard + wl_credit);
 }
 
 bool betterCandidate(const RouteScore& baseline_score,
@@ -158,11 +178,19 @@ bool betterCandidate(const RouteScore& baseline_score,
     return false;
   }
 
-  if (candidate_score.wirelength < current_best_score.wirelength) {
-    const int64_t allowed_extra_vs_current
-        = policy.long_net ? (policy.via_guard + 10)
-                          : (policy.medium_net ? (policy.via_guard / 2 + 5) : 4);
-    return candidate_extra_vias <= current_extra_vias + allowed_extra_vs_current;
+  const int64_t wl_gain_vs_current = std::max<int64_t>(
+      0, current_best_score.wirelength - candidate_score.wirelength);
+  if (wl_gain_vs_current >= policy.min_wl_improve) {
+    if (candidate_extra_vias
+        <= extraViaBudget(policy, current_extra_vias, wl_gain_vs_current)) {
+      return true;
+    }
+    const int64_t aggressive_via_budget
+        = policy.hard_via_guard
+          + wl_gain_vs_current
+                / std::max<int64_t>(1, policy.wl_per_extra_via * 2);
+    return wl_gain_vs_current >= policy.aggressive_wl_gain
+           && candidate_extra_vias <= aggressive_via_budget;
   }
   if (candidate_score.wirelength > current_best_score.wirelength) {
     return false;
@@ -216,18 +244,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   engine_->init(grouter_->sproute_grid_data_, grouter_->sproute_nets_);
   NetRouteMap balanced_routes = engine_->run();
   NetRouteMap wirelength_routes = engine_->runWirelengthFirst();
+  NetRouteMap data_wirelength_routes = engine_->runDataDrivenWirelength();
   NetRouteMap region_routes = engine_->runRegionAware();
   NetRouteMap regular_region_routes = engine_->runRegularRegionAware();
   NetRouteMap finegrain_routes = engine_->runFineGrainRefine();
 
   int selected_from_balanced = 0;
   int selected_from_wl = 0;
+  int selected_from_data_wl = 0;
   int selected_from_region = 0;
   int selected_from_regular_region = 0;
   int selected_from_finegrain = 0;
   int kept_fastroute = 0;
   int inserted_from_balanced = 0;
   int inserted_from_wl = 0;
+  int inserted_from_data_wl = 0;
   int inserted_from_region = 0;
   int inserted_from_regular_region = 0;
   int inserted_from_finegrain = 0;
@@ -259,6 +290,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     consider(balanced_routes, RouteSource::kNewgrBalanced);
     consider(wirelength_routes, RouteSource::kNewgrWirelength);
+    consider(data_wirelength_routes, RouteSource::kNewgrDataWirelength);
     consider(region_routes, RouteSource::kNewgrRegion);
     consider(regular_region_routes, RouteSource::kNewgrRegularRegion);
     consider(finegrain_routes, RouteSource::kNewgrFineGrain);
@@ -276,6 +308,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         break;
       case RouteSource::kNewgrWirelength:
         selected_from_wl++;
+        break;
+      case RouteSource::kNewgrDataWirelength:
+        selected_from_data_wl++;
         break;
       case RouteSource::kNewgrRegion:
         selected_from_region++;
@@ -301,6 +336,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       inserted_from_wl++;
     }
   }
+  for (const auto& [db_net, route] : data_wirelength_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_data_wl++;
+    }
+  }
   for (const auto& [db_net, route] : region_routes) {
     if (routes.find(db_net) == routes.end()) {
       routes.emplace(db_net, route);
@@ -322,18 +363,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   logger_->info(utl::GRT,
                 6004,
-                "NEWGR hybrid selected {} balanced, {} WL-first, {} region, {} "
-                "regular-region, and {} fine-grain routes (kept {} FastRoute, "
-                "+{} balanced-only, +{} WL-only, +{} region-only, +{} "
+                "NEWGR hybrid selected {} balanced, {} WL-first, {} "
+                "data-WL-first, {} region, {} regular-region, and {} "
+                "fine-grain routes (kept {} FastRoute, +{} balanced-only, +{} "
+                "WL-only, +{} data-WL-only, +{} region-only, +{} "
                 "regular-region-only, +{} fine-grain-only) out of {} total.",
                 selected_from_balanced,
                 selected_from_wl,
+                selected_from_data_wl,
                 selected_from_region,
                 selected_from_regular_region,
                 selected_from_finegrain,
                 kept_fastroute,
                 inserted_from_balanced,
                 inserted_from_wl,
+                inserted_from_data_wl,
                 inserted_from_region,
                 inserted_from_regular_region,
                 inserted_from_finegrain,

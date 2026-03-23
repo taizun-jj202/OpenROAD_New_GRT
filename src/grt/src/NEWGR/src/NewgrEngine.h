@@ -44,6 +44,7 @@ class NewgrEngine
   void init(const SprouteGridData& grid, const std::vector<SprouteNetData>& nets);
   NetRouteMap run();
   NetRouteMap runWirelengthFirst();
+  NetRouteMap runDataDrivenWirelength();
   NetRouteMap runRegionAware();
   NetRouteMap runRegularRegionAware();
   NetRouteMap runFineGrainRefine();

@@ -86,6 +86,13 @@ NetRouteMap NewgrEngine::runWirelengthFirst()
                        /*warn_id=*/402);
 }
 
+NetRouteMap NewgrEngine::runDataDrivenWirelength()
+{
+  return runWithConfig(/*max_maze_round=*/280,
+                       static_cast<int>(Algo::DetPart_Astar_Data),
+                       /*warn_id=*/406);
+}
+
 NetRouteMap NewgrEngine::runRegionAware()
 {
   return runWithConfig(/*max_maze_round=*/220,
