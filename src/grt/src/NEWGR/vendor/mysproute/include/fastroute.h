@@ -693,7 +693,6 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		// call FLUTE to generate RSMT and break the nets into segments (2-pin nets)
 
 		VIA=2;
-		//viacost = VIA;
 		viacost = 0;
 		gen_brk_RSMT(FALSE, FALSE, FALSE, FALSE, noADJ);
 		printf("first L\n");

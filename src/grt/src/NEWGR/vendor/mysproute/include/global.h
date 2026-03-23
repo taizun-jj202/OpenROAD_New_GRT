@@ -13,12 +13,12 @@ int n_small_undone;
 float max_rudy;
 
 #define M2_ADJ_MIN 0.68
-#define M2_ADJ_MAX 0.98
+#define M2_ADJ_MAX 0.99
 #define M2_ADJ_MID 4.2
 #define M2_ADJ_K 1.6
 
 #define M3_ADJ_MIN 0.70
-#define M3_ADJ_MAX 0.98
+#define M3_ADJ_MAX 0.99
 #define M3_ADJ_MID 4.2
 #define M3_ADJ_K 1.6
 
@@ -27,7 +27,7 @@ float max_rudy;
 #define MID_ADJ_MID 5.5
 #define MID_ADJ_K 1.2
 
-#define HIGH_ADJ 0.92
+#define HIGH_ADJ 0.93
 
 #define OBS_NO_STOP 0 // 1 == go through OBS, 0 == hard stop
 
@@ -57,8 +57,8 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 			adj = HIGH_ADJ;
 
 		// Keep near-hard capacity in sparse regions to avoid unnecessary detours.
-		if (rudy < 1.5f) {
-			adj = (adj + 0.08f > 1.0f) ? 1.0f : (adj + 0.08f);
+		if (rudy < 1.8f) {
+			adj = (adj + 0.10f > 1.0f) ? 1.0f : (adj + 0.10f);
 		} else if (rudy > 7.0f) {
 			adj *= 0.90f;
 		}
