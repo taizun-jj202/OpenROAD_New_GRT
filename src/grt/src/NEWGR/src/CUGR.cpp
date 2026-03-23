@@ -73,10 +73,22 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
   constexpr double kOverflowEpsilon = 1e-6;
   constexpr double kAllowedOverflowIncreaseForWlGain = 6.0;
   constexpr double kStrongOverflowDropThreshold = 20.0;
+  constexpr int64_t kWlGainPerExtraVia = 3;
+  constexpr int64_t kMinMeaningfulWlGain = 6;
 
   // Wirelength-first objective:
   // keep shorter candidates as long as they don't cause a large overflow jump.
+  // For very small WL wins, avoid trading into significantly more vias.
   if (candidate.wirelength < current_best.wirelength) {
+    const int64_t wl_gain = static_cast<int64_t>(current_best.wirelength)
+                            - static_cast<int64_t>(candidate.wirelength);
+    const int via_increase = candidate.vias - current_best.vias;
+    if (via_increase > 0
+        && wl_gain
+               < std::max(kMinMeaningfulWlGain,
+                          kWlGainPerExtraVia * static_cast<int64_t>(via_increase))) {
+      return false;
+    }
     return candidate.total_overflow
            <= current_best.total_overflow + kAllowedOverflowIncreaseForWlGain;
   }
@@ -680,14 +692,14 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         // pure wirelength edge costs and keep only legal improvements.
         const bool enable_wl_only_maze
             = constants_.recovery_use_wirelength_maze
-              && candidateIndex < deep_keep
+              && (deep_search || candidateIndex < keep / 2)
               && candidates[candidateIndex].hpwl
                      >= constants_.recovery_wl_only_hpwl_threshold;
         if (enable_wl_only_maze) {
           GridGraphView<CostT> recoveryWlOnlyView;
           grid_graph_->extractWireLengthCostView(recoveryWlOnlyView);
-          const int wl_config_count
-              = std::min(static_cast<int>(maze_configs.size()), 8);
+          const int wl_config_count = std::min(static_cast<int>(maze_configs.size()),
+                                               deep_search ? 10 : 4);
           for (int cfg_index = 0; cfg_index < wl_config_count; cfg_index++) {
             const auto& cfg = maze_configs[cfg_index];
             MazeRoute wlMazeRoute(net, grid_graph_.get(), logger_);

@@ -53,11 +53,19 @@ struct Constants
   double overflow_linear_penalty = 6.0;
 
   // SPRoute-style soft capacity model (utilization driven)
-  bool use_soft_capacity = false;
-  double soft_cap_min_ratio = 0.78;
-  double soft_cap_max_ratio = 0.96;
-  double soft_cap_mid_util = 0.72;
-  double soft_cap_slope = 7.0;
+  bool use_soft_capacity = true;
+  double soft_cap_min_ratio = 0.82;
+  double soft_cap_max_ratio = 0.97;
+  double soft_cap_mid_util = 0.76;
+  double soft_cap_slope = 8.0;
+
+  // SPRoute-style adaptive access-layer expansion:
+  // low-utilization regions keep pin access stacks shallow to suppress vias,
+  // while hot spots get extra layers for routability.
+  double access_layer_warm_util = 0.45;
+  double access_layer_hot_util = 0.78;
+  int access_layer_warm_extension = 1;
+  int access_layer_hot_extension = 2;
 
   // FastRoute-style critical-net refinement schedule
   bool wirelength_first_refinement = true;
@@ -79,7 +87,7 @@ struct Constants
   bool enable_wirelength_recovery = true;
   bool recovery_use_maze = true;
   bool recovery_use_wirelength_maze = true;
-  int recovery_wl_only_hpwl_threshold = 180;
+  int recovery_wl_only_hpwl_threshold = 120;
   int recovery_hpwl_threshold = 64;
   double recovery_refine_ratio = 0.97;
   int recovery_max_passes = 5;
@@ -98,10 +106,10 @@ struct Constants
   int recovery_max_maze_configs = 30;
   int recovery_max_via_increase = 3;
 
-  double pin_patch_threshold = 1000000.0;
-  int pin_patch_padding = 3;
-  double wire_patch_threshold = 1000000.0;
-  double wire_patch_inflation_rate = 1.0;
+  double pin_patch_threshold = 20.0;
+  int pin_patch_padding = 1;
+  double wire_patch_threshold = 2.0;
+  double wire_patch_inflation_rate = 1.2;
 
   bool write_heatmap = false;
 };
