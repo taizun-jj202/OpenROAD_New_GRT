@@ -43,7 +43,10 @@ enum class RouteSource
 {
   kFastRoute,
   kNewgrBalanced,
-  kNewgrWirelength
+  kNewgrWirelength,
+  kNewgrDataWirelength,
+  kNewgrRegionAware,
+  kNewgrRegularRegion
 };
 
 enum class SegmentDirection
@@ -321,20 +324,20 @@ SelectionPolicy buildSelectionPolicy(const RouteScore& baseline_score, int tile_
     policy.long_net = true;
     policy.via_tradeoff = 1;
     policy.bend_tradeoff = std::max(1, tile_size / 220);
-    policy.via_guard = policy.via_guard * 5 + 20;
-    policy.hard_via_guard = policy.via_guard * 2 + 28;
+    policy.via_guard = policy.via_guard * 7 + 28;
+    policy.hard_via_guard = policy.via_guard * 2 + 36;
     policy.min_wl_improve = 1;
-    policy.wl_per_extra_via = 4;
-    policy.aggressive_wl_gain = std::max<int64_t>(2, tile_size / 4);
+    policy.wl_per_extra_via = 3;
+    policy.aggressive_wl_gain = std::max<int64_t>(1, tile_size / 5);
   } else if (baseline_score.wirelength >= medium_net_threshold) {
     policy.medium_net = true;
     policy.via_tradeoff = 1;
     policy.bend_tradeoff = std::max(1, tile_size / 180);
-    policy.via_guard = policy.via_guard * 2 + 12;
-    policy.hard_via_guard = policy.via_guard * 3 + 18;
+    policy.via_guard = policy.via_guard * 3 + 16;
+    policy.hard_via_guard = policy.via_guard * 3 + 24;
     policy.min_wl_improve = 1;
-    policy.wl_per_extra_via = 8;
-    policy.aggressive_wl_gain = std::max<int64_t>(3, tile_size / 3);
+    policy.wl_per_extra_via = 6;
+    policy.aggressive_wl_gain = std::max<int64_t>(2, tile_size / 4);
   }
 
   return policy;
@@ -446,6 +449,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   engine_->init(grouter_->sproute_grid_data_, grouter_->sproute_nets_);
   NetRouteMap balanced_routes = engine_->run();
   NetRouteMap wirelength_routes = engine_->runWirelengthFirst();
+  NetRouteMap data_wirelength_routes = engine_->runDataDrivenWirelength();
+  NetRouteMap region_aware_routes = engine_->runRegionAware();
+  NetRouteMap regular_region_routes = engine_->runRegularRegionAware();
 
   const SprouteGridData& grid = grouter_->sproute_grid_data_;
   const int origin_x = grid.origin.x();
@@ -489,14 +495,31 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               return lhs.db_net < rhs.db_net;
             });
 
+  int64_t baseline_total_vias = 0;
+  for (const OrderedNet& ordered_net : ordered_nets) {
+    baseline_total_vias += ordered_net.baseline_score.vias;
+  }
+
+  const int64_t global_base_via_budget
+      = std::max<int64_t>(16, baseline_total_vias / 4000);
+  const int64_t global_wl_to_via_credit = std::max<int64_t>(8, tile_size / 2);
+
   int selected_from_balanced = 0;
   int selected_from_wl = 0;
+  int selected_from_data_wl = 0;
+  int selected_from_region = 0;
+  int selected_from_regular_region = 0;
   int kept_fastroute = 0;
   int inserted_from_balanced = 0;
   int inserted_from_wl = 0;
+  int inserted_from_data_wl = 0;
+  int inserted_from_region = 0;
+  int inserted_from_regular_region = 0;
 
   EdgeUsageMap selected_usage;
   selected_usage.reserve(baseline_demand.size());
+  int64_t cumulative_wl_gain = 0;
+  int64_t cumulative_extra_vias = 0;
 
   for (const OrderedNet& ordered_net : ordered_nets) {
     auto route_it = routes.find(ordered_net.db_net);
@@ -507,7 +530,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     GRoute& route = route_it->second;
     const RouteScore baseline_score = ordered_net.baseline_score;
     const SelectionPolicy policy = buildSelectionPolicy(baseline_score, tile_size);
-    const int64_t congestion_tradeoff = policy.long_net ? 1 : (policy.medium_net ? 2 : 3);
+    const int64_t congestion_tradeoff = policy.long_net ? 0 : (policy.medium_net ? 1 : 2);
 
     RouteScore best_score = baseline_score;
     int64_t best_congestion_cost
@@ -533,6 +556,35 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       if (!betterCandidate(
               baseline_score, best_score, candidate_score, policy)) {
         return;
+      }
+
+      const int64_t current_net_extra_vias
+          = std::max<int64_t>(0, best_score.vias - baseline_score.vias);
+      const int64_t candidate_net_extra_vias
+          = std::max<int64_t>(0, candidate_score.vias - baseline_score.vias);
+      const int64_t current_net_wl_gain
+          = std::max<int64_t>(0, baseline_score.wirelength - best_score.wirelength);
+      const int64_t candidate_net_wl_gain
+          = std::max<int64_t>(0, baseline_score.wirelength - candidate_score.wirelength);
+
+      const int64_t prospective_total_extra_vias
+          = cumulative_extra_vias - current_net_extra_vias + candidate_net_extra_vias;
+      const int64_t prospective_total_wl_gain
+          = cumulative_wl_gain - current_net_wl_gain + candidate_net_wl_gain;
+      int64_t global_via_budget = global_base_via_budget;
+      if (prospective_total_wl_gain > 0) {
+        global_via_budget += prospective_total_wl_gain / global_wl_to_via_credit;
+      }
+
+      if (prospective_total_extra_vias > global_via_budget
+          && candidate_net_extra_vias > current_net_extra_vias) {
+        const int64_t wl_drop_vs_best = std::max<int64_t>(
+            0, best_score.wirelength - candidate_score.wirelength);
+        const int64_t emergency_budget = global_via_budget + policy.via_guard / 2;
+        if (wl_drop_vs_best < std::max<int64_t>(tile_size / 2, 1)
+            || prospective_total_extra_vias > emergency_budget) {
+          return;
+        }
       }
 
       const int64_t candidate_congestion_cost
@@ -562,11 +614,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     consider(balanced_routes, RouteSource::kNewgrBalanced);
     consider(wirelength_routes, RouteSource::kNewgrWirelength);
+    consider(data_wirelength_routes, RouteSource::kNewgrDataWirelength);
+    consider(region_aware_routes, RouteSource::kNewgrRegionAware);
+    consider(regular_region_routes, RouteSource::kNewgrRegularRegion);
 
     if (selected_route != &route) {
       route = *selected_route;
     }
     addRouteToUsage(route, origin_x, origin_y, tile_size, selected_usage);
+    cumulative_wl_gain += std::max<int64_t>(
+        0, baseline_score.wirelength - best_score.wirelength);
+    cumulative_extra_vias += std::max<int64_t>(
+        0, best_score.vias - baseline_score.vias);
 
     switch (selected_source) {
       case RouteSource::kFastRoute:
@@ -577,6 +636,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         break;
       case RouteSource::kNewgrWirelength:
         selected_from_wl++;
+        break;
+      case RouteSource::kNewgrDataWirelength:
+        selected_from_data_wl++;
+        break;
+      case RouteSource::kNewgrRegionAware:
+        selected_from_region++;
+        break;
+      case RouteSource::kNewgrRegularRegion:
+        selected_from_regular_region++;
         break;
     }
   }
@@ -593,17 +661,46 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       inserted_from_wl++;
     }
   }
+  for (const auto& [db_net, route] : data_wirelength_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_data_wl++;
+    }
+  }
+  for (const auto& [db_net, route] : region_aware_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_region++;
+    }
+  }
+  for (const auto& [db_net, route] : regular_region_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_regular_region++;
+    }
+  }
 
   logger_->info(utl::GRT,
                 6004,
-                "NEWGR congestion-aware hybrid selected {} balanced and {} "
-                "WL-first routes (kept {} FastRoute, +{} balanced-only, +{} "
-                "WL-only) out of {} total.",
+                "NEWGR WL-priority hybrid selected balanced={} wl={} data={} "
+                "region={} regular={} (kept FR={}; +balanced={} +wl={} "
+                "+data={} +region={} +regular={}). Global WL gain={} "
+                "extra-vias={} (base via budget={} + gain/{}) out of {} total.",
                 selected_from_balanced,
                 selected_from_wl,
+                selected_from_data_wl,
+                selected_from_region,
+                selected_from_regular_region,
                 kept_fastroute,
                 inserted_from_balanced,
                 inserted_from_wl,
+                inserted_from_data_wl,
+                inserted_from_region,
+                inserted_from_regular_region,
+                cumulative_wl_gain,
+                cumulative_extra_vias,
+                global_base_via_budget,
+                global_wl_to_via_credit,
                 routes.size());
 
   grouter_->addRemainingGuides(routes, nets, min_routing_layer, max_routing_layer);
