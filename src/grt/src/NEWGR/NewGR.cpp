@@ -2486,6 +2486,194 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     };
 
+    auto append_via_floor_wl_hybrid = [&](const std::string& hybrid_name,
+                                          int source_count,
+                                          int per_net_via_drop_limit,
+                                          int logger_code) {
+      source_count
+          = std::max(1, std::min(source_count, static_cast<int>(ranked.size())));
+      ScenarioResult hybrid_result;
+      hybrid_result.name = hybrid_name;
+
+      struct CandidateRoute
+      {
+        const GRoute* route = nullptr;
+        RouteEdgeStats stats;
+        long detour_dbu = 0;
+        double consensus_penalty = 0.0;
+      };
+
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      const long via_drop_budget
+          = std::max<long>(220L,
+                           static_cast<long>(
+                               std::ceil(static_cast<double>(expected_net_count)
+                                         * 0.018)));
+      long consumed_via_drop = 0;
+      int budget_clamped_nets = 0;
+
+      for (odb::dbNet* db_net : hybrid_nets) {
+        if (db_net == nullptr) {
+          continue;
+        }
+
+        std::vector<CandidateRoute> candidates;
+        candidates.reserve(source_count);
+        std::unordered_map<uint64_t, int> edge_frequency;
+        edge_frequency.reserve(64);
+
+        for (int idx = 0; idx < source_count; ++idx) {
+          const ScenarioResult* source = ranked[idx];
+          if (source == nullptr) {
+            continue;
+          }
+          const auto route_it = source->routes.find(db_net);
+          if (route_it == source->routes.end()) {
+            continue;
+          }
+
+          CandidateRoute candidate;
+          candidate.route = &route_it->second;
+          candidate.stats = collectRouteEdgeStats(route_it->second, grouter_->grid_);
+          const long bbox_hpwl = getRouteBBoxHpwl(route_it->second);
+          candidate.detour_dbu
+              = std::max(0L, candidate.stats.wirelength_dbu - bbox_hpwl);
+          for (const auto& [edge_key, usage] : candidate.stats.edge_counts) {
+            if (usage > 0) {
+              edge_frequency[edge_key] += 1;
+            }
+          }
+          candidates.push_back(std::move(candidate));
+        }
+
+        if (candidates.empty()) {
+          continue;
+        }
+
+        for (CandidateRoute& candidate : candidates) {
+          long vote_sum = 0;
+          for (const auto& [edge_key, usage] : candidate.stats.edge_counts) {
+            if (usage > 0) {
+              const auto vote_it = edge_frequency.find(edge_key);
+              if (vote_it != edge_frequency.end()) {
+                vote_sum += vote_it->second;
+              }
+            }
+          }
+          const int edge_count
+              = std::max(1, static_cast<int>(candidate.stats.edge_counts.size()));
+          const double avg_vote
+              = static_cast<double>(vote_sum) / static_cast<double>(edge_count);
+          const double vote_target = static_cast<double>(source_count) * 0.76;
+          candidate.consensus_penalty = std::max(0.0, vote_target - avg_vote);
+        }
+
+        const CandidateRoute* anchor = nullptr;
+        double best_anchor_objective = std::numeric_limits<double>::max();
+        for (const CandidateRoute& candidate : candidates) {
+          const double anchor_objective
+              = static_cast<double>(candidate.stats.wirelength_dbu)
+                + 0.20 * static_cast<double>(candidate.detour_dbu)
+                + static_cast<double>(tile_size) * 0.45
+                      * candidate.consensus_penalty;
+          if (anchor_objective < best_anchor_objective) {
+            best_anchor_objective = anchor_objective;
+            anchor = &candidate;
+          }
+        }
+        if (anchor == nullptr) {
+          continue;
+        }
+
+        const int min_allowed_vias
+            = std::max(0, anchor->stats.via_count - per_net_via_drop_limit);
+        const long wl_slack
+            = std::max<long>(tile_size * 2L,
+                             static_cast<long>(std::ceil(
+                                 static_cast<double>(anchor->stats.wirelength_dbu)
+                                 * 0.0018)));
+        const long detour_slack = std::max<long>(
+            tile_size * 12L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(std::max(1L, anchor->detour_dbu)) * 0.10)));
+
+        const CandidateRoute* best_candidate = anchor;
+        double best_objective = std::numeric_limits<double>::max();
+        for (const CandidateRoute& candidate : candidates) {
+          if (candidate.stats.via_count < min_allowed_vias
+              || candidate.stats.wirelength_dbu
+                     > anchor->stats.wirelength_dbu + wl_slack
+              || candidate.detour_dbu > anchor->detour_dbu + detour_slack) {
+            continue;
+          }
+
+          const double objective
+              = static_cast<double>(candidate.stats.wirelength_dbu)
+                + 0.08 * static_cast<double>(candidate.detour_dbu)
+                + 0.004 * static_cast<double>(candidate.stats.high_layer_dbu)
+                + static_cast<double>(tile_size) * 0.16
+                      * candidate.consensus_penalty
+                + 0.40 * static_cast<double>(candidate.stats.segment_count)
+                + 2.0 * static_cast<double>(candidate.stats.bend_count);
+          if (objective < best_objective
+              || (objective == best_objective
+                  && candidate.stats.wirelength_dbu
+                         < best_candidate->stats.wirelength_dbu)
+              || (objective == best_objective
+                  && candidate.stats.wirelength_dbu
+                         == best_candidate->stats.wirelength_dbu
+                  && candidate.stats.via_count < best_candidate->stats.via_count)) {
+            best_objective = objective;
+            best_candidate = &candidate;
+          }
+        }
+
+        if (best_candidate == nullptr) {
+          continue;
+        }
+
+        const long via_drop = std::max(
+            0, anchor->stats.via_count - best_candidate->stats.via_count);
+        if (best_candidate != anchor
+            && consumed_via_drop + via_drop > via_drop_budget) {
+          best_candidate = anchor;
+          budget_clamped_nets++;
+        } else {
+          consumed_via_drop += via_drop;
+        }
+        hybrid_result.routes.emplace(db_net, *best_candidate->route);
+      }
+
+      const std::size_t coverage_threshold
+          = expected_net_count > 0 ? (expected_net_count * 95) / 100 : 0;
+      if (hybrid_result.routes.size() >= coverage_threshold) {
+        hybrid_result.metrics = compute_metrics(hybrid_result.routes);
+        logger_->info(
+            GNR,
+            logger_code,
+            "NEWGR {} from top {} scenarios: wirelength {:.0f} um, vias {}, "
+            "routed nets {}/{}, via-drop {}/{}, budget-clamped nets {}",
+            hybrid_name,
+            source_count,
+            hybrid_result.metrics.wirelength_um,
+            hybrid_result.metrics.via_count,
+            hybrid_result.routes.size(),
+            expected_net_count,
+            consumed_via_drop,
+            via_drop_budget,
+            budget_clamped_nets);
+        scenario_results.push_back(std::move(hybrid_result));
+      } else {
+        logger_->info(
+            GNR,
+            7317,
+            "NEWGR skipped {} due low net coverage ({}/{}).",
+            hybrid_name,
+            hybrid_result.routes.size(),
+            expected_net_count);
+      }
+    };
+
     auto append_softcap_hybrid = [&](const std::string& hybrid_name,
                                      int source_count,
                                      long via_weight,
@@ -3031,6 +3219,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const int dr_shield_source_count = std::min<int>(30, ranked.size());
     const int dr_stable_source_count = std::min<int>(34, ranked.size());
     const int wl_safe_source_count = std::min<int>(18, ranked.size());
+    const int via_floor_wl_source_count = std::min<int>(20, ranked.size());
     const int layer_compact_source_count = std::min<int>(20, ranked.size());
     const int balanced_source_count = std::min<int>(8, ranked.size());
     const int softcap_source_count = std::min<int>(16, ranked.size());
@@ -3073,6 +3262,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                 compact_source_count,
                                 wl_feedback_via_weight,
                                 7313);
+      append_via_floor_wl_hybrid("hybrid-netmix-via-floor-wl",
+                                 compact_source_count,
+                                 1,
+                                 7316);
       append_min_wl_hybrid("hybrid-netmix-min-wl-wide",
                            compact_source_count,
                            min_wl_via_weight,
@@ -3103,6 +3296,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                 wl_feedback_source_count,
                                 wl_feedback_via_weight,
                                 7313);
+      append_via_floor_wl_hybrid("hybrid-netmix-via-floor-wl",
+                                 via_floor_wl_source_count,
+                                 1,
+                                 7316);
       append_min_wl_hybrid("hybrid-netmix-min-wl",
                            min_wl_source_count,
                            min_wl_via_weight,
