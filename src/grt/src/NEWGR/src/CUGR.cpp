@@ -1198,7 +1198,7 @@ void CUGR::strictWirelengthCompaction()
                                    ? std::min(totalNets,
                                               std::max(192, totalNets / 128))
                                    : std::min(totalNets,
-                                              std::max(64, totalNets / 640));
+                                              std::max(96, totalNets / 480));
   if (compactionBudget <= 0) {
     return;
   }
@@ -1214,7 +1214,7 @@ void CUGR::strictWirelengthCompaction()
                                   ? std::min(compactionBudget,
                                              std::max(24, compactionBudget / 12))
                                   : std::min(compactionBudget,
-                                             std::max(28, compactionBudget / 4));
+                                             std::max(48, compactionBudget / 3));
   std::vector<int> scheduledNetIndices = buildSpatialCompactionOrder(
       netIndices, gr_nets_, compactionBudget, useXAxisWavefront);
   if (scheduledNetIndices.empty()) {
@@ -1272,7 +1272,7 @@ void CUGR::strictWirelengthCompaction()
     const bool runMazeCandidate
         = rank < denseMazeBudget || oldScore.overflow_edges > 0
           || oldDetourRatio
-                 >= detourRatioThreshold * (firstStrictPass ? 1.08 : 1.015)
+                 >= detourRatioThreshold * (firstStrictPass ? 1.08 : 1.01)
           || (oldScore.wire_length >= longWireThreshold
               && (firstStrictPass ? rank < compactionBudget / 2 : true));
     if (runMazeCandidate) {
@@ -1314,7 +1314,8 @@ void CUGR::strictWirelengthCompaction()
       }
       const int maxMazeCandidates = firstStrictPass
                                         ? (rank < denseMazeBudget / 8 ? 2 : 1)
-                                        : (rank < denseMazeBudget / 2 ? 3 : 2);
+                                        : (rank < denseMazeBudget * 2 / 3 ? 3
+                                                                          : 2);
       const auto candidateGrids
           = buildMazeCandidateGrids(interval,
                                     rank + oldScore.via_count * 3
@@ -1403,7 +1404,7 @@ void CUGR::route()
   grid_graph_->setSoftCapacityEnabled(false);
   grid_graph_->setStageCostScales(0.14, 0.16, 0.98);
   strictWirelengthCompaction();
-  grid_graph_->setStageCostScales(0.06, 0.08, 0.88);
+  grid_graph_->setStageCostScales(0.08, 0.10, 0.92);
   strictWirelengthCompaction();
   updateOverflowNets(netIndices);
 
