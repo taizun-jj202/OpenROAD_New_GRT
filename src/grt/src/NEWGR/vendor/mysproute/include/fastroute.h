@@ -643,19 +643,45 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	bmfl = BIG_INT;
 	minofl = BIG_INT;
 
-	// NEWGR policy for wirelength: when using A*, keep expansion tighter and
-	// reduce congestion inflation so shortest paths are favored unless needed.
+	// NEWGR multi-profile policy:
+	// - WL_FOCUSED: tighter expansion, shortest-path bias.
+	// - DR_FOCUSED: wider expansion, more routability reserve.
+	// - BALANCED : compromise between the two.
 	if (algo == Astar) {
-		ENLARGE = 36;
-		ESTEP1 = 8;
-		ESTEP2 = 6;
-		ESTEP3 = 4;
-		CSTEP1 = 1;
-		CSTEP2 = 1;
-		CSTEP3 = 1;
-		LVIter = 1;
-		VIA = 0;
-		astar_weight = 0.70f;
+		if (newgr_capacity_profile == NEWGR_CAP_PROFILE_WL_FOCUSED) {
+			ENLARGE = 32;
+			ESTEP1 = 7;
+			ESTEP2 = 5;
+			ESTEP3 = 4;
+			CSTEP1 = 1;
+			CSTEP2 = 1;
+			CSTEP3 = 1;
+			LVIter = 1;
+			VIA = 1;
+			astar_weight = 0.65f;
+		} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_DR_FOCUSED) {
+			ENLARGE = 58;
+			ESTEP1 = 12;
+			ESTEP2 = 10;
+			ESTEP3 = 8;
+			CSTEP1 = 1;
+			CSTEP2 = 1;
+			CSTEP3 = 2;
+			LVIter = 3;
+			VIA = 3;
+			astar_weight = 0.95f;
+		} else {
+			ENLARGE = 40;
+			ESTEP1 = 9;
+			ESTEP2 = 7;
+			ESTEP3 = 5;
+			CSTEP1 = 1;
+			CSTEP2 = 1;
+			CSTEP3 = 1;
+			LVIter = 2;
+			VIA = 2;
+			astar_weight = 0.78f;
+		}
 	}
 
      //galois::substrate::PerThreadStorage<THREAD_LOCAL_STORAGE> thread_local_storage;
@@ -708,6 +734,11 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		// call FLUTE to generate RSMT and break the nets into segments (2-pin nets)
 
 		VIA=2;
+		if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_WL_FOCUSED) {
+			VIA = 1;
+		} else if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_DR_FOCUSED) {
+			VIA = 3;
+		}
 		//viacost = VIA;
 		viacost = 0;
 		gen_brk_RSMT(FALSE, FALSE, FALSE, FALSE, noADJ);
@@ -856,9 +887,16 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			}
 
 			 
-			const int enlarge_limit = (algo == Astar)
-			                              ? max(6, max(xGrid, yGrid) / 10)
-			                              : max(8, max(xGrid, yGrid) / 7);
+			int enlarge_limit = max(8, max(xGrid, yGrid) / 7);
+			if (algo == Astar) {
+				if (newgr_capacity_profile == NEWGR_CAP_PROFILE_WL_FOCUSED) {
+					enlarge_limit = max(6, max(xGrid, yGrid) / 11);
+				} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_DR_FOCUSED) {
+					enlarge_limit = max(8, max(xGrid, yGrid) / 7);
+				} else {
+					enlarge_limit = max(7, max(xGrid, yGrid) / 9);
+				}
+			}
 			enlarge = min(enlarge, enlarge_limit);
 			//std::cout << "costheight : " << costheight << " enlarge: " << enlarge << std::endl; 
 			costheight+=cost_step;

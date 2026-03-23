@@ -78,6 +78,7 @@ struct CandidateResult
 {
   Algo algo{Algo::Astar};
   std::string mode_name;
+  int capacity_profile{NEWGR_CAP_PROFILE_BALANCED};
   int maze_rounds{0};
   int overflow{std::numeric_limits<int>::max()};
   RouteMetrics metrics{};
@@ -105,10 +106,22 @@ bool isBetterCandidate(const CandidateResult& lhs, const CandidateResult& rhs)
   if (lhs.overflow != rhs.overflow) {
     return lhs.overflow < rhs.overflow;
   }
-  if (lhs.metrics.wirelength != rhs.metrics.wirelength) {
-    return lhs.metrics.wirelength < rhs.metrics.wirelength;
+
+  // Allow a small wirelength tie window; inside that window prefer fewer vias,
+  // which usually improves detailed-route realizability and final WL.
+  const uint64_t wl_tol = std::max<uint64_t>(
+      1,
+      std::max(lhs.metrics.wirelength, rhs.metrics.wirelength) / 400);
+  if (lhs.metrics.wirelength + wl_tol < rhs.metrics.wirelength) {
+    return true;
   }
-  return lhs.metrics.vias < rhs.metrics.vias;
+  if (rhs.metrics.wirelength + wl_tol < lhs.metrics.wirelength) {
+    return false;
+  }
+  if (lhs.metrics.vias != rhs.metrics.vias) {
+    return lhs.metrics.vias < rhs.metrics.vias;
+  }
+  return lhs.metrics.wirelength < rhs.metrics.wirelength;
 }
 
 const char* algoName(Algo algo)
@@ -122,6 +135,19 @@ const char* algoName(Algo algo)
       return "FineGrain";
     default:
       return "Other";
+  }
+}
+
+const char* capacityProfileName(int profile)
+{
+  switch (profile) {
+    case NEWGR_CAP_PROFILE_WL_FOCUSED:
+      return "WL_FOCUSED";
+    case NEWGR_CAP_PROFILE_DR_FOCUSED:
+      return "DR_FOCUSED";
+    case NEWGR_CAP_PROFILE_BALANCED:
+    default:
+      return "BALANCED";
   }
 }
 
@@ -244,11 +270,16 @@ NetRouteMap NewgrEngine::run()
                   "continuing without adjustments.");
   }
 
-  auto run_candidate = [&](Algo algo, int maze_rounds, const char* mode_name) {
+  auto run_candidate = [&](Algo algo,
+                           int maze_rounds,
+                           int capacity_profile,
+                           const char* mode_name) {
     CandidateResult candidate;
     candidate.algo = algo;
     candidate.mode_name = mode_name;
+    candidate.capacity_profile = capacity_profile;
     candidate.maze_rounds = maze_rounds;
+    newgr_capacity_profile = capacity_profile;
 
     parser::CongestionMap congestion_map(
         generator.grid.z, generator.grid.x, generator.grid.y);
@@ -269,26 +300,64 @@ NetRouteMap NewgrEngine::run()
 
     logger_->info(utl::GRT,
                   402,
-                  "NEWGR candidate {}: overflow={}, route_wl={}, route_vias={}",
+                  "NEWGR candidate {} [{}]: overflow={}, route_wl={}, "
+                  "route_vias={}",
                   candidateName(candidate),
+                  capacityProfileName(candidate.capacity_profile),
                   candidate.overflow,
                   candidate.metrics.wirelength,
                   candidate.metrics.vias);
     return candidate;
   };
 
-  // Two-pass hybrid:
-  // 1) SPRoute-style deterministic partitioned warmup to shape congestion.
-  // 2) Final FastRoute-style global A* pass for low-wirelength guide output.
-  run_candidate(Algo::DetPart_Astar_Local, 520, "DetPart_Astar_Local_Warmup");
-  CandidateResult best = run_candidate(Algo::Astar, 700, "Astar_Final");
+  // Three-way hybrid (SPRoute + FastRoute + CUGR-inspired balancing):
+  // 1) DR-focused DetPart_Astar_Local for routability-centric reserve.
+  // 2) WL-focused Astar for shortest-path preference.
+  // 3) Balanced Astar with moderate reserve and expansion.
+  std::vector<CandidateResult> candidates;
+  candidates.reserve(3);
+  candidates.push_back(run_candidate(Algo::DetPart_Astar_Local,
+                                     520,
+                                     NEWGR_CAP_PROFILE_DR_FOCUSED,
+                                     "DetPart_DR"));
+  candidates.push_back(run_candidate(Algo::Astar,
+                                     700,
+                                     NEWGR_CAP_PROFILE_WL_FOCUSED,
+                                     "Astar_WL"));
+  candidates.push_back(run_candidate(Algo::Astar,
+                                     700,
+                                     NEWGR_CAP_PROFILE_BALANCED,
+                                     "Astar_Balanced"));
 
+  CandidateResult best = candidates.front();
+  for (size_t i = 1; i < candidates.size(); ++i) {
+    if (isBetterCandidate(candidates[i], best)) {
+      best = candidates[i];
+    }
+  }
+
+  const CandidateResult& last_candidate = candidates.back();
+  if (best.algo != last_candidate.algo
+      || best.capacity_profile != last_candidate.capacity_profile) {
+    logger_->info(
+        utl::GRT,
+        403,
+        "Re-running selected NEWGR candidate {} [{}] to keep congestion "
+        "state aligned with output guides.",
+        candidateName(best),
+        capacityProfileName(best.capacity_profile));
+    best = run_candidate(
+        best.algo, best.maze_rounds, best.capacity_profile, best.mode_name.c_str());
+  }
+
+  newgr_capacity_profile = best.capacity_profile;
   last_total_overflow_ = best.overflow;
   logger_->info(utl::GRT,
                 404,
-                "NEWGR selected candidate {}: overflow={}, route_wl={}, "
+                "NEWGR selected candidate {} [{}]: overflow={}, route_wl={}, "
                 "route_vias={}",
                 candidateName(best),
+                capacityProfileName(best.capacity_profile),
                 best.overflow,
                 best.metrics.wirelength,
                 best.metrics.vias);

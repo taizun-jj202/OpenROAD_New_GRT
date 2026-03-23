@@ -11,6 +11,11 @@ int numThreads;
 int acc_count;
 int n_small_undone;
 float max_rudy;
+// Runtime-switchable profile used by NEWGR candidate evaluation.
+#define NEWGR_CAP_PROFILE_BALANCED 0
+#define NEWGR_CAP_PROFILE_WL_FOCUSED 1
+#define NEWGR_CAP_PROFILE_DR_FOCUSED 2
+int newgr_capacity_profile = NEWGR_CAP_PROFILE_BALANCED;
 
 // NEWGR hybrid policy:
 // keep SPRoute-style congestion awareness, but bias toward FastRoute-like
@@ -47,12 +52,14 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 		return 0;
 	else {
 		float adj;
+		const bool wl_profile = (newgr_capacity_profile == NEWGR_CAP_PROFILE_WL_FOCUSED);
+		const bool dr_profile = (newgr_capacity_profile == NEWGR_CAP_PROFILE_DR_FOCUSED);
 		// In low congestion regions, keep hard capacity to avoid unnecessary
 		// global-route detours that tend to increase wirelength.
 		if (rudy < 1.0) {
-			adj = 1.0;
+			adj = wl_profile ? 1.0f : (dr_profile ? 0.93f : 0.97f);
 		} else if (rudy < 2.0) {
-			adj = 0.98;
+			adj = wl_profile ? 0.98f : (dr_profile ? 0.88f : 0.95f);
 		} else
 
 		if(layerID == 1) //metal2
@@ -66,11 +73,25 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 		else
 			adj = 1.0;
 
-		// Keep a small reserve only in severe hotspots.
-		if (rudy > 8.0 && adj > 0.92f) {
-			adj = 0.92f;
+		if (dr_profile) {
+			if (layerID <= 2) {
+				adj -= 0.04f;
+			} else if (layerID >= 5) {
+				adj -= 0.02f;
+			}
 		}
-		
+
+		// Keep a reserve in severe hotspots; reserve depth depends on profile.
+		const float hotspot_adj_floor = wl_profile ? 0.92f : (dr_profile ? 0.82f : 0.88f);
+		if (rudy > 8.0f && adj > hotspot_adj_floor) {
+			adj = hotspot_adj_floor;
+		}
+		if (adj > 1.0f) {
+			adj = 1.0f;
+		}
+		if (adj < 0.65f) {
+			adj = 0.65f;
+		}
 
 		//adj = 0.9;
 		return ((float) x * adj < 2)?  1 : x * adj;
