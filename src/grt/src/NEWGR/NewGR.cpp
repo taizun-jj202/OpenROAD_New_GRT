@@ -563,6 +563,69 @@ void applyHotspotPenalties(GlobalRouter* grouter,
   }
 }
 
+void applyLayerPolarityField(GlobalRouter* grouter,
+                             const RudyGrid& normalized_rudy,
+                             int min_layer,
+                             int max_layer,
+                             float favored_ratio,
+                             float suppressed_ratio,
+                             float transition_rudy)
+{
+  Grid* grid = grouter->grid();
+  if (normalized_rudy.empty() || grid == nullptr) {
+    return;
+  }
+
+  const int x_grids = grid->getXGrids();
+  const int y_grids = grid->getYGrids();
+  const int x_tiles = normalized_rudy.size();
+  const int y_tiles = normalized_rudy.front().size();
+  const int usable_x = std::min(x_grids, x_tiles);
+  const int usable_y = std::min(y_grids, y_tiles);
+  if (usable_x < 2 || usable_y < 2) {
+    return;
+  }
+
+  favored_ratio = std::clamp(favored_ratio, 1.0f, 1.60f);
+  suppressed_ratio = std::clamp(suppressed_ratio, 0.08f, 0.98f);
+  transition_rudy = std::clamp(transition_rudy, 0.10f, 0.90f);
+
+  const auto sample = [&](int x, int y) {
+    if (x < 0 || y < 0 || x >= usable_x || y >= usable_y) {
+      return 0.0f;
+    }
+    return normalized_rudy[x][y];
+  };
+
+  for (int layer = min_layer; layer <= max_layer; ++layer) {
+    const bool favor_horizontal = ((layer - min_layer) % 2) == 0;
+    for (int y = 0; y < usable_y; ++y) {
+      for (int x = 0; x < usable_x - 1; ++x) {
+        const float local_rudy = 0.5f * (sample(x, y) + sample(x + 1, y));
+        const float polarity
+            = std::clamp((local_rudy - transition_rudy) / 0.30f, -1.0f, 1.0f);
+        float ratio = favor_horizontal
+                          ? favored_ratio - 0.15f * polarity
+                          : suppressed_ratio + 0.30f * local_rudy;
+        ratio = std::clamp(ratio, 0.08f, 1.60f);
+        adjustEdgeCapacity(grouter, x, y, x + 1, y, layer, ratio);
+      }
+    }
+    for (int y = 0; y < usable_y - 1; ++y) {
+      for (int x = 0; x < usable_x; ++x) {
+        const float local_rudy = 0.5f * (sample(x, y) + sample(x, y + 1));
+        const float polarity
+            = std::clamp((local_rudy - transition_rudy) / 0.30f, -1.0f, 1.0f);
+        float ratio = favor_horizontal
+                          ? suppressed_ratio + 0.30f * local_rudy
+                          : favored_ratio - 0.15f * polarity;
+        ratio = std::clamp(ratio, 0.08f, 1.60f);
+        adjustEdgeCapacity(grouter, x, y, x, y + 1, layer, ratio);
+      }
+    }
+  }
+}
+
 }  // namespace
 
 NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
@@ -769,97 +832,202 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
 
-  ScenarioDefinition braided_balanced_def;
-  braided_balanced_def.name = "braided-balanced";
-  braided_balanced_def.pre_init = [this]() {
-    grouter_->setCapacitiesPerturbationPercentage(14.0f);
-    grouter_->setPerturbationAmount(1);
-    grouter_->setSeed(43);
+  ScenarioDefinition compression_gridlock_def;
+  compression_gridlock_def.name = "compression-gridlock";
+  compression_gridlock_def.pre_init = [this]() {
+    grouter_->setCapacitiesPerturbationPercentage(22.0f);
+    grouter_->setPerturbationAmount(2);
+    grouter_->setSeed(67);
     grouter_->setAllowCongestion(false);
-    grouter_->fastroute_->setCriticalNetsPercentage(34.0f);
+    grouter_->fastroute_->setCriticalNetsPercentage(52.0f);
   };
-  braided_balanced_def.post_init = [this,
-                                    &normalized_rudy,
-                                    &braided_hotspots,
-                                    &baseline_usage,
-                                    min_routing_layer,
-                                    max_routing_layer]() {
+  compression_gridlock_def.post_init = [this,
+                                        &normalized_rudy,
+                                        &braided_hotspots,
+                                        &baseline_usage,
+                                        min_routing_layer,
+                                        max_routing_layer]() {
     applySoftCapacityScaling(grouter_,
                              normalized_rudy,
                              min_routing_layer,
                              max_routing_layer,
-                             0.62f,
-                             0.95f,
-                             5.6f,
-                             0.46f);
+                             0.35f,
+                             1.28f,
+                             8.5f,
+                             0.55f);
     applyBackboneCapacityReinforcement(grouter_,
                                        normalized_rudy,
                                        baseline_usage,
                                        min_routing_layer,
                                        max_routing_layer,
-                                       0.48f,
-                                       1.28f,
-                                       0.85f);
+                                       0.34f,
+                                       1.48f,
+                                       1.22f);
     applyAggressiveCapacityField(grouter_,
                                  normalized_rudy,
                                  braided_hotspots,
                                  min_routing_layer,
                                  max_routing_layer,
-                                 0.72f,
-                                 0.10f,
-                                 0.48f,
-                                 1.20f,
-                                 0.22f,
+                                 0.56f,
+                                 0.08f,
+                                 0.18f,
+                                 1.36f,
+                                 0.64f,
+                                 true);
+    applyHotspotPenalties(grouter_,
+                          braided_hotspots,
+                          min_routing_layer,
+                          max_routing_layer,
+                          4,
+                          0.52f,
+                          0.95f);
+  };
+
+  ScenarioDefinition polarity_corridors_def;
+  polarity_corridors_def.name = "polarity-corridors";
+  polarity_corridors_def.pre_init = [this]() {
+    grouter_->setCapacitiesPerturbationPercentage(18.0f);
+    grouter_->setPerturbationAmount(1);
+    grouter_->setSeed(91);
+    grouter_->setAllowCongestion(true);
+    grouter_->fastroute_->setCriticalNetsPercentage(44.0f);
+  };
+  polarity_corridors_def.post_init = [this,
+                                      &normalized_rudy,
+                                      &braided_hotspots,
+                                      &baseline_usage,
+                                      min_routing_layer,
+                                      max_routing_layer]() {
+    applyLayerPolarityField(grouter_,
+                            normalized_rudy,
+                            min_routing_layer,
+                            max_routing_layer,
+                            1.45f,
+                            0.16f,
+                            0.42f);
+    applyBackboneCapacityReinforcement(grouter_,
+                                       normalized_rudy,
+                                       baseline_usage,
+                                       min_routing_layer,
+                                       max_routing_layer,
+                                       0.62f,
+                                       1.34f,
+                                       0.62f);
+    applyAggressiveCapacityField(grouter_,
+                                 normalized_rudy,
+                                 braided_hotspots,
+                                 min_routing_layer,
+                                 max_routing_layer,
+                                 0.68f,
+                                 0.12f,
+                                 0.30f,
+                                 1.30f,
+                                 0.52f,
                                  false);
     applyHotspotPenalties(grouter_,
                           braided_hotspots,
                           min_routing_layer,
                           max_routing_layer,
-                          3,
-                          0.63f,
-                          0.55f);
+                          2,
+                          0.70f,
+                          0.40f);
   };
 
-  ScenarioResult braided_balanced = run_scenario(braided_balanced_def, snapshot);
+  ScenarioResult compression_gridlock
+      = run_scenario(compression_gridlock_def, snapshot);
+  ScenarioResult polarity_corridors
+      = run_scenario(polarity_corridors_def, snapshot);
   logger_->info(GNR,
                 6007,
-                "NEWGR diagnostic baseline vs braided-balanced: baseline "
-                "wirelength {:.0f} um / vias {} / overflow {}, scenario "
-                "wirelength {:.0f} um / vias {} / overflow {}",
+                "NEWGR diagnostics: baseline wl {:.0f} vias {} of {}, "
+                "compression wl {:.0f} vias {} of {}, polarity wl {:.0f} vias "
+                "{} of {}",
                 baseline.metrics.wirelength_um,
                 baseline.metrics.via_count,
                 baseline.overflow,
-                braided_balanced.metrics.wirelength_um,
-                braided_balanced.metrics.via_count,
-                braided_balanced.overflow);
+                compression_gridlock.metrics.wirelength_um,
+                compression_gridlock.metrics.via_count,
+                compression_gridlock.overflow,
+                polarity_corridors.metrics.wirelength_um,
+                polarity_corridors.metrics.via_count,
+                polarity_corridors.overflow);
 
-  const long wl_guard
-      = baseline.metrics.wirelength_dbu
-        + std::max(1500L, baseline.metrics.wirelength_dbu / 220);
-  const long via_guard
-      = baseline.metrics.via_count + std::max(200L, baseline.metrics.via_count / 90);
-  const bool scenario_candidate = !braided_balanced.routes.empty()
-                                  && braided_balanced.overflow == 0
-                                  && (braided_balanced.metrics.wirelength_dbu <= wl_guard
-                                      || braided_balanced.metrics.via_count <= via_guard);
+  const double via_weight
+      = static_cast<double>(std::max(grouter_->grid_->getTileSize(), 1)) * 3.0;
+  auto objective = [&](const ScenarioResult& scenario) {
+    const double overflow_penalty
+        = static_cast<double>(std::max(scenario.overflow, 0))
+          * via_weight * 0.9;
+    return static_cast<double>(scenario.metrics.wirelength_dbu)
+           + via_weight * static_cast<double>(scenario.metrics.via_count)
+           + overflow_penalty;
+  };
+  auto displacement = [&](const ScenarioResult& scenario) {
+    const long delta_wl = std::abs(scenario.metrics.wirelength_dbu
+                                   - baseline.metrics.wirelength_dbu);
+    const long delta_via = std::abs(scenario.metrics.via_count
+                                    - baseline.metrics.via_count);
+    return delta_wl + 8L * delta_via;
+  };
 
-  if (scenario_candidate) {
+  const int overflow_guard = std::max(800, baseline.overflow + 1800);
+  std::vector<ScenarioResult*> candidates;
+  if (!compression_gridlock.routes.empty()
+      && compression_gridlock.overflow <= overflow_guard) {
+    candidates.push_back(&compression_gridlock);
+  }
+  if (!polarity_corridors.routes.empty()
+      && polarity_corridors.overflow <= overflow_guard) {
+    candidates.push_back(&polarity_corridors);
+  }
+
+  ScenarioResult* selected = nullptr;
+  if (!candidates.empty()) {
+    selected = *std::min_element(
+        candidates.begin(),
+        candidates.end(),
+        [&](const ScenarioResult* lhs, const ScenarioResult* rhs) {
+          return objective(*lhs) < objective(*rhs);
+        });
+    // If objectives are effectively tied, prefer the scenario that moves
+    // wirelength/via behavior further away from baseline to avoid stagnation.
+    if (candidates.size() > 1) {
+      ScenarioResult* exploratory
+          = *std::max_element(candidates.begin(),
+                              candidates.end(),
+                              [&](const ScenarioResult* lhs,
+                                  const ScenarioResult* rhs) {
+                                return displacement(*lhs) < displacement(*rhs);
+                              });
+      const double objective_delta
+          = std::abs(objective(*selected) - objective(*exploratory));
+      if (objective_delta < via_weight * 40.0
+          && displacement(*exploratory) > displacement(*selected) + 120L) {
+        selected = exploratory;
+      }
+    }
+  }
+
+  if (selected != nullptr) {
     logger_->warn(
         GNR,
         6010,
-        "NEWGR selected scenario '{}' with guarded overflow {}.",
-        braided_balanced.name,
-        braided_balanced.overflow);
+        "NEWGR selected scenario '{}' (objective {:.0f}, displacement {}, "
+        "overflow {}).",
+        selected->name,
+        objective(*selected),
+        displacement(*selected),
+        selected->overflow);
     restore_snapshot(snapshot);
-    return std::move(braided_balanced.routes);
+    return std::move(selected->routes);
   }
 
   logger_->warn(
       GNR,
       6011,
-      "NEWGR scenario not selected (scenario overflow {}), replaying baseline "
-      "to keep congestion state consistent.",
-      braided_balanced.overflow);
+      "NEWGR aggressive scenarios invalid (overflow guard {}), replaying "
+      "baseline.",
+      overflow_guard);
   ScenarioDefinition baseline_replay{"baseline-replay", nullptr, nullptr};
   ScenarioResult fallback = run_scenario(baseline_replay, snapshot);
   restore_snapshot(snapshot);
