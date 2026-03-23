@@ -89,6 +89,13 @@ struct Constants
   // FastRoute-style post-processing pass: reroute a subset of long,
   // overflow-free nets and keep only wirelength-improving solutions.
   bool enable_wirelength_recovery = true;
+  bool enable_wirelength_surgery = true;
+  int surgery_candidate_cap = 14;
+  int surgery_hpwl_threshold = 150;
+  double surgery_min_stretch = 1.07;
+  int surgery_max_via_increase = 4;
+  double surgery_via_cost_scale_a = 0.0;
+  double surgery_via_cost_scale_b = 0.04;
   bool recovery_use_maze = true;
   bool recovery_use_wirelength_maze = true;
   double recovery_wl_maze_via_cost_scale = 0.28;
@@ -156,6 +163,7 @@ class CUGR
   void patternRoute(std::vector<int>& netIndices);
   void patternRouteWithDetours(std::vector<int>& netIndices);
   void mazeRoute(std::vector<int>& netIndices);
+  void wirelengthSurgery(const std::vector<int>& netIndices);
   void wirelengthRecovery(const std::vector<int>& netIndices);
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,

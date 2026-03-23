@@ -592,6 +592,162 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   updateOverflowNets(netIndices);
 }
 
+void CUGR::wirelengthSurgery(const std::vector<int>& netIndices)
+{
+  if (!constants_.enable_wirelength_surgery || netIndices.empty()) {
+    return;
+  }
+
+  struct Candidate
+  {
+    int index;
+    int hpwl;
+    double stretch;
+    uint64_t excess_wirelength;
+  };
+
+  std::vector<Candidate> candidates;
+  candidates.reserve(netIndices.size());
+  const int gcell_span = std::max(1, design_->getGridlineSize());
+  for (const int netIndex : netIndices) {
+    const auto& net = gr_nets_[netIndex];
+    const auto& tree = net->getRoutingTree();
+    if (!tree) {
+      continue;
+    }
+    if (grid_graph_->checkOverflow(tree) > 0) {
+      continue;
+    }
+    const int hpwl = net->getBoundingBox().hp();
+    if (hpwl < constants_.surgery_hpwl_threshold) {
+      continue;
+    }
+    const RouteStats stats = measureRouteStats(grid_graph_.get(), tree);
+    const uint64_t approx_hpwl_dbu
+        = static_cast<uint64_t>(std::max(1, hpwl))
+          * static_cast<uint64_t>(gcell_span);
+    const double stretch = approx_hpwl_dbu > 0
+                               ? static_cast<double>(stats.wirelength)
+                                     / static_cast<double>(approx_hpwl_dbu)
+                               : 1.0;
+    if (stretch < constants_.surgery_min_stretch) {
+      continue;
+    }
+    const uint64_t excess_wirelength
+        = stats.wirelength > approx_hpwl_dbu ? stats.wirelength - approx_hpwl_dbu
+                                             : 0;
+    candidates.push_back({netIndex, hpwl, stretch, excess_wirelength});
+  }
+
+  if (candidates.empty()) {
+    return;
+  }
+
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const Candidate& lhs, const Candidate& rhs) {
+              if (lhs.excess_wirelength != rhs.excess_wirelength) {
+                return lhs.excess_wirelength > rhs.excess_wirelength;
+              }
+              if (std::abs(lhs.stretch - rhs.stretch) > 1e-4) {
+                return lhs.stretch > rhs.stretch;
+              }
+              return lhs.hpwl > rhs.hpwl;
+            });
+  const int keep = std::max(
+      1,
+      std::min(static_cast<int>(candidates.size()),
+               std::max(1, constants_.surgery_candidate_cap)));
+  candidates.resize(keep);
+
+  GridGraphView<CostT> wireLengthCostView;
+  grid_graph_->extractWireLengthCostView(wireLengthCostView);
+
+  std::vector<double> via_scales;
+  via_scales.reserve(2);
+  via_scales.push_back(std::clamp(constants_.surgery_via_cost_scale_a, 0.0, 1.0));
+  const double second_via_scale
+      = std::clamp(constants_.surgery_via_cost_scale_b, 0.0, 1.0);
+  if (std::abs(second_via_scale - via_scales.front()) > 1e-9) {
+    via_scales.push_back(second_via_scale);
+  }
+
+  logger_->report("stage 3.5: wirelength surgery on {} / {} nets",
+                  candidates.size(),
+                  netIndices.size());
+  int accepted = 0;
+  for (const Candidate& candidate : candidates) {
+    const int netIndex = candidate.index;
+    GRNet* net = gr_nets_[netIndex].get();
+    const std::shared_ptr<GRTreeNode> original_tree = net->getRoutingTree();
+    if (!original_tree) {
+      continue;
+    }
+    const RouteStats original_stats
+        = measureRouteStats(grid_graph_.get(), original_tree);
+    const int original_overflow = grid_graph_->checkOverflow(original_tree);
+    const int max_allowed_vias
+        = original_stats.vias + std::max(0, constants_.surgery_max_via_increase);
+
+    grid_graph_->commitTree(original_tree, /*ripup*/ true);
+
+    std::shared_ptr<GRTreeNode> best_tree = nullptr;
+    RouteStats best_stats = original_stats;
+
+    auto isImprovement = [](const RouteStats& lhs, const RouteStats& rhs) {
+      return lhs.wirelength < rhs.wirelength
+             || (lhs.wirelength == rhs.wirelength && lhs.vias < rhs.vias);
+    };
+
+    auto considerCandidate = [&](const std::shared_ptr<GRTreeNode>& tree) {
+      if (!tree) {
+        return;
+      }
+      grid_graph_->commitTree(tree);
+      const int overflow_after_commit = grid_graph_->checkOverflow(tree);
+      grid_graph_->commitTree(tree, /*ripup*/ true);
+      if (overflow_after_commit > original_overflow) {
+        return;
+      }
+      RouteStats stats = measureRouteStats(grid_graph_.get(), tree);
+      if (stats.vias > max_allowed_vias) {
+        return;
+      }
+      if (!best_tree || isImprovement(stats, best_stats)) {
+        best_tree = tree;
+        best_stats = stats;
+      }
+    };
+
+    for (const double via_scale : via_scales) {
+      MazeRoute fullGridMaze(net, grid_graph_.get(), logger_);
+      fullGridMaze.constructSparsifiedGraph(
+          wireLengthCostView, SparseGrid(1, 1, 0, 0), via_scale);
+      fullGridMaze.run();
+      const std::shared_ptr<SteinerTreeNode> maze_tree = fullGridMaze.getSteinerTree();
+      if (!maze_tree) {
+        continue;
+      }
+      PatternRoute patternRoute(
+          net, grid_graph_.get(), stt_builder_, constants_, logger_);
+      patternRoute.setSteinerTree(maze_tree);
+      patternRoute.constructRoutingDAG();
+      patternRoute.run();
+      considerCandidate(net->getRoutingTree());
+    }
+
+    if (best_tree && isImprovement(best_stats, original_stats)) {
+      net->setRoutingTree(best_tree);
+      grid_graph_->commitTree(best_tree);
+      accepted++;
+    } else {
+      net->setRoutingTree(original_tree);
+      grid_graph_->commitTree(original_tree);
+    }
+  }
+  logger_->report("stage 3.5 accepted {} reroutes.", accepted);
+}
+
 void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
 {
   if (!constants_.enable_wirelength_recovery || netIndices.empty()) {
@@ -1142,6 +1298,7 @@ void CUGR::route()
         = selectCriticalNets(detourIndices, constants_.maze_refine_ratio);
   }
   mazeRoute(mazeIndices);
+  wirelengthSurgery(allNetIndices);
   wirelengthRecovery(allNetIndices);
 
   printStatistics();
