@@ -3520,12 +3520,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     sculpted.name = "field_sculpted_failed";
   }
 
-  // Iteration 30 radical mode:
-  // Build two topology-breaking corridor candidates:
+  // Iteration 31 radical mode:
+  // Build three topology-breaking corridor candidates:
   // 1) corridor_hyper: low-RUDY corridor backbone rebuild.
   // 2) corridor_shockwave: corridor backbone plus an aggressive wave pass.
-  // Then run a deterministic per-net tournament with explicit forcing on
-  // medium/large nets so we break compact-route fixed points.
+  // 3) corridor_portal_vortex: portal hypergraph + dual-backbone warp.
+  // Then run a deterministic per-net tournament with explicit forcing buckets
+  // so a larger fraction of medium/large nets are rewritten each run.
   const bool use_corridor_mode
       = grouter_->grid() != nullptr && grouter_->grid()->getXGrids() > 0;
   if (use_corridor_mode) {
@@ -3559,10 +3560,44 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     applyGuideCompression(corridor_shock.routes, std::max(6 * tile_size, 1));
     corridor_shock.metrics = compute_metrics(corridor_shock.routes);
 
+    ScenarioResult corridor_vortex = compact;
+    corridor_vortex.name = "corridor_portal_vortex";
+    applyQuadrantPortalHypergraphRebuild(grouter_,
+                                         corridor_vortex.routes,
+                                         baseline_rudy,
+                                         4,
+                                         220,
+                                         100,
+                                         min_routing_layer,
+                                         max_routing_layer);
+    applyDualBackboneWarp(grouter_,
+                          corridor_vortex.routes,
+                          baseline_rudy,
+                          4,
+                          100,
+                          min_routing_layer,
+                          max_routing_layer);
+    applyWavefrontDetours(grouter_,
+                          corridor_vortex.routes,
+                          baseline_rudy,
+                          std::max(3 * tile_size, 1),
+                          std::max(10 * tile_size, 1),
+                          120);
+    applyAggressiveDoglegShortcuts(corridor_vortex.routes,
+                                   std::max(12 * tile_size, 1),
+                                   std::max(tile_size, 1));
+    applyGuideCompression(corridor_vortex.routes, std::max(7 * tile_size, 1));
+    applyViaExcursionCollapse(corridor_vortex.routes, std::max(4 * tile_size, 1));
+    corridor_vortex.metrics = compute_metrics(corridor_vortex.routes);
+
     ScenarioResult selected = compact;
-    selected.name = "corridor_tournament";
+    selected.name = "corridor_vortex_tournament";
     long nets_taken_from_corridor = 0;
     long nets_taken_from_corridor_shock = 0;
+    long nets_taken_from_corridor_vortex = 0;
+    long forced_shock_buckets = 0;
+    long forced_vortex_buckets = 0;
+    long forced_corridor_buckets = 0;
 
     auto has_planar_guide = [](const GRoute& route) {
       for (const GSegment& segment : route) {
@@ -3588,27 +3623,45 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
     auto route_score = [&](const GRoute& route, int scenario_overflow) {
       const auto [route_wl, route_vias] = route_stats(route);
-      const double via_weight = static_cast<double>(tile_size) * 0.45;
+      const double via_weight = static_cast<double>(tile_size) * 0.32;
       const double overflow_penalty
           = static_cast<double>(std::max(scenario_overflow, 0))
-            * static_cast<double>(tile_size) * 10.0;
+            * static_cast<double>(tile_size) * 12.0;
       return static_cast<double>(route_wl)
              + via_weight * static_cast<double>(route_vias) + overflow_penalty;
     };
-    auto route_admissible = [&](const GRoute& candidate, const GRoute& reference) {
+    auto route_admissible_strict = [&](const GRoute& candidate,
+                                       const GRoute& reference) {
       const auto [cand_wl, cand_vias] = route_stats(candidate);
       const auto [ref_wl, ref_vias] = route_stats(reference);
       if (ref_wl <= 0) {
         return true;
       }
       const long wl_cap
-          = std::max(ref_wl + static_cast<long>(12 * tile_size),
+          = std::max(ref_wl + static_cast<long>(14 * tile_size),
                      static_cast<long>(
-                         std::ceil(static_cast<double>(ref_wl) * 3.20)));
+                         std::ceil(static_cast<double>(ref_wl) * 2.60)));
       const long via_cap
-          = std::max(ref_vias + 18L,
+          = std::max(ref_vias + 20L,
                      static_cast<long>(
-                         std::ceil(static_cast<double>(ref_vias) * 5.50 + 16.0)));
+                         std::ceil(static_cast<double>(ref_vias) * 4.80 + 20.0)));
+      return cand_wl <= wl_cap && cand_vias <= via_cap;
+    };
+    auto route_admissible_loose = [&](const GRoute& candidate,
+                                      const GRoute& reference) {
+      const auto [cand_wl, cand_vias] = route_stats(candidate);
+      const auto [ref_wl, ref_vias] = route_stats(reference);
+      if (ref_wl <= 0) {
+        return true;
+      }
+      const long wl_cap
+          = std::max(ref_wl + static_cast<long>(24 * tile_size),
+                     static_cast<long>(
+                         std::ceil(static_cast<double>(ref_wl) * 3.40)));
+      const long via_cap
+          = std::max(ref_vias + 28L,
+                     static_cast<long>(
+                         std::ceil(static_cast<double>(ref_vias) * 6.80 + 28.0)));
       return cand_wl <= wl_cap && cand_vias <= via_cap;
     };
 
@@ -3623,71 +3676,142 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         continue;
       }
       const GRoute& corridor_shock_route = corridor_shock_it->second;
+      auto corridor_vortex_it = corridor_vortex.routes.find(db_net);
+      if (corridor_vortex_it == corridor_vortex.routes.end()) {
+        continue;
+      }
+      const GRoute& corridor_vortex_route = corridor_vortex_it->second;
 
       const bool compact_valid = has_planar_guide(compact_route);
       const bool corridor_valid = has_planar_guide(corridor_route);
       const bool shock_valid = has_planar_guide(corridor_shock_route);
-      if (!corridor_valid && compact_valid) {
-        continue;
-      }
-      if (corridor_valid && !compact_valid) {
-        selected.routes[db_net] = corridor_route;
-        nets_taken_from_corridor++;
-        continue;
-      }
-      if (!route_admissible(corridor_route, compact_route)) {
+      const bool vortex_valid = has_planar_guide(corridor_vortex_route);
+
+      if (!compact_valid) {
+        if (vortex_valid) {
+          selected.routes[db_net] = corridor_vortex_route;
+          nets_taken_from_corridor_vortex++;
+          continue;
+        }
+        if (shock_valid) {
+          selected.routes[db_net] = corridor_shock_route;
+          nets_taken_from_corridor_shock++;
+          continue;
+        }
+        if (corridor_valid) {
+          selected.routes[db_net] = corridor_route;
+          nets_taken_from_corridor++;
+          continue;
+        }
         continue;
       }
 
       const auto [compact_wl, compact_vias] = route_stats(compact_route);
       const auto [corr_wl, corr_vias] = route_stats(corridor_route);
       const auto [shock_wl, shock_vias] = route_stats(corridor_shock_route);
+      const auto [vortex_wl, vortex_vias] = route_stats(corridor_vortex_route);
       const double compact_score = route_score(compact_route, compact.overflow);
       const double corridor_score = route_score(corridor_route, corridor.overflow);
       const double shock_score
           = route_score(corridor_shock_route, corridor_shock.overflow);
+      const double vortex_score
+          = route_score(corridor_vortex_route, corridor_vortex.overflow);
       const int node_count
           = static_cast<int>(collectUniqueRouteNodes(compact_route).size());
       const auto key
           = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+      const unsigned phase = static_cast<unsigned>(key % 8ULL);
 
-      bool use_shock = false;
-      if (shock_valid && route_admissible(corridor_shock_route, compact_route)) {
-        const bool force_shock = node_count >= 7 && (key % 2ULL) == 0ULL;
-        if (force_shock && shock_score <= compact_score * 1.65) {
-          use_shock = true;
-        }
-        if (!use_shock && shock_score + 1e-3 < corridor_score * 1.04) {
-          use_shock = true;
-        }
-        if (!use_shock && node_count >= 10
-            && shock_wl <= static_cast<long>(compact_wl * 1.45)
-            && shock_vias <= static_cast<long>(compact_vias * 5.00 + 20)) {
-          use_shock = (key % 3ULL) == 1ULL;
-        }
+      const bool corridor_ok
+          = corridor_valid && route_admissible_strict(corridor_route, compact_route);
+      const bool shock_ok
+          = shock_valid && route_admissible_loose(corridor_shock_route, compact_route);
+      const bool vortex_ok
+          = vortex_valid && route_admissible_loose(corridor_vortex_route, compact_route);
+
+      bool forced_pick = false;
+      if (vortex_ok && node_count >= 10 && (phase == 1U || phase == 5U)
+          && vortex_score <= compact_score * 1.95) {
+        selected.routes[db_net] = corridor_vortex_route;
+        nets_taken_from_corridor_vortex++;
+        forced_vortex_buckets++;
+        forced_pick = true;
       }
-      if (use_shock) {
+      if (!forced_pick && shock_ok && node_count >= 8
+          && (phase == 2U || phase == 6U)
+          && shock_score <= compact_score * 1.75) {
+        selected.routes[db_net] = corridor_shock_route;
+        nets_taken_from_corridor_shock++;
+        forced_shock_buckets++;
+        forced_pick = true;
+      }
+      if (!forced_pick && corridor_ok && node_count >= 6 && phase == 3U
+          && corridor_score <= compact_score * 1.40) {
+        selected.routes[db_net] = corridor_route;
+        nets_taken_from_corridor++;
+        forced_corridor_buckets++;
+        forced_pick = true;
+      }
+      if (!forced_pick && vortex_ok && node_count >= 14 && phase == 0U
+          && vortex_wl <= static_cast<long>(compact_wl * 1.45)
+          && vortex_vias <= static_cast<long>(compact_vias * 6.00 + 22)) {
+        selected.routes[db_net] = corridor_vortex_route;
+        nets_taken_from_corridor_vortex++;
+        forced_vortex_buckets++;
+        forced_pick = true;
+      }
+      if (!forced_pick && shock_ok && node_count >= 12 && phase == 7U
+          && shock_wl <= static_cast<long>(compact_wl * 1.30)
+          && shock_vias <= static_cast<long>(compact_vias * 4.80 + 16)) {
+        selected.routes[db_net] = corridor_shock_route;
+        nets_taken_from_corridor_shock++;
+        forced_shock_buckets++;
+        forced_pick = true;
+      }
+      if (forced_pick) {
+        continue;
+      }
+
+      double best_score = compact_score;
+      enum class CorridorPick
+      {
+        kCompact,
+        kCorridor,
+        kShock,
+        kVortex
+      };
+      CorridorPick pick = CorridorPick::kCompact;
+      if (corridor_ok && corridor_score + 1e-3 < best_score) {
+        best_score = corridor_score;
+        pick = CorridorPick::kCorridor;
+      }
+      if (shock_ok && shock_score + 1e-3 < best_score) {
+        best_score = shock_score;
+        pick = CorridorPick::kShock;
+      }
+      if (vortex_ok && vortex_score + 1e-3 < best_score) {
+        pick = CorridorPick::kVortex;
+      }
+
+      if (pick == CorridorPick::kShock) {
         selected.routes[db_net] = corridor_shock_route;
         nets_taken_from_corridor_shock++;
         continue;
       }
-
-      bool use_corridor = corridor_score + 1e-3 < compact_score;
-      if (!use_corridor && corr_wl <= static_cast<long>(compact_wl * 1.05)
-          && corr_vias <= static_cast<long>(compact_vias * 2.50 + 8)) {
-        use_corridor = true;
+      if (pick == CorridorPick::kVortex) {
+        selected.routes[db_net] = corridor_vortex_route;
+        nets_taken_from_corridor_vortex++;
+        continue;
       }
-      if (!use_corridor && node_count >= 7
-          && corridor_score <= compact_score * 1.35) {
-        use_corridor = (key % 2ULL) == 0ULL;
+      if (pick == CorridorPick::kCorridor) {
+        selected.routes[db_net] = corridor_route;
+        nets_taken_from_corridor++;
+        continue;
       }
-      if (!use_corridor && node_count >= 11
-          && corr_wl <= static_cast<long>(compact_wl * 1.25)
-          && corr_vias <= static_cast<long>(compact_vias * 3.80 + 14)) {
-        use_corridor = (key % 3ULL) == 0ULL;
-      }
-
-      if (use_corridor) {
+      if (corridor_ok && node_count >= 9
+          && corr_wl <= static_cast<long>(compact_wl * 1.12)
+          && corr_vias <= static_cast<long>(compact_vias * 2.80 + 10)
+          && (phase == 4U || phase == 5U)) {
         selected.routes[db_net] = corridor_route;
         nets_taken_from_corridor++;
       }
@@ -3695,10 +3819,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     applyWavefrontDetours(grouter_,
                           selected.routes,
                           baseline_rudy,
-                          std::max(2 * tile_size, 1),
-                          std::max(6 * tile_size, 1),
-                          96);
-    applyGuideCompression(selected.routes, std::max(4 * tile_size, 1));
+                          std::max(3 * tile_size, 1),
+                          std::max(8 * tile_size, 1),
+                          120);
+    applyQuadrantPortalHypergraphRebuild(grouter_,
+                                         selected.routes,
+                                         baseline_rudy,
+                                         6,
+                                         220,
+                                         70,
+                                         min_routing_layer,
+                                         max_routing_layer);
+    applyAggressiveDoglegShortcuts(selected.routes,
+                                   std::max(14 * tile_size, 1),
+                                   std::max(tile_size, 1));
+    applyGuideCompression(selected.routes, std::max(5 * tile_size, 1));
+    applyViaExcursionCollapse(selected.routes, std::max(3 * tile_size, 1));
     selected.metrics = compute_metrics(selected.routes);
 
     const double selected_delta_wl
@@ -3719,9 +3855,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         selected_delta_vias);
     logger_->warn(GNR,
                   6042,
-                  "NEWGR corridor blend counters: corridor {} corridor_shock {}.",
+                  "NEWGR corridor blend counters: corridor {} corridor_shock {} "
+                  "corridor_vortex {} forced_corridor {} forced_shock {} "
+                  "forced_vortex {}.",
                   nets_taken_from_corridor,
-                  nets_taken_from_corridor_shock);
+                  nets_taken_from_corridor_shock,
+                  nets_taken_from_corridor_vortex,
+                  forced_corridor_buckets,
+                  forced_shock_buckets,
+                  forced_vortex_buckets);
 
     restore_snapshot(snapshot);
     return selected.routes;
