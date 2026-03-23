@@ -2871,6 +2871,295 @@ void applyDualBackboneWarp(GlobalRouter* grouter,
   }
 }
 
+void applyRudyCorridorBackboneRebuild(GlobalRouter* grouter,
+                                      NetRouteMap& routes,
+                                      const RudyGrid& normalized_rudy,
+                                      int min_unique_nodes,
+                                      int coverage_percent,
+                                      int min_layer,
+                                      int max_layer)
+{
+  if (grouter == nullptr || grouter->grid() == nullptr || routes.empty()) {
+    return;
+  }
+
+  Grid* grid = grouter->grid();
+  const int tile = std::max(grid->getTileSize(), 1);
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+  const int x_max = grid->getXMax();
+  const int y_max = grid->getYMax();
+  const int x_grids = std::max(grid->getXGrids(), 1);
+  const int y_grids = std::max(grid->getYGrids(), 1);
+  const int x_tiles = normalized_rudy.empty()
+                          ? x_grids
+                          : static_cast<int>(normalized_rudy.size());
+  const int y_tiles = normalized_rudy.empty()
+                          ? y_grids
+                          : static_cast<int>(normalized_rudy.front().size());
+
+  min_unique_nodes = std::max(min_unique_nodes, 3);
+  coverage_percent = std::clamp(coverage_percent, 1, 100);
+  min_layer = std::max(min_layer, 0);
+  max_layer = std::max(max_layer, min_layer);
+
+  auto to_grid_x = [&](int x) {
+    if (x_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((x - x_min) / tile, 0, x_tiles - 1);
+  };
+  auto to_grid_y = [&](int y) {
+    if (y_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((y - y_min) / tile, 0, y_tiles - 1);
+  };
+  auto to_dbu_x = [&](int gx) {
+    return std::clamp(x_min + gx * tile, x_min, x_max);
+  };
+  auto to_dbu_y = [&](int gy) {
+    return std::clamp(y_min + gy * tile, y_min, y_max);
+  };
+
+  auto sample = [&](int gx, int gy) {
+    if (normalized_rudy.empty() || normalized_rudy.front().empty()) {
+      return 0.5f;
+    }
+    gx = std::clamp(gx, 0, x_tiles - 1);
+    gy = std::clamp(gy, 0, y_tiles - 1);
+    return normalized_rudy[gx][gy];
+  };
+
+  auto row_cost = [&](int gy, int gx_lo, int gx_hi) {
+    gy = std::clamp(gy, 0, y_tiles - 1);
+    gx_lo = std::clamp(gx_lo, 0, x_tiles - 1);
+    gx_hi = std::clamp(gx_hi, 0, x_tiles - 1);
+    if (gx_lo > gx_hi) {
+      std::swap(gx_lo, gx_hi);
+    }
+    float sum = 0.0f;
+    int count = 0;
+    for (int gx = gx_lo; gx <= gx_hi; ++gx) {
+      sum += sample(gx, gy);
+      count++;
+    }
+    return count > 0 ? sum / static_cast<float>(count) : 0.5f;
+  };
+
+  auto col_cost = [&](int gx, int gy_lo, int gy_hi) {
+    gx = std::clamp(gx, 0, x_tiles - 1);
+    gy_lo = std::clamp(gy_lo, 0, y_tiles - 1);
+    gy_hi = std::clamp(gy_hi, 0, y_tiles - 1);
+    if (gy_lo > gy_hi) {
+      std::swap(gy_lo, gy_hi);
+    }
+    float sum = 0.0f;
+    int count = 0;
+    for (int gy = gy_lo; gy <= gy_hi; ++gy) {
+      sum += sample(gx, gy);
+      count++;
+    }
+    return count > 0 ? sum / static_cast<float>(count) : 0.5f;
+  };
+
+  for (auto& [db_net, route] : routes) {
+    if (route.empty()) {
+      continue;
+    }
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    if (static_cast<int>(key % 100ULL) >= coverage_percent) {
+      continue;
+    }
+
+    const std::vector<RouteNode> nodes = collectUniqueRouteNodes(route);
+    if (static_cast<int>(nodes.size()) < min_unique_nodes) {
+      continue;
+    }
+
+    int min_x = std::clamp(nodes.front().x, x_min, x_max);
+    int max_x = min_x;
+    int min_y = std::clamp(nodes.front().y, y_min, y_max);
+    int max_y = min_y;
+    for (const RouteNode& node : nodes) {
+      const int x = std::clamp(node.x, x_min, x_max);
+      const int y = std::clamp(node.y, y_min, y_max);
+      min_x = std::min(min_x, x);
+      max_x = std::max(max_x, x);
+      min_y = std::min(min_y, y);
+      max_y = std::max(max_y, y);
+    }
+
+    const int gx_lo = to_grid_x(min_x);
+    const int gx_hi = to_grid_x(max_x);
+    const int gy_lo = to_grid_y(min_y);
+    const int gy_hi = to_grid_y(max_y);
+    const int x_span = std::max(gx_hi - gx_lo, 1);
+    const int y_span = std::max(gy_hi - gy_lo, 1);
+    const int search_x = std::max(2, x_span / 4);
+    const int search_y = std::max(2, y_span / 4);
+
+    auto pick_column = [&](int target_gx) {
+      const int lo = std::max(gx_lo, target_gx - search_x);
+      const int hi = std::min(gx_hi, target_gx + search_x);
+      int best = std::clamp(target_gx, gx_lo, gx_hi);
+      float best_score = std::numeric_limits<float>::max();
+      for (int gx = lo; gx <= hi; ++gx) {
+        const float cost = col_cost(gx, gy_lo, gy_hi)
+                           + 0.08f
+                                 * static_cast<float>(std::abs(gx - target_gx))
+                                 / static_cast<float>(search_x + 1);
+        if (cost < best_score) {
+          best_score = cost;
+          best = gx;
+        }
+      }
+      return best;
+    };
+
+    auto pick_row = [&](int target_gy) {
+      const int lo = std::max(gy_lo, target_gy - search_y);
+      const int hi = std::min(gy_hi, target_gy + search_y);
+      int best = std::clamp(target_gy, gy_lo, gy_hi);
+      float best_score = std::numeric_limits<float>::max();
+      for (int gy = lo; gy <= hi; ++gy) {
+        const float cost = row_cost(gy, gx_lo, gx_hi)
+                           + 0.08f
+                                 * static_cast<float>(std::abs(gy - target_gy))
+                                 / static_cast<float>(search_y + 1);
+        if (cost < best_score) {
+          best_score = cost;
+          best = gy;
+        }
+      }
+      return best;
+    };
+
+    const int target_x1 = gx_lo + x_span / 4;
+    const int target_x2 = gx_lo + (3 * x_span) / 4;
+    const int target_y1 = gy_lo + y_span / 3;
+    const int target_y2 = gy_lo + (2 * y_span) / 3;
+    int corr_x1 = pick_column(target_x1);
+    int corr_x2 = pick_column(target_x2);
+    int corr_y1 = pick_row(target_y1);
+    int corr_y2 = pick_row(target_y2);
+    if (corr_x1 > corr_x2) {
+      std::swap(corr_x1, corr_x2);
+    }
+    if (corr_y1 > corr_y2) {
+      std::swap(corr_y1, corr_y2);
+    }
+    if (corr_x1 == corr_x2) {
+      corr_x2 = std::min(gx_hi, corr_x1 + 1);
+    }
+    if (corr_y1 == corr_y2) {
+      corr_y2 = std::min(gy_hi, corr_y1 + 1);
+    }
+
+    const int hub_x1 = to_dbu_x(corr_x1);
+    const int hub_x2 = to_dbu_x(corr_x2);
+    const int hub_y1 = to_dbu_y(corr_y1);
+    const int hub_y2 = to_dbu_y(corr_y2);
+    const int trunk_layer = chooseDominantLayer(nodes, min_layer, max_layer);
+    std::array<std::pair<int, int>, 4> hubs{
+        std::pair<int, int>{hub_x1, hub_y1},
+        std::pair<int, int>{hub_x1, hub_y2},
+        std::pair<int, int>{hub_x2, hub_y1},
+        std::pair<int, int>{hub_x2, hub_y2}};
+
+    std::vector<GSegment> rebuilt;
+    rebuilt.reserve(nodes.size() * 4 + 12);
+    for (size_t idx = 0; idx < nodes.size(); ++idx) {
+      int cur_x = std::clamp(nodes[idx].x, x_min, x_max);
+      int cur_y = std::clamp(nodes[idx].y, y_min, y_max);
+      int cur_layer = nodes[idx].layer;
+
+      if (cur_layer != trunk_layer) {
+        const int step = (trunk_layer > cur_layer) ? 1 : -1;
+        while (cur_layer != trunk_layer) {
+          const int next_layer = cur_layer + step;
+          appendSegment(
+              rebuilt, cur_x, cur_y, cur_layer, cur_x, cur_y, next_layer);
+          cur_layer = next_layer;
+        }
+      }
+
+      int chosen_hub = 0;
+      double best_cost = std::numeric_limits<double>::max();
+      bool best_horizontal_first = true;
+      for (int h = 0; h < static_cast<int>(hubs.size()); ++h) {
+        const int hx = hubs[h].first;
+        const int hy = hubs[h].second;
+        const long dist = std::abs(cur_x - hx) + std::abs(cur_y - hy);
+        const float h_rudy = estimatePathRudy(normalized_rudy,
+                                              to_grid_x(cur_x),
+                                              to_grid_y(cur_y),
+                                              to_grid_x(hx),
+                                              to_grid_y(hy),
+                                              true);
+        const float v_rudy = estimatePathRudy(normalized_rudy,
+                                              to_grid_x(cur_x),
+                                              to_grid_y(cur_y),
+                                              to_grid_x(hx),
+                                              to_grid_y(hy),
+                                              false);
+        const float edge_rudy = std::min(h_rudy, v_rudy);
+        const double cost = static_cast<double>(dist)
+                            + static_cast<double>(tile) * 3.6
+                                  * static_cast<double>(edge_rudy);
+        if (cost + 1e-9 < best_cost) {
+          best_cost = cost;
+          chosen_hub = h;
+          best_horizontal_first = h_rudy <= v_rudy;
+        }
+      }
+
+      const int hx = hubs[chosen_hub].first;
+      const int hy = hubs[chosen_hub].second;
+      bool horizontal_first = best_horizontal_first;
+      if (((key + static_cast<std::uint64_t>(idx) * 19ULL) & 1ULL) == 1ULL) {
+        horizontal_first = !horizontal_first;
+      }
+      if (horizontal_first) {
+        appendSegment(rebuilt, cur_x, cur_y, trunk_layer, hx, cur_y, trunk_layer);
+        appendSegment(rebuilt, hx, cur_y, trunk_layer, hx, hy, trunk_layer);
+      } else {
+        appendSegment(rebuilt, cur_x, cur_y, trunk_layer, cur_x, hy, trunk_layer);
+        appendSegment(rebuilt, cur_x, hy, trunk_layer, hx, hy, trunk_layer);
+      }
+    }
+
+    appendSegment(rebuilt, hub_x1, hub_y1, trunk_layer, hub_x2, hub_y1, trunk_layer);
+    appendSegment(rebuilt, hub_x1, hub_y2, trunk_layer, hub_x2, hub_y2, trunk_layer);
+    appendSegment(rebuilt, hub_x1, hub_y1, trunk_layer, hub_x1, hub_y2, trunk_layer);
+    appendSegment(rebuilt, hub_x2, hub_y1, trunk_layer, hub_x2, hub_y2, trunk_layer);
+    appendSegment(rebuilt,
+                  std::clamp(min_x, x_min, x_max),
+                  hub_y1,
+                  trunk_layer,
+                  std::clamp(max_x, x_min, x_max),
+                  hub_y1,
+                  trunk_layer);
+    appendSegment(rebuilt,
+                  std::clamp(min_x, x_min, x_max),
+                  hub_y2,
+                  trunk_layer,
+                  std::clamp(max_x, x_min, x_max),
+                  hub_y2,
+                  trunk_layer);
+
+    std::vector<GSegment> compressed;
+    compressed.reserve(rebuilt.size());
+    for (const GSegment& segment : rebuilt) {
+      appendCompressedSegment(compressed, segment);
+    }
+    if (!compressed.empty()) {
+      route.swap(compressed);
+    }
+  }
+}
+
 void applyWavefrontDetours(GlobalRouter* grouter,
                            NetRouteMap& routes,
                            const RudyGrid& normalized_rudy,
@@ -3229,6 +3518,154 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   "baseline_compact.");
     sculpted = compact;
     sculpted.name = "field_sculpted_failed";
+  }
+
+  // Iteration 29 radical mode:
+  // Collapse most eligible nets into low-RUDY dual corridors and run a
+  // deterministic per-net tournament against compact routes. This creates a
+  // strong topology break while avoiding the very expensive multi-scenario
+  // rewrite chain from previous iterations.
+  const bool use_corridor_mode
+      = grouter_->grid() != nullptr && grouter_->grid()->getXGrids() > 0;
+  if (use_corridor_mode) {
+    ScenarioResult corridor = compact;
+    corridor.name = "corridor_hyper";
+    applyRudyCorridorBackboneRebuild(grouter_,
+                                     corridor.routes,
+                                     baseline_rudy,
+                                     3,
+                                     94,
+                                     min_routing_layer,
+                                     max_routing_layer);
+    applyAggressiveDoglegShortcuts(corridor.routes,
+                                   std::max(20 * tile_size, 1),
+                                   std::max(tile_size, 1));
+    applyGuideCompression(corridor.routes, std::max(10 * tile_size, 1));
+    applyViaExcursionCollapse(corridor.routes, std::max(6 * tile_size, 1));
+    corridor.metrics = compute_metrics(corridor.routes);
+
+    ScenarioResult selected = compact;
+    selected.name = "corridor_tournament";
+    long nets_taken_from_corridor = 0;
+
+    auto has_planar_guide = [](const GRoute& route) {
+      for (const GSegment& segment : route) {
+        if (!segment.isVia()
+            && (segment.init_x != segment.final_x
+                || segment.init_y != segment.final_y)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    auto route_stats = [](const GRoute& route) {
+      std::pair<long, long> stats{0, 0};
+      for (const GSegment& segment : route) {
+        if (segment.isVia()) {
+          stats.second++;
+        } else {
+          stats.first += std::abs(segment.final_x - segment.init_x)
+                         + std::abs(segment.final_y - segment.init_y);
+        }
+      }
+      return stats;
+    };
+    auto route_score = [&](const GRoute& route, int scenario_overflow) {
+      const auto [route_wl, route_vias] = route_stats(route);
+      const double via_weight = static_cast<double>(tile_size) * 0.55;
+      const double overflow_penalty
+          = static_cast<double>(std::max(scenario_overflow, 0))
+            * static_cast<double>(tile_size) * 10.0;
+      return static_cast<double>(route_wl)
+             + via_weight * static_cast<double>(route_vias) + overflow_penalty;
+    };
+    auto route_admissible = [&](const GRoute& candidate, const GRoute& reference) {
+      const auto [cand_wl, cand_vias] = route_stats(candidate);
+      const auto [ref_wl, ref_vias] = route_stats(reference);
+      if (ref_wl <= 0) {
+        return true;
+      }
+      const long wl_cap
+          = std::max(ref_wl + static_cast<long>(12 * tile_size),
+                     static_cast<long>(
+                         std::ceil(static_cast<double>(ref_wl) * 2.60)));
+      const long via_cap
+          = std::max(ref_vias + 18L,
+                     static_cast<long>(
+                         std::ceil(static_cast<double>(ref_vias) * 4.00 + 12.0)));
+      return cand_wl <= wl_cap && cand_vias <= via_cap;
+    };
+
+    for (const auto& [db_net, compact_route] : compact.routes) {
+      auto corridor_it = corridor.routes.find(db_net);
+      if (corridor_it == corridor.routes.end()) {
+        continue;
+      }
+      const GRoute& corridor_route = corridor_it->second;
+
+      const bool compact_valid = has_planar_guide(compact_route);
+      const bool corridor_valid = has_planar_guide(corridor_route);
+      if (!corridor_valid && compact_valid) {
+        continue;
+      }
+      if (corridor_valid && !compact_valid) {
+        selected.routes[db_net] = corridor_route;
+        nets_taken_from_corridor++;
+        continue;
+      }
+      if (!route_admissible(corridor_route, compact_route)) {
+        continue;
+      }
+
+      const auto [compact_wl, compact_vias] = route_stats(compact_route);
+      const auto [corr_wl, corr_vias] = route_stats(corridor_route);
+      const double compact_score = route_score(compact_route, compact.overflow);
+      const double corridor_score = route_score(corridor_route, corridor.overflow);
+      const int node_count
+          = static_cast<int>(collectUniqueRouteNodes(compact_route).size());
+      const auto key
+          = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+
+      bool use_corridor = corridor_score + 1e-3 < compact_score;
+      if (!use_corridor && corr_wl <= static_cast<long>(compact_wl * 1.05)
+          && corr_vias <= static_cast<long>(compact_vias * 2.50 + 8)) {
+        use_corridor = true;
+      }
+      if (!use_corridor && node_count >= 10
+          && corridor_score <= compact_score * 1.20) {
+        use_corridor = (key % 3ULL) == 0ULL;
+      }
+
+      if (use_corridor) {
+        selected.routes[db_net] = corridor_route;
+        nets_taken_from_corridor++;
+      }
+    }
+    selected.metrics = compute_metrics(selected.routes);
+
+    const double selected_delta_wl
+        = selected.metrics.wirelength_um - baseline.metrics.wirelength_um;
+    const long selected_delta_vias
+        = selected.metrics.via_count - baseline.metrics.via_count;
+    logger_->warn(
+        GNR,
+        6041,
+        "NEWGR corridor tournament selected {}: baseline {:.0f} um/{} vias -> "
+        "{:.0f} um/{} vias (delta wl {:+.0f} um, delta vias {:+d}).",
+        selected.name,
+        baseline.metrics.wirelength_um,
+        baseline.metrics.via_count,
+        selected.metrics.wirelength_um,
+        selected.metrics.via_count,
+        selected_delta_wl,
+        selected_delta_vias);
+    logger_->warn(GNR,
+                  6042,
+                  "NEWGR corridor blend counters: corridor {}.",
+                  nets_taken_from_corridor);
+
+    restore_snapshot(snapshot);
+    return selected.routes;
   }
 
   ScenarioResult selected = compact;
