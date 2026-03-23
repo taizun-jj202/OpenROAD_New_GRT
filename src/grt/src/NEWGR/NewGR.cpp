@@ -1198,6 +1198,82 @@ void applyGuideCompression(NetRouteMap& routes, int jog_limit)
   }
 }
 
+bool samePointAndLayer(const GSegment& lhs,
+                       bool lhs_final,
+                       const GSegment& rhs,
+                       bool rhs_init)
+{
+  const int lhs_layer = lhs_final ? lhs.final_layer : lhs.init_layer;
+  const int rhs_layer = rhs_init ? rhs.init_layer : rhs.final_layer;
+  return samePoint(lhs, lhs_final, rhs, rhs_init) && lhs_layer == rhs_layer;
+}
+
+void applyViaExcursionCollapse(NetRouteMap& routes, int max_planar_excursion)
+{
+  max_planar_excursion = std::max(max_planar_excursion, 1);
+  for (auto& [db_net, route] : routes) {
+    static_cast<void>(db_net);
+    if (route.size() < 3) {
+      continue;
+    }
+
+    std::vector<GSegment> simplified;
+    simplified.reserve(route.size());
+
+    for (size_t idx = 0; idx < route.size();) {
+      if (idx + 2 < route.size()) {
+        const GSegment& first = route[idx];
+        const GSegment& middle = route[idx + 1];
+        const GSegment& last = route[idx + 2];
+
+        const bool first_via = first.isVia() && first.init_x == first.final_x
+                               && first.init_y == first.final_y;
+        const bool last_via = last.isVia() && last.init_x == last.final_x
+                              && last.init_y == last.final_y;
+        const bool middle_planar
+            = !middle.isVia() && middle.init_layer == middle.final_layer;
+        const long middle_len = std::abs(middle.final_x - middle.init_x)
+                                + std::abs(middle.final_y - middle.init_y);
+
+        const bool contiguous = samePointAndLayer(first, true, middle, true)
+                                && samePointAndLayer(middle, false, last, true);
+        const bool returns_to_origin_layer
+            = first.init_layer == last.final_layer
+              && first.final_layer == middle.init_layer
+              && middle.final_layer == last.init_layer
+              && first.final_layer == last.init_layer;
+
+        if (first_via && middle_planar && last_via && contiguous
+            && returns_to_origin_layer
+            && middle_len <= max_planar_excursion) {
+          GSegment collapsed(first.init_x,
+                             first.init_y,
+                             first.init_layer,
+                             last.final_x,
+                             last.final_y,
+                             last.final_layer);
+          appendCompressedSegment(simplified, collapsed);
+          idx += 3;
+          continue;
+        }
+      }
+
+      appendCompressedSegment(simplified, route[idx]);
+      ++idx;
+    }
+
+    std::vector<GSegment> second_pass;
+    second_pass.reserve(simplified.size());
+    for (const GSegment& segment : simplified) {
+      appendCompressedSegment(second_pass, segment);
+    }
+
+    if (!second_pass.empty()) {
+      route.swap(second_pass);
+    }
+  }
+}
+
 }  // namespace
 
 NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
@@ -1285,27 +1361,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return ScenarioResult{name, metrics, std::move(routes), overflow};
   };
 
-  RouterSnapshot snapshot = capture_snapshot();
-  ScenarioResult baseline = run_existing_state("baseline", nets);
-
-  if (baseline.routes.empty()) {
-    restore_snapshot(snapshot);
-    return {};
-  }
-
-  const int tile_size = grouter_->grid() != nullptr
-                            ? std::max(grouter_->grid()->getTileSize(), 1)
-                            : 1;
-  const auto objective = [&](const ScenarioResult& scenario) {
-    const double overflow_penalty
-        = static_cast<double>(std::max(scenario.overflow, 0))
-          * static_cast<double>(tile_size) * 12000.0;
-    const double via_weight = static_cast<double>(tile_size) * 0.75;
-    return static_cast<double>(scenario.metrics.wirelength_dbu)
-           + via_weight * static_cast<double>(scenario.metrics.via_count)
-           + overflow_penalty;
-  };
-
   auto compute_current_rudy = [&]() {
     Rudy* rudy = grouter_->getRudy();
     if (rudy == nullptr) {
@@ -1315,196 +1370,48 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return computeNormalizedRudyGrid(rudy);
   };
 
-  auto run_fresh_state = [&](const std::string& name,
-                             const std::function<void(std::vector<Net*>&)>&
-                                 pre_routing,
-                             const std::function<void(NetRouteMap&)>&
-                                 post_routing) {
+  RouterSnapshot snapshot = capture_snapshot();
+  ScenarioResult baseline = run_existing_state("baseline", nets);
+  if (baseline.routes.empty()) {
     restore_snapshot(snapshot);
-    std::vector<Net*> fresh_nets
-        = grouter_->initFastRoute(min_routing_layer, max_routing_layer);
-    if (fresh_nets.empty()) {
-      return ScenarioResult{name, RouteMetrics{}, NetRouteMap{}, 0};
-    }
-    if (pre_routing) {
-      pre_routing(fresh_nets);
-    }
-    ScenarioResult scenario = run_existing_state(name, fresh_nets);
-    if (!scenario.routes.empty() && post_routing) {
-      post_routing(scenario.routes);
-      scenario.metrics = compute_metrics(scenario.routes);
-    }
-    return scenario;
-  };
+    return {};
+  }
 
-  ScenarioResult compact_baseline = baseline;
-  compact_baseline.name = "baseline_compact";
-  const RudyGrid baseline_rudy = compute_current_rudy();
+  const int tile_size = grouter_->grid() != nullptr
+                            ? std::max(grouter_->grid()->getTileSize(), 1)
+                            : 1;
+  const RudyGrid radical_rudy = compute_current_rudy();
+  ScenarioResult radical = baseline;
+  radical.name = "baseline_rewired";
+
   applyLayerHoppingDetours(grouter_,
-                           compact_baseline.routes,
-                           baseline_rudy,
+                           radical.routes,
+                           radical_rudy,
                            min_routing_layer,
                            max_routing_layer);
-  applyBraidedDetourWeave(grouter_, compact_baseline.routes, baseline_rudy);
-  applyGuideCompression(compact_baseline.routes, std::max(2 * tile_size, 1));
-  compact_baseline.metrics = compute_metrics(compact_baseline.routes);
-  logger_->info(GNR,
-                6013,
-                "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}",
-                compact_baseline.name,
-                compact_baseline.metrics.wirelength_um,
-                compact_baseline.metrics.via_count,
-                compact_baseline.overflow);
-
-  RudyGrid polarized_rudy;
-  std::vector<Hotspot> polarized_hotspots;
-  ScenarioResult polarized = run_fresh_state(
-      "polarized_softcap",
-      [&](std::vector<Net*>& state_nets) {
-        static_cast<void>(state_nets);
-        polarized_rudy = compute_current_rudy();
-        polarized_hotspots = extractTopRudyHotspots(polarized_rudy, 64);
-        applySoftCapacityScaling(grouter_,
-                                 polarized_rudy,
-                                 min_routing_layer,
-                                 max_routing_layer,
-                                 0.22f,
-                                 0.95f,
-                                 11.0f,
-                                 0.36f);
-        applyLayerPolarityField(grouter_,
-                                polarized_rudy,
-                                min_routing_layer,
-                                max_routing_layer,
-                                1.58f,
-                                0.14f,
-                                0.42f);
-        applyHotspotPenalties(grouter_,
-                              polarized_hotspots,
-                              min_routing_layer,
-                              max_routing_layer,
-                              4,
-                              0.38f,
-                              0.80f);
-        applyAggressiveCapacityField(grouter_,
-                                     polarized_rudy,
-                                     polarized_hotspots,
-                                     min_routing_layer,
-                                     max_routing_layer,
-                                     0.55f,
-                                     0.14f,
-                                     0.16f,
-                                     1.34f,
-                                     0.62f,
-                                     true);
-      },
-      [&](NetRouteMap& routes) {
-        applyGuideCompression(routes, std::max(3 * tile_size, 1));
-      });
-
-  PlanarEdgeUsage polarized_usage
-      = computeNormalizedBackboneUsage(grouter_, polarized.routes);
-  ScenarioResult braided = run_fresh_state(
-      "backbone_braided",
-      [&](std::vector<Net*>& state_nets) {
-        static_cast<void>(state_nets);
-        RudyGrid reinforced_rudy = compute_current_rudy();
-        const std::vector<Hotspot> reinforced_hotspots
-            = extractTopRudyHotspots(reinforced_rudy, 80);
-        applySoftCapacityScaling(grouter_,
-                                 reinforced_rudy,
-                                 min_routing_layer,
-                                 max_routing_layer,
-                                 0.28f,
-                                 0.98f,
-                                 9.5f,
-                                 0.40f);
-        applyBackboneCapacityReinforcement(grouter_,
-                                           reinforced_rudy,
-                                           polarized_usage,
-                                           min_routing_layer,
-                                           max_routing_layer,
-                                           0.14f,
-                                           1.45f,
-                                           0.55f);
-        applyAggressiveCapacityField(grouter_,
-                                     reinforced_rudy,
-                                     reinforced_hotspots,
-                                     min_routing_layer,
-                                     max_routing_layer,
-                                     0.52f,
-                                     0.12f,
-                                     0.20f,
-                                     1.38f,
-                                     0.70f,
-                                     false);
-        applyHotspotPenalties(grouter_,
-                              reinforced_hotspots,
-                              min_routing_layer,
-                              max_routing_layer,
-                              5,
-                              0.42f,
-                              0.72f);
-      },
-      [&](NetRouteMap& routes) {
-        const RudyGrid rewrite_rudy = compute_current_rudy();
-        applyLayerHoppingDetours(grouter_,
-                                 routes,
-                                 rewrite_rudy,
-                                 min_routing_layer,
-                                 max_routing_layer);
-        applyBraidedDetourWeave(grouter_, routes, rewrite_rudy);
-        applyGuideCompression(routes, std::max(4 * tile_size, 1));
-      });
-
-  std::vector<ScenarioResult> candidates;
-  candidates.reserve(3);
-  candidates.push_back(std::move(compact_baseline));
-  candidates.push_back(std::move(polarized));
-  candidates.push_back(std::move(braided));
-
-  size_t best_idx = 0;
-  for (size_t idx = 1; idx < candidates.size(); ++idx) {
-    const ScenarioResult& best = candidates[best_idx];
-    const ScenarioResult& trial = candidates[idx];
-    const bool better_overflow = trial.overflow < best.overflow;
-    const bool same_overflow = trial.overflow == best.overflow;
-    const bool better_objective = objective(trial) < objective(best);
-    if (better_overflow || (same_overflow && better_objective)) {
-      best_idx = idx;
-    }
-  }
-
-  const ScenarioResult& selected = candidates[best_idx];
+  applyBraidedDetourWeave(grouter_, radical.routes, radical_rudy);
+  applyViaExcursionCollapse(radical.routes, std::max(10 * tile_size, 1));
+  applyGuideCompression(radical.routes, std::max(14 * tile_size, 1));
+  radical.metrics = compute_metrics(radical.routes);
   const double delta_wl_um
-      = selected.metrics.wirelength_um - baseline.metrics.wirelength_um;
-  const long delta_vias = selected.metrics.via_count - baseline.metrics.via_count;
+      = radical.metrics.wirelength_um - baseline.metrics.wirelength_um;
+  const long delta_vias = radical.metrics.via_count - baseline.metrics.via_count;
   logger_->warn(
       GNR,
-      6012,
-      "NEWGR radical routing selected '{}': baseline {:.0f} um vias {}, "
-      "selected {:.0f} um vias {} (delta wl {:+.0f} um, delta vias {:+d}, "
+      6016,
+      "NEWGR radical single-pass: baseline {:.0f} um vias {}, "
+      "radical {:.0f} um vias {} (delta wl {:+.0f} um, delta vias {:+d}, "
       "overflow {}).",
-      selected.name,
       baseline.metrics.wirelength_um,
       baseline.metrics.via_count,
-      selected.metrics.wirelength_um,
-      selected.metrics.via_count,
+      radical.metrics.wirelength_um,
+      radical.metrics.via_count,
       delta_wl_um,
       delta_vias,
-      selected.overflow);
+      baseline.overflow);
 
-  NetRouteMap final_routes = std::move(candidates[best_idx].routes);
-  if (best_idx == 0) {
-    restore_snapshot(snapshot);
-    std::vector<Net*> sync_nets
-        = grouter_->initFastRoute(min_routing_layer, max_routing_layer);
-    if (!sync_nets.empty()) {
-      static_cast<void>(run_existing_state("baseline_sync", sync_nets));
-    }
-  }
   restore_snapshot(snapshot);
-  return final_routes;
+  return radical.routes;
 }
 
 }  // namespace grt
