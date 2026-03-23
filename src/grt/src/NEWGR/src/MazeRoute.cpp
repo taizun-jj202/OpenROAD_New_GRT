@@ -23,6 +23,18 @@ namespace grt::newgr {
 void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
                        const SparseGrid& grid)
 {
+  pseudo_pins_.clear();
+  xs_.clear();
+  ys_.clear();
+  vertices_.clear();
+  edges_.clear();
+  costs_.clear();
+  vertex_pin_.clear();
+  pin_vertex_.clear();
+
+  const int xSize = grid_graph_->getSize(0);
+  const int ySize = grid_graph_->getSize(1);
+
   // 0. Create pseudo pins
   const auto selectedAccessPoints = grid_graph_->selectAccessPoints(net_);
   pseudo_pins_.reserve(selectedAccessPoints.size());
@@ -33,17 +45,32 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   // 1. Collect additional routing grid lines
   std::vector<int> pxs;
   std::vector<int> pys;
-  pxs.reserve(net_->getNumPins());
-  pys.reserve(net_->getNumPins());
+  pxs.reserve(net_->getNumPins() * 2);
+  pys.reserve(net_->getNumPins() * 2);
   for (const auto& pin : pseudo_pins_) {
     pxs.emplace_back(pin.point.x());
     pys.emplace_back(pin.point.y());
   }
+
+  // Reuse current routed trunks as sparse-graph anchors (FastRoute-like
+  // topology preservation). This keeps maze search near short existing trees
+  // while still enabling congestion repairs.
+  const auto& oldTree = net_->getRoutingTree();
+  if (oldTree) {
+    GRTreeNode::preorder(
+        oldTree, [&](const std::shared_ptr<GRTreeNode>& node) {
+          pxs.emplace_back(node->x());
+          pys.emplace_back(node->y());
+        });
+  }
+
+  const auto& box = net_->getBoundingBox();
+  pxs.emplace_back(std::clamp(box.cx(), 0, xSize - 1));
+  pys.emplace_back(std::clamp(box.cy(), 0, ySize - 1));
+
   std::sort(pxs.begin(), pxs.end());
   std::sort(pys.begin(), pys.end());
 
-  const int xSize = grid_graph_->getSize(0);
-  const int ySize = grid_graph_->getSize(1);
   xs_.reserve(xSize / grid.interval.x() + pxs.size());
   ys_.reserve(ySize / grid.interval.y() + pys.size());
   for (int i = 0, j = 0; true; i++) {

@@ -227,11 +227,27 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
   sortNetIndices(netIndices);
-  const int sparse_interval = netIndices.size() < 2000 ? 6 : 10;
-  SparseGrid grid(sparse_interval, sparse_interval, 0, 0);
+  const int base_sparse_interval = netIndices.size() < 2000 ? 6 : 10;
+  int rank = 0;
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
     const auto oldTree = net->getRoutingTree();
+
+    // Mix FastRoute/SPRoute ideas: use denser sparse graphs on long/high-fanout
+    // nets and coarser sampling on simpler nets to control runtime.
+    const int hp = net->getBoundingBox().hp();
+    const int pins = net->getNumPins();
+    int interval = base_sparse_interval;
+    if (pins >= 16 || hp >= 180) {
+      interval = std::max(3, base_sparse_interval - 3);
+    } else if (pins >= 8 || hp >= 110) {
+      interval = std::max(4, base_sparse_interval - 2);
+    } else if (pins >= 4 || hp >= 70) {
+      interval = std::max(5, base_sparse_interval - 1);
+    }
+    const int xOffset = (rank * 3 + hp) % interval;
+    const int yOffset = (rank * 5 + pins) % interval;
+    SparseGrid grid(interval, interval, xOffset, yOffset);
 
     MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
     mazeRoute.constructSparsifiedGraph(wireCostView, grid);
@@ -255,7 +271,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         grid_graph_->commitTree(oldTree);
         grid_graph_->updateWireCostView(wireCostView, oldTree);
       }
-      grid.step();
+      rank++;
       continue;
     }
 
@@ -269,7 +285,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
     if (isBetterScore(candidateScore, oldScore)) {
       grid_graph_->updateWireCostView(wireCostView, candidateTree);
-      grid.step();
+      rank++;
       continue;
     }
 
@@ -277,7 +293,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     net->setRoutingTree(oldTree);
     grid_graph_->commitTree(oldTree);
     grid_graph_->updateWireCostView(wireCostView, oldTree);
-    grid.step();
+    rank++;
   }
 
   updateOverflowNets(netIndices);
@@ -311,7 +327,14 @@ void CUGR::wirelengthRecovery()
   grid_graph_->extractWireCostView(wireCostView);
 
   const int mazeCandidateBudget
-      = std::max(64, static_cast<int>(netIndices.size() / 6));
+      = std::max(128, static_cast<int>(netIndices.size() / 4));
+  const int denseMazeBudget
+      = std::max(64, static_cast<int>(netIndices.size() / 20));
+  const int longNetRank
+      = std::min(static_cast<int>(netIndices.size()) - 1,
+                 std::max(0, static_cast<int>(netIndices.size() / 8)));
+  const uint64_t longWireThreshold
+      = routedWireLength[netIndices[longNetRank]];
   int accepted = 0;
   int acceptedFromMaze = 0;
   int rank = 0;
@@ -360,9 +383,13 @@ void CUGR::wirelengthRecovery()
     // Candidate B: SPRoute-like selective sparse maze refinement for
     // critical/overflow nets.
     const bool runMazeCandidate
-        = (rank < mazeCandidateBudget || oldScore.overflow_edges > 0);
+        = (rank < mazeCandidateBudget || oldScore.overflow_edges > 0
+           || oldScore.wire_length >= longWireThreshold);
     if (runMazeCandidate) {
-      const int interval = oldScore.overflow_edges > 0 ? 4 : 5;
+      int interval = oldScore.overflow_edges > 0 ? 4 : 5;
+      if (rank < denseMazeBudget || oldScore.wire_length >= longWireThreshold) {
+        interval = 3;
+      }
       const int xOffset = rank % interval;
       const int yOffset = (rank * 3) % interval;
       SparseGrid recoveryGrid(interval, interval, xOffset, yOffset);
@@ -425,9 +452,12 @@ void CUGR::finalPatternTighten()
   const int tightenBudget
       = std::min(static_cast<int>(netIndices.size()),
                  std::max(4096, static_cast<int>(netIndices.size() / 2)));
+  const int mazeTightenBudget
+      = std::min(tightenBudget, std::max(512, tightenBudget / 12));
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
   int accepted = 0;
+  int acceptedFromMaze = 0;
   for (int rank = 0; rank < tightenBudget; rank++) {
     const int netIndex = netIndices[rank];
     GRNet* net = gr_nets_[netIndex].get();
@@ -445,16 +475,48 @@ void CUGR::finalPatternTighten()
     patternRoute.constructSteinerTree();
     patternRoute.constructRoutingDAG();
     patternRoute.run();
-    const auto candidateTree = net->getRoutingTree();
+    const auto patternTree = net->getRoutingTree();
 
     std::shared_ptr<GRTreeNode> bestTree = oldTree;
-    if (candidateTree) {
-      grid_graph_->commitTree(candidateTree);
-      const RouteScore candidateScore
-          = evaluateRouteScore(candidateTree, grid_graph_.get());
-      grid_graph_->commitTree(candidateTree, /*ripup*/ true);
-      if (isRecoveryScoreBetter(candidateScore, oldScore)) {
-        bestTree = candidateTree;
+    RouteScore bestScore = oldScore;
+    if (patternTree) {
+      grid_graph_->commitTree(patternTree);
+      const RouteScore patternScore
+          = evaluateRouteScore(patternTree, grid_graph_.get());
+      grid_graph_->commitTree(patternTree, /*ripup*/ true);
+      if (isRecoveryScoreBetter(patternScore, bestScore)) {
+        bestTree = patternTree;
+        bestScore = patternScore;
+      }
+    }
+
+    if (rank < mazeTightenBudget) {
+      const int interval = rank < mazeTightenBudget / 4 ? 3 : 4;
+      const int xOffset = (rank * 5) % interval;
+      const int yOffset = (rank * 7) % interval;
+      SparseGrid tightenGrid(interval, interval, xOffset, yOffset);
+      MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+      mazeRoute.constructSparsifiedGraph(wireCostView, tightenGrid);
+      mazeRoute.run();
+      std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();
+      if (steinerTree) {
+        PatternRoute mazeRefineRoute(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        mazeRefineRoute.setSteinerTree(steinerTree);
+        mazeRefineRoute.constructRoutingDAG();
+        mazeRefineRoute.run();
+        const auto mazeTree = net->getRoutingTree();
+        if (mazeTree) {
+          grid_graph_->commitTree(mazeTree);
+          const RouteScore mazeScore
+              = evaluateRouteScore(mazeTree, grid_graph_.get());
+          grid_graph_->commitTree(mazeTree, /*ripup*/ true);
+          if (isRecoveryScoreBetter(mazeScore, bestScore)) {
+            bestTree = mazeTree;
+            bestScore = mazeScore;
+            acceptedFromMaze++;
+          }
+        }
       }
     }
 
@@ -466,8 +528,10 @@ void CUGR::finalPatternTighten()
     grid_graph_->updateWireCostView(wireCostView, bestTree);
   }
 
-  logger_->report("final pattern tightening accepted {} net updates.",
-                  accepted);
+  logger_->report(
+      "final pattern tightening accepted {} net updates ({} from maze).",
+      accepted,
+      acceptedFromMaze);
 }
 
 void CUGR::route()
