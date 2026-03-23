@@ -28,6 +28,67 @@
 
 namespace grt::newgr {
 
+namespace {
+
+struct RouteScore
+{
+  int overflow_edges = std::numeric_limits<int>::max();
+  uint64_t wire_length = std::numeric_limits<uint64_t>::max();
+  int via_count = std::numeric_limits<int>::max();
+};
+
+RouteScore evaluateRouteScore(const std::shared_ptr<GRTreeNode>& tree,
+                              const GridGraph* grid_graph)
+{
+  if (!tree) {
+    return {};
+  }
+
+  RouteScore score;
+  score.overflow_edges = 0;
+  score.wire_length = 0;
+  score.via_count = 0;
+
+  GRTreeNode::preorder(
+      tree, [&](const std::shared_ptr<GRTreeNode>& node) {
+        for (const auto& child : node->getChildren()) {
+          if (node->getLayerIdx() == child->getLayerIdx()) {
+            const int layer_idx = node->getLayerIdx();
+            const int direction = grid_graph->getLayerDirection(layer_idx);
+            const int l = std::min((*node)[direction], (*child)[direction]);
+            const int h = std::max((*node)[direction], (*child)[direction]);
+            const int r = (*node)[1 - direction];
+            for (int c = l; c < h; c++) {
+              score.wire_length += grid_graph->getEdgeLength(direction, c);
+              const int x = direction == MetalLayer::H ? c : r;
+              const int y = direction == MetalLayer::H ? r : c;
+              if (grid_graph->checkOverflow(layer_idx, x, y)) {
+                score.overflow_edges += 1;
+              }
+            }
+          } else {
+            score.via_count
+                += std::abs(node->getLayerIdx() - child->getLayerIdx());
+          }
+        }
+      });
+
+  return score;
+}
+
+bool isBetterScore(const RouteScore& candidate, const RouteScore& baseline)
+{
+  if (candidate.overflow_edges != baseline.overflow_edges) {
+    return candidate.overflow_edges < baseline.overflow_edges;
+  }
+  if (candidate.wire_length != baseline.wire_length) {
+    return candidate.wire_length < baseline.wire_length;
+  }
+  return candidate.via_count < baseline.via_count;
+}
+
+}  // namespace
+
 CUGR::CUGR(odb::dbDatabase* db,
            utl::Logger* log,
            stt::SteinerTreeBuilder* stt_builder)
@@ -93,7 +154,9 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
   sortNetIndices(netIndices);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
-    grid_graph_->commitTree(net->getRoutingTree(), /*ripup*/ true);
+    const auto oldTree = net->getRoutingTree();
+    grid_graph_->commitTree(oldTree, /*ripup*/ true);
+
     PatternRoute patternRoute(
         net, grid_graph_.get(), stt_builder_, constants_, logger_);
     patternRoute.constructSteinerTree();
@@ -101,7 +164,33 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
     // KEY DIFFERENCE compared to stage 1 (patternRoute)
     patternRoute.constructDetours(congestionView);
     patternRoute.run();
-    grid_graph_->commitTree(net->getRoutingTree());
+    const auto candidateTree = net->getRoutingTree();
+
+    if (!oldTree || !candidateTree) {
+      if (candidateTree) {
+        grid_graph_->commitTree(candidateTree);
+      } else if (oldTree) {
+        net->setRoutingTree(oldTree);
+        grid_graph_->commitTree(oldTree);
+      }
+      continue;
+    }
+
+    grid_graph_->commitTree(oldTree);
+    const RouteScore oldScore = evaluateRouteScore(oldTree, grid_graph_.get());
+    grid_graph_->commitTree(oldTree, /*ripup*/ true);
+
+    grid_graph_->commitTree(candidateTree);
+    const RouteScore candidateScore
+        = evaluateRouteScore(candidateTree, grid_graph_.get());
+
+    if (isBetterScore(candidateScore, oldScore)) {
+      continue;
+    }
+
+    grid_graph_->commitTree(candidateTree, /*ripup*/ true);
+    net->setRoutingTree(oldTree);
+    grid_graph_->commitTree(oldTree);
   }
 
   updateOverflowNets(netIndices);
@@ -120,9 +209,12 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
   sortNetIndices(netIndices);
-  SparseGrid grid(10, 10, 0, 0);
+  const int sparse_interval = netIndices.size() < 2000 ? 6 : 10;
+  SparseGrid grid(sparse_interval, sparse_interval, 0, 0);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
+    const auto oldTree = net->getRoutingTree();
+
     MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
     mazeRoute.constructSparsifiedGraph(wireCostView, grid);
     mazeRoute.run();
@@ -134,9 +226,39 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     patternRoute.setSteinerTree(tree);
     patternRoute.constructRoutingDAG();
     patternRoute.run();
+    const auto candidateTree = net->getRoutingTree();
 
-    grid_graph_->commitTree(net->getRoutingTree());
-    grid_graph_->updateWireCostView(wireCostView, net->getRoutingTree());
+    if (!oldTree || !candidateTree) {
+      if (candidateTree) {
+        grid_graph_->commitTree(candidateTree);
+        grid_graph_->updateWireCostView(wireCostView, candidateTree);
+      } else if (oldTree) {
+        net->setRoutingTree(oldTree);
+        grid_graph_->commitTree(oldTree);
+        grid_graph_->updateWireCostView(wireCostView, oldTree);
+      }
+      grid.step();
+      continue;
+    }
+
+    grid_graph_->commitTree(oldTree);
+    const RouteScore oldScore = evaluateRouteScore(oldTree, grid_graph_.get());
+    grid_graph_->commitTree(oldTree, /*ripup*/ true);
+
+    grid_graph_->commitTree(candidateTree);
+    const RouteScore candidateScore
+        = evaluateRouteScore(candidateTree, grid_graph_.get());
+
+    if (isBetterScore(candidateScore, oldScore)) {
+      grid_graph_->updateWireCostView(wireCostView, candidateTree);
+      grid.step();
+      continue;
+    }
+
+    grid_graph_->commitTree(candidateTree, /*ripup*/ true);
+    net->setRoutingTree(oldTree);
+    grid_graph_->commitTree(oldTree);
+    grid_graph_->updateWireCostView(wireCostView, oldTree);
     grid.step();
   }
 
@@ -159,6 +281,10 @@ void CUGR::route()
 
   // Keep detours as a final cleanup pass for residual difficult hotspots.
   patternRouteWithDetours(netIndices);
+
+  // FastRoute-style final RRR cleanup: re-run maze search to pull inflated
+  // detours back to shorter legal paths after hotspot repair.
+  mazeRoute(netIndices);
 
   printStatistics();
   if (constants_.write_heatmap) {
