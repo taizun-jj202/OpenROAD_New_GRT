@@ -48,6 +48,7 @@ void CUGR::init(const int min_routing_layer, const int max_routing_layer)
   for (const CUGRNet& baseNet : baseNets) {
     gr_nets_.push_back(std::make_unique<GRNet>(baseNet, grid_graph_.get()));
   }
+  grid_graph_->applySoftCapacities(gr_nets_);
 }
 
 void CUGR::updateOverflowNets(std::vector<int>& netIndices)

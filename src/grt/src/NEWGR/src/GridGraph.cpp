@@ -365,6 +365,143 @@ CostT GridGraph::getViaCost(const int layer_index, const PointT loc) const
   return cost;
 }
 
+void GridGraph::applySoftCapacities(
+    const std::vector<std::unique_ptr<GRNet>>& nets)
+{
+  if (!constants_.enable_soft_capacity || nets.empty()) {
+    return;
+  }
+
+  std::vector<std::vector<double>> pinDensity(
+      x_size_, std::vector<double>(y_size_, 0.0));
+  std::vector<std::vector<double>> rudyDiff(x_size_ + 1,
+                                            std::vector<double>(y_size_ + 1,
+                                                                0.0));
+
+  for (const auto& netPtr : nets) {
+    const GRNet* net = netPtr.get();
+    if (net == nullptr) {
+      continue;
+    }
+
+    for (const auto& accessPoints : net->getPinAccessPoints()) {
+      if (accessPoints.empty()) {
+        continue;
+      }
+      const double share = 1.0 / static_cast<double>(accessPoints.size());
+      for (const auto& point : accessPoints) {
+        pinDensity[point.x()][point.y()] += share;
+      }
+    }
+
+    const BoxT& box = net->getBoundingBox();
+    if (!box.IsValid()) {
+      continue;
+    }
+    const int lx = std::max(0, box.lx());
+    const int ly = std::max(0, box.ly());
+    const int hx = std::min(x_size_ - 1, box.hx());
+    const int hy = std::min(y_size_ - 1, box.hy());
+    if (lx > hx || ly > hy) {
+      continue;
+    }
+
+    const double spanX = std::max(1, hx - lx + 1);
+    const double spanY = std::max(1, hy - ly + 1);
+    const double rudy = std::max(1, net->getNumPins() - 1) / (spanX * spanY);
+
+    rudyDiff[lx][ly] += rudy;
+    rudyDiff[hx + 1][ly] -= rudy;
+    rudyDiff[lx][hy + 1] -= rudy;
+    rudyDiff[hx + 1][hy + 1] += rudy;
+  }
+
+  std::vector<std::vector<double>> combinedDensity(
+      x_size_, std::vector<double>(y_size_, 0.0));
+  double maxCombinedDensity = 0.0;
+  for (int x = 0; x < x_size_; x++) {
+    for (int y = 0; y < y_size_; y++) {
+      double rudy = rudyDiff[x][y];
+      if (x > 0) {
+        rudy += rudyDiff[x - 1][y];
+      }
+      if (y > 0) {
+        rudy += rudyDiff[x][y - 1];
+      }
+      if (x > 0 && y > 0) {
+        rudy -= rudyDiff[x - 1][y - 1];
+      }
+      rudyDiff[x][y] = rudy;
+
+      const double combined
+          = pinDensity[x][y] + constants_.soft_capacity_rudy_weight * rudy;
+      combinedDensity[x][y] = combined;
+      maxCombinedDensity = std::max(maxCombinedDensity, combined);
+    }
+  }
+
+  if (maxCombinedDensity <= 0.0) {
+    return;
+  }
+
+  const int layerDenom = std::max(num_layers_ - 1, 1);
+  const auto getRatio = [&](const int layer, const double normalizedCong) {
+    const double layerScale = 1.0
+                              + constants_.soft_capacity_lower_layer_boost
+                                    * (1.0 - static_cast<double>(layer)
+                                                 / static_cast<double>(
+                                                     layerDenom));
+    const double congestion = normalizedCong * layerScale;
+    const double ratio = constants_.soft_capacity_ratio_min
+                         + (constants_.soft_capacity_ratio_max
+                            - constants_.soft_capacity_ratio_min)
+                               / (1.0
+                                  + std::exp((congestion
+                                              - constants_.soft_capacity_congestion_mid)
+                                             * constants_.soft_capacity_slope));
+    return std::clamp(ratio,
+                      constants_.soft_capacity_ratio_min,
+                      constants_.soft_capacity_ratio_max);
+  };
+
+  int adjustedEdges = 0;
+  for (int layer = constants_.min_routing_layer; layer < num_layers_; layer++) {
+    const int direction = layer_directions_[layer];
+    for (int x = 0; x < x_size_; x++) {
+      for (int y = 0; y < y_size_; y++) {
+        const int edgeIndex = direction == MetalLayer::H ? x : y;
+        if (edgeIndex >= getSize(direction) - 1) {
+          continue;
+        }
+        GraphEdge& edge = graph_edges_[layer][x][y];
+        if (edge.capacity <= 0.0) {
+          continue;
+        }
+
+        const int nx = std::min(x + (direction == MetalLayer::H ? 1 : 0),
+                                x_size_ - 1);
+        const int ny = std::min(y + (direction == MetalLayer::V ? 1 : 0),
+                                y_size_ - 1);
+        const double localDensity = 0.5
+                                    * (combinedDensity[x][y]
+                                       + combinedDensity[nx][ny])
+                                    / maxCombinedDensity;
+        const double ratio = getRatio(layer, localDensity);
+        const double scaledCapacity
+            = std::max(edge.capacity * ratio,
+                       std::min(edge.capacity,
+                                constants_.soft_capacity_min_absolute));
+        if (scaledCapacity < edge.capacity) {
+          edge.capacity = scaledCapacity;
+          adjustedEdges++;
+        }
+      }
+    }
+  }
+
+  logger_->report("soft capacity shaping adjusted {} edges", adjustedEdges);
+}
+
 AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
 {
   AccessPointHash hasher(y_size_);

@@ -107,6 +107,7 @@ class GridGraph
 
   // Misc
   AccessPointSet selectAccessPoints(const GRNet* net) const;
+  void applySoftCapacities(const std::vector<std::unique_ptr<GRNet>>& nets);
 
   // Methods for updating demands
   void commitTree(const std::shared_ptr<GRTreeNode>& tree, bool rip_up = false);

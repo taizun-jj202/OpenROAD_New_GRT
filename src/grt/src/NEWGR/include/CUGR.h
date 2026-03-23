@@ -54,6 +54,16 @@ struct Constants
   int maze_min_interval = 3;
   int global_rebalance_rounds = 2;
 
+  // SPRoute-inspired soft-capacity shaping.
+  bool enable_soft_capacity = true;
+  double soft_capacity_ratio_min = 0.70;
+  double soft_capacity_ratio_max = 0.98;
+  double soft_capacity_slope = 6.0;
+  double soft_capacity_congestion_mid = 0.55;
+  double soft_capacity_rudy_weight = 1.2;
+  double soft_capacity_lower_layer_boost = 0.25;
+  double soft_capacity_min_absolute = 0.50;
+
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
   double wire_patch_threshold = 2.0;
