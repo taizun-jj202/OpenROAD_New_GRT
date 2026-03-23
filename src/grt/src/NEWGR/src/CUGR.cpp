@@ -313,13 +313,13 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
                  <= constants_.stage3_full_grid_overflow_threshold + 2
           && baseline_stretch >= 1.08;
     const bool ultra_wirelength_mode
-        = aggressive_wirelength_mode && baseline_stretch >= 1.16
+        = aggressive_wirelength_mode && baseline_stretch >= 1.18
           && hpwl >= constants_.stage3_full_grid_hpwl_threshold;
     const double stage3_wl_overflow_slack
-        = ultra_wirelength_mode ? 14.0 : (aggressive_wirelength_mode ? 11.5 : 7.0);
+        = ultra_wirelength_mode ? 13.0 : (aggressive_wirelength_mode ? 10.5 : 6.8);
     const bool overflow_driven = baseline_overflow > 0;
     const bool very_high_stretch
-        = baseline_stretch >= (aggressive_wirelength_mode ? 1.16 : 1.26);
+        = baseline_stretch >= (aggressive_wirelength_mode ? 1.18 : 1.27);
     const bool wide_bbox = bbox.width() >= bbox.height();
     const int base_sparse = std::clamp(hpwl >= 240 ? 8 : (hpwl >= 120 ? 7 : 6),
                                        4,
@@ -399,14 +399,14 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         }
       }
     }
-    int stage3_cfg_budget = overflow_driven ? 8 : 4;
+    int stage3_cfg_budget = overflow_driven ? 7 : 4;
     if (aggressive_wirelength_mode) {
       stage3_cfg_budget += 2;
     }
     if (ultra_wirelength_mode) {
-      stage3_cfg_budget += 2;
+      stage3_cfg_budget += 1;
     }
-    if (hpwl >= constants_.stage3_full_grid_hpwl_threshold) {
+    if (hpwl >= constants_.stage3_full_grid_hpwl_threshold && very_high_stretch) {
       stage3_cfg_budget++;
     }
     if (very_high_stretch) {
@@ -468,16 +468,16 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         && net->getNumPins() > 2) {
       const int wl_config_limit = std::max(1, constants_.stage3_wl_config_limit);
       const int wl_bonus_runs = aggressive_wirelength_mode
-                                    ? (ultra_wirelength_mode ? 4 : 3)
+                                    ? (ultra_wirelength_mode ? 2 : 1)
                                     : 1;
       int wl_runs
-          = std::min(stage3_cfg_budget + (aggressive_wirelength_mode ? 2 : 0),
+          = std::min(stage3_cfg_budget + (aggressive_wirelength_mode ? 1 : 0),
                      wl_config_limit + wl_bonus_runs);
       if (!overflow_driven && !aggressive_wirelength_mode) {
         wl_runs = std::min(wl_runs, 2);
       }
       if (aggressive_wirelength_mode) {
-        wl_runs = std::max(wl_runs, std::min(stage3_cfg_budget, 4));
+        wl_runs = std::max(wl_runs, std::min(stage3_cfg_budget, 3));
       }
       const double wl_via_cost_scale
           = std::clamp(constants_.stage3_wl_via_cost_scale
@@ -505,6 +505,11 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         wlPatternRoute.run();
         considerCandidate(net->getRoutingTree(), /*is_baseline_candidate*/ false);
         evaluated_candidates++;
+        if (!overflow_driven && best_tree && !best_is_baseline
+            && best_stats.overflow <= baseline_overflow
+            && best_stats.wirelength + 28 < original_stats.wirelength) {
+          break;
+        }
       }
     }
 
@@ -520,7 +525,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         && baseline_stretch
                >= (aggressive_wirelength_mode
                        ? std::max(1.05,
-                                  constants_.stage3_full_grid_min_stretch - 0.12)
+                                  constants_.stage3_full_grid_min_stretch - 0.08)
                        : constants_.stage3_full_grid_min_stretch)) {
       const double full_grid_via_scale = std::clamp(
           constants_.stage3_full_grid_via_cost_scale, 0.0, 1.0);
@@ -539,8 +544,8 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         considerCandidate(net->getRoutingTree(), /*is_baseline_candidate*/ false);
         evaluated_candidates++;
       }
-      if (ultra_wirelength_mode) {
-        constexpr double kUltraViaScale = 0.0;
+      if (ultra_wirelength_mode && baseline_stretch >= 1.24) {
+        constexpr double kUltraViaScale = 0.02;
         MazeRoute ultraFullGridWlMaze(net, grid_graph_.get(), logger_);
         ultraFullGridWlMaze.constructSparsifiedGraph(
             wireLengthCostView, SparseGrid(1, 1, 0, 0), kUltraViaScale);
@@ -842,6 +847,11 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
 
       std::shared_ptr<GRTreeNode> best_tree = nullptr;
       std::pair<uint64_t, int> best_stats = original_stats;
+      auto hasStrongWireGain = [&]() {
+        constexpr uint64_t kStrongRecoveryGain = 40;
+        return best_tree
+               && best_stats.first + kStrongRecoveryGain < original_stats.first;
+      };
 
       auto considerCandidate = [&](const std::shared_ptr<GRTreeNode>& tree) {
         if (!tree) {
@@ -989,6 +999,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
           }
         }
 
+        int maze_trials = 0;
         for (const auto& cfg : maze_configs) {
           MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
           SparseGrid recoveryGrid(
@@ -1003,6 +1014,10 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
             mazePatternRoute.constructRoutingDAG();
             mazePatternRoute.run();
             considerCandidate(net->getRoutingTree());
+            maze_trials++;
+            if (!deep_search && maze_trials >= 3 && hasStrongWireGain()) {
+              break;
+            }
           }
         }
 
@@ -1011,6 +1026,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         const bool enable_wl_only_maze
             = constants_.recovery_use_wirelength_maze
               && (deep_search || candidateIndex < keep / 2)
+              && (!hasStrongWireGain() || deep_search)
               && candidate.hpwl
                      >= constants_.recovery_wl_only_hpwl_threshold;
         if (enable_wl_only_maze) {
@@ -1050,6 +1066,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         const bool enable_full_grid_maze
             = constants_.recovery_use_full_grid_maze
               && deep_search
+              && !hasStrongWireGain()
               && candidateIndex < std::max(1, constants_.recovery_full_grid_top_n)
               && candidate.hpwl
                      >= constants_.recovery_full_grid_hpwl_threshold
