@@ -45,6 +45,9 @@ struct Constants
 
   int mst_topology_pin_threshold = 7;
   double mst_bend_penalty = 3.0;
+  int hub_topology_pin_threshold = 20;
+  int pin_access_layer_extension = 1;
+  bool enable_early_detour_stage = false;
 
   double maze_logistic_slope = 0.5;
   int maze_base_interval = 8;

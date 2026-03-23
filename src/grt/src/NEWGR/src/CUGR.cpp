@@ -230,14 +230,18 @@ void CUGR::route()
 
   patternRoute(netIndices);
 
-  patternRouteWithDetours(netIndices);
+  if (constants_.enable_early_detour_stage) {
+    patternRouteWithDetours(netIndices);
+  }
 
   mazeRoute(netIndices);
 
   globalRebalanceRoute(allNetIndices);
 
   updateOverflowNets(netIndices);
-  patternRouteWithDetours(netIndices);
+  if (!netIndices.empty()) {
+    patternRouteWithDetours(netIndices);
+  }
 
   printStatistics();
   if (constants_.write_heatmap) {
@@ -332,13 +336,16 @@ NetRouteMap CUGR::getRoutes()
 
 void CUGR::sortNetIndices(std::vector<int>& netIndices) const
 {
-  std::vector<int> halfParameters(gr_nets_.size());
+  std::vector<int> halfParameters(gr_nets_.size(), 0);
   for (int netIndex : netIndices) {
     auto& net = gr_nets_[netIndex];
     halfParameters[netIndex] = net->getBoundingBox().hp();
   }
   sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
-    return halfParameters[lhs] < halfParameters[rhs];
+    if (halfParameters[lhs] != halfParameters[rhs]) {
+      return halfParameters[lhs] > halfParameters[rhs];
+    }
+    return gr_nets_[lhs]->getNumPins() > gr_nets_[rhs]->getNumPins();
   });
 }
 

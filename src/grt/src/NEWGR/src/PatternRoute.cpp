@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -106,8 +107,79 @@ void PatternRoute::constructSteinerTree()
     return;
   }
 
-  // Radical topology switch for large nets:
-  // build a Prim-MST over pin access points instead of a FLUTE RSMT.
+  // Radical topology switch for very large nets:
+  // build a median-hub tree with shared bend junctions to compress trunks.
+  if (degree >= constants_.hub_topology_pin_threshold) {
+    std::vector<int> xs;
+    std::vector<int> ys;
+    xs.reserve(degree);
+    ys.reserve(degree);
+    robin_hood::unordered_map<int, int> xFreq;
+    robin_hood::unordered_map<int, int> yFreq;
+    for (const auto& accessPoint : orderedAccessPoints) {
+      xs.push_back(accessPoint.point.x());
+      ys.push_back(accessPoint.point.y());
+      xFreq[accessPoint.point.x()] += 1;
+      yFreq[accessPoint.point.y()] += 1;
+    }
+    std::nth_element(xs.begin(), xs.begin() + degree / 2, xs.end());
+    std::nth_element(ys.begin(), ys.begin() + degree / 2, ys.end());
+    const PointT hub(xs[degree / 2], ys[degree / 2]);
+    auto root = std::make_shared<SteinerTreeNode>(hub);
+
+    auto mergeLayers = [](IntervalT& dst, const IntervalT& src) {
+      if (!src.IsValid()) {
+        return;
+      }
+      if (!dst.IsValid()) {
+        dst = src;
+        return;
+      }
+      dst.Update(src.low());
+      dst.Update(src.high());
+    };
+
+    std::map<std::pair<int, int>, std::shared_ptr<SteinerTreeNode>> junctions;
+    auto getOrCreateJunction = [&](const PointT& point) {
+      const std::pair<int, int> key(point.x(), point.y());
+      auto it = junctions.find(key);
+      if (it != junctions.end()) {
+        return it->second;
+      }
+      auto node = std::make_shared<SteinerTreeNode>(point);
+      junctions.emplace(key, node);
+      root->addChild(node);
+      return node;
+    };
+
+    for (const auto& accessPoint : orderedAccessPoints) {
+      const PointT pin = accessPoint.point;
+      if (pin == hub) {
+        IntervalT merged = root->getFixedLayers();
+        mergeLayers(merged, accessPoint.layers);
+        root->setFixedLayers(merged);
+        continue;
+      }
+
+      auto pinNode = std::make_shared<SteinerTreeNode>(pin, accessPoint.layers);
+      if (pin.x() == hub.x() || pin.y() == hub.y()) {
+        root->addChild(pinNode);
+        continue;
+      }
+
+      const bool preferHorizontalTrunk
+          = yFreq[pin.y()] >= xFreq[pin.x()];
+      const PointT bend = preferHorizontalTrunk ? PointT(hub.x(), pin.y())
+                                                : PointT(pin.x(), hub.y());
+      auto junction = getOrCreateJunction(bend);
+      junction->addChild(pinNode);
+    }
+
+    steiner_tree_ = root;
+    return;
+  }
+
+  // Medium-size nets use a congestion-biased Prim-MST over access points.
   if (degree >= constants_.mst_topology_pin_threshold) {
     const auto& box = net_->getBoundingBox();
     const PointT boxCenter(box.cx(), box.cy());

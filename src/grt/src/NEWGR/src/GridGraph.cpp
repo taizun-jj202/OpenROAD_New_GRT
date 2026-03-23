@@ -415,11 +415,13 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       }
     }
   }
-  // Extend the fixed layers to 2 layers higher to facilitate track switching
+  // Extend fixed layers by a configurable margin.
+  // Setting this to 0 keeps pin-layer commitments tight and can reduce vias.
   for (auto& accessPoint : selected_access_points) {
     IntervalT& fixedLayers = accessPoint.layers;
     fixedLayers.SetHigh(
-        std::min(fixedLayers.high() + 2, (int) getNumLayers() - 1));
+        std::min(fixedLayers.high() + constants_.pin_access_layer_extension,
+                 (int) getNumLayers() - 1));
   }
   return selected_access_points;
 }
