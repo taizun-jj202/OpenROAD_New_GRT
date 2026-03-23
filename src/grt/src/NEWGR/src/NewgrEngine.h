@@ -44,6 +44,8 @@ class NewgrEngine
   void init(const SprouteGridData& grid, const std::vector<SprouteNetData>& nets);
   NetRouteMap run();
   NetRouteMap runWirelengthFirst();
+  NetRouteMap runRegionAware();
+  NetRouteMap runFineGrainRefine();
 
   const NewgrInput& getInput() const { return input_; }
   int getTotalOverflow() const { return last_total_overflow_; }

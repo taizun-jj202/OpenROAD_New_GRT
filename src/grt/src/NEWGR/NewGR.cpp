@@ -20,7 +20,7 @@ struct RouteScore
 {
   int64_t wirelength{0};
   int64_t vias{0};
-  int64_t weighted_cost{0};
+  int64_t bends{0};
 };
 
 enum class RouteSource
@@ -30,35 +30,89 @@ enum class RouteSource
   kNewgrWirelength
 };
 
-RouteScore scoreRoute(const GRoute& route, int via_penalty)
+enum class SegmentDirection
+{
+  kNone,
+  kHorizontal,
+  kVertical,
+  kVia
+};
+
+SegmentDirection getSegmentDirection(const GSegment& segment)
+{
+  if (segment.init_layer != segment.final_layer) {
+    return SegmentDirection::kVia;
+  }
+  if (segment.init_x != segment.final_x) {
+    return SegmentDirection::kHorizontal;
+  }
+  if (segment.init_y != segment.final_y) {
+    return SegmentDirection::kVertical;
+  }
+  return SegmentDirection::kNone;
+}
+
+RouteScore scoreRoute(const GRoute& route)
 {
   RouteScore score;
+  SegmentDirection previous_planar_direction = SegmentDirection::kNone;
   for (const GSegment& segment : route) {
     score.wirelength += segment.length();
     score.vias += std::abs(segment.init_layer - segment.final_layer);
+    const SegmentDirection direction = getSegmentDirection(segment);
+    if (direction == SegmentDirection::kHorizontal
+        || direction == SegmentDirection::kVertical) {
+      if (previous_planar_direction != SegmentDirection::kNone
+          && previous_planar_direction != direction) {
+        score.bends++;
+      }
+      previous_planar_direction = direction;
+    }
   }
-  score.weighted_cost = score.wirelength + score.vias * via_penalty;
   return score;
+}
+
+int64_t viaGuardForNet(const RouteScore& baseline_score, int tile_size)
+{
+  const int64_t long_net_threshold = static_cast<int64_t>(tile_size) * 24;
+  const int64_t medium_net_threshold = static_cast<int64_t>(tile_size) * 12;
+  if (baseline_score.wirelength >= long_net_threshold) {
+    return std::max<int64_t>(10, baseline_score.vias / 2 + 4);
+  }
+  if (baseline_score.wirelength >= medium_net_threshold) {
+    return std::max<int64_t>(4, baseline_score.vias / 3 + 2);
+  }
+  return std::max<int64_t>(1, baseline_score.vias / 6);
 }
 
 int64_t effectiveWirelengthCost(const RouteScore& baseline_score,
                                 const RouteScore& candidate_score,
-                                int via_tradeoff)
+                                int via_tradeoff,
+                                int bend_tradeoff,
+                                int64_t via_guard)
 {
   const int64_t extra_vias
       = std::max<int64_t>(0, candidate_score.vias - baseline_score.vias);
-  return candidate_score.wirelength + extra_vias * via_tradeoff;
+  const int64_t penalized_vias = std::max<int64_t>(0, extra_vias - via_guard);
+  const int64_t extra_bends
+      = std::max<int64_t>(0, candidate_score.bends - baseline_score.bends);
+  return candidate_score.wirelength + penalized_vias * via_tradeoff
+         + extra_bends * bend_tradeoff;
 }
 
 bool betterCandidate(const RouteScore& baseline_score,
                      const RouteScore& current_best_score,
                      const RouteScore& candidate_score,
-                     int via_tradeoff)
+                     int via_tradeoff,
+                     int bend_tradeoff,
+                     int64_t via_guard)
 {
   const int64_t current_effective_cost
-      = effectiveWirelengthCost(baseline_score, current_best_score, via_tradeoff);
+      = effectiveWirelengthCost(
+          baseline_score, current_best_score, via_tradeoff, bend_tradeoff, via_guard);
   const int64_t candidate_effective_cost
-      = effectiveWirelengthCost(baseline_score, candidate_score, via_tradeoff);
+      = effectiveWirelengthCost(
+          baseline_score, candidate_score, via_tradeoff, bend_tradeoff, via_guard);
   if (candidate_effective_cost != current_effective_cost) {
     return candidate_effective_cost < current_effective_cost;
   }
@@ -68,7 +122,7 @@ bool betterCandidate(const RouteScore& baseline_score,
   if (candidate_score.vias != current_best_score.vias) {
     return candidate_score.vias < current_best_score.vias;
   }
-  return candidate_score.weighted_cost < current_best_score.weighted_cost;
+  return candidate_score.bends < current_best_score.bends;
 }
 
 }  // namespace
@@ -105,8 +159,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   NetRouteMap wirelength_routes = engine_->runWirelengthFirst();
 
   const int tile_size = std::max(1, grouter_->getTileSize());
-  const int via_penalty = std::max(1, tile_size / 16);
-  const int via_tradeoff = std::max(1, tile_size / 20);
+  const int via_tradeoff = std::max(1, tile_size / 30);
+  const int bend_tradeoff = std::max(1, tile_size / 48);
 
   int selected_from_balanced = 0;
   int selected_from_wl = 0;
@@ -115,7 +169,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int inserted_from_wl = 0;
 
   for (auto& [db_net, route] : routes) {
-    const RouteScore baseline_score = scoreRoute(route, via_penalty);
+    const RouteScore baseline_score = scoreRoute(route);
+    const int64_t via_guard = viaGuardForNet(baseline_score, tile_size);
     RouteScore best_score = baseline_score;
     const GRoute* selected_route = &route;
     RouteSource selected_source = RouteSource::kFastRoute;
@@ -125,10 +180,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       if (candidate_it == candidate_routes.end()) {
         return;
       }
-      const RouteScore candidate_score
-          = scoreRoute(candidate_it->second, via_penalty);
+      const RouteScore candidate_score = scoreRoute(candidate_it->second);
       if (betterCandidate(
-              baseline_score, best_score, candidate_score, via_tradeoff)) {
+              baseline_score,
+              best_score,
+              candidate_score,
+              via_tradeoff,
+              bend_tradeoff,
+              via_guard)) {
         best_score = candidate_score;
         selected_route = &candidate_it->second;
         selected_source = source;
@@ -170,9 +229,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   logger_->info(utl::GRT,
                 6004,
-                "NEWGR hybrid selected {} balanced routes, {} WL-first routes "
-                "(kept {} FastRoute, +{} balanced-only, +{} WL-only) out of {} "
-                "total.",
+                "NEWGR hybrid selected {} balanced and {} WL-first routes (kept "
+                "{} FastRoute, +{} balanced-only, +{} WL-only) out of {} total.",
                 selected_from_balanced,
                 selected_from_wl,
                 kept_fastroute,

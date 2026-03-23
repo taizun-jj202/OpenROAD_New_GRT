@@ -86,6 +86,20 @@ NetRouteMap NewgrEngine::runWirelengthFirst()
                        /*warn_id=*/402);
 }
 
+NetRouteMap NewgrEngine::runRegionAware()
+{
+  return runWithConfig(/*max_maze_round=*/220,
+                       static_cast<int>(Algo::DetPart_Astar_Region),
+                       /*warn_id=*/403);
+}
+
+NetRouteMap NewgrEngine::runFineGrainRefine()
+{
+  return runWithConfig(/*max_maze_round=*/180,
+                       static_cast<int>(Algo::FineGrain),
+                       /*warn_id=*/404);
+}
+
 NetRouteMap NewgrEngine::runWithConfig(int max_maze_round, int algo_id, int warn_id)
 {
   if (!input_ready_) {
