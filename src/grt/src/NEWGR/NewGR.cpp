@@ -1224,7 +1224,7 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
 
       // Keep patching focused on severe regions. Patching low-pressure edges
       // can broaden guides and invite unnecessary detailed-route detours.
-      if (overflow == 0 && usage_ratio < 0.95f) {
+      if (overflow == 0 && usage_ratio < 0.90f) {
         continue;
       }
 
@@ -1248,10 +1248,10 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
         return lhs.severity > rhs.severity;
       });
 
-  const int edge_budget = 36;
+  const int edge_budget = 64;
   const int sources_per_edge = 1;
-  const int patches_per_net = 3;
-  const int total_patch_budget = 540;
+  const int patches_per_net = 4;
+  const int total_patch_budget = 780;
 
   int patched_edges = 0;
   int added_segments = 0;
@@ -1344,8 +1344,8 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
   // to justify extra guide flexibility.
   const bool enable_long_seg_patching = patched_edges >= (edge_budget / 3);
   const int long_seg_threshold = 4 * tile_size;
-  const int long_seg_patches_per_net = 2;
-  const int long_seg_segment_budget = 240;
+  const int long_seg_patches_per_net = 3;
+  const int long_seg_segment_budget = 360;
   int long_seg_added_segments = 0;
   std::map<odb::dbNet*, int> long_seg_patch_count;
 
@@ -2335,7 +2335,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 final_result.metrics.wirelength_um,
                 final_result.metrics.via_count);
 
-  if (final_result.name == "cugr-softcap-wirelength") {
+  const bool apply_patching
+      = final_result.name == "cugr-softcap-wirelength"
+        || final_result.name.find("fusion") != std::string::npos
+        || final_result.name.find("stitch") != std::string::npos;
+  if (apply_patching) {
     applyCugrStyleGuidePatching(grouter_,
                                 final_result.routes,
                                 min_routing_layer,
