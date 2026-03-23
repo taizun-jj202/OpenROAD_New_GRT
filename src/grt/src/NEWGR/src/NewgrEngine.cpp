@@ -102,7 +102,7 @@ NetRouteMap NewgrEngine::runCriticalWirelengthRefine()
   }
 
   buildInput(critical_nets);
-  NetRouteMap routes = runWithConfig(/*max_maze_round=*/90,
+  NetRouteMap routes = runWithConfig(/*max_maze_round=*/130,
                                      static_cast<int>(Algo::DetPart_Astar_Data),
                                      /*warn_id=*/411);
   buildInput();
@@ -117,8 +117,8 @@ NetRouteMap NewgrEngine::runCriticalTopologyRefine()
   }
 
   buildInput(critical_nets);
-  NetRouteMap routes = runWithConfig(/*max_maze_round=*/70,
-                                     static_cast<int>(Algo::DetPart_Astar),
+  NetRouteMap routes = runWithConfig(/*max_maze_round=*/110,
+                                     static_cast<int>(Algo::Astar),
                                      /*warn_id=*/412);
   buildInput();
   return routes;
@@ -344,15 +344,16 @@ std::vector<int> NewgrEngine::selectCriticalNetIndices() const
     return lhs.index < rhs.index;
   });
 
-  // Route only the highest-impact nets with a heavier data-driven pass.
-  const size_t min_budget = 24;
-  const size_t max_budget = 112;
-  size_t budget = ranked.size() / 64;
+  // Mix SPRoute-style data-driven refinement and classic A* over a broad
+  // critical subset so NEWGR can apply more aggressive WL improvements.
+  const size_t min_budget = 96;
+  const size_t max_budget = 320;
+  size_t budget = ranked.size() / 18;
   budget = std::max(budget, min_budget);
   budget = std::min(budget, max_budget);
   budget = std::min(budget, ranked.size());
 
-  const int64_t min_hpwl = 22;
+  const int64_t min_hpwl = 12;
   std::vector<int> selected;
   selected.reserve(budget);
   for (const RankedNet& ranked_net : ranked) {
@@ -366,7 +367,7 @@ std::vector<int> NewgrEngine::selectCriticalNetIndices() const
   }
 
   if (selected.empty()) {
-    const size_t fallback = std::min<size_t>(24, ranked.size());
+    const size_t fallback = std::min<size_t>(96, ranked.size());
     selected.reserve(fallback);
     for (size_t i = 0; i < fallback; ++i) {
       selected.push_back(ranked[i].index);
