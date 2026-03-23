@@ -1261,7 +1261,7 @@ NetRouteMap buildWirelengthSweepHybrid(
           - static_cast<int64_t>(base_usage.low_layer_wl);
     const int64_t via_increase_limit
         = maxInterleavedViaIncrease(pin_count)
-          + ((pin_count <= 16) ? 3 : ((pin_count <= 40) ? 5 : 6));
+          + ((pin_count <= 16) ? 2 : ((pin_count <= 40) ? 4 : 5));
     if (via_increase > via_increase_limit) {
       ++stats.skipped_by_via_guard;
       continue;
@@ -1318,15 +1318,15 @@ NetRouteMap buildWirelengthSweepHybrid(
 
   stats.candidate_pool_size = candidates.size();
   const size_t swap_limit = std::min<size_t>(
-      1320, std::max<size_t>(220, base_routes.size() / 14));
+      1180, std::max<size_t>(180, base_routes.size() / 16));
   const int64_t via_increase_budget = std::max<int64_t>(
-      620, static_cast<int64_t>(base_total_vias / 170));
+      130, static_cast<int64_t>(base_total_vias / 850));
   const int64_t low_layer_growth_budget = std::max<int64_t>(
       2400000, static_cast<int64_t>(base_low_layer_wl / 16));
   const uint64_t base_wirelength = computeRouteScore(base_routes).wirelength;
   const uint64_t wl_gain_target = std::max<uint64_t>(
-      3400000, base_wirelength / 180);
-  const size_t min_swaps_before_stop = std::max<size_t>(80, swap_limit / 4);
+      2400000, base_wirelength / 240);
+  const size_t min_swaps_before_stop = std::max<size_t>(64, swap_limit / 5);
 
   int min_center_x = 0;
   int max_center_x = 0;
