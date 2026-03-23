@@ -910,9 +910,9 @@ NetRouteMap buildInterleavedBackboneHybrid(
   const size_t swap_limit = std::min<size_t>(
       840, std::max<size_t>(120, base_routes.size() / 24));
   const int64_t total_via_increase_budget = std::max<int64_t>(
-      360, static_cast<int64_t>(base_total_vias / 260));
+      420, static_cast<int64_t>(base_total_vias / 220));
   const int64_t low_layer_growth_budget = std::max<int64_t>(
-      2100000, static_cast<int64_t>(base_low_layer_wl / 16));
+      2600000, static_cast<int64_t>(base_low_layer_wl / 14));
   const uint64_t base_wirelength = computeRouteScore(base_routes).wirelength;
   const uint64_t wl_gain_target = std::max<uint64_t>(
       2200000, base_wirelength / 250);
@@ -996,20 +996,20 @@ NetRouteMap buildInterleavedBackboneHybrid(
             }
             if (via_increase > 0
                 && candidate.wl_gain
-                       < via_increase * 240 + low_layer_delta / 4
-                             + static_cast<int64_t>(120)) {
+                       < via_increase * 180 + low_layer_delta / 5
+                             + static_cast<int64_t>(80)) {
               ++stats.skipped_by_via_guard;
               continue;
             }
             if (low_layer_delta > 0
                 && candidate.wl_gain
-                       < low_layer_delta + static_cast<int64_t>(96)) {
+                       < low_layer_delta + static_cast<int64_t>(64)) {
               ++stats.skipped_by_layer_guard;
               continue;
             }
             if (candidate.pin_count > 48 && low_layer_delta > 0
                 && candidate.wl_gain
-                       < low_layer_delta * 3 / 2 + static_cast<int64_t>(240)) {
+                       < low_layer_delta * 6 / 5 + static_cast<int64_t>(180)) {
               ++stats.skipped_by_layer_guard;
               continue;
             }
@@ -1060,12 +1060,12 @@ NetRouteMap buildInterleavedBackboneHybrid(
   // FastRoute-style wirelength closure after spatial interleaving:
   // consume residual donor routes with small, bounded via/layer risk.
   const size_t closure_swap_budget = std::min<size_t>(
-      420, std::max<size_t>(48, candidates.size() / 5));
+      560, std::max<size_t>(64, candidates.size() / 3));
   const int64_t closure_via_budget = std::max<int64_t>(
-      240, static_cast<int64_t>(base_total_vias / 520));
-  const int64_t closure_low_layer_budget = 650000;
+      320, static_cast<int64_t>(base_total_vias / 420));
+  const int64_t closure_low_layer_budget = 950000;
   const uint64_t closure_wl_gain_target = std::max<uint64_t>(
-      900000, base_wirelength / 420);
+      1400000, base_wirelength / 320);
   uint64_t closure_wl_gain = 0;
   size_t closure_swaps = 0;
 
@@ -1086,12 +1086,12 @@ NetRouteMap buildInterleavedBackboneHybrid(
     if (candidate.wl_gain < min_closure_gain) {
       continue;
     }
-    if (via_increase > 2) {
+    if (via_increase > 3) {
       continue;
     }
     if (low_layer_delta > 0
         && candidate.wl_gain
-               < low_layer_delta * 2 + static_cast<int64_t>(160)) {
+               < low_layer_delta * 8 / 5 + static_cast<int64_t>(120)) {
       continue;
     }
     if (consumed_via_increase + via_increase
