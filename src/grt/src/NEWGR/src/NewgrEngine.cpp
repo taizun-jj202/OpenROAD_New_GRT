@@ -277,36 +277,11 @@ NetRouteMap NewgrEngine::run()
     return candidate;
   };
 
-  // Hybrid strategy:
-  // 1) SPRoute deterministic partition reroute
-  // 2) FastRoute A* with aggressive short-path window (wirelength first)
-  // 3) FastRoute A* with standard window (fallback for hard congestion)
-  // Select by overflow first, then wirelength and via count.
-  CandidateResult detpart
-      = run_candidate(Algo::DetPart_Astar_Local, 520, "DetPart_Astar_Local");
-  CandidateResult astar_aggressive
-      = run_candidate(Algo::Astar, 180, "Astar_Aggressive");
-  CandidateResult astar_standard
-      = run_candidate(Algo::Astar, 700, "Astar_Standard");
-
-  CandidateResult best = std::move(detpart);
-  if (isBetterCandidate(astar_aggressive, best)) {
-    best = std::move(astar_aggressive);
-  }
-  if (isBetterCandidate(astar_standard, best)) {
-    best = std::move(astar_standard);
-  }
-
-  const char* last_executed_mode = "Astar_Standard";
-  if (best.mode_name != last_executed_mode) {
-    logger_->info(utl::GRT,
-                  403,
-                  "Re-running selected NEWGR candidate {} to keep congestion "
-                  "state aligned with output guides.",
-                  candidateName(best));
-    best = run_candidate(
-        best.algo, best.maze_rounds, best.mode_name.c_str());
-  }
+  // Two-pass hybrid:
+  // 1) SPRoute-style deterministic partitioned warmup to shape congestion.
+  // 2) Final FastRoute-style global A* pass for low-wirelength guide output.
+  run_candidate(Algo::DetPart_Astar_Local, 520, "DetPart_Astar_Local_Warmup");
+  CandidateResult best = run_candidate(Algo::Astar, 700, "Astar_Final");
 
   last_total_overflow_ = best.overflow;
   logger_->info(utl::GRT,

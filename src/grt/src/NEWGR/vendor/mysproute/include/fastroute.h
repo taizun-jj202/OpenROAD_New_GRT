@@ -646,32 +646,16 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	// NEWGR policy for wirelength: when using A*, keep expansion tighter and
 	// reduce congestion inflation so shortest paths are favored unless needed.
 	if (algo == Astar) {
-		ENLARGE = 28;
-		ESTEP1 = 6;
-		ESTEP2 = 4;
-		ESTEP3 = 2;
+		ENLARGE = 36;
+		ESTEP1 = 8;
+		ESTEP2 = 6;
+		ESTEP3 = 4;
 		CSTEP1 = 1;
 		CSTEP2 = 1;
 		CSTEP3 = 1;
 		LVIter = 1;
 		VIA = 0;
 		astar_weight = 0.70f;
-
-		// Aggressive short-path mode, enabled by a lower maze round budget.
-		// This is intentionally wirelength-first and only falls back to the
-		// standard A* profile when needed.
-		if (maxMazeRound <= 240) {
-			ENLARGE = 16;
-			ESTEP1 = 2;
-			ESTEP2 = 1;
-			ESTEP3 = 1;
-			CSTEP1 = 0;
-			CSTEP2 = 0;
-			CSTEP3 = 0;
-			LVIter = 0;
-			COSHEIGHT = 18;
-			astar_weight = 0.45f;
-		}
 	}
 
      //galois::substrate::PerThreadStorage<THREAD_LOCAL_STORAGE> thread_local_storage;
@@ -872,16 +856,9 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			}
 
 			 
-			int enlarge_limit;
-			if (algo == Astar) {
-				if (maxMazeRound <= 240) {
-					enlarge_limit = max(4, max(xGrid, yGrid) / 16);
-				} else {
-					enlarge_limit = max(6, max(xGrid, yGrid) / 10);
-				}
-			} else {
-				enlarge_limit = max(8, max(xGrid, yGrid) / 7);
-			}
+			const int enlarge_limit = (algo == Astar)
+			                              ? max(6, max(xGrid, yGrid) / 10)
+			                              : max(8, max(xGrid, yGrid) / 7);
 			enlarge = min(enlarge, enlarge_limit);
 			//std::cout << "costheight : " << costheight << " enlarge: " << enlarge << std::endl; 
 			costheight+=cost_step;
