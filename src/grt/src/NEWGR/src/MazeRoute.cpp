@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -44,6 +45,24 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
 
   const int xSize = grid_graph_->getSize(0);
   const int ySize = grid_graph_->getSize(1);
+  const BoxT& netBox = net_->getBoundingBox();
+  const int hp = std::max(netBox.hp(), 1);
+  const int netWidth = std::max(netBox.width(), 1);
+  const int netHeight = std::max(netBox.height(), 1);
+  const bool preferHorizontal = netWidth >= netHeight;
+  const double aspectRatio
+      = static_cast<double>(std::max(netWidth, netHeight))
+        / static_cast<double>(std::max(std::min(netWidth, netHeight), 1));
+  const double directionalPenaltyScale
+      = aspectRatio >= 1.5 ? std::min(1.5, 0.35 * (aspectRatio - 1.0)) : 0.0;
+  const int corridorMargin = std::clamp(hp / 12, 2, 14);
+  const int corridorLx = std::max(0, netBox.lx() - corridorMargin);
+  const int corridorLy = std::max(0, netBox.ly() - corridorMargin);
+  const int corridorHx = std::min(xSize - 1, netBox.hx() + corridorMargin);
+  const int corridorHy = std::min(ySize - 1, netBox.hy() + corridorMargin);
+  const int centerX = std::clamp(netBox.cx(), 0, xSize - 1);
+  const int centerY = std::clamp(netBox.cy(), 0, ySize - 1);
+  const double hpNorm = static_cast<double>(hp);
   xs_.reserve(xSize / grid.interval.x() + pxs.size());
   ys_.reserve(ySize / grid.interval.y() + pys.size());
   for (int i = 0, j = 0; true; i++) {
@@ -93,10 +112,32 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
     const int v = direction == MetalLayer::H ? u + 1 : u + xs_.size();
     const PointT U(xs_[xi], ys_[yi]);
     const PointT V(xs_[xi + 1 - direction], ys_[yi + direction]);
+    const int midX = (U.x() + V.x()) / 2;
+    const int midY = (U.y() + V.y()) / 2;
+    const int projectedX = std::clamp(midX, corridorLx, corridorHx);
+    const int projectedY = std::clamp(midY, corridorLy, corridorHy);
+    const int corridorDistance = std::abs(midX - projectedX)
+                                 + std::abs(midY - projectedY);
+    const int centerDistance = std::abs(midX - centerX) + std::abs(midY - centerY);
+    const double centerPenalty = 0.08 * static_cast<double>(centerDistance)
+                                 / hpNorm;
+    const double corridorPenalty
+        = corridorDistance > 0 ? (0.55 + 0.10 * corridorDistance) : 0.0;
+    const bool nonPreferredDirection
+        = (preferHorizontal && direction == MetalLayer::V)
+          || (!preferHorizontal && direction == MetalLayer::H);
+    CostT cost = wire_cost_view.sum(U, V);
+    if (cost <= 0.0) {
+      cost = 1.0;
+    }
+    cost += cost * (centerPenalty + corridorPenalty);
+    if (nonPreferredDirection) {
+      cost += cost * directionalPenaltyScale;
+    }
 
     edges_[u][0] = v;
     edges_[v][1] = u;
-    costs_[u][0] = costs_[v][1] = wire_cost_view.sum(U, V);
+    costs_[u][0] = costs_[v][1] = cost;
   };
 
   for (int direction = 0; direction < 2; direction++) {
@@ -119,10 +160,13 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   auto addDiffLayerEdge = [&](const int xi, const int yi) {
     const int u = getVertexIndex(0, xi, yi);
     const int v = u + xs_.size() * ys_.size();
+    const double viaScale = 1.0 + 0.06 * std::max(net_->getNumPins() - 2, 0)
+                            + 0.015 * std::min(hp, 250)
+                            + (aspectRatio > 1.8 ? 0.45 : 0.0);
 
     edges_[u][2] = v;
     edges_[v][2] = u;
-    costs_[u][2] = costs_[v][2] = grid_graph_->getUnitViaCost();
+    costs_[u][2] = costs_[v][2] = grid_graph_->getUnitViaCost() * viaScale;
   };
 
   for (int xi = 0; xi < xs_.size(); xi++) {
