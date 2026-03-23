@@ -1,6 +1,7 @@
 #include "NewgrEngine.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -81,16 +82,31 @@ NetRouteMap NewgrEngine::run()
 
 NetRouteMap NewgrEngine::runWirelengthFirst()
 {
-  return runWithConfig(/*max_maze_round=*/260,
+  return runWithConfig(/*max_maze_round=*/130,
                        static_cast<int>(Algo::DetPart_Astar),
                        /*warn_id=*/402);
 }
 
 NetRouteMap NewgrEngine::runDataDrivenWirelength()
 {
-  return runWithConfig(/*max_maze_round=*/280,
+  return runWithConfig(/*max_maze_round=*/220,
                        static_cast<int>(Algo::DetPart_Astar_Data),
                        /*warn_id=*/406);
+}
+
+NetRouteMap NewgrEngine::runCriticalWirelengthRefine()
+{
+  const std::vector<int> critical_nets = selectCriticalNetIndices();
+  if (critical_nets.empty()) {
+    return {};
+  }
+
+  buildInput(critical_nets);
+  NetRouteMap routes = runWithConfig(/*max_maze_round=*/260,
+                                     static_cast<int>(Algo::DetPart_Astar_Data),
+                                     /*warn_id=*/411);
+  buildInput();
+  return routes;
 }
 
 NetRouteMap NewgrEngine::runRegionAware()
@@ -216,6 +232,124 @@ void NewgrEngine::buildInput()
   }
 
   input_ready_ = true;
+}
+
+void NewgrEngine::buildInput(const std::vector<int>& net_indices)
+{
+  input_ = NewgrInput();
+  input_.grid = grid_;
+  input_.nets.reserve(net_indices.size());
+
+  for (const int net_idx : net_indices) {
+    if (net_idx < 0 || net_idx >= static_cast<int>(nets_.size())) {
+      continue;
+    }
+    const auto& net = nets_[net_idx];
+    NewgrInputNet input_net;
+    input_net.db_net = net.db_net;
+    std::string base_name;
+    if (net.db_net != nullptr) {
+      base_name = net.db_net->getConstName();
+    } else {
+      base_name = "newgr_net_" + std::to_string(input_.nets.size());
+    }
+    input_net.name = sanitizeNetName(base_name);
+    input_net.is_clock = net.is_clock;
+    input_net.min_layer = net.min_layer;
+    input_net.max_layer = net.max_layer;
+    input_net.root_pin_index = net.root_pin_index;
+    input_net.pins = net.pins;
+    input_.nets.push_back(std::move(input_net));
+  }
+
+  input_ready_ = true;
+}
+
+std::vector<int> NewgrEngine::selectCriticalNetIndices() const
+{
+  struct RankedNet
+  {
+    int index{0};
+    int64_t hpwl{0};
+    int pin_count{0};
+  };
+
+  auto hpwlInGrid = [](const SprouteNetData& net) -> int64_t {
+    if (net.pins.empty()) {
+      return 0;
+    }
+
+    int min_x = net.pins.front().x();
+    int max_x = min_x;
+    int min_y = net.pins.front().y();
+    int max_y = min_y;
+    for (const RoutePt& pin : net.pins) {
+      min_x = std::min(min_x, pin.x());
+      max_x = std::max(max_x, pin.x());
+      min_y = std::min(min_y, pin.y());
+      max_y = std::max(max_y, pin.y());
+    }
+    return static_cast<int64_t>(max_x - min_x) + static_cast<int64_t>(max_y - min_y);
+  };
+
+  std::vector<RankedNet> ranked;
+  ranked.reserve(nets_.size());
+  for (int i = 0; i < static_cast<int>(nets_.size()); ++i) {
+    const auto& net = nets_[i];
+    if (net.pins.size() < 2) {
+      continue;
+    }
+    const int64_t hpwl = hpwlInGrid(net);
+    if (hpwl <= 0) {
+      continue;
+    }
+    ranked.push_back({i, hpwl, static_cast<int>(net.pins.size())});
+  }
+
+  if (ranked.empty()) {
+    return {};
+  }
+
+  std::sort(ranked.begin(), ranked.end(), [](const RankedNet& lhs, const RankedNet& rhs) {
+    if (lhs.hpwl != rhs.hpwl) {
+      return lhs.hpwl > rhs.hpwl;
+    }
+    if (lhs.pin_count != rhs.pin_count) {
+      return lhs.pin_count > rhs.pin_count;
+    }
+    return lhs.index < rhs.index;
+  });
+
+  // Route only the highest-impact nets with a heavier data-driven pass.
+  const size_t min_budget = 64;
+  const size_t max_budget = 800;
+  size_t budget = ranked.size() / 14;
+  budget = std::max(budget, min_budget);
+  budget = std::min(budget, max_budget);
+  budget = std::min(budget, ranked.size());
+
+  const int64_t min_hpwl = 18;
+  std::vector<int> selected;
+  selected.reserve(budget);
+  for (const RankedNet& ranked_net : ranked) {
+    if (selected.size() >= budget) {
+      break;
+    }
+    if (ranked_net.hpwl < min_hpwl) {
+      break;
+    }
+    selected.push_back(ranked_net.index);
+  }
+
+  if (selected.empty()) {
+    const size_t fallback = std::min<size_t>(64, ranked.size());
+    selected.reserve(fallback);
+    for (size_t i = 0; i < fallback; ++i) {
+      selected.push_back(ranked[i].index);
+    }
+  }
+
+  return selected;
 }
 
 void NewgrEngine::prepareLefDefMetadata()

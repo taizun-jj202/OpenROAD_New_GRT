@@ -43,6 +43,7 @@ enum class RouteSource
 {
   kFastRoute,
   kNewgrBalanced,
+  kNewgrCritical,
   kNewgrWirelength,
   kNewgrDataWirelength,
   kNewgrRegionAware,
@@ -452,16 +453,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   NetRouteMap routes = grouter_->fastroute()->run();
 
   engine_->init(grouter_->sproute_grid_data_, grouter_->sproute_nets_);
-  NetRouteMap balanced_routes = engine_->run();
-  NetRouteMap wirelength_routes = engine_->runWirelengthFirst();
-  NetRouteMap data_wirelength_routes = engine_->runDataDrivenWirelength();
-  NetRouteMap region_aware_routes = engine_->runRegionAware();
-  NetRouteMap regular_region_routes = engine_->runRegularRegionAware();
-  NetRouteMap finegrain_routes = engine_->runFineGrainRefine();
-  NetRouteMap smallnet_routes = engine_->runSmallNetAware();
-  NetRouteMap astar_routes = engine_->runAstarClassic();
-  NetRouteMap rudy_routes = engine_->runRudyDriven();
-  NetRouteMap local_polish_routes = engine_->runLocalPolish();
+  NetRouteMap balanced_routes = engine_->runWirelengthFirst();
+  NetRouteMap critical_wirelength_routes = engine_->runCriticalWirelengthRefine();
+  NetRouteMap wirelength_routes;
+  NetRouteMap data_wirelength_routes;
+  NetRouteMap region_aware_routes;
+  NetRouteMap regular_region_routes;
+  NetRouteMap finegrain_routes;
+  NetRouteMap smallnet_routes;
+  NetRouteMap astar_routes;
+  NetRouteMap rudy_routes;
+  NetRouteMap local_polish_routes;
 
   const SprouteGridData& grid = grouter_->sproute_grid_data_;
   const int origin_x = grid.origin.x();
@@ -515,6 +517,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const int64_t global_wl_to_via_credit = std::max<int64_t>(6, tile_size / 3);
 
   int selected_from_balanced = 0;
+  int selected_from_critical = 0;
   int selected_from_wl = 0;
   int selected_from_data_wl = 0;
   int selected_from_region = 0;
@@ -526,6 +529,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int selected_from_polish = 0;
   int kept_fastroute = 0;
   int inserted_from_balanced = 0;
+  int inserted_from_critical = 0;
   int inserted_from_wl = 0;
   int inserted_from_data_wl = 0;
   int inserted_from_region = 0;
@@ -675,6 +679,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               : (policy.medium_net ? std::max<int64_t>(1, tile_size / 11)
                                    : std::max<int64_t>(1, tile_size / 8));
     consider(balanced_routes, RouteSource::kNewgrBalanced, 0, false);
+    consider(critical_wirelength_routes,
+             RouteSource::kNewgrCritical,
+             0,
+             true);
     consider(wirelength_routes,
              RouteSource::kNewgrWirelength,
              0,
@@ -745,6 +753,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
 
     maybeUpdateChampion(balanced_routes, RouteSource::kNewgrBalanced);
+    maybeUpdateChampion(critical_wirelength_routes, RouteSource::kNewgrCritical);
     maybeUpdateChampion(wirelength_routes, RouteSource::kNewgrWirelength);
     maybeUpdateChampion(data_wirelength_routes, RouteSource::kNewgrDataWirelength);
     maybeUpdateChampion(region_aware_routes, RouteSource::kNewgrRegionAware);
@@ -822,6 +831,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       case RouteSource::kNewgrBalanced:
         selected_from_balanced++;
         break;
+      case RouteSource::kNewgrCritical:
+        selected_from_critical++;
+        break;
       case RouteSource::kNewgrWirelength:
         selected_from_wl++;
         break;
@@ -856,6 +868,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (routes.find(db_net) == routes.end()) {
       routes.emplace(db_net, route);
       inserted_from_balanced++;
+    }
+  }
+  for (const auto& [db_net, route] : critical_wirelength_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_critical++;
     }
   }
   for (const auto& [db_net, route] : wirelength_routes) {
@@ -915,13 +933,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   logger_->info(utl::GRT,
                 6004,
-                "NEWGR portfolio hybrid selected balanced={} wl={} data={} "
+                "NEWGR portfolio hybrid selected balanced={} critical={} wl={} data={} "
                 "region={} regular={} fine={} small={} astar={} rudy={} polish={} "
-                "(kept FR={}; +balanced={} +wl={} +data={} +region={} +regular={} "
+                "(kept FR={}; +balanced={} +critical={} +wl={} +data={} +region={} +regular={} "
                 "+fine={} +small={} +astar={} +rudy={} +polish={}). "
                 "Global WL gain={} "
                 "extra-vias={} (base via budget={} + gain/{}) out of {} total.",
                 selected_from_balanced,
+                selected_from_critical,
                 selected_from_wl,
                 selected_from_data_wl,
                 selected_from_region,
@@ -933,6 +952,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 selected_from_polish,
                 kept_fastroute,
                 inserted_from_balanced,
+                inserted_from_critical,
                 inserted_from_wl,
                 inserted_from_data_wl,
                 inserted_from_region,

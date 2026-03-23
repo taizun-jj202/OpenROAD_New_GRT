@@ -45,6 +45,7 @@ class NewgrEngine
   NetRouteMap run();
   NetRouteMap runWirelengthFirst();
   NetRouteMap runDataDrivenWirelength();
+  NetRouteMap runCriticalWirelengthRefine();
   NetRouteMap runRegionAware();
   NetRouteMap runRegularRegionAware();
   NetRouteMap runFineGrainRefine();
@@ -59,6 +60,8 @@ class NewgrEngine
 
  private:
   void buildInput();
+  void buildInput(const std::vector<int>& net_indices);
+  std::vector<int> selectCriticalNetIndices() const;
   void prepareLefDefMetadata();
   parser::grGenerator buildGenerator() const;
   int coordFromIndex(int index, bool is_y = false) const;
