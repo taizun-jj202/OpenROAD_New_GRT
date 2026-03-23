@@ -2816,25 +2816,33 @@ bool shouldPreferWirelengthOracleHybrid(int incumbent_overflow,
                                - static_cast<int64_t>(incumbent_score.vias);
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
+  const bool strong_risk_drop
+      = via_increase <= 0 && low_layer_delta <= -220000;
   const uint64_t min_wl_gain
-      = std::max<uint64_t>(82000, incumbent_score.wirelength / 17000);
-  if (wl_gain < min_wl_gain) {
+      = std::max<uint64_t>(180000, incumbent_score.wirelength / 9000);
+  if (wl_gain < min_wl_gain
+      && !(strong_risk_drop && wl_gain >= min_wl_gain / 2)) {
     return false;
   }
   const int64_t via_increase_budget
-      = std::max<int64_t>(620, static_cast<int64_t>(incumbent_score.vias / 210));
+      = std::max<int64_t>(280, static_cast<int64_t>(incumbent_score.vias / 380));
   if (via_increase > via_increase_budget
       && wl_gain
-             < static_cast<uint64_t>(via_increase * 220 + static_cast<int64_t>(140000))) {
+             < static_cast<uint64_t>(via_increase * 640 + static_cast<int64_t>(220000))) {
+    return false;
+  }
+  if (via_increase > 0
+      && wl_gain
+             < static_cast<uint64_t>(via_increase * 520 + static_cast<int64_t>(180000))) {
     return false;
   }
   const int64_t low_layer_budget = std::max<int64_t>(
-      700000, static_cast<int64_t>(incumbent_low_layer_wl / 560));
+      520000, static_cast<int64_t>(incumbent_low_layer_wl / 780));
   if (low_layer_delta > low_layer_budget
       || (low_layer_delta > 0
           && wl_gain
-                 < static_cast<uint64_t>(low_layer_delta / 3
-                                         + static_cast<int64_t>(180000)))) {
+                 < static_cast<uint64_t>(low_layer_delta / 2
+                                         + static_cast<int64_t>(220000)))) {
     return false;
   }
   return true;
@@ -2865,23 +2873,39 @@ bool shouldPreferWirelengthClosureHybrid(int incumbent_overflow,
                                - static_cast<int64_t>(incumbent_score.vias);
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
+  const bool strong_risk_drop
+      = via_increase <= 0 && low_layer_delta <= -180000;
   const uint64_t min_wl_gain
-      = std::max<uint64_t>(26000, incumbent_score.wirelength / 36000);
-  if (wl_gain < min_wl_gain) {
+      = std::max<uint64_t>(150000, incumbent_score.wirelength / 12000);
+  if (wl_gain < min_wl_gain
+      && !(strong_risk_drop && wl_gain >= min_wl_gain / 2)) {
     return false;
   }
   const int64_t via_increase_budget
-      = std::max<int64_t>(220, static_cast<int64_t>(incumbent_score.vias / 430));
+      = std::max<int64_t>(120, static_cast<int64_t>(incumbent_score.vias / 820));
   if (via_increase > via_increase_budget
       && wl_gain
-             < static_cast<uint64_t>(via_increase * 360 + static_cast<int64_t>(90000))) {
+             < static_cast<uint64_t>(via_increase * 900 + static_cast<int64_t>(220000))) {
+    return false;
+  }
+  if (via_increase > 0
+      && wl_gain
+             < static_cast<uint64_t>(via_increase * 700 + static_cast<int64_t>(180000))) {
     return false;
   }
   const int64_t low_layer_budget = std::max<int64_t>(
-      520000, static_cast<int64_t>(incumbent_low_layer_wl / 90));
+      420000, static_cast<int64_t>(incumbent_low_layer_wl / 300));
   if (low_layer_delta > low_layer_budget
       && wl_gain
-             < static_cast<uint64_t>(low_layer_delta / 2 + static_cast<int64_t>(120000))) {
+             < static_cast<uint64_t>(low_layer_delta * 2 / 3
+                                     + static_cast<int64_t>(180000))) {
+    return false;
+  }
+  if (low_layer_delta > 0 && via_increase > 0
+      && wl_gain
+             < static_cast<uint64_t>(low_layer_delta
+                                     + via_increase * 620
+                                     + static_cast<int64_t>(180000))) {
     return false;
   }
   return true;
