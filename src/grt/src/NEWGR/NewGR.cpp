@@ -3660,6 +3660,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const int wl_safe_source_count = std::min<int>(18, ranked.size());
     const int via_floor_wl_source_count = std::min<int>(20, ranked.size());
     const int via_band_wl_source_count = std::min<int>(20, ranked.size());
+    const int anchor_wl_deep_source_count = std::min<int>(28, ranked.size());
     const int layer_compact_source_count = std::min<int>(20, ranked.size());
     const int balanced_source_count = std::min<int>(8, ranked.size());
     const int softcap_source_count = std::min<int>(16, ranked.size());
@@ -3716,6 +3717,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                      compact_source_count,
                                      2,
                                      7321);
+      append_anchor_locked_wl_hybrid("hybrid-netmix-anchor-wl-deep",
+                                     "hybrid-netmix-wl",
+                                     std::min<int>(compact_source_count + 4,
+                                                   static_cast<int>(ranked.size())),
+                                     4,
+                                     7322);
       append_min_wl_hybrid("hybrid-netmix-min-wl-wide",
                            compact_source_count,
                            min_wl_via_weight,
@@ -3760,6 +3767,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                      via_band_wl_source_count,
                                      3,
                                      7321);
+      append_anchor_locked_wl_hybrid("hybrid-netmix-anchor-wl-deep",
+                                     "hybrid-netmix-wl",
+                                     anchor_wl_deep_source_count,
+                                     6,
+                                     7322);
       append_min_wl_hybrid("hybrid-netmix-min-wl",
                            min_wl_source_count,
                            min_wl_via_weight,
@@ -3885,13 +3897,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = find_scenario("hybrid-netmix-via-band-wl");
     const ScenarioResult* anchor_wl_hybrid
         = find_scenario("hybrid-netmix-anchor-wl");
+    const ScenarioResult* anchor_wl_deep_hybrid
+        = find_scenario("hybrid-netmix-anchor-wl-deep");
     const ScenarioResult* length_adaptive_hybrid
         = find_scenario("hybrid-netmix-length-adaptive");
 
     const ScenarioResult* patch_alt_a
-        = dr_stable_hybrid != nullptr ? dr_stable_hybrid : anchor_wl_hybrid;
+        = dr_stable_hybrid != nullptr ? dr_stable_hybrid : anchor_wl_deep_hybrid;
     if (patch_alt_a == nullptr) {
-      patch_alt_a = via_band_hybrid;
+      patch_alt_a = anchor_wl_hybrid != nullptr ? anchor_wl_hybrid : via_band_hybrid;
     }
     const ScenarioResult* patch_alt_b = layer_compact_hybrid != nullptr
                                             ? layer_compact_hybrid
@@ -4059,6 +4073,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = find_scenario_by_name("hybrid-netmix-wl-feedback");
     const ScenarioResult* length_adaptive_ptr
         = find_scenario_by_name("hybrid-netmix-length-adaptive");
+    const ScenarioResult* anchor_wl_deep_ptr
+        = find_scenario_by_name("hybrid-netmix-anchor-wl-deep");
     const ScenarioResult* min_wl_wide_ptr
         = find_scenario_by_name("hybrid-netmix-min-wl-wide");
     const ScenarioResult* absolute_wl_ptr
@@ -4208,6 +4224,59 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
 
+    if (wl_anchor != nullptr && anchor_wl_deep_ptr != nullptr) {
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      const long wl_guard = std::max<long>(
+          90L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00035)));
+      const long via_bonus_floor = std::max<long>(96L, tile_size * 4L);
+      const long via_bonus_cap = std::max<long>(
+          1200L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.012)));
+      const long detour_guard = std::max<long>(tile_size * 16L, 8500L);
+      const long high_layer_guard = std::max<long>(
+          tile_size * 26L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.060)));
+      const bool within_wl_guard
+          = anchor_wl_deep_ptr->metrics.wirelength_dbu
+            <= wl_anchor->metrics.wirelength_dbu + wl_guard;
+      const long via_delta
+          = static_cast<long>(anchor_wl_deep_ptr->metrics.via_count)
+            - static_cast<long>(wl_anchor->metrics.via_count);
+      const bool within_via_window
+          = via_delta >= via_bonus_floor && via_delta <= via_bonus_cap;
+      const bool structural_guard
+          = anchor_wl_deep_ptr->metrics.detour_dbu
+                 <= wl_anchor->metrics.detour_dbu + detour_guard
+            && anchor_wl_deep_ptr->metrics.high_layer_dbu
+                   <= wl_anchor->metrics.high_layer_dbu + high_layer_guard;
+      const double anchor_proxy = estimateDetailedRouteProxyCost(wl_anchor->metrics);
+      const double deep_anchor_proxy
+          = estimateDetailedRouteProxyCost(anchor_wl_deep_ptr->metrics);
+      const double via_elastic_credit
+          = std::min(2500.0, std::max(0L, via_delta) * 0.90);
+      const double elastic_proxy = deep_anchor_proxy - via_elastic_credit;
+      const bool proxy_better = elastic_proxy + 1e-3 < anchor_proxy * 0.997;
+
+      if (within_wl_guard && within_via_window && structural_guard && proxy_better) {
+        preferred_wl_ptr = anchor_wl_deep_ptr;
+        logger_->info(
+            GNR,
+            7323,
+            "NEWGR pre-selecting '{}' over '{}' in via-elastic mode "
+            "(wl delta {}, via delta {}, proxy ratio {:.3f}, elastic proxy ratio {:.3f}).",
+            preferred_wl_ptr->name,
+            wl_anchor->name,
+            preferred_wl_ptr->metrics.wirelength_dbu - wl_anchor->metrics.wirelength_dbu,
+            preferred_wl_ptr->metrics.via_count - wl_anchor->metrics.via_count,
+            anchor_proxy > 1e-9 ? deep_anchor_proxy / anchor_proxy : 1.0,
+            anchor_proxy > 1e-9 ? elastic_proxy / anchor_proxy : 1.0);
+      }
+    }
+
     // Wirelength champion pool (mixing aggressive FastRoute-like shortest-path
     // hybrids with low-via variants): rank by WL, but use a CUGR-style
     // detailed-routability proxy tie-break in a narrow WL band.
@@ -4234,8 +4303,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
 
     std::vector<const ScenarioResult*> wl_champion_pool;
-    wl_champion_pool.reserve(12);
-    for (const char* name : std::array<const char*, 12>{
+    wl_champion_pool.reserve(13);
+    for (const char* name : std::array<const char*, 13>{
+             "hybrid-netmix-anchor-wl-deep",
              "hybrid-netmix-anchor-wl",
              "hybrid-netmix-length-adaptive",
              "hybrid-netmix-wl-feedback",
