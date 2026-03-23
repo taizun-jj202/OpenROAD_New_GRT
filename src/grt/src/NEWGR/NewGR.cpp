@@ -4012,11 +4012,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const long tie_via_wl_band
       = std::max<long>(28, static_cast<long>(std::ceil(shortest_wl * 0.00011)));
   const long tie_proxy_wl_band
-      = std::max<long>(220, static_cast<long>(std::ceil(shortest_wl * 0.0052)));
+      = std::max<long>(120, static_cast<long>(std::ceil(shortest_wl * 0.00042)));
   auto wirelength_with_dr_proxy_tie_better = [&](const ScenarioResult& lhs,
                                                   const ScenarioResult& rhs) {
     const long wl_gap = std::llabs(lhs.metrics.wirelength_dbu
                                    - rhs.metrics.wirelength_dbu);
+    if (wl_gap == 0 && lhs.metrics.via_count != rhs.metrics.via_count) {
+      return lhs.metrics.via_count < rhs.metrics.via_count;
+    }
     if (wl_gap <= tie_proxy_wl_band) {
       const double lhs_proxy = estimateDetailedRouteProxyCost(lhs.metrics);
       const double rhs_proxy = estimateDetailedRouteProxyCost(rhs.metrics);
@@ -4071,11 +4074,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                     : 0L;
     const long deep_via_drop_wl_gain = wl_anchor != nullptr
                                            ? std::max<long>(
-                                                 180L,
+                                                 60000L,
                                                  static_cast<long>(std::ceil(
                                                      static_cast<double>(
                                                          wl_anchor->metrics.wirelength_dbu)
-                                                     * 0.00070)))
+                                                     * 0.00020)))
                                            : 0L;
     const long deep_via_drop_detour_bonus = std::max<long>(
         9000L, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1) * 18L));
@@ -4111,10 +4114,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const bool strict_pareto_upgrade
           = candidate->metrics.wirelength_dbu <= wl_anchor->metrics.wirelength_dbu
             && candidate->metrics.via_count <= wl_anchor->metrics.via_count
-            && via_drop <= (via_drop_guard * 3L) / 2L
+            && candidate->metrics.overflow_edges <= wl_anchor->metrics.overflow_edges
             && detour_delta <= deep_via_drop_detour_bonus
             && high_layer_delta <= deep_via_drop_high_layer_bonus
-            && candidate_proxy + 1e-3 < anchor_proxy * 1.020;
+            && candidate_proxy + 1e-3 < anchor_proxy * 1.030;
       if (strict_pareto_upgrade) {
         return true;
       }
@@ -4425,6 +4428,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             && (forced_wl_ptr->metrics.via_count <= wl_anchor->metrics.via_count)
             && structural_guard;
       const bool via_drop_guard_ok = allow_aggressive_via_drop(forced_wl_ptr);
+      const bool strict_pareto_accept
+          = strict_dominates
+            && forced_wl_ptr->metrics.overflow_edges
+                   <= wl_anchor->metrics.overflow_edges;
+      const bool bypass_via_drop_guard = strict_pareto_accept || proxy_dominant_upgrade
+                                         || via_dominant_upgrade || equal_wl_via_win;
 
       if (!((wl_gain >= min_wl_gain && proxy_guard && via_guard_ok
            && structural_guard)
@@ -4432,7 +4441,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             || via_dominant_upgrade
             || equal_wl_via_win
             || strict_dominates)
-          || !via_drop_guard_ok) {
+          || (!bypass_via_drop_guard && !via_drop_guard_ok)) {
         forced_wl_ptr = wl_anchor;
       } else {
         logger_->info(
