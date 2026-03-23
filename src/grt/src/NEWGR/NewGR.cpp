@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -865,16 +866,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           return lhs->metrics.via_count < rhs->metrics.via_count;
         });
 
-    const int source_count = std::min<int>(6, ranked.size());
-    const long via_mix_weight
-        = static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) * 2L;
     const std::size_t expected_net_count = ranked.front()->routes.size();
 
     std::vector<odb::dbNet*> hybrid_nets;
     hybrid_nets.reserve(expected_net_count);
     std::set<int> hybrid_net_ids;
-    for (int idx = 0; idx < source_count; ++idx) {
-      for (const auto& [route_net, route] : ranked[idx]->routes) {
+    for (const ScenarioResult* source : ranked) {
+      if (source == nullptr) {
+        continue;
+      }
+      for (const auto& [route_net, route] : source->routes) {
         static_cast<void>(route);
         if (route_net == nullptr) {
           continue;
@@ -885,76 +886,99 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
 
-    ScenarioResult hybrid_result;
-    hybrid_result.name = "hybrid-netmix";
-
-    for (odb::dbNet* db_net : hybrid_nets) {
-      const int target_id = db_net->getId();
-      const GRoute* best_route = nullptr;
-      long best_cost = std::numeric_limits<long>::max();
-      long best_wl = std::numeric_limits<long>::max();
-      int best_via = std::numeric_limits<int>::max();
-
-      for (int idx = 0; idx < source_count; ++idx) {
-        const ScenarioResult* source = ranked[idx];
-        const GRoute* source_route = nullptr;
-        for (const auto& [route_net, route] : source->routes) {
-          if (route_net != nullptr && route_net->getId() == target_id) {
-            source_route = &route;
-            break;
-          }
+    const auto get_route_metrics = [](const GRoute& route) {
+      long wl = 0;
+      int vias = 0;
+      for (const GSegment& segment : route) {
+        if (segment.isVia()) {
+          vias++;
+        } else {
+          wl += std::abs(segment.final_x - segment.init_x)
+                + std::abs(segment.final_y - segment.init_y);
         }
-        if (source_route == nullptr) {
+      }
+      return std::pair<long, int>{wl, vias};
+    };
+
+    auto append_hybrid = [&](const std::string& hybrid_name,
+                             int source_count,
+                             long via_weight,
+                             int logger_code) {
+      source_count = std::max(1, std::min(source_count, static_cast<int>(ranked.size())));
+      ScenarioResult hybrid_result;
+      hybrid_result.name = hybrid_name;
+
+      for (odb::dbNet* db_net : hybrid_nets) {
+        if (db_net == nullptr) {
           continue;
         }
+        const GRoute* best_route = nullptr;
+        long best_cost = std::numeric_limits<long>::max();
+        long best_wl = std::numeric_limits<long>::max();
+        int best_via = std::numeric_limits<int>::max();
 
-        long wl = 0;
-        int vias = 0;
-        for (const GSegment& segment : *source_route) {
-          if (segment.isVia()) {
-            vias++;
-          } else {
-            wl += std::abs(segment.final_x - segment.init_x)
-                  + std::abs(segment.final_y - segment.init_y);
+        for (int idx = 0; idx < source_count; ++idx) {
+          const ScenarioResult* source = ranked[idx];
+          if (source == nullptr) {
+            continue;
+          }
+          const auto route_it = source->routes.find(db_net);
+          if (route_it == source->routes.end()) {
+            continue;
+          }
+          const GRoute& source_route = route_it->second;
+          const auto [wl, vias] = get_route_metrics(source_route);
+          const long cost = wl + via_weight * static_cast<long>(vias);
+          if (cost < best_cost || (cost == best_cost && wl < best_wl)
+              || (cost == best_cost && wl == best_wl && vias < best_via)) {
+            best_cost = cost;
+            best_wl = wl;
+            best_via = vias;
+            best_route = &source_route;
           }
         }
-        const long cost = wl + via_mix_weight * static_cast<long>(vias);
-        if (cost < best_cost || (cost == best_cost && wl < best_wl)
-            || (cost == best_cost && wl == best_wl && vias < best_via)) {
-          best_cost = cost;
-          best_wl = wl;
-          best_via = vias;
-          best_route = source_route;
+
+        if (best_route != nullptr) {
+          hybrid_result.routes.emplace(db_net, *best_route);
         }
       }
 
-      if (best_route != nullptr) {
-        hybrid_result.routes.emplace(db_net, *best_route);
+      const std::size_t coverage_threshold
+          = expected_net_count > 0 ? (expected_net_count * 95) / 100 : 0;
+      if (hybrid_result.routes.size() >= coverage_threshold) {
+        hybrid_result.metrics = compute_metrics(hybrid_result.routes);
+        logger_->info(GNR,
+                      logger_code,
+                      "NEWGR {} from top {} scenarios: wirelength {:.0f} um, "
+                      "vias {}, routed nets {}/{}",
+                      hybrid_name,
+                      source_count,
+                      hybrid_result.metrics.wirelength_um,
+                      hybrid_result.metrics.via_count,
+                      hybrid_result.routes.size(),
+                      expected_net_count);
+        scenario_results.push_back(std::move(hybrid_result));
+      } else {
+        logger_->info(
+            GNR,
+            6011,
+            "NEWGR skipped {} due low net coverage ({}/{}).",
+            hybrid_name,
+            hybrid_result.routes.size(),
+            expected_net_count);
       }
-    }
+    };
 
-    const std::size_t coverage_threshold
-        = expected_net_count > 0 ? (expected_net_count * 95) / 100 : 0;
-    if (hybrid_result.routes.size() >= coverage_threshold) {
-      hybrid_result.metrics = compute_metrics(hybrid_result.routes);
-      logger_->info(GNR,
-                    6010,
-                    "NEWGR hybrid-netmix from top {} scenarios: wirelength "
-                    "{:.0f} um, vias {}, routed nets {}/{}",
-                    source_count,
-                    hybrid_result.metrics.wirelength_um,
-                    hybrid_result.metrics.via_count,
-                    hybrid_result.routes.size(),
-                    expected_net_count);
-      scenario_results.push_back(std::move(hybrid_result));
-    } else {
-      logger_->info(
-          GNR,
-          6011,
-          "NEWGR skipped hybrid-netmix due low net coverage ({}/{}).",
-          hybrid_result.routes.size(),
-          expected_net_count);
-    }
+    // Drastic recombination:
+    // 1) a wirelength-first hybrid (FastRoute shortest-path intent),
+    // 2) a balanced hybrid that softly penalizes vias (SPRoute/CUGR flavor).
+    const int wl_source_count = std::min<int>(14, ranked.size());
+    const int balanced_source_count = std::min<int>(8, ranked.size());
+    const long balanced_via_weight
+        = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 3L);
+    append_hybrid("hybrid-netmix-wl", wl_source_count, 0, 6010);
+    append_hybrid(
+        "hybrid-netmix-balanced", balanced_source_count, balanced_via_weight, 6012);
   }
 
   auto robust_better = [](const ScenarioResult& lhs,
@@ -1019,12 +1043,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return lhs.metrics.score < rhs.metrics.score;
   };
 
+  const long tie_via_wl_band
+      = std::max<long>(24, static_cast<long>(std::ceil(shortest_wl * 0.00008)));
+  auto wirelength_with_via_tie_better = [&](const ScenarioResult& lhs,
+                                            const ScenarioResult& rhs) {
+    const long wl_gap = std::llabs(lhs.metrics.wirelength_dbu
+                                   - rhs.metrics.wirelength_dbu);
+    if (wl_gap <= tie_via_wl_band && lhs.metrics.via_count != rhs.metrics.via_count) {
+      return lhs.metrics.via_count < rhs.metrics.via_count;
+    }
+    return wirelength_first_better(lhs, rhs);
+  };
+
   auto best_ptr = *std::min_element(
       shortlist.begin(),
       shortlist.end(),
       [&](const ScenarioResult* lhs, const ScenarioResult* rhs) {
         if (overflow_free_sweep) {
-          return wirelength_first_better(*lhs, *rhs);
+          return wirelength_with_via_tie_better(*lhs, *rhs);
         }
         return robust_better(*lhs, *rhs);
       });
