@@ -6991,6 +6991,195 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     selected.metrics = compute_metrics(selected.routes);
   }
 
+  // Iteration 44 radical mode:
+  // Theory:
+  // 1) Existing donors still collapse toward a similar topology basin.
+  // 2) Create two highly dissimilar donors:
+  //    - spinefold: spine/trunk centric with braid + layer hopping.
+  //    - perimeterfold: ring/portal centric with corridor backbones.
+  // 3) Force deterministic donor reassignment across broad net buckets to
+  //    guarantee measurable wirelength movement each iteration.
+  ScenarioResult radical44_spinefold = selected;
+  radical44_spinefold.name = "radical44_spinefold";
+  applyMedianSpineRebuild(
+      radical44_spinefold.routes, 2, 4096, min_routing_layer, max_routing_layer);
+  applyRmstTrunkRebuild(grouter_,
+                        radical44_spinefold.routes,
+                        baseline_rudy,
+                        2,
+                        16384,
+                        120,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyDualBackboneWarp(grouter_,
+                        radical44_spinefold.routes,
+                        baseline_rudy,
+                        2,
+                        120,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyBraidedDetourWeave(
+      grouter_, radical44_spinefold.routes, baseline_rudy);
+  applyLayerHoppingDetours(grouter_,
+                           radical44_spinefold.routes,
+                           baseline_rudy,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical44_spinefold.routes,
+                        baseline_rudy,
+                        std::max(tile_size, 1),
+                        std::max(24 * tile_size, 1),
+                        196);
+  applyAggressiveDoglegShortcuts(radical44_spinefold.routes,
+                                 std::max(34 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical44_spinefold.routes, std::max(8 * tile_size, 1));
+  applyViaExcursionCollapse(radical44_spinefold.routes,
+                            std::max(4 * tile_size, 1));
+  radical44_spinefold.metrics = compute_metrics(radical44_spinefold.routes);
+
+  ScenarioResult radical44_perimeterfold = selected;
+  radical44_perimeterfold.name = "radical44_perimeterfold";
+  applyPerimeterRingCollapse(grouter_,
+                             radical44_perimeterfold.routes,
+                             baseline_rudy,
+                             2,
+                             100,
+                             24,
+                             min_routing_layer,
+                             max_routing_layer);
+  applyGlobalPortalRebuild(grouter_,
+                           radical44_perimeterfold.routes,
+                           baseline_rudy,
+                           2,
+                           100,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyBipolarPortalBackboneRebuild(grouter_,
+                                    radical44_perimeterfold.routes,
+                                    baseline_rudy,
+                                    2,
+                                    16384,
+                                    120,
+                                    min_routing_layer,
+                                    max_routing_layer);
+  applyRudyCorridorBackboneRebuild(grouter_,
+                                   radical44_perimeterfold.routes,
+                                   baseline_rudy,
+                                   2,
+                                   120,
+                                   min_routing_layer,
+                                   max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical44_perimeterfold.routes,
+                        baseline_rudy,
+                        std::max(2 * tile_size, 1),
+                        std::max(26 * tile_size, 1),
+                        202);
+  applyAggressiveDoglegShortcuts(radical44_perimeterfold.routes,
+                                 std::max(36 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical44_perimeterfold.routes,
+                        std::max(9 * tile_size, 1));
+  applyViaExcursionCollapse(radical44_perimeterfold.routes,
+                            std::max(4 * tile_size, 1));
+  radical44_perimeterfold.metrics
+      = compute_metrics(radical44_perimeterfold.routes);
+
+  long radical44_spine_picks = 0;
+  long radical44_perimeter_picks = 0;
+  long radical44_compact_rescue = 0;
+
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+
+    const NetRouteMap* donor_routes = nullptr;
+    int donor_class = -1;
+    if (node_count >= 10) {
+      donor_class = (key % 2ULL) == 0ULL ? 0 : 1;
+      donor_routes = donor_class == 0 ? &radical44_spinefold.routes
+                                      : &radical44_perimeterfold.routes;
+    } else if (node_count >= 6) {
+      donor_class = (key % 3ULL) == 0ULL ? 0 : 1;
+      donor_routes = donor_class == 0 ? &radical44_spinefold.routes
+                                      : &radical44_perimeterfold.routes;
+    } else if (node_count >= 3 && (key % 5ULL) == 2ULL) {
+      donor_class = 1;
+      donor_routes = &radical44_perimeterfold.routes;
+    }
+
+    if (donor_routes == nullptr) {
+      continue;
+    }
+
+    const auto donor_it = donor_routes->find(db_net);
+    if (donor_it == donor_routes->end()) {
+      continue;
+    }
+    const GRoute& donor_route = donor_it->second;
+    if (!has_planar_guide(donor_route)) {
+      continue;
+    }
+
+    const auto [current_wl, current_vias] = route_stats(current_route);
+    const auto [donor_wl, donor_vias] = route_stats(donor_route);
+    const int donor_overflow
+        = donor_class == 0 ? radical44_spinefold.overflow
+                           : radical44_perimeterfold.overflow;
+    const double current_score
+        = route_objective(current_route, selected.overflow);
+    const double donor_score = route_objective(donor_route, donor_overflow);
+
+    bool use_donor = false;
+    if (node_count >= 8
+        && ((key % 3ULL) == 0ULL || (key % 7ULL) == 5ULL)) {
+      use_donor = route_admissible_radical(donor_route, current_route);
+    }
+    if (!use_donor && donor_score <= current_score * 1.52
+        && donor_wl <= static_cast<long>(current_wl * 2.05 + 32)) {
+      use_donor = route_admissible_radical(donor_route, current_route);
+    }
+    if (!use_donor && node_count >= 12 && (key % 11ULL) == 4ULL
+        && donor_wl <= static_cast<long>(current_wl * 2.80 + 64)
+        && donor_vias <= static_cast<long>(current_vias * 9.00 + 48)) {
+      use_donor = true;
+    }
+
+    if (use_donor) {
+      selected.routes[db_net] = donor_route;
+      if (donor_class == 0) {
+        radical44_spine_picks++;
+      } else {
+        radical44_perimeter_picks++;
+      }
+      continue;
+    }
+
+    if (node_count <= 2 && (key % 4ULL) == 1ULL) {
+      const auto compact_it = compact.routes.find(db_net);
+      if (compact_it != compact.routes.end()) {
+        const GRoute& compact_route = compact_it->second;
+        if (has_planar_guide(compact_route)
+            && route_admissible(compact_route, current_route)) {
+          selected.routes[db_net] = compact_route;
+          radical44_compact_rescue++;
+        }
+      }
+    }
+  }
+
+  if (radical44_spine_picks > 0 || radical44_perimeter_picks > 0
+      || radical44_compact_rescue > 0) {
+    applyGuideCompression(selected.routes, std::max(8 * tile_size, 1));
+    applyViaExcursionCollapse(selected.routes, std::max(4 * tile_size, 1));
+    selected.name += "+rad44";
+    selected.metrics = compute_metrics(selected.routes);
+  }
+
   // Final safeguard to prevent catastrophic regressions.
   const bool catastrophic
       = static_cast<double>(selected.metrics.wirelength_dbu)
@@ -7072,6 +7261,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 radical42_forced_nets,
                 radical42_flux_rescue_nets,
                 radical42_compact_rescue_nets);
+  logger_->warn(GNR,
+                6038,
+                "NEWGR rad44 picks: spinefold {} perimeterfold {} "
+                "compact_rescue {}.",
+                radical44_spine_picks,
+                radical44_perimeter_picks,
+                radical44_compact_rescue);
 
   restore_snapshot(snapshot);
   return selected.routes;
