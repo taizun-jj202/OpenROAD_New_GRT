@@ -1773,8 +1773,14 @@ NetRouteMap FastRouteCore::run()
   via_cost_ = 1;
 
   if (past_cong == 0) {
+    // SPRoute-style staged refinement:
+    // first pass aggressively prioritizes shortest 3D paths, then a second
+    // pass restores local quality on short edges.
+    via_cost_ = 0;
     mazeRouteMSMDOrder3D(enlarge_, 0, long_edge_len);
-    mazeRouteMSMDOrder3D(enlarge_, 0, short_edge_len);
+    via_cost_ = 1;
+    const int local_refine_enlarge = std::max(4, enlarge_ - 2);
+    mazeRouteMSMDOrder3D(local_refine_enlarge, 0, short_edge_len);
   }
 
   // Disable estimate parasitics for grt incremental steps with resistance-aware

@@ -650,11 +650,36 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                              5,
                                              8.0f));
   } else if (!normalized_rudy.empty()) {
+    // Even in low-overflow designs, run light RUDY-guided variants to expose
+    // alternative low-detour topologies for detailed route.
+    scenario_defs.push_back(make_soft_config("rudy-light-direct",
+                                             0.70f,
+                                             1.00f,
+                                             3.2f,
+                                             0.30f,
+                                             1,
+                                             0.88f,
+                                             0.15f,
+                                             0.10f,
+                                             0.0f,
+                                             snapshot.seed,
+                                             2.0f));
+    scenario_defs.push_back(make_soft_config("rudy-light-balanced",
+                                             0.62f,
+                                             0.98f,
+                                             3.8f,
+                                             0.34f,
+                                             1,
+                                             0.82f,
+                                             0.20f,
+                                             0.09f,
+                                             0.0f,
+                                             snapshot.seed,
+                                             3.0f));
     logger_->info(GNR,
                   6008,
-                  "NEWGR skipping soft-capacity scenarios: baseline "
-                  "congestion is already low (overflow {}, hot edges {}, "
-                  "max ratio {:.2f}).",
+                  "NEWGR enabling light soft-capacity scenarios in low "
+                  "congestion mode (overflow {}, hot edges {}, max ratio {:.2f}).",
                   baseline.metrics.overflow_edges,
                   baseline.metrics.near_capacity_edges,
                   baseline.metrics.max_usage_ratio);
@@ -675,6 +700,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return def;
   };
 
+  auto make_critical_sweep_def = [&](int seed, float critical_pct) {
+    ScenarioDefinition def;
+    def.name = "critical-s" + std::to_string(seed)
+               + "-c" + std::to_string(static_cast<int>(critical_pct * 10.0f));
+    def.pre_init = [this, seed, critical_pct]() {
+      grouter_->setCapacitiesPerturbationPercentage(0.0f);
+      grouter_->setPerturbationAmount(0);
+      grouter_->setSeed(seed);
+      grouter_->fastroute_->setCriticalNetsPercentage(critical_pct);
+    };
+    return def;
+  };
+
   // Multi-seed sweep (SPRoute-inspired exploration) with a narrow perturbation
   // range to search for lower-wirelength minima while preserving routability.
   scenario_defs.push_back(make_random_def(11, 6.0f, 6.0f));
@@ -685,6 +723,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   scenario_defs.push_back(make_random_def(31, 2.5f, 3.0f));
   scenario_defs.push_back(make_random_def(37, 1.5f, 2.0f));
   scenario_defs.push_back(make_random_def(41, 4.5f, 5.0f));
+  scenario_defs.push_back(make_random_def(43, 0.0f, 2.5f));
+  scenario_defs.push_back(make_random_def(47, 0.5f, 2.0f));
+  scenario_defs.push_back(make_random_def(53, 1.0f, 2.5f));
+  scenario_defs.push_back(make_random_def(59, 2.0f, 3.0f));
+  scenario_defs.push_back(make_random_def(61, 3.0f, 3.5f));
+  scenario_defs.push_back(make_random_def(67, 0.0f, 1.0f));
+  scenario_defs.push_back(make_critical_sweep_def(5, 0.0f));
+  scenario_defs.push_back(make_critical_sweep_def(13, 2.0f));
+  scenario_defs.push_back(make_critical_sweep_def(19, 4.0f));
+  scenario_defs.push_back(make_critical_sweep_def(23, 8.0f));
+  scenario_defs.push_back(make_critical_sweep_def(29, 12.0f));
 
   for (const ScenarioDefinition& def : scenario_defs) {
     ScenarioResult result = run_scenario(def, snapshot);
@@ -696,11 +745,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (lhs.metrics.overflow_edges != rhs.metrics.overflow_edges) {
       return lhs.metrics.overflow_edges < rhs.metrics.overflow_edges;
     }
-    if (lhs.metrics.near_capacity_edges != rhs.metrics.near_capacity_edges) {
-      return lhs.metrics.near_capacity_edges < rhs.metrics.near_capacity_edges;
+    if (lhs.metrics.overflow_ratio_sum != rhs.metrics.overflow_ratio_sum) {
+      return lhs.metrics.overflow_ratio_sum < rhs.metrics.overflow_ratio_sum;
     }
-    if (lhs.metrics.max_usage_ratio != rhs.metrics.max_usage_ratio) {
-      return lhs.metrics.max_usage_ratio < rhs.metrics.max_usage_ratio;
+    if (lhs.metrics.score != rhs.metrics.score) {
+      return lhs.metrics.score < rhs.metrics.score;
     }
     if (lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
       return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
@@ -708,7 +757,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (lhs.metrics.via_count != rhs.metrics.via_count) {
       return lhs.metrics.via_count < rhs.metrics.via_count;
     }
-    return lhs.metrics.score < rhs.metrics.score;
+    if (lhs.metrics.near_capacity_edges != rhs.metrics.near_capacity_edges) {
+      return lhs.metrics.near_capacity_edges < rhs.metrics.near_capacity_edges;
+    }
+    return lhs.metrics.max_usage_ratio < rhs.metrics.max_usage_ratio;
   };
 
   const auto shortest_wl_iter = std::min_element(
@@ -718,8 +770,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
       });
   const long shortest_wl = shortest_wl_iter->metrics.wirelength_dbu;
+  const bool overflow_free_sweep = std::all_of(
+      scenario_results.begin(), scenario_results.end(), [](const auto& result) {
+        return result.metrics.overflow_edges == 0;
+      });
+  const double wl_guard_ratio = overflow_free_sweep ? 0.025 : 0.0125;
   const long wl_guard_band
-      = std::max<long>(200, static_cast<long>(std::ceil(0.0125 * shortest_wl)));
+      = std::max<long>(200, static_cast<long>(std::ceil(wl_guard_ratio * shortest_wl)));
 
   std::vector<const ScenarioResult*> shortlist;
   shortlist.reserve(scenario_results.size());
