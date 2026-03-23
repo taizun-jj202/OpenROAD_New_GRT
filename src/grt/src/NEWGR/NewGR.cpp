@@ -1655,6 +1655,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   bool sculpted_available = false;
   long nets_taken_from_sculpted = 0;
   long nets_taken_from_shortcuts = 0;
+  long nets_taken_from_anisotropic = 0;
   try {
     for (Net* net : nets) {
       if (net != nullptr && net->getDbNet() != nullptr) {
@@ -1833,6 +1834,65 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   selected.name += "+ortholine";
   selected.metrics = compute_metrics(selected.routes);
 
+  ScenarioResult anisotropic = selected;
+  anisotropic.name = "anisotropic_escape";
+  applyLayerHoppingDetours(grouter_,
+                           anisotropic.routes,
+                           baseline_rudy,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyBraidedDetourWeave(grouter_, anisotropic.routes, baseline_rudy);
+  applyWavefrontDetours(grouter_,
+                        anisotropic.routes,
+                        baseline_rudy,
+                        std::max(12 * tile_size, 1),
+                        std::max(4 * tile_size, 1),
+                        68);
+  applyAggressiveDoglegShortcuts(anisotropic.routes,
+                                 std::max(28 * tile_size, 1),
+                                 std::max(2 * tile_size, 1));
+  applyViaExcursionCollapse(anisotropic.routes, std::max(16 * tile_size, 1));
+  applyGuideCompression(anisotropic.routes, std::max(20 * tile_size, 1));
+  anisotropic.metrics = compute_metrics(anisotropic.routes);
+
+  for (const auto& [db_net, route] : selected.routes) {
+    auto anisotropic_it = anisotropic.routes.find(db_net);
+    if (anisotropic_it == anisotropic.routes.end()) {
+      continue;
+    }
+    const GRoute& anisotropic_route = anisotropic_it->second;
+
+    const bool base_valid = has_planar_guide(route);
+    const bool anisotropic_valid = has_planar_guide(anisotropic_route);
+    if (!anisotropic_valid && base_valid) {
+      continue;
+    }
+    if (anisotropic_valid && !base_valid) {
+      selected.routes[db_net] = anisotropic_route;
+      nets_taken_from_anisotropic++;
+      continue;
+    }
+
+    const double base_score = route_score(route, selected.overflow);
+    const double anisotropic_score
+        = route_score(anisotropic_route, selected.overflow);
+    bool use_anisotropic = anisotropic_score + 1e-3 < base_score;
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    if (!use_anisotropic && anisotropic_score <= base_score * 1.05) {
+      use_anisotropic = (key % 3ULL) == 0ULL;
+    }
+    if (!use_anisotropic && anisotropic_score <= base_score * 1.20) {
+      use_anisotropic = (key % 11ULL) == 0ULL;
+    }
+    if (use_anisotropic) {
+      selected.routes[db_net] = anisotropic_route;
+      nets_taken_from_anisotropic++;
+    }
+  }
+  selected.name += "+anisotropic";
+  selected.metrics = compute_metrics(selected.routes);
+
   const RouteMetrics pre_wave_metrics = compute_metrics(selected.routes);
   applyWavefrontDetours(grouter_,
                         selected.routes,
@@ -1865,6 +1925,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = shortcut.metrics.wirelength_um - baseline.metrics.wirelength_um;
   const long shortcut_delta_vias
       = shortcut.metrics.via_count - baseline.metrics.via_count;
+  const double anisotropic_delta_wl
+      = anisotropic.metrics.wirelength_um - baseline.metrics.wirelength_um;
+  const long anisotropic_delta_vias
+      = anisotropic.metrics.via_count - baseline.metrics.via_count;
   const double selected_delta_wl
       = selected.metrics.wirelength_um - baseline.metrics.wirelength_um;
   const long selected_delta_vias
@@ -1901,6 +1965,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 shortcut_delta_vias,
                 selected.overflow);
   logger_->warn(GNR,
+                6023,
+                "NEWGR candidate {}: wl {:.0f} um vias {} (delta wl {:+.0f} "
+                "um, delta vias {:+d}, overflow {}).",
+                anisotropic.name,
+                anisotropic.metrics.wirelength_um,
+                anisotropic.metrics.via_count,
+                anisotropic_delta_wl,
+                anisotropic_delta_vias,
+                selected.overflow);
+  logger_->warn(GNR,
                 6018,
                 "NEWGR selected {} over baseline {:.0f} um vias {} -> {:.0f} "
                 "um vias {} (delta wl {:+.0f} um, delta vias {:+d}).",
@@ -1919,6 +1993,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 sculpted.name,
                 nets_taken_from_shortcuts,
                 shortcut.name);
+  logger_->warn(GNR,
+                6024,
+                "NEWGR blended {} nets from {} into anisotropic escape.",
+                nets_taken_from_anisotropic,
+                anisotropic.name);
 
   restore_snapshot(snapshot);
   return selected.routes;
