@@ -660,6 +660,10 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
    int thread_livelock_limit[6] = {1,1,1,1,1};
    bool extrarun = false;
    int thread_livelock = 0;
+   const int kViaCostCongested = 2;
+   const int kViaCostRelaxed = 4;
+   const int kViaCostModerate = 8;
+   const int kViaCostTight = 12;
 
     if(1)
 	{
@@ -692,9 +696,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	    
 		// call FLUTE to generate RSMT and break the nets into segments (2-pin nets)
 
-		VIA=2;
-		//viacost = VIA;
-		viacost = 0;
+		VIA = kViaCostModerate;
+		viacost = VIA;
 		gen_brk_RSMT(FALSE, FALSE, FALSE, FALSE, noADJ);
 		printf("first L\n");
 		routeLAll(TRUE);
@@ -724,7 +727,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		if (maxOverflow > 700) {
 			costheight = 8;
 			LOGIS_COF = 1.33;
-			VIA = 1;
+			VIA = kViaCostCongested;
+			viacost = VIA;
 			THRESH_M = 0;
 			CSTEP1 = 30;
 			slope = BIG_INT;
@@ -783,6 +787,20 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 
 		while(totalOverflow>0)
 		{
+			if (totalOverflow > 5000) {
+				VIA = kViaCostCongested;
+			} else if (totalOverflow > 1500) {
+				VIA = kViaCostRelaxed;
+			} else if (totalOverflow > 200) {
+				VIA = kViaCostModerate;
+			} else {
+				VIA = kViaCostTight;
+			}
+			if (i > 20 && totalOverflow < 80) {
+				VIA = kViaCostTight + 2;
+			}
+			viacost = VIA;
+
 			/*if(THRESH_M>15) {
 				THRESH_M-=thStep1;
 			} else if(THRESH_M>=2) {
@@ -821,7 +839,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 				slope = BIG_INT;
 				//slope = 20;
 				if (i == 5) {
-					VIA = 1;
+					VIA = kViaCostCongested;
+					viacost = VIA;
 					LOGIS_COF = 1.33;
 					ripup_threshold = -1;
 				//	cost_type = 3;
