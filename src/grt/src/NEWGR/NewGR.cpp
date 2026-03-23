@@ -498,6 +498,11 @@ bool parsePerturbScenarioName(const std::string& name,
   return true;
 }
 
+bool isWirelengthPriorityScenario(const std::string& name)
+{
+  return name == "hybrid-netmix-wl" || name == "hybrid-netmix-ultra-wl";
+}
+
 int getSoftCapacityForEdge(uint64_t key,
                            FastRouteCore* core,
                            const RudyGrid& normalized_rudy,
@@ -1738,11 +1743,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const long tie_via_wl_band
       = std::max<long>(24, static_cast<long>(std::ceil(shortest_wl * 0.00008)));
   const long tie_quality_wl_band
-      = std::max<long>(80, static_cast<long>(std::ceil(shortest_wl * 0.0012)));
+      = std::max<long>(80, static_cast<long>(std::ceil(shortest_wl * 0.0018)));
   auto wirelength_with_quality_tie_better = [&](const ScenarioResult& lhs,
                                                 const ScenarioResult& rhs) {
     const long wl_gap = std::llabs(lhs.metrics.wirelength_dbu
                                    - rhs.metrics.wirelength_dbu);
+    const bool lhs_wl_priority = isWirelengthPriorityScenario(lhs.name);
+    const bool rhs_wl_priority = isWirelengthPriorityScenario(rhs.name);
+    if (lhs_wl_priority != rhs_wl_priority && wl_gap <= tie_quality_wl_band) {
+      return lhs_wl_priority;
+    }
     if (wl_gap <= tie_quality_wl_band) {
       const double lhs_proxy = estimateDetailedRouteProxyCost(lhs.metrics);
       const double rhs_proxy = estimateDetailedRouteProxyCost(rhs.metrics);
