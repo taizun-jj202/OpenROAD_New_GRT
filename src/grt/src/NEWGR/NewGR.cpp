@@ -30,6 +30,7 @@ struct SelectionPolicy
   int64_t via_guard{0};
   int64_t hard_via_guard{0};
   int64_t min_wl_improve{1};
+  bool medium_net{false};
   bool long_net{false};
 };
 
@@ -37,7 +38,10 @@ enum class RouteSource
 {
   kFastRoute,
   kNewgrBalanced,
-  kNewgrWirelength
+  kNewgrWirelength,
+  kNewgrRegion,
+  kNewgrRegularRegion,
+  kNewgrFineGrain
 };
 
 enum class SegmentDirection
@@ -98,27 +102,28 @@ int64_t viaGuardForNet(const RouteScore& baseline_score, int tile_size)
 SelectionPolicy buildSelectionPolicy(const RouteScore& baseline_score, int tile_size)
 {
   SelectionPolicy policy;
-  policy.via_tradeoff = std::max(1, tile_size / 30);
-  policy.bend_tradeoff = std::max(1, tile_size / 48);
-  policy.via_guard = viaGuardForNet(baseline_score, tile_size);
+  policy.via_tradeoff = 1;
+  policy.bend_tradeoff = std::max(1, tile_size / 72);
+  policy.via_guard = viaGuardForNet(baseline_score, tile_size) + 2;
   policy.hard_via_guard = policy.via_guard * 3 + 2;
-  policy.min_wl_improve = std::max<int64_t>(1, tile_size / 3);
+  policy.min_wl_improve = 1;
 
   const int64_t medium_net_threshold = static_cast<int64_t>(tile_size) * 8;
   const int64_t long_net_threshold = static_cast<int64_t>(tile_size) * 16;
   if (baseline_score.wirelength >= long_net_threshold) {
     policy.long_net = true;
-    policy.via_tradeoff = std::max(1, tile_size / 56);
-    policy.bend_tradeoff = std::max(1, tile_size / 84);
-    policy.via_guard = policy.via_guard * 2 + 4;
-    policy.hard_via_guard = policy.via_guard * 2 + 8;
-    policy.min_wl_improve = std::max<int64_t>(2, tile_size / 2);
+    policy.via_tradeoff = 1;
+    policy.bend_tradeoff = std::max(1, tile_size / 180);
+    policy.via_guard = policy.via_guard * 4 + 12;
+    policy.hard_via_guard = policy.via_guard * 2 + 16;
+    policy.min_wl_improve = 1;
   } else if (baseline_score.wirelength >= medium_net_threshold) {
-    policy.via_tradeoff = std::max(1, tile_size / 40);
-    policy.bend_tradeoff = std::max(1, tile_size / 60);
-    policy.via_guard += 2;
-    policy.hard_via_guard = policy.via_guard * 3 + 6;
-    policy.min_wl_improve = std::max<int64_t>(1, tile_size / 2);
+    policy.medium_net = true;
+    policy.via_tradeoff = 1;
+    policy.bend_tradeoff = std::max(1, tile_size / 120);
+    policy.via_guard += 8;
+    policy.hard_via_guard = policy.via_guard * 3 + 12;
+    policy.min_wl_improve = 1;
   }
 
   return policy;
@@ -153,15 +158,14 @@ bool betterCandidate(const RouteScore& baseline_score,
     return false;
   }
 
-  const int64_t wl_gain = current_best_score.wirelength - candidate_score.wirelength;
-  if (wl_gain >= policy.min_wl_improve
-      && candidate_extra_vias <= policy.via_guard + (policy.long_net ? 4 : 1)) {
-    return true;
+  if (candidate_score.wirelength < current_best_score.wirelength) {
+    const int64_t allowed_extra_vs_current
+        = policy.long_net ? (policy.via_guard + 10)
+                          : (policy.medium_net ? (policy.via_guard / 2 + 5) : 4);
+    return candidate_extra_vias <= current_extra_vias + allowed_extra_vs_current;
   }
-  if (policy.long_net && candidate_score.wirelength < current_best_score.wirelength
-      && candidate_extra_vias <= policy.via_guard * 2
-      && candidate_score.bends <= current_best_score.bends + 4) {
-    return true;
+  if (candidate_score.wirelength > current_best_score.wirelength) {
+    return false;
   }
 
   const int64_t current_effective_cost
@@ -212,12 +216,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   engine_->init(grouter_->sproute_grid_data_, grouter_->sproute_nets_);
   NetRouteMap balanced_routes = engine_->run();
   NetRouteMap wirelength_routes = engine_->runWirelengthFirst();
+  NetRouteMap region_routes = engine_->runRegionAware();
+  NetRouteMap regular_region_routes = engine_->runRegularRegionAware();
+  NetRouteMap finegrain_routes = engine_->runFineGrainRefine();
 
   int selected_from_balanced = 0;
   int selected_from_wl = 0;
+  int selected_from_region = 0;
+  int selected_from_regular_region = 0;
+  int selected_from_finegrain = 0;
   int kept_fastroute = 0;
   int inserted_from_balanced = 0;
   int inserted_from_wl = 0;
+  int inserted_from_region = 0;
+  int inserted_from_regular_region = 0;
+  int inserted_from_finegrain = 0;
 
   for (auto& [db_net, route] : routes) {
     const int tile_size = std::max(1, grouter_->getTileSize());
@@ -246,6 +259,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     consider(balanced_routes, RouteSource::kNewgrBalanced);
     consider(wirelength_routes, RouteSource::kNewgrWirelength);
+    consider(region_routes, RouteSource::kNewgrRegion);
+    consider(regular_region_routes, RouteSource::kNewgrRegularRegion);
+    consider(finegrain_routes, RouteSource::kNewgrFineGrain);
 
     if (selected_route != &route) {
       route = *selected_route;
@@ -260,6 +276,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         break;
       case RouteSource::kNewgrWirelength:
         selected_from_wl++;
+        break;
+      case RouteSource::kNewgrRegion:
+        selected_from_region++;
+        break;
+      case RouteSource::kNewgrRegularRegion:
+        selected_from_regular_region++;
+        break;
+      case RouteSource::kNewgrFineGrain:
+        selected_from_finegrain++;
         break;
     }
   }
@@ -276,16 +301,42 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       inserted_from_wl++;
     }
   }
+  for (const auto& [db_net, route] : region_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_region++;
+    }
+  }
+  for (const auto& [db_net, route] : regular_region_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_regular_region++;
+    }
+  }
+  for (const auto& [db_net, route] : finegrain_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_finegrain++;
+    }
+  }
 
   logger_->info(utl::GRT,
                 6004,
-                "NEWGR hybrid selected {} balanced and {} WL-first routes (kept "
-                "{} FastRoute, +{} balanced-only, +{} WL-only) out of {} total.",
+                "NEWGR hybrid selected {} balanced, {} WL-first, {} region, {} "
+                "regular-region, and {} fine-grain routes (kept {} FastRoute, "
+                "+{} balanced-only, +{} WL-only, +{} region-only, +{} "
+                "regular-region-only, +{} fine-grain-only) out of {} total.",
                 selected_from_balanced,
                 selected_from_wl,
+                selected_from_region,
+                selected_from_regular_region,
+                selected_from_finegrain,
                 kept_fastroute,
                 inserted_from_balanced,
                 inserted_from_wl,
+                inserted_from_region,
+                inserted_from_regular_region,
+                inserted_from_finegrain,
                 routes.size());
 
   grouter_->addRemainingGuides(routes, nets, min_routing_layer, max_routing_layer);

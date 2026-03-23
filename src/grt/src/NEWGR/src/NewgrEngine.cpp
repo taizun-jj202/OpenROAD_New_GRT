@@ -93,6 +93,13 @@ NetRouteMap NewgrEngine::runRegionAware()
                        /*warn_id=*/403);
 }
 
+NetRouteMap NewgrEngine::runRegularRegionAware()
+{
+  return runWithConfig(/*max_maze_round=*/220,
+                       static_cast<int>(Algo::DetPart_Astar_Regular_Region),
+                       /*warn_id=*/405);
+}
+
 NetRouteMap NewgrEngine::runFineGrainRefine()
 {
   return runWithConfig(/*max_maze_round=*/180,
@@ -105,6 +112,16 @@ NetRouteMap NewgrEngine::runWithConfig(int max_maze_round, int algo_id, int warn
   if (!input_ready_) {
     buildInput();
   }
+
+  // SPRoute vendor code keeps these as mutable globals; reset them before each
+  // run so multi-pass NEWGR portfolios do not accumulate stale state.
+  acc_count = 0;
+  n_small_undone = 0;
+  max_rudy = 0.0f;
+  MD = 0;
+  TD = 0;
+  totalOverflow = 0;
+  max_adj = 0;
 
   prepareLefDefMetadata();
   parser::grGenerator generator = buildGenerator();

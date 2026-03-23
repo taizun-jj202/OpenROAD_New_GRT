@@ -45,6 +45,7 @@ class NewgrEngine
   NetRouteMap run();
   NetRouteMap runWirelengthFirst();
   NetRouteMap runRegionAware();
+  NetRouteMap runRegularRegionAware();
   NetRouteMap runFineGrainRefine();
 
   const NewgrInput& getInput() const { return input_; }
