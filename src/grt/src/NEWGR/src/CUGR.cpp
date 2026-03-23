@@ -83,15 +83,17 @@ bool isBetterScore(const RouteScore& candidate, const RouteScore& baseline)
   }
   if (candidate.overflow_edges < baseline.overflow_edges) {
     const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
-    // Keep overflow reduction, but strongly bound detour growth.
+    // Keep overflow reduction, but tightly cap wire inflation. This borrows
+    // FastRoute-style RRR acceptance pressure to prevent long detours from
+    // being admitted early and then requiring expensive cleanup later.
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 24ULL;
+        = static_cast<uint64_t>(overflowGain) * 10ULL;
     const uint64_t allowedWireLength
         = baseline.wire_length + allowedIncrease;
     if (candidate.wire_length > allowedWireLength) {
       return false;
     }
-    const int viaSlack = std::max(2, overflowGain / 4);
+    const int viaSlack = std::max(1, overflowGain / 6);
     return candidate.via_count <= baseline.via_count + viaSlack;
   }
   if (candidate.overflow_edges > baseline.overflow_edges) {
@@ -115,13 +117,13 @@ bool isRecoveryScoreBetter(const RouteScore& candidate,
   if (candidate.overflow_edges < baseline.overflow_edges) {
     const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 12ULL;
+        = static_cast<uint64_t>(overflowGain) * 6ULL;
     const uint64_t allowedWireLength
         = baseline.wire_length + allowedIncrease;
     if (candidate.wire_length > allowedWireLength) {
       return false;
     }
-    const int viaSlack = std::max(1, overflowGain / 6);
+    const int viaSlack = std::max(1, overflowGain / 8);
     return candidate.via_count <= baseline.via_count + viaSlack;
   }
   if (candidate.wire_length < baseline.wire_length) {
@@ -146,13 +148,13 @@ bool isTightenScoreBetter(const RouteScore& candidate, const RouteScore& baselin
     // Tightening is wirelength-focused. Overflow reduction can grow wire only
     // slightly to avoid reintroducing long detours late in the flow.
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 4ULL;
+        = static_cast<uint64_t>(overflowGain) * 2ULL;
     const uint64_t allowedWireLength
         = baseline.wire_length + allowedIncrease;
     if (candidate.wire_length > allowedWireLength) {
       return false;
     }
-    return candidate.via_count <= baseline.via_count + 1;
+    return candidate.via_count <= baseline.via_count;
   }
   if (candidate.wire_length < baseline.wire_length) {
     return true;
@@ -211,7 +213,7 @@ bool isStrictWirelengthScoreBetter(const RouteScore& candidate,
     // Preserve overflow relief while keeping the route close to wirelength
     // neutral.
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 2ULL;
+        = static_cast<uint64_t>(overflowGain);
     if (candidate.wire_length > baseline.wire_length + allowedIncrease) {
       return false;
     }
@@ -403,8 +405,13 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
     }
     return lhs < rhs;
   });
-  const int detourBudget = std::max(128, static_cast<int>(netIndices.size() / 3));
-  const int minOverflowForDetour = 2;
+  const int detourBudget = std::max(96, static_cast<int>(netIndices.size() / 5));
+  const int minOverflowForDetour = 3;
+  if (overflowEdges[netIndices.front()] < minOverflowForDetour) {
+    logger_->report("stage 2 skipped: overflow is below detour trigger.");
+    updateOverflowNets(netIndices);
+    return;
+  }
   int considered = 0;
   int accepted = 0;
   for (int rank = 0; rank < netIndices.size(); rank++) {
@@ -1207,17 +1214,17 @@ void CUGR::route()
   // routing and accept only net-level improvements in
   // overflow/wirelength/via score.
   grid_graph_->setSoftCapacityEnabled(false);
-  grid_graph_->setStageCostScales(0.50, 0.54, 1.40);
+  grid_graph_->setStageCostScales(0.46, 0.50, 1.20);
   wirelengthRecovery();
-  grid_graph_->setStageCostScales(0.42, 0.44, 1.55);
+  grid_graph_->setStageCostScales(0.38, 0.40, 1.28);
   finalPatternTighten();
-  grid_graph_->setStageCostScales(0.24, 0.26, 1.45);
+  grid_graph_->setStageCostScales(0.22, 0.24, 1.22);
   globalCompaction();
-  grid_graph_->setStageCostScales(0.16, 0.18, 1.55);
+  grid_graph_->setStageCostScales(0.14, 0.16, 1.25);
   strictWirelengthCompaction();
-  grid_graph_->setStageCostScales(0.09, 0.11, 1.70);
+  grid_graph_->setStageCostScales(0.08, 0.09, 1.18);
   strictWirelengthCompaction();
-  grid_graph_->setStageCostScales(0.03, 0.04, 1.55);
+  grid_graph_->setStageCostScales(0.03, 0.03, 1.12);
   strictWirelengthCompaction();
 
   printStatistics();

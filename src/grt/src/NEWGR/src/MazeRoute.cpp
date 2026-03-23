@@ -58,7 +58,10 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   const int hp = std::max(1, box.hp());
   // Keep only nearby old-tree anchors so maze reroute can aggressively compact
   // long detours instead of preserving the previous expanded topology.
-  const int anchorMargin = std::clamp(hp / (pins >= 12 ? 8 : 7), 4, 28);
+  int anchorMargin = std::clamp(hp / (pins >= 12 ? 12 : 10), 2, 18);
+  if (hp >= 220 || pins >= 18) {
+    anchorMargin = std::min(anchorMargin + 2, 24);
+  }
   const int anchorXLow = std::max(0, box.lx() - anchorMargin);
   const int anchorXHigh = std::min(xSize - 1, box.hx() + anchorMargin);
   const int anchorYLow = std::max(0, box.ly() - anchorMargin);
@@ -84,14 +87,14 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
 
   // CUGR-style coarse-to-fine corridor search: bound sparse-graph expansion to
   // each net neighborhood to suppress long global detours.
-  int margin = std::clamp(hp / (pins >= 12 ? 7 : 6), 6, 64);
+  int margin = std::clamp(hp / (pins >= 12 ? 10 : 8), 4, 40);
   if (pins <= 3) {
-    margin = std::max(margin, 10);
+    margin = std::max(margin, 8);
   }
   if (hp >= 220 || pins >= 18) {
-    margin += std::max(4, hp / 50);
+    margin += std::max(2, hp / 80);
   }
-  margin += std::max(1, std::max(grid.interval.x(), grid.interval.y()) / 2);
+  margin += std::max(1, std::max(grid.interval.x(), grid.interval.y()) / 3);
   int xLow = std::max(0, box.lx() - margin);
   int xHigh = std::min(xSize - 1, box.hx() + margin);
   int yLow = std::max(0, box.ly() - margin);
