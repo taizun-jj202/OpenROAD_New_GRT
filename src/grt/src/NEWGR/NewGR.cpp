@@ -4012,7 +4012,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const long tie_via_wl_band
       = std::max<long>(28, static_cast<long>(std::ceil(shortest_wl * 0.00011)));
   const long tie_proxy_wl_band
-      = std::max<long>(120, static_cast<long>(std::ceil(shortest_wl * 0.00042)));
+      = std::max<long>(220, static_cast<long>(std::ceil(shortest_wl * 0.0052)));
   auto wirelength_with_dr_proxy_tie_better = [&](const ScenarioResult& lhs,
                                                   const ScenarioResult& rhs) {
     const long wl_gap = std::llabs(lhs.metrics.wirelength_dbu
@@ -4074,11 +4074,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                     : 0L;
     const long deep_via_drop_wl_gain = wl_anchor != nullptr
                                            ? std::max<long>(
-                                                 60000L,
+                                                 180L,
                                                  static_cast<long>(std::ceil(
                                                      static_cast<double>(
                                                          wl_anchor->metrics.wirelength_dbu)
-                                                     * 0.00020)))
+                                                     * 0.00070)))
                                            : 0L;
     const long deep_via_drop_detour_bonus = std::max<long>(
         9000L, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1) * 18L));
@@ -4114,10 +4114,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const bool strict_pareto_upgrade
           = candidate->metrics.wirelength_dbu <= wl_anchor->metrics.wirelength_dbu
             && candidate->metrics.via_count <= wl_anchor->metrics.via_count
-            && candidate->metrics.overflow_edges <= wl_anchor->metrics.overflow_edges
+            && via_drop <= (via_drop_guard * 3L) / 2L
             && detour_delta <= deep_via_drop_detour_bonus
             && high_layer_delta <= deep_via_drop_high_layer_bonus
-            && candidate_proxy + 1e-3 < anchor_proxy * 1.030;
+            && candidate_proxy + 1e-3 < anchor_proxy * 1.020;
       if (strict_pareto_upgrade) {
         return true;
       }
@@ -4404,19 +4404,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                    <= wl_anchor->metrics.detour_dbu + detour_guard
             && forced_wl_ptr->metrics.near_capacity_edges
                    <= wl_anchor->metrics.near_capacity_edges + hotspot_guard;
+      const bool via_drop_guard_ok = allow_aggressive_via_drop(forced_wl_ptr);
       const double anchor_proxy
           = estimateDetailedRouteProxyCost(wl_anchor->metrics);
       const double challenger_proxy
           = estimateDetailedRouteProxyCost(forced_wl_ptr->metrics);
       const bool proxy_guard = challenger_proxy + 1e-3 < anchor_proxy * 1.005;
       const bool proxy_dominant_upgrade
-          = wl_gain >= 0 && via_guard_ok && structural_guard
+          = wl_gain >= 0 && via_guard_ok && via_drop_guard_ok && structural_guard
             && challenger_proxy + 1e-3 < anchor_proxy * 1.010;
       const long via_gain_floor = std::max<long>(120L, tile_size * 5L);
       const bool via_dominant_upgrade
           = wl_gain >= 0
             && forced_wl_ptr->metrics.via_count + via_gain_floor
                    <= wl_anchor->metrics.via_count
+            && via_drop_guard_ok
             && forced_wl_ptr->metrics.detour_dbu
                    <= wl_anchor->metrics.detour_dbu + detour_guard
             && challenger_proxy + 1e-3 < anchor_proxy * 1.010;
@@ -4427,12 +4429,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = (forced_wl_ptr->metrics.wirelength_dbu <= wl_anchor->metrics.wirelength_dbu)
             && (forced_wl_ptr->metrics.via_count <= wl_anchor->metrics.via_count)
             && structural_guard;
-      const bool via_drop_guard_ok = allow_aggressive_via_drop(forced_wl_ptr);
-      const bool strict_pareto_accept
-          = strict_dominates
-            && forced_wl_ptr->metrics.overflow_edges
-                   <= wl_anchor->metrics.overflow_edges;
-      const bool bypass_via_drop_guard = strict_pareto_accept || proxy_dominant_upgrade
+      const bool bypass_via_drop_guard = proxy_dominant_upgrade
                                          || via_dominant_upgrade || equal_wl_via_win;
 
       if (!((wl_gain >= min_wl_gain && proxy_guard && via_guard_ok
@@ -4555,6 +4552,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const long wl_gain
           = wl_anchor->metrics.wirelength_dbu - absolute_wl_ptr->metrics.wirelength_dbu;
       const long via_gain = wl_anchor->metrics.via_count - absolute_wl_ptr->metrics.via_count;
+      const long via_elasticity_cap = std::max<long>(
+          900L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.0105)));
       const long min_wl_gain = std::max<long>(
           60L,
           static_cast<long>(std::ceil(
@@ -4562,16 +4563,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const long min_via_gain = std::max<long>(140L, grouter_->grid_->getTileSize() * 5L);
       const bool overflow_ok = absolute_wl_ptr->metrics.overflow_edges
                                <= wl_anchor->metrics.overflow_edges;
-      if (overflow_ok && wl_gain >= min_wl_gain && via_gain >= min_via_gain) {
+      // Preserve a minimum via elasticity window (SPRoute-style soft reservation
+      // intuition): very deep via drops can remove layer-switch freedom and
+      // increase detailed-route detours even when guide WL improves.
+      const bool via_elasticity_ok = via_gain <= via_elasticity_cap;
+      if (overflow_ok && via_elasticity_ok && wl_gain >= min_wl_gain
+          && via_gain >= min_via_gain) {
         logger_->info(
             GNR,
             6036,
             "NEWGR forcing absolute WL champion '{}' over anchor '{}' "
-            "(wl gain {}, via gain {}).",
+            "(wl gain {}, via gain {}, via elasticity cap {}).",
             absolute_wl_ptr->name,
             wl_anchor->name,
             wl_gain,
-            via_gain);
+            via_gain,
+            via_elasticity_cap);
         forced_wl_ptr = absolute_wl_ptr;
       }
     }
