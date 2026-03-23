@@ -85,7 +85,7 @@ bool isBetterScore(const RouteScore& candidate, const RouteScore& baseline)
     const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
     // Keep overflow reduction, but strongly bound detour growth.
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 64ULL;
+        = static_cast<uint64_t>(overflowGain) * 24ULL;
     const uint64_t allowedWireLength
         = baseline.wire_length + allowedIncrease;
     if (candidate.wire_length > allowedWireLength) {
@@ -115,7 +115,7 @@ bool isRecoveryScoreBetter(const RouteScore& candidate,
   if (candidate.overflow_edges < baseline.overflow_edges) {
     const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 24ULL;
+        = static_cast<uint64_t>(overflowGain) * 12ULL;
     const uint64_t allowedWireLength
         = baseline.wire_length + allowedIncrease;
     if (candidate.wire_length > allowedWireLength) {
@@ -146,7 +146,7 @@ bool isTightenScoreBetter(const RouteScore& candidate, const RouteScore& baselin
     // Tightening is wirelength-focused. Overflow reduction can grow wire only
     // slightly to avoid reintroducing long detours late in the flow.
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 8ULL;
+        = static_cast<uint64_t>(overflowGain) * 4ULL;
     const uint64_t allowedWireLength
         = baseline.wire_length + allowedIncrease;
     if (candidate.wire_length > allowedWireLength) {
@@ -1165,6 +1165,8 @@ void CUGR::route()
     netIndices.push_back(net->getIndex());
   }
 
+  grid_graph_->setSoftCapacityEnabled(false);
+
   // FastRoute-style adaptive emphasis: start wirelength-first and raise
   // congestion pressure in the middle RRR passes.
   grid_graph_->setStageCostScales(0.75, 0.75, 1.20);
@@ -1187,12 +1189,17 @@ void CUGR::route()
   // FastRoute-inspired post-congestion tightening: re-run pure pattern
   // routing and accept only net-level improvements in
   // overflow/wirelength/via score.
+  grid_graph_->setSoftCapacityEnabled(false);
   grid_graph_->setStageCostScales(0.50, 0.54, 1.40);
   wirelengthRecovery();
   grid_graph_->setStageCostScales(0.42, 0.44, 1.55);
   finalPatternTighten();
   grid_graph_->setStageCostScales(0.24, 0.26, 1.45);
   globalCompaction();
+  grid_graph_->setStageCostScales(0.18, 0.20, 1.60);
+  strictWirelengthCompaction();
+  grid_graph_->setStageCostScales(0.12, 0.14, 1.75);
+  strictWirelengthCompaction();
 
   printStatistics();
   if (constants_.write_heatmap) {

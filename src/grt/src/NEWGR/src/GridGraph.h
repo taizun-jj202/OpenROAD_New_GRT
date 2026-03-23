@@ -107,6 +107,7 @@ class GridGraph
   void setStageCostScales(double pattern_congestion_scale,
                           double maze_congestion_scale,
                           double via_cost_scale);
+  void setSoftCapacityEnabled(bool enabled);
 
   // Misc
   AccessPointSet selectAccessPoints(const GRNet* net) const;
@@ -193,6 +194,7 @@ class GridGraph
   double pattern_congestion_scale_ = 1.0;
   double maze_congestion_scale_ = 1.0;
   double via_cost_scale_ = 1.0;
+  bool soft_capacity_enabled_ = false;
 };
 
 template <typename Type>

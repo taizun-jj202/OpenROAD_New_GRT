@@ -309,9 +309,14 @@ void GridGraph::setStageCostScales(const double pattern_congestion_scale,
   via_cost_scale_ = std::max(0.1, via_cost_scale);
 }
 
+void GridGraph::setSoftCapacityEnabled(const bool enabled)
+{
+  soft_capacity_enabled_ = enabled;
+}
+
 CapacityT GridGraph::getSoftCapacity(const GraphEdge& edge) const
 {
-  if (!constants_.enable_soft_capacity || edge.capacity <= 0.0) {
+  if (!soft_capacity_enabled_ || edge.capacity <= 0.0) {
     return edge.capacity;
   }
 
