@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <unordered_map>
@@ -134,6 +135,9 @@ int buildLocalizedCapacityReductions(const NewgrInput& input,
   if (x_grids <= 1 || y_grids <= 1 || num_layers <= 0) {
     return 0;
   }
+  const int total_edges = num_layers
+                          * ((x_grids - 1) * y_grids + x_grids * (y_grids - 1));
+  const int max_reductions = std::max(256, total_edges / 16);
 
   std::vector<float> pin_pressure(x_grids * y_grids, 0.0f);
   for (const auto& net : input.nets) {
@@ -228,6 +232,9 @@ int buildLocalizedCapacityReductions(const NewgrInput& input,
           if (!should_shape) {
             continue;
           }
+          if (reduction_count >= max_reductions) {
+            return reduction_count;
+          }
           const int new_cap
               = std::max(1, static_cast<int>(std::lround(base_hcap * ratio)));
           if (new_cap >= base_hcap) {
@@ -269,6 +276,9 @@ int buildLocalizedCapacityReductions(const NewgrInput& input,
                                              should_shape);
           if (!should_shape) {
             continue;
+          }
+          if (reduction_count >= max_reductions) {
+            return reduction_count;
           }
           const int new_cap
               = std::max(1, static_cast<int>(std::lround(base_vcap * ratio)));
@@ -334,14 +344,13 @@ NetRouteMap NewgrEngine::run()
                /*OutFileName=*/"",
                congestion_map,
                timer,
-               /*maxMazeRound=*/90,
-               Algo::DetPart_Astar_Local);
+               /*maxMazeRound=*/180,
+               Algo::DetPart_Astar);
   timer.stop();
   last_total_overflow_ = totalOverflow;
 
-  // NEWGR may leave malformed edge route payloads on difficult runs.
-  // Use deterministic pin-based fallback guides to avoid extraction crashes.
-  return extractPinFallbackRoutes();
+  NetRouteMap extracted_routes = extractRoutes();
+  return extractPinFallbackRoutes(extracted_routes);
 }
 
 void NewgrEngine::buildInput()
@@ -540,8 +549,7 @@ NetRouteMap NewgrEngine::extractRoutes() const
       continue;
     }
     GRoute route_segments;
-    appendRouteSegments(net_id, route_segments);
-    if (!route_segments.empty()) {
+    if (appendRouteSegments(net_id, route_segments) && !route_segments.empty()) {
       routes[it->second] = std::move(route_segments);
     }
   }
@@ -549,55 +557,47 @@ NetRouteMap NewgrEngine::extractRoutes() const
   return routes;
 }
 
-NetRouteMap NewgrEngine::extractPinFallbackRoutes() const
+NetRouteMap NewgrEngine::extractPinFallbackRoutes(
+    const NetRouteMap& seeded_routes) const
 {
-  NetRouteMap routes;
+  NetRouteMap routes = seeded_routes;
+  int fallback_net_count = 0;
   for (const auto& net : input_.nets) {
     if (net.db_net == nullptr || net.pins.size() < 2) {
       continue;
     }
+    if (routes.find(net.db_net) != routes.end()) {
+      continue;
+    }
 
     GRoute route;
-    const RoutePt& root = net.pins.front();
-    for (size_t pin_idx = 1; pin_idx < net.pins.size(); ++pin_idx) {
-      const RoutePt& sink = net.pins[pin_idx];
-      int x0 = root.x();
-      int y0 = root.y();
-      int l0 = root.layer();
-      const int x1 = sink.x();
-      const int y1 = sink.y();
-      const int l1 = sink.layer();
-
-      while (l0 < l1) {
-        addSegment(route, x0, y0, l0, x0, y0, l0 + 1);
-        ++l0;
-      }
-      while (l0 > l1) {
-        addSegment(route, x0, y0, l0, x0, y0, l0 - 1);
-        --l0;
-      }
-      if (x0 != x1) {
-        addSegment(route, x0, y0, l0, x1, y0, l0);
-      }
-      if (y0 != y1) {
-        addSegment(route, x1, y0, l0, x1, y1, l0);
-      }
+    if (!appendFallbackMstRoute(net, route)) {
+      continue;
     }
-
     if (!route.empty()) {
       routes[net.db_net] = std::move(route);
+      ++fallback_net_count;
     }
+  }
+  if (fallback_net_count > 0) {
+    logger_->report("NEWGR applied MST fallback routing for {} nets.",
+                    fallback_net_count);
   }
   return routes;
 }
 
-void NewgrEngine::appendRouteSegments(int net_id, GRoute& route) const
+bool NewgrEngine::appendRouteSegments(int net_id, GRoute& route) const
 {
+  if (net_id < 0 || net_id >= numValidNets) {
+    return false;
+  }
   const StTree& tree = sttrees[net_id];
   if (tree.deg == 0 || tree.edges == nullptr) {
-    return;
+    return true;
   }
 
+  const int max_reasonable_routelen
+      = std::max(1024, grid_.x_grids * grid_.y_grids * std::max(1, grid_.num_layers));
   const int edge_count = 2 * tree.deg - 3;
   for (int edge_id = 0; edge_id < edge_count; ++edge_id) {
     const TreeEdge& tree_edge = tree.edges[edge_id];
@@ -606,6 +606,9 @@ void NewgrEngine::appendRouteSegments(int net_id, GRoute& route) const
         || edge_route.gridsY == nullptr || edge_route.gridsL == nullptr) {
       continue;
     }
+    if (edge_route.routelen > max_reasonable_routelen) {
+      return false;
+    }
     for (int i = 0; i < edge_route.routelen; ++i) {
       const int x0 = edge_route.gridsX[i];
       const int y0 = edge_route.gridsY[i];
@@ -613,9 +616,159 @@ void NewgrEngine::appendRouteSegments(int net_id, GRoute& route) const
       const int x1 = edge_route.gridsX[i + 1];
       const int y1 = edge_route.gridsY[i + 1];
       const int l1 = edge_route.gridsL[i + 1];
-      addSegment(route, x0, y0, l0, x1, y1, l1);
+      if (!isGridPointValid(x0, y0, l0) || !isGridPointValid(x1, y1, l1)) {
+        return false;
+      }
+
+      const int manhattan_delta
+          = std::abs(x1 - x0) + std::abs(y1 - y0) + std::abs(l1 - l0);
+      if (manhattan_delta == 0) {
+        continue;
+      }
+      if (manhattan_delta == 1) {
+        addSegment(route, x0, y0, l0, x1, y1, l1);
+        continue;
+      }
+      if (!appendManhattanBridge(x0, y0, l0, x1, y1, l1, route)) {
+        return false;
+      }
     }
   }
+
+  return true;
+}
+
+bool NewgrEngine::appendFallbackMstRoute(const NewgrInputNet& net,
+                                         GRoute& route) const
+{
+  if (net.pins.size() < 2) {
+    return false;
+  }
+
+  const int pin_count = static_cast<int>(net.pins.size());
+  int seed_pin = net.root_pin_index;
+  if (seed_pin < 0 || seed_pin >= pin_count) {
+    seed_pin = 0;
+  }
+
+  std::vector<bool> in_tree(pin_count, false);
+  in_tree[seed_pin] = true;
+  int connected_count = 1;
+
+  auto weightedDistance = [&](int lhs_idx, int rhs_idx) {
+    const RoutePt& lhs = net.pins[lhs_idx];
+    const RoutePt& rhs = net.pins[rhs_idx];
+    return std::abs(lhs.x() - rhs.x()) + std::abs(lhs.y() - rhs.y())
+           + 2 * std::abs(lhs.layer() - rhs.layer());
+  };
+
+  while (connected_count < pin_count) {
+    int best_u = -1;
+    int best_v = -1;
+    int best_cost = std::numeric_limits<int>::max();
+    for (int u = 0; u < pin_count; ++u) {
+      if (!in_tree[u]) {
+        continue;
+      }
+      for (int v = 0; v < pin_count; ++v) {
+        if (in_tree[v]) {
+          continue;
+        }
+        const int cost = weightedDistance(u, v);
+        if (cost < best_cost) {
+          best_cost = cost;
+          best_u = u;
+          best_v = v;
+        }
+      }
+    }
+
+    if (best_u < 0 || best_v < 0) {
+      return false;
+    }
+
+    const RoutePt& src = net.pins[best_u];
+    const RoutePt& dst = net.pins[best_v];
+    if (!appendManhattanBridge(src.x(),
+                               src.y(),
+                               src.layer(),
+                               dst.x(),
+                               dst.y(),
+                               dst.layer(),
+                               route)) {
+      return false;
+    }
+    in_tree[best_v] = true;
+    ++connected_count;
+  }
+
+  return true;
+}
+
+bool NewgrEngine::appendManhattanBridge(int grid_x0,
+                                        int grid_y0,
+                                        int grid_l0,
+                                        int grid_x1,
+                                        int grid_y1,
+                                        int grid_l1,
+                                        GRoute& route) const
+{
+  if (!isGridPointValid(grid_x0, grid_y0, grid_l0)
+      || !isGridPointValid(grid_x1, grid_y1, grid_l1)) {
+    return false;
+  }
+
+  int x = grid_x0;
+  int y = grid_y0;
+  int l = grid_l0;
+  const int max_steps = std::max(32,
+                                 2 * (std::abs(grid_x1 - grid_x0)
+                                      + std::abs(grid_y1 - grid_y0)
+                                      + std::abs(grid_l1 - grid_l0))
+                                     + 8);
+  int step_count = 0;
+
+  while (l != grid_l1) {
+    if (++step_count > max_steps) {
+      return false;
+    }
+    const int next_l = l + ((grid_l1 > l) ? 1 : -1);
+    if (!isGridPointValid(x, y, next_l)) {
+      return false;
+    }
+    addSegment(route, x, y, l, x, y, next_l);
+    l = next_l;
+  }
+  while (x != grid_x1) {
+    if (++step_count > max_steps) {
+      return false;
+    }
+    const int next_x = x + ((grid_x1 > x) ? 1 : -1);
+    if (!isGridPointValid(next_x, y, l)) {
+      return false;
+    }
+    addSegment(route, x, y, l, next_x, y, l);
+    x = next_x;
+  }
+  while (y != grid_y1) {
+    if (++step_count > max_steps) {
+      return false;
+    }
+    const int next_y = y + ((grid_y1 > y) ? 1 : -1);
+    if (!isGridPointValid(x, next_y, l)) {
+      return false;
+    }
+    addSegment(route, x, y, l, x, next_y, l);
+    y = next_y;
+  }
+
+  return true;
+}
+
+bool NewgrEngine::isGridPointValid(int grid_x, int grid_y, int grid_l) const
+{
+  return grid_x >= 0 && grid_x < grid_.x_grids && grid_y >= 0
+         && grid_y < grid_.y_grids && grid_l >= 0 && grid_l < grid_.num_layers;
 }
 
 void NewgrEngine::addSegment(GRoute& route,

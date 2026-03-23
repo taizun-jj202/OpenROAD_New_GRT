@@ -56,8 +56,17 @@ class NewgrEngine
   std::string routingLayerName(int layer_index) const;
   std::string cutLayerName(int layer_index) const;
   NetRouteMap extractRoutes() const;
-  NetRouteMap extractPinFallbackRoutes() const;
-  void appendRouteSegments(int net_id, grt::GRoute& route) const;
+  NetRouteMap extractPinFallbackRoutes(const NetRouteMap& seeded_routes) const;
+  bool appendRouteSegments(int net_id, grt::GRoute& route) const;
+  bool appendFallbackMstRoute(const NewgrInputNet& net, grt::GRoute& route) const;
+  bool appendManhattanBridge(int grid_x0,
+                             int grid_y0,
+                             int grid_l0,
+                             int grid_x1,
+                             int grid_y1,
+                             int grid_l1,
+                             grt::GRoute& route) const;
+  bool isGridPointValid(int grid_x, int grid_y, int grid_l) const;
   void addSegment(grt::GRoute& route,
                   int grid_x0,
                   int grid_y0,
