@@ -87,6 +87,24 @@ bool isBetterScore(const RouteScore& candidate, const RouteScore& baseline)
   return candidate.via_count < baseline.via_count;
 }
 
+bool isRecoveryScoreBetter(const RouteScore& candidate,
+                           const RouteScore& baseline)
+{
+  if (candidate.overflow_edges > baseline.overflow_edges) {
+    return false;
+  }
+  if (candidate.wire_length > baseline.wire_length) {
+    return false;
+  }
+  if (candidate.wire_length < baseline.wire_length) {
+    return true;
+  }
+  if (candidate.overflow_edges < baseline.overflow_edges) {
+    return true;
+  }
+  return candidate.via_count < baseline.via_count;
+}
+
 }  // namespace
 
 CUGR::CUGR(odb::dbDatabase* db,
@@ -265,6 +283,60 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   updateOverflowNets(netIndices);
 }
 
+void CUGR::wirelengthRecovery()
+{
+  logger_->report("stage 4: wirelength recovery with pattern reroute");
+  std::vector<int> netIndices;
+  netIndices.reserve(gr_nets_.size());
+  for (const auto& net : gr_nets_) {
+    netIndices.push_back(net->getIndex());
+  }
+  sortNetIndices(netIndices);
+
+  int accepted = 0;
+  for (const int netIndex : netIndices) {
+    GRNet* net = gr_nets_[netIndex].get();
+    const auto oldTree = net->getRoutingTree();
+    if (!oldTree) {
+      continue;
+    }
+
+    grid_graph_->commitTree(oldTree, /*ripup*/ true);
+
+    PatternRoute patternRoute(
+        net, grid_graph_.get(), stt_builder_, constants_, logger_);
+    patternRoute.constructSteinerTree();
+    patternRoute.constructRoutingDAG();
+    patternRoute.run();
+    const auto candidateTree = net->getRoutingTree();
+
+    if (!candidateTree) {
+      net->setRoutingTree(oldTree);
+      grid_graph_->commitTree(oldTree);
+      continue;
+    }
+
+    grid_graph_->commitTree(oldTree);
+    const RouteScore oldScore = evaluateRouteScore(oldTree, grid_graph_.get());
+    grid_graph_->commitTree(oldTree, /*ripup*/ true);
+
+    grid_graph_->commitTree(candidateTree);
+    const RouteScore candidateScore
+        = evaluateRouteScore(candidateTree, grid_graph_.get());
+
+    if (isRecoveryScoreBetter(candidateScore, oldScore)) {
+      accepted++;
+      continue;
+    }
+
+    grid_graph_->commitTree(candidateTree, /*ripup*/ true);
+    net->setRoutingTree(oldTree);
+    grid_graph_->commitTree(oldTree);
+  }
+
+  logger_->report("wirelength recovery accepted {} net updates.", accepted);
+}
+
 void CUGR::route()
 {
   std::vector<int> netIndices;
@@ -285,6 +357,11 @@ void CUGR::route()
   // FastRoute-style final RRR cleanup: re-run maze search to pull inflated
   // detours back to shorter legal paths after hotspot repair.
   mazeRoute(netIndices);
+
+  // FastRoute-inspired post-congestion tightening: re-run pure pattern
+  // routing and accept only net-level improvements in
+  // overflow/wirelength/via score.
+  wirelengthRecovery();
 
   printStatistics();
   if (constants_.write_heatmap) {

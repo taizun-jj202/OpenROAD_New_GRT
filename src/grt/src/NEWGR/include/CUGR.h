@@ -31,8 +31,8 @@ struct Constants
 {
   // Wirelength-first weighting to counter NEWGR's CUGR-like over-detour
   // behavior on large designs.
-  double weight_wire_length = 0.8;
-  double weight_via_number = 3.0;
+  double weight_wire_length = 0.9;
+  double weight_via_number = 2.8;
   double weight_short_area = 500.0;
 
   int min_routing_layer = 1;
@@ -75,6 +75,7 @@ class CUGR
   void patternRoute(std::vector<int>& netIndices);
   void patternRouteWithDetours(std::vector<int>& netIndices);
   void mazeRoute(std::vector<int>& netIndices);
+  void wirelengthRecovery();
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
