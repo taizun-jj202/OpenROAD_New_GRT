@@ -254,6 +254,8 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
                                || pass > 0;
       const auto original_stats = measureRoute(original_tree);
       const int original_tree_overflow = grid_graph_->checkOverflow(original_tree);
+      const int max_via_allowed
+          = original_stats.second + std::max(0, constants_.recovery_max_via_increase);
 
       grid_graph_->commitTree(original_tree, /*ripup*/ true);
 
@@ -274,6 +276,9 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
           return;
         }
         const auto stats = measureRoute(tree);
+        if (stats.second > max_via_allowed) {
+          return;
+        }
         if (!best_tree || isImprovement(stats, best_stats)) {
           best_tree = tree;
           best_stats = stats;
@@ -304,10 +309,15 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
 
         std::vector<MazeConfig> maze_configs;
         maze_configs.reserve(64);
+        const int max_maze_configs
+            = std::max(2, constants_.recovery_max_maze_configs);
         auto addMazeConfig = [&](int sparse_x,
                                  int sparse_y,
                                  int offset_x,
                                  int offset_y) {
+          if (static_cast<int>(maze_configs.size()) >= max_maze_configs) {
+            return;
+          }
           sparse_x = std::max(2, sparse_x);
           sparse_y = std::max(2, sparse_y);
           offset_x = std::clamp(offset_x, 0, sparse_x - 1);
@@ -357,9 +367,19 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
             }
           }
 
-          if (constants_.recovery_full_offset_sweep) {
-            for (int offset_x = 0; offset_x < base_sparse_x; offset_x++) {
-              for (int offset_y = 0; offset_y < base_sparse_y; offset_y++) {
+          const bool enable_full_offset_sweep
+              = constants_.recovery_full_offset_sweep
+                && candidates[candidateIndex].hpwl
+                       >= constants_.recovery_full_offset_hpwl_threshold;
+          if (enable_full_offset_sweep) {
+            for (int offset_x = 0;
+                 offset_x < base_sparse_x
+                 && static_cast<int>(maze_configs.size()) < max_maze_configs;
+                 offset_x++) {
+              for (int offset_y = 0;
+                   offset_y < base_sparse_y
+                   && static_cast<int>(maze_configs.size()) < max_maze_configs;
+                   offset_y++) {
                 addMazeConfig(base_sparse_x, base_sparse_y, offset_x, offset_y);
               }
             }
@@ -367,8 +387,14 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
                 = std::max(2, constants_.recovery_dense_sparse_x);
             const int dense_sparse_y
                 = std::max(2, constants_.recovery_dense_sparse_y);
-            for (int offset_x = 0; offset_x < dense_sparse_x; offset_x++) {
-              for (int offset_y = 0; offset_y < dense_sparse_y; offset_y++) {
+            for (int offset_x = 0;
+                 offset_x < dense_sparse_x
+                 && static_cast<int>(maze_configs.size()) < max_maze_configs;
+                 offset_x++) {
+              for (int offset_y = 0;
+                   offset_y < dense_sparse_y
+                   && static_cast<int>(maze_configs.size()) < max_maze_configs;
+                   offset_y++) {
                 addMazeConfig(dense_sparse_x, dense_sparse_y, offset_x, offset_y);
               }
             }

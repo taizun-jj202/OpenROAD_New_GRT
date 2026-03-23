@@ -72,7 +72,7 @@ struct Constants
   bool recovery_use_maze = true;
   int recovery_hpwl_threshold = 72;
   double recovery_refine_ratio = 0.74;
-  int recovery_max_passes = 3;
+  int recovery_max_passes = 2;
   double recovery_pass_decay = 0.86;
   int recovery_maze_sparse_x = 4;
   int recovery_maze_sparse_y = 4;
@@ -81,9 +81,12 @@ struct Constants
   int recovery_aniso_sparse_long = 7;
   int recovery_aniso_sparse_short = 3;
   bool recovery_try_offset = true;
-  bool recovery_full_offset_sweep = true;
+  bool recovery_full_offset_sweep = false;
+  int recovery_full_offset_hpwl_threshold = 220;
   int recovery_dense_sparse_x = 2;
   int recovery_dense_sparse_y = 2;
+  int recovery_max_maze_configs = 12;
+  int recovery_max_via_increase = 2;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;

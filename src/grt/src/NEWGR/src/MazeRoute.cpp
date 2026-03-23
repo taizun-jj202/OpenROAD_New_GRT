@@ -42,17 +42,61 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   std::sort(pxs.begin(), pxs.end());
   std::sort(pys.begin(), pys.end());
 
+  // Add Steiner-like anchors so sparse routing can form shorter trunk lines
+  // than a pin-only Hanan subset.
+  auto addAnchor = [](std::vector<int>& anchors, int value, int upper_bound) {
+    if (upper_bound <= 0) {
+      return;
+    }
+    anchors.push_back(std::clamp(value, 0, upper_bound - 1));
+  };
+  std::vector<int> x_guides = pxs;
+  std::vector<int> y_guides = pys;
+
   const int xSize = grid_graph_->getSize(0);
   const int ySize = grid_graph_->getSize(1);
-  xs_.reserve(xSize / grid.interval.x() + pxs.size());
-  ys_.reserve(ySize / grid.interval.y() + pys.size());
+  if (!pxs.empty()) {
+    const int x_min = pxs.front();
+    const int x_max = pxs.back();
+    const int y_min = pys.front();
+    const int y_max = pys.back();
+    addAnchor(x_guides, (x_min + x_max) / 2, xSize);
+    addAnchor(y_guides, (y_min + y_max) / 2, ySize);
+
+    int sum_x = 0;
+    int sum_y = 0;
+    for (const int x : pxs) {
+      sum_x += x;
+    }
+    for (const int y : pys) {
+      sum_y += y;
+    }
+    addAnchor(x_guides, sum_x / static_cast<int>(pxs.size()), xSize);
+    addAnchor(y_guides, sum_y / static_cast<int>(pys.size()), ySize);
+
+    if (pxs.size() >= 4) {
+      const int n = static_cast<int>(pxs.size()) - 1;
+      addAnchor(x_guides, pxs[n / 4], xSize);
+      addAnchor(y_guides, pys[n / 4], ySize);
+      addAnchor(x_guides, pxs[(3 * n) / 4], xSize);
+      addAnchor(y_guides, pys[(3 * n) / 4], ySize);
+    }
+  }
+
+  std::sort(x_guides.begin(), x_guides.end());
+  x_guides.erase(std::unique(x_guides.begin(), x_guides.end()), x_guides.end());
+  std::sort(y_guides.begin(), y_guides.end());
+  y_guides.erase(std::unique(y_guides.begin(), y_guides.end()), y_guides.end());
+
+  xs_.reserve(xSize / grid.interval.x() + x_guides.size());
+  ys_.reserve(ySize / grid.interval.y() + y_guides.size());
   for (int i = 0, j = 0; true; i++) {
     const int x = i * grid.interval.x() + grid.offset.x();
-    for (; j < pxs.size() && pxs[j] <= x; j++) {
-      if ((!xs_.empty() && pxs[j] == xs_.back()) || pxs[j] == x) {
+    for (; j < x_guides.size() && x_guides[j] <= x; j++) {
+      if ((!xs_.empty() && x_guides[j] == xs_.back()) || x_guides[j] == x) {
         continue;
       }
-      xs_.emplace_back(pxs[j]);
+      xs_.emplace_back(x_guides[j]);
     }
     if (x < xSize) {
       xs_.emplace_back(x);
@@ -62,11 +106,11 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   }
   for (int i = 0, j = 0; true; i++) {
     const int y = i * grid.interval.y() + grid.offset.y();
-    for (; j < pys.size() && pys[j] <= y; j++) {
-      if ((!ys_.empty() && pys[j] == ys_.back()) || pys[j] == y) {
+    for (; j < y_guides.size() && y_guides[j] <= y; j++) {
+      if ((!ys_.empty() && y_guides[j] == ys_.back()) || y_guides[j] == y) {
         continue;
       }
-      ys_.emplace_back(pys[j]);
+      ys_.emplace_back(y_guides[j]);
     }
     if (y < ySize) {
       ys_.emplace_back(y);
