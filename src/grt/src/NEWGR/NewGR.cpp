@@ -3322,6 +3322,50 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   applyViaExcursionCollapse(axial_force.routes, std::max(4 * tile_size, 1));
   axial_force.metrics = compute_metrics(axial_force.routes);
 
+  // Shockwave scenario: aggressively collapse most nets onto global
+  // portal/spine topologies so we force a topology break from compact routes.
+  ScenarioResult shockwave = compact;
+  shockwave.name = "shockwave";
+  applyMedianSpineRebuild(
+      shockwave.routes, 2, 100, min_routing_layer, max_routing_layer);
+  applyQuadrantPortalHypergraphRebuild(grouter_,
+                                       shockwave.routes,
+                                       baseline_rudy,
+                                       2,
+                                       4096,
+                                       100,
+                                       min_routing_layer,
+                                       max_routing_layer);
+  applyGlobalPortalRebuild(grouter_,
+                           shockwave.routes,
+                           baseline_rudy,
+                           2,
+                           100,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyBipolarPortalBackboneRebuild(grouter_,
+                                    shockwave.routes,
+                                    baseline_rudy,
+                                    2,
+                                    4096,
+                                    100,
+                                    min_routing_layer,
+                                    max_routing_layer);
+  applyRmstTrunkRebuild(grouter_,
+                        shockwave.routes,
+                        baseline_rudy,
+                        2,
+                        4096,
+                        100,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyAggressiveDoglegShortcuts(shockwave.routes,
+                                 std::max(48 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(shockwave.routes, std::max(7 * tile_size, 1));
+  applyViaExcursionCollapse(shockwave.routes, std::max(3 * tile_size, 1));
+  shockwave.metrics = compute_metrics(shockwave.routes);
+
   struct CandidateEntry
   {
     const char* name;
@@ -3334,7 +3378,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       {"anisotropic", &anisotropic},
       {"wirehunter", &wirelength_hunter},
       {"radical_hyper", &radical_hyper},
-      {"axial_force", &axial_force}};
+      {"axial_force", &axial_force},
+      {"shockwave", &shockwave}};
   if (sculpted_available) {
     candidates.push_back({"sculpted", &sculpted});
   }
@@ -3397,6 +3442,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return cand_wl <= wl_cap && cand_vias <= via_cap;
   };
 
+  auto route_admissible_loose = [&](const GRoute& candidate,
+                                    const GRoute& reference) {
+    const auto [cand_wl, cand_vias] = route_stats(candidate);
+    const auto [ref_wl, ref_vias] = route_stats(reference);
+    if (ref_wl <= 0) {
+      return true;
+    }
+    const long wl_cap
+        = std::max(ref_wl + static_cast<long>(20 * tile_size),
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_wl) * 2.40)));
+    const long via_cap
+        = std::max(ref_vias + 20L,
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_vias) * 4.20 + 16.0)));
+    return cand_wl <= wl_cap && cand_vias <= via_cap;
+  };
+
   auto route_objective = [&](const GRoute& route, int overflow) {
     const auto [route_wl, route_vias] = route_stats(route);
     const double via_weight = static_cast<double>(tile_size) * 1.00;
@@ -3411,6 +3474,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   selected.name = "deterministic_tournament";
   std::vector<long> tournament_picks(candidates.size(), 0);
   long axial_forced_nets = 0;
+  long shock_forced_nets = 0;
 
   for (const auto& [db_net, base_route] : compact.routes) {
     const GRoute* best_route = &base_route;
@@ -3517,6 +3581,61 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     selected.metrics = compute_metrics(selected.routes);
   }
 
+  // Final shock injection: force topology perturbation on a subset of
+  // complex nets so NEWGR keeps escaping compact-route fixed points.
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto shock_it = shockwave.routes.find(db_net);
+    if (shock_it == shockwave.routes.end()) {
+      continue;
+    }
+    const GRoute& shock_route = shock_it->second;
+    if (!has_planar_guide(shock_route)) {
+      continue;
+    }
+
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+    if (node_count < 7) {
+      continue;
+    }
+    if (!route_admissible_loose(shock_route, current_route)) {
+      continue;
+    }
+
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const auto [base_wl, base_vias] = route_stats(current_route);
+    const auto [shock_wl, shock_vias] = route_stats(shock_route);
+    const double base_score = route_objective(current_route, selected.overflow);
+    const double shock_score = route_objective(shock_route, shockwave.overflow);
+
+    bool use_shock = false;
+    if (node_count >= 14 && (key % 2ULL) == 1ULL) {
+      use_shock = true;
+    }
+    if (!use_shock
+        && shock_wl <= static_cast<long>(base_wl * 1.05)
+        && shock_vias <= static_cast<long>(base_vias * 1.30 + 6)) {
+      use_shock = true;
+    }
+    if (!use_shock && shock_score <= base_score * 1.18) {
+      use_shock = (key % 3ULL) == 1ULL;
+    }
+    if (!use_shock && node_count >= 10
+        && shock_wl <= static_cast<long>(base_wl * 1.35)
+        && shock_vias <= static_cast<long>(base_vias * 3.80 + 12)) {
+      use_shock = (key % 5ULL) == 2ULL;
+    }
+    if (use_shock) {
+      selected.routes[db_net] = shock_route;
+      shock_forced_nets++;
+    }
+  }
+  if (shock_forced_nets > 0) {
+    selected.name += "+shockwave";
+    selected.metrics = compute_metrics(selected.routes);
+  }
+
   ScenarioResult stabilized = selected;
   stabilized.name = "stabilized_radical_hyper";
   applyQuadrantPortalHypergraphRebuild(grouter_,
@@ -3571,23 +3690,26 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   logger_->warn(GNR,
                 6033,
                 "NEWGR tournament picks: compact {} shortcut {} anisotropic {} "
-                "wirehunter {} radical_hyper {} axial_force {} sculpted {}.",
+                "wirehunter {} radical_hyper {} axial_force {} shockwave {} "
+                "sculpted {}.",
                 tournament_picks.size() > 0 ? tournament_picks[0] : 0,
                 tournament_picks.size() > 1 ? tournament_picks[1] : 0,
                 tournament_picks.size() > 2 ? tournament_picks[2] : 0,
                 tournament_picks.size() > 3 ? tournament_picks[3] : 0,
                 tournament_picks.size() > 4 ? tournament_picks[4] : 0,
                 tournament_picks.size() > 5 ? tournament_picks[5] : 0,
-                tournament_picks.size() > 6 ? tournament_picks[6] : 0);
+                tournament_picks.size() > 6 ? tournament_picks[6] : 0,
+                tournament_picks.size() > 7 ? tournament_picks[7] : 0);
   logger_->warn(GNR,
                 6034,
                 "NEWGR blend counters: sculpted {} shortcuts {} anisotropic {} "
-                "wirehunter {} axial_force {}.",
+                "wirehunter {} axial_force {} shockwave {}.",
                 nets_taken_from_sculpted,
                 nets_taken_from_shortcuts,
                 nets_taken_from_anisotropic,
                 nets_taken_from_wirelength_hunter,
-                axial_forced_nets);
+                axial_forced_nets,
+                shock_forced_nets);
 
   restore_snapshot(snapshot);
   return selected.routes;
