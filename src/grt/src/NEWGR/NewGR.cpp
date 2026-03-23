@@ -994,6 +994,210 @@ void applyLayerHoppingDetours(GlobalRouter* grouter,
   }
 }
 
+std::vector<Hotspot> extractTopRudyHotspots(const RudyGrid& normalized_rudy,
+                                            int max_hotspots)
+{
+  std::vector<Hotspot> hotspots;
+  if (normalized_rudy.empty() || normalized_rudy.front().empty()
+      || max_hotspots <= 0) {
+    return hotspots;
+  }
+
+  struct RudyPoint
+  {
+    int gx;
+    int gy;
+    float rudy;
+  };
+
+  std::vector<RudyPoint> candidates;
+  candidates.reserve(normalized_rudy.size() * normalized_rudy.front().size());
+  for (int gx = 0; gx < static_cast<int>(normalized_rudy.size()); ++gx) {
+    for (int gy = 0; gy < static_cast<int>(normalized_rudy[gx].size()); ++gy) {
+      const float rudy = normalized_rudy[gx][gy];
+      if (rudy < 0.65f) {
+        continue;
+      }
+      candidates.push_back(RudyPoint{gx, gy, rudy});
+    }
+  }
+
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const RudyPoint& lhs, const RudyPoint& rhs) {
+              return lhs.rudy > rhs.rudy;
+            });
+
+  const int picked = std::min(max_hotspots, static_cast<int>(candidates.size()));
+  hotspots.reserve(picked);
+  for (int i = 0; i < picked; ++i) {
+    const RudyPoint& point = candidates[i];
+    Hotspot hotspot;
+    hotspot.gx = point.gx;
+    hotspot.gy = point.gy;
+    hotspot.severity = 1.0f + 1.6f * point.rudy;
+    hotspot.affect_horizontal = true;
+    hotspot.affect_vertical = true;
+    hotspots.push_back(hotspot);
+  }
+
+  return hotspots;
+}
+
+bool isPlanarHorizontal(const GSegment& segment)
+{
+  return !segment.isVia() && segment.init_layer == segment.final_layer
+         && segment.init_y == segment.final_y && segment.init_x != segment.final_x;
+}
+
+bool isPlanarVertical(const GSegment& segment)
+{
+  return !segment.isVia() && segment.init_layer == segment.final_layer
+         && segment.init_x == segment.final_x && segment.init_y != segment.final_y;
+}
+
+bool samePoint(const GSegment& lhs, bool lhs_final, const GSegment& rhs, bool rhs_init)
+{
+  const int lhs_x = lhs_final ? lhs.final_x : lhs.init_x;
+  const int lhs_y = lhs_final ? lhs.final_y : lhs.init_y;
+  const int rhs_x = rhs_init ? rhs.init_x : rhs.final_x;
+  const int rhs_y = rhs_init ? rhs.init_y : rhs.final_y;
+  return lhs_x == rhs_x && lhs_y == rhs_y;
+}
+
+void appendCompressedSegment(std::vector<GSegment>& compressed,
+                             const GSegment& segment)
+{
+  const bool degenerate_planar
+      = !segment.isVia()
+        && segment.init_x == segment.final_x
+        && segment.init_y == segment.final_y;
+  if (degenerate_planar) {
+    return;
+  }
+
+  if (compressed.empty()) {
+    compressed.push_back(segment);
+    return;
+  }
+
+  GSegment& prev = compressed.back();
+  const bool reverse_cancel = prev.init_x == segment.final_x
+                              && prev.init_y == segment.final_y
+                              && prev.final_x == segment.init_x
+                              && prev.final_y == segment.init_y
+                              && prev.init_layer == segment.final_layer
+                              && prev.final_layer == segment.init_layer;
+  if (reverse_cancel) {
+    compressed.pop_back();
+    return;
+  }
+
+  const bool contiguous = prev.final_x == segment.init_x
+                          && prev.final_y == segment.init_y
+                          && prev.final_layer == segment.init_layer;
+  if (contiguous) {
+    const bool same_horizontal = isPlanarHorizontal(prev)
+                                 && isPlanarHorizontal(segment)
+                                 && prev.init_y == segment.init_y;
+    const bool same_vertical = isPlanarVertical(prev)
+                               && isPlanarVertical(segment)
+                               && prev.init_x == segment.init_x;
+    if (same_horizontal || same_vertical) {
+      prev.final_x = segment.final_x;
+      prev.final_y = segment.final_y;
+      prev.final_layer = segment.final_layer;
+      return;
+    }
+  }
+
+  compressed.push_back(segment);
+}
+
+bool compressJogTail(std::vector<GSegment>& route, int jog_limit)
+{
+  if (route.size() < 3) {
+    return false;
+  }
+
+  const int n = route.size();
+  const GSegment& first = route[n - 3];
+  const GSegment& middle = route[n - 2];
+  const GSegment& last = route[n - 1];
+
+  if (!samePoint(first, true, middle, true)
+      || !samePoint(middle, false, last, true)) {
+    return false;
+  }
+  if (first.init_layer != first.final_layer
+      || middle.init_layer != middle.final_layer
+      || last.init_layer != last.final_layer) {
+    return false;
+  }
+  if (first.final_layer != middle.init_layer
+      || middle.final_layer != last.init_layer) {
+    return false;
+  }
+
+  if (isPlanarHorizontal(first) && isPlanarVertical(middle)
+      && isPlanarHorizontal(last) && first.init_y == last.final_y
+      && std::abs(middle.final_y - middle.init_y) <= jog_limit) {
+    GSegment merged(first.init_x,
+                    first.init_y,
+                    first.init_layer,
+                    last.final_x,
+                    last.final_y,
+                    last.final_layer);
+    route.resize(n - 3);
+    appendCompressedSegment(route, merged);
+    return true;
+  }
+
+  if (isPlanarVertical(first) && isPlanarHorizontal(middle)
+      && isPlanarVertical(last) && first.init_x == last.final_x
+      && std::abs(middle.final_x - middle.init_x) <= jog_limit) {
+    GSegment merged(first.init_x,
+                    first.init_y,
+                    first.init_layer,
+                    last.final_x,
+                    last.final_y,
+                    last.final_layer);
+    route.resize(n - 3);
+    appendCompressedSegment(route, merged);
+    return true;
+  }
+  return false;
+}
+
+void applyGuideCompression(NetRouteMap& routes, int jog_limit)
+{
+  jog_limit = std::max(jog_limit, 1);
+  for (auto& [db_net, route] : routes) {
+    static_cast<void>(db_net);
+    if (route.empty()) {
+      continue;
+    }
+
+    std::vector<GSegment> compressed;
+    compressed.reserve(route.size());
+    for (const GSegment& segment : route) {
+      appendCompressedSegment(compressed, segment);
+      while (compressJogTail(compressed, jog_limit)) {
+      }
+    }
+
+    std::vector<GSegment> second_pass;
+    second_pass.reserve(compressed.size());
+    for (const GSegment& segment : compressed) {
+      appendCompressedSegment(second_pass, segment);
+    }
+
+    if (!second_pass.empty()) {
+      route.swap(second_pass);
+    }
+  }
+}
+
 }  // namespace
 
 NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
@@ -1084,23 +1288,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   RouterSnapshot snapshot = capture_snapshot();
   ScenarioResult baseline = run_existing_state("baseline", nets);
 
-  RudyGrid normalized_rudy;
-  if (Rudy* rudy = grouter_->getRudy()) {
-    rudy->calculateRudy();
-    normalized_rudy = computeNormalizedRudyGrid(rudy);
-  }
-
   if (baseline.routes.empty()) {
     restore_snapshot(snapshot);
     return {};
   }
 
-  applyLayerHoppingDetours(grouter_,
-                           baseline.routes,
-                           normalized_rudy,
-                           min_routing_layer,
-                           max_routing_layer);
-  applyBraidedDetourWeave(grouter_, baseline.routes, normalized_rudy);
+  const int tile_size = grouter_->grid() != nullptr ? grouter_->grid()->getTileSize()
+                                                     : 1;
+  applyGuideCompression(baseline.routes, std::max(2 * tile_size, 1));
 
   const RouteMetrics transformed = compute_metrics(baseline.routes);
   const double delta_wl_um
@@ -1109,7 +1304,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   logger_->warn(
       GNR,
       6012,
-      "NEWGR radical rewrite: baseline wl {:.0f} um vias {}, rewritten wl "
+      "NEWGR radical rewrite: shaped wl {:.0f} um vias {}, compressed wl "
       "{:.0f} um vias {} (delta wl {:+.0f} um, delta vias {:+d}).",
       baseline.metrics.wirelength_um,
       baseline.metrics.via_count,

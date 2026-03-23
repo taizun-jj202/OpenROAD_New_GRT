@@ -1194,7 +1194,7 @@ NetRouteMap FastRouteCore::run()
   const int CSTEP3 = 5;    // 15
   const int COSHEIGHT = 4;
   int L = 0;
-  int VIA = 6;
+  int VIA = 8;
   const int Ripvalue = -1;
   const bool noADJ = false;
   const int thStep1 = 10;
@@ -1262,7 +1262,7 @@ NetRouteMap FastRouteCore::run()
   if (maxOverflow > 700) {
     costheight_ = 8;
     logistic_coef = 1.33;
-    VIA = 1;
+    VIA = 2;
     THRESH_M = 0;
     CSTEP1 = 30;
   }
@@ -1646,7 +1646,7 @@ NetRouteMap FastRouteCore::run()
   }
 
   costheight_ = 3;
-  via_cost_ = 6;
+  via_cost_ = std::clamp(8 + past_cong / 600, 6, 14);
 
   if (past_cong == 0) {
     mazeRouteMSMDOrder3D(enlarge_, 0, long_edge_len);
