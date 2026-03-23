@@ -3299,8 +3299,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           48,
           static_cast<long>(std::ceil(
               static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00020)));
-      const long via_gain_req = std::max<long>(220L, tile_size * 8L);
-      const long detour_guard = std::max<long>(tile_size * 10L, 5000L);
+      const long via_gain_req = 220L;
+      const long detour_guard = std::max<long>(5000L, tile_size * 2L);
       const bool within_wl_guard
           = wl_feedback_ptr->metrics.wirelength_dbu
             <= wl_anchor->metrics.wirelength_dbu + wl_guard;
@@ -3313,7 +3313,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const double anchor_proxy = estimateDetailedRouteProxyCost(wl_anchor->metrics);
       const double feedback_proxy
           = estimateDetailedRouteProxyCost(wl_feedback_ptr->metrics);
-      const bool proxy_ok = feedback_proxy + 1e-3 < anchor_proxy * 1.005;
+      const bool proxy_ok = feedback_proxy + 1e-3 < anchor_proxy * 1.010;
 
       if (within_wl_guard && via_gain && detour_ok && proxy_ok) {
         preferred_wl_ptr = wl_feedback_ptr;
@@ -3395,17 +3395,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
 
     std::vector<const ScenarioResult*> wl_champion_pool;
-    wl_champion_pool.reserve(10);
-    for (const char* name : std::array<const char*, 10>{
-             "hybrid-netmix-absolute-wl",
-             "hybrid-netmix-min-wl-wide",
-             "hybrid-netmix-min-wl-extreme",
-             "hybrid-netmix-min-wl",
+    wl_champion_pool.reserve(8);
+    for (const char* name : std::array<const char*, 8>{
              "hybrid-netmix-length-adaptive",
              "hybrid-netmix-wl-feedback",
              "hybrid-netmix-smooth-wl",
              "hybrid-netmix-ultra-wl",
              "hybrid-netmix-wl-safe",
+             "hybrid-netmix-dr-stable",
+             "hybrid-netmix-hpwl-lock",
              "hybrid-netmix-wl"}) {
       if (const ScenarioResult* candidate = find_scenario_by_name(name)) {
         wl_champion_pool.push_back(candidate);
@@ -3424,25 +3422,99 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (preferred_wl_ptr != nullptr) {
       forced_wl_ptr = preferred_wl_ptr;
     }
+    if (preferred_wl_ptr == nullptr && wl_anchor != nullptr
+        && !wl_champion_pool.empty()) {
+      // FastRoute+SPRoute-style aggressive netmix championing:
+      // if a candidate is a structural Pareto improvement over the wl anchor,
+      // take it before conservative DR-proxy guards can reject it.
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      const long detour_guard = std::max<long>(tile_size * 18L, 8500L);
+      const long high_layer_guard = std::max<long>(
+          tile_size * 28L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.070)));
+      const int hotspot_guard = std::max<int>(6, wl_anchor->metrics.near_capacity_edges / 5);
+      const long wl_gain_floor = std::max<long>(
+          28L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00010)));
+      const long via_gain_floor = std::max<long>(120L, tile_size * 5L);
+      const long via_trade_guard = std::max<long>(64L, tile_size * 3L);
+
+      const ScenarioResult* pareto_upgrade = nullptr;
+      for (const ScenarioResult* candidate : wl_champion_pool) {
+        if (candidate == nullptr || candidate == wl_anchor) {
+          continue;
+        }
+        const bool structural_guard
+            = candidate->metrics.high_layer_dbu
+                   <= wl_anchor->metrics.high_layer_dbu + high_layer_guard
+              && candidate->metrics.detour_dbu
+                     <= wl_anchor->metrics.detour_dbu + detour_guard
+              && candidate->metrics.near_capacity_edges
+                     <= wl_anchor->metrics.near_capacity_edges + hotspot_guard;
+        if (!structural_guard) {
+          continue;
+        }
+
+        const bool strict_dominates
+            = candidate->metrics.wirelength_dbu <= wl_anchor->metrics.wirelength_dbu
+              && candidate->metrics.via_count <= wl_anchor->metrics.via_count;
+        const bool wl_dominates_with_via_trade
+            = candidate->metrics.wirelength_dbu + wl_gain_floor
+                     <= wl_anchor->metrics.wirelength_dbu
+              && candidate->metrics.via_count
+                     <= wl_anchor->metrics.via_count + via_trade_guard;
+        const bool via_dominates_with_wl_guard
+            = candidate->metrics.via_count + via_gain_floor
+                     <= wl_anchor->metrics.via_count
+              && candidate->metrics.wirelength_dbu
+                     <= wl_anchor->metrics.wirelength_dbu + wl_gain_floor;
+        if (!(strict_dominates || wl_dominates_with_via_trade
+              || via_dominates_with_wl_guard)) {
+          continue;
+        }
+
+        if (pareto_upgrade == nullptr
+            || wirelength_with_dr_proxy_tie_better(*candidate, *pareto_upgrade)) {
+          pareto_upgrade = candidate;
+        }
+      }
+
+      if (pareto_upgrade != nullptr) {
+        forced_wl_ptr = pareto_upgrade;
+        logger_->info(
+            GNR,
+            6033,
+            "NEWGR accepted Pareto champion '{}' over wl anchor '{}' "
+            "(wl delta {}, via delta {}, detour delta {}, high-layer delta {}).",
+            forced_wl_ptr->name,
+            wl_anchor->name,
+            forced_wl_ptr->metrics.wirelength_dbu - wl_anchor->metrics.wirelength_dbu,
+            forced_wl_ptr->metrics.via_count - wl_anchor->metrics.via_count,
+            forced_wl_ptr->metrics.detour_dbu - wl_anchor->metrics.detour_dbu,
+            forced_wl_ptr->metrics.high_layer_dbu - wl_anchor->metrics.high_layer_dbu);
+      }
+    }
 
     if (forced_wl_ptr != nullptr && wl_anchor != nullptr
         && forced_wl_ptr != wl_anchor) {
       const long wl_gain
           = wl_anchor->metrics.wirelength_dbu - forced_wl_ptr->metrics.wirelength_dbu;
       const long min_wl_gain = std::max<long>(
-          96,
+          32,
           static_cast<long>(std::ceil(
-              static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00033)));
+              static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00010)));
       const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
-      const long via_guard = std::max<long>(48L, tile_size * 3L);
+      const long via_guard = std::max<long>(120L, tile_size * 5L);
       const bool via_guard_ok
           = forced_wl_ptr->metrics.via_count <= wl_anchor->metrics.via_count + via_guard;
-      const long detour_guard = std::max<long>(tile_size * 12L, 6500L);
+      const long detour_guard = std::max<long>(tile_size * 20L, 10000L);
       const long high_layer_guard = std::max<long>(
-          tile_size * 18L,
+          tile_size * 28L,
           static_cast<long>(std::ceil(
-              static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.045)));
-      const int hotspot_guard = std::max<int>(4, wl_anchor->metrics.near_capacity_edges / 8);
+              static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.070)));
+      const int hotspot_guard = std::max<int>(6, wl_anchor->metrics.near_capacity_edges / 5);
       const bool structural_guard
           = forced_wl_ptr->metrics.high_layer_dbu
                  <= wl_anchor->metrics.high_layer_dbu + high_layer_guard
@@ -3454,27 +3526,32 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = estimateDetailedRouteProxyCost(wl_anchor->metrics);
       const double challenger_proxy
           = estimateDetailedRouteProxyCost(forced_wl_ptr->metrics);
-      const bool proxy_guard = challenger_proxy + 1e-3 < anchor_proxy * 0.992;
+      const bool proxy_guard = challenger_proxy + 1e-3 < anchor_proxy * 1.005;
       const bool proxy_dominant_upgrade
           = wl_gain >= 0 && via_guard_ok && structural_guard
-            && challenger_proxy + 1e-3 < anchor_proxy * 0.975;
-      const long via_gain_floor = std::max<long>(180L, tile_size * 7L);
+            && challenger_proxy + 1e-3 < anchor_proxy * 1.010;
+      const long via_gain_floor = std::max<long>(120L, tile_size * 5L);
       const bool via_dominant_upgrade
           = wl_gain >= 0
             && forced_wl_ptr->metrics.via_count + via_gain_floor
                    <= wl_anchor->metrics.via_count
             && forced_wl_ptr->metrics.detour_dbu
                    <= wl_anchor->metrics.detour_dbu + detour_guard
-            && challenger_proxy + 1e-3 < anchor_proxy * 1.003;
+            && challenger_proxy + 1e-3 < anchor_proxy * 1.010;
       const bool equal_wl_via_win
           = (wl_gain == 0)
             && (forced_wl_ptr->metrics.via_count < wl_anchor->metrics.via_count);
+      const bool strict_dominates
+          = (forced_wl_ptr->metrics.wirelength_dbu <= wl_anchor->metrics.wirelength_dbu)
+            && (forced_wl_ptr->metrics.via_count <= wl_anchor->metrics.via_count)
+            && structural_guard;
 
       if (!((wl_gain >= min_wl_gain && proxy_guard && via_guard_ok
              && structural_guard)
             || proxy_dominant_upgrade
             || via_dominant_upgrade
-            || equal_wl_via_win)) {
+            || equal_wl_via_win
+            || strict_dominates)) {
         forced_wl_ptr = wl_anchor;
       } else {
         logger_->info(
