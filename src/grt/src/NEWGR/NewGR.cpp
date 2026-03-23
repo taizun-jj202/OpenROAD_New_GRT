@@ -3642,6 +3642,288 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   applyGuideCompression(compact.routes, std::max(8 * tile_size, 1));
   compact.metrics = compute_metrics(compact.routes);
 
+  // Iteration 38 radical mode:
+  // Replace the long sequential rewrite cascade with a one-shot tournament.
+  // Theory:
+  // 1) Build several intentionally different topologies (portal mesh, corridor
+  //    lattice, ring-axis, and RMST anchor).
+  // 2) Pick a donor per net using deterministic keys and strict admissibility.
+  // This produces large wirelength movement while avoiding runaway route bloat.
+  auto radical38_has_planar = [](const GRoute& route) {
+    for (const GSegment& segment : route) {
+      if (!segment.isVia()
+          && (segment.init_x != segment.final_x
+              || segment.init_y != segment.final_y)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  auto radical38_stats = [](const GRoute& route) {
+    std::pair<long, long> stats{0, 0};
+    for (const GSegment& segment : route) {
+      if (segment.isVia()) {
+        stats.second++;
+      } else {
+        stats.first += std::abs(segment.final_x - segment.init_x)
+                       + std::abs(segment.final_y - segment.init_y);
+      }
+    }
+    return stats;
+  };
+  auto radical38_objective = [&](const GRoute& route, int scenario_overflow) {
+    const auto [route_wl, route_vias] = radical38_stats(route);
+    const double via_weight = static_cast<double>(tile_size) * 0.58;
+    const double overflow_penalty
+        = static_cast<double>(std::max(scenario_overflow, 0))
+          * static_cast<double>(tile_size) * 8.0;
+    return static_cast<double>(route_wl)
+           + via_weight * static_cast<double>(route_vias) + overflow_penalty;
+  };
+  auto radical38_admissible = [&](const GRoute& candidate,
+                                  const GRoute& reference,
+                                  int node_count) {
+    const auto [cand_wl, cand_vias] = radical38_stats(candidate);
+    const auto [ref_wl, ref_vias] = radical38_stats(reference);
+    if (ref_wl <= 0) {
+      return true;
+    }
+    const bool large = node_count >= 12;
+    const long wl_cap
+        = std::max(ref_wl
+                       + static_cast<long>((large ? 22 : 14) * tile_size),
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_wl)
+                                 * (large ? 2.40 : 1.85))));
+    const long via_cap
+        = std::max(ref_vias + 24L,
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_vias)
+                                     * (large ? 4.60 : 3.20)
+                                 + 24.0)));
+    return cand_wl <= wl_cap && cand_vias <= via_cap;
+  };
+
+  ScenarioResult radical38_portal_mesh = compact;
+  radical38_portal_mesh.name = "radical38_portal_mesh";
+  applyMedianSpineRebuild(radical38_portal_mesh.routes,
+                          3,
+                          100,
+                          min_routing_layer,
+                          max_routing_layer);
+  applyQuadrantPortalHypergraphRebuild(grouter_,
+                                       radical38_portal_mesh.routes,
+                                       baseline_rudy,
+                                       3,
+                                       4096,
+                                       100,
+                                       min_routing_layer,
+                                       max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical38_portal_mesh.routes,
+                        baseline_rudy,
+                        std::max(6 * tile_size, 1),
+                        std::max(10 * tile_size, 1),
+                        100);
+  applyAggressiveDoglegShortcuts(radical38_portal_mesh.routes,
+                                 std::max(18 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical38_portal_mesh.routes, std::max(8 * tile_size, 1));
+  applyViaExcursionCollapse(radical38_portal_mesh.routes,
+                            std::max(4 * tile_size, 1));
+  radical38_portal_mesh.metrics = compute_metrics(radical38_portal_mesh.routes);
+
+  ScenarioResult radical38_corridor_lattice = compact;
+  radical38_corridor_lattice.name = "radical38_corridor_lattice";
+  applyRudyCorridorBackboneRebuild(grouter_,
+                                   radical38_corridor_lattice.routes,
+                                   baseline_rudy,
+                                   3,
+                                   100,
+                                   min_routing_layer,
+                                   max_routing_layer);
+  applyDualBackboneWarp(grouter_,
+                        radical38_corridor_lattice.routes,
+                        baseline_rudy,
+                        3,
+                        100,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyAggressiveDoglegShortcuts(radical38_corridor_lattice.routes,
+                                 std::max(22 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical38_corridor_lattice.routes,
+                        std::max(7 * tile_size, 1));
+  applyViaExcursionCollapse(radical38_corridor_lattice.routes,
+                            std::max(3 * tile_size, 1));
+  radical38_corridor_lattice.metrics
+      = compute_metrics(radical38_corridor_lattice.routes);
+
+  ScenarioResult radical38_ring_axis = compact;
+  radical38_ring_axis.name = "radical38_ring_axis";
+  applyPerimeterRingCollapse(grouter_,
+                             radical38_ring_axis.routes,
+                             baseline_rudy,
+                             2,
+                             100,
+                             14,
+                             min_routing_layer,
+                             max_routing_layer);
+  applyGlobalPortalRebuild(grouter_,
+                           radical38_ring_axis.routes,
+                           baseline_rudy,
+                           2,
+                           100,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyAggressiveDoglegShortcuts(radical38_ring_axis.routes,
+                                 std::max(20 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical38_ring_axis.routes, std::max(6 * tile_size, 1));
+  applyViaExcursionCollapse(radical38_ring_axis.routes, std::max(3 * tile_size, 1));
+  radical38_ring_axis.metrics = compute_metrics(radical38_ring_axis.routes);
+
+  ScenarioResult radical38_rmst_anchor = compact;
+  radical38_rmst_anchor.name = "radical38_rmst_anchor";
+  applyRmstTrunkRebuild(grouter_,
+                        radical38_rmst_anchor.routes,
+                        baseline_rudy,
+                        3,
+                        4096,
+                        100,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyBipolarPortalBackboneRebuild(grouter_,
+                                    radical38_rmst_anchor.routes,
+                                    baseline_rudy,
+                                    3,
+                                    4096,
+                                    100,
+                                    min_routing_layer,
+                                    max_routing_layer);
+  applyAggressiveDoglegShortcuts(radical38_rmst_anchor.routes,
+                                 std::max(24 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical38_rmst_anchor.routes,
+                        std::max(7 * tile_size, 1));
+  applyViaExcursionCollapse(radical38_rmst_anchor.routes,
+                            std::max(3 * tile_size, 1));
+  radical38_rmst_anchor.metrics = compute_metrics(radical38_rmst_anchor.routes);
+
+  ScenarioResult radical38_selected = compact;
+  radical38_selected.name = "radical38_tournament";
+  long radical38_pick_portal = 0;
+  long radical38_pick_corridor = 0;
+  long radical38_pick_ring = 0;
+  long radical38_pick_rmst = 0;
+
+  for (const auto& [db_net, compact_route] : compact.routes) {
+    const auto net_key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(compact_route).size());
+    const bool is_large = node_count >= 12;
+    const bool is_medium = node_count >= 6;
+
+    const GRoute* best_route = &compact_route;
+    double best_score = radical38_objective(compact_route, compact.overflow);
+    int best_donor = 0;
+
+    auto evaluate_candidate = [&](const NetRouteMap& donor_routes,
+                                  int donor_overflow,
+                                  int donor_id) {
+      const auto donor_it = donor_routes.find(db_net);
+      if (donor_it == donor_routes.end()) {
+        return;
+      }
+      const GRoute& donor_route = donor_it->second;
+      if (!radical38_has_planar(donor_route)) {
+        return;
+      }
+      if (!radical38_admissible(donor_route, compact_route, node_count)) {
+        return;
+      }
+
+      double score = radical38_objective(donor_route, donor_overflow);
+      // Deterministic donor pressure so every iteration materially moves
+      // topology rather than converging to compact-only fixed points.
+      if (is_large && ((net_key + static_cast<std::uint64_t>(donor_id) * 17ULL)
+                           % 3ULL)
+                           == 0ULL) {
+        score *= 0.93;
+      } else if (is_medium
+                 && ((net_key
+                      + static_cast<std::uint64_t>(donor_id) * 11ULL)
+                     % 5ULL)
+                        == 1ULL) {
+        score *= 0.96;
+      }
+
+      if (score + 1e-3 < best_score) {
+        best_score = score;
+        best_route = &donor_route;
+        best_donor = donor_id;
+      }
+    };
+
+    evaluate_candidate(
+        radical38_portal_mesh.routes, radical38_portal_mesh.overflow, 1);
+    evaluate_candidate(
+        radical38_corridor_lattice.routes, radical38_corridor_lattice.overflow, 2);
+    evaluate_candidate(radical38_ring_axis.routes, radical38_ring_axis.overflow, 3);
+    evaluate_candidate(
+        radical38_rmst_anchor.routes, radical38_rmst_anchor.overflow, 4);
+
+    radical38_selected.routes[db_net] = *best_route;
+    switch (best_donor) {
+      case 1:
+        radical38_pick_portal++;
+        break;
+      case 2:
+        radical38_pick_corridor++;
+        break;
+      case 3:
+        radical38_pick_ring++;
+        break;
+      case 4:
+        radical38_pick_rmst++;
+        break;
+      default:
+        break;
+    }
+  }
+
+  applyGuideCompression(radical38_selected.routes, std::max(7 * tile_size, 1));
+  applyViaExcursionCollapse(radical38_selected.routes,
+                            std::max(3 * tile_size, 1));
+  radical38_selected.metrics = compute_metrics(radical38_selected.routes);
+  const double radical38_delta_wl
+      = radical38_selected.metrics.wirelength_um - baseline.metrics.wirelength_um;
+  const long radical38_delta_vias
+      = radical38_selected.metrics.via_count - baseline.metrics.via_count;
+  logger_->warn(GNR,
+                6050,
+                "NEWGR radical38 selected {}: baseline {:.0f} um/{} vias -> "
+                "{:.0f} um/{} vias (delta wl {:+.0f} um, delta vias {:+d}).",
+                radical38_selected.name,
+                baseline.metrics.wirelength_um,
+                baseline.metrics.via_count,
+                radical38_selected.metrics.wirelength_um,
+                radical38_selected.metrics.via_count,
+                radical38_delta_wl,
+                radical38_delta_vias);
+  logger_->warn(GNR,
+                6051,
+                "NEWGR radical38 donor picks: portal {} corridor {} ring {} "
+                "rmst {}.",
+                radical38_pick_portal,
+                radical38_pick_corridor,
+                radical38_pick_ring,
+                radical38_pick_rmst);
+
+  restore_snapshot(snapshot);
+  return radical38_selected.routes;
+
   // Candidate B: reroute with strong but wirelength-oriented capacity sculpting.
   ScenarioResult sculpted = compact;
   sculpted.name = "field_sculpted";
