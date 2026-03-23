@@ -311,7 +311,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
           && net->getNumPins() <= constants_.stage3_full_grid_pin_limit + 4
           && baseline_overflow
                  <= constants_.stage3_full_grid_overflow_threshold + 2
-          && baseline_stretch >= 1.03;
+          && baseline_stretch >= 1.08;
     const double stage3_wl_overflow_slack
         = aggressive_wirelength_mode ? 11.5 : 7.0;
     const bool overflow_driven = baseline_overflow > 0;
@@ -377,15 +377,12 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         }
       }
     }
-    int stage3_cfg_budget = overflow_driven ? 8 : 5;
+    int stage3_cfg_budget = overflow_driven ? 6 : 4;
     if (hpwl >= constants_.stage3_full_grid_hpwl_threshold) {
-      stage3_cfg_budget += 2;
+      stage3_cfg_budget++;
     }
     if (very_high_stretch) {
-      stage3_cfg_budget += 2;
-    }
-    if (aggressive_wirelength_mode) {
-      stage3_cfg_budget += 2;
+      stage3_cfg_budget++;
     }
     stage3_cfg_budget
         = std::max(2,
@@ -427,6 +424,11 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       patternRoute.run();
       considerCandidate(net->getRoutingTree(), /*is_baseline_candidate*/ false);
       evaluated_candidates++;
+      if (!overflow_driven && best_tree && !best_is_baseline
+          && best_stats.overflow <= baseline_overflow
+          && best_stats.wirelength + 20 < original_stats.wirelength) {
+        break;
+      }
     }
 
     // FastRoute-style wirelength-first intensification:
@@ -436,10 +438,10 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         && hpwl >= constants_.stage3_wl_only_hpwl_threshold
         && net->getNumPins() > 2) {
       const int wl_config_limit = std::max(1, constants_.stage3_wl_config_limit);
-      const int wl_bonus_runs = aggressive_wirelength_mode ? 4 : 1;
+      const int wl_bonus_runs = aggressive_wirelength_mode ? 2 : 0;
       int wl_runs = std::min(stage3_cfg_budget, wl_config_limit + wl_bonus_runs);
       if (!overflow_driven) {
-        wl_runs = std::min(wl_runs, aggressive_wirelength_mode ? 6 : 4);
+        wl_runs = std::min(wl_runs, 3);
       }
       const double wl_via_cost_scale
           = std::clamp(constants_.stage3_wl_via_cost_scale
