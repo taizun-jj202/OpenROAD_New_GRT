@@ -53,57 +53,49 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
     pys.emplace_back(pin.point.y());
   }
 
-  // Reuse current routed trunks as sparse-graph anchors (FastRoute-like
-  // topology preservation). This keeps maze search near short existing trees
-  // while still enabling congestion repairs.
+  const auto& box = net_->getBoundingBox();
+  const int pins = std::max(2, net_->getNumPins());
+  const int hp = std::max(1, box.hp());
+  // Keep only nearby old-tree anchors so maze reroute can aggressively compact
+  // long detours instead of preserving the previous expanded topology.
+  const int anchorMargin = std::clamp(hp / (pins >= 12 ? 8 : 7), 4, 28);
+  const int anchorXLow = std::max(0, box.lx() - anchorMargin);
+  const int anchorXHigh = std::min(xSize - 1, box.hx() + anchorMargin);
+  const int anchorYLow = std::max(0, box.ly() - anchorMargin);
+  const int anchorYHigh = std::min(ySize - 1, box.hy() + anchorMargin);
   const auto& oldTree = net_->getRoutingTree();
   if (oldTree) {
     GRTreeNode::preorder(
         oldTree, [&](const std::shared_ptr<GRTreeNode>& node) {
-          pxs.emplace_back(node->x());
-          pys.emplace_back(node->y());
+          if (node->x() >= anchorXLow && node->x() <= anchorXHigh
+              && node->y() >= anchorYLow && node->y() <= anchorYHigh) {
+            pxs.emplace_back(node->x());
+            pys.emplace_back(node->y());
+          }
         });
   }
 
-  const auto& box = net_->getBoundingBox();
   pxs.emplace_back(std::clamp(box.cx(), 0, xSize - 1));
   pys.emplace_back(std::clamp(box.cy(), 0, ySize - 1));
+  pxs.emplace_back(std::clamp(box.lx(), 0, xSize - 1));
+  pxs.emplace_back(std::clamp(box.hx(), 0, xSize - 1));
+  pys.emplace_back(std::clamp(box.ly(), 0, ySize - 1));
+  pys.emplace_back(std::clamp(box.hy(), 0, ySize - 1));
 
   // CUGR-style coarse-to-fine corridor search: bound sparse-graph expansion to
   // each net neighborhood to suppress long global detours.
-  const int pins = std::max(2, net_->getNumPins());
-  const int hp = std::max(1, box.hp());
-  int margin = std::clamp(hp / (pins >= 12 ? 5 : 4), 12, 96);
+  int margin = std::clamp(hp / (pins >= 12 ? 7 : 6), 6, 64);
   if (pins <= 3) {
-    margin = std::max(margin, 18);
+    margin = std::max(margin, 10);
   }
-  if (hp >= 180 || pins >= 16) {
-    margin += std::max(6, hp / 30);
+  if (hp >= 220 || pins >= 18) {
+    margin += std::max(4, hp / 50);
   }
-  margin += std::max(grid.interval.x(), grid.interval.y());
+  margin += std::max(1, std::max(grid.interval.x(), grid.interval.y()) / 2);
   int xLow = std::max(0, box.lx() - margin);
   int xHigh = std::min(xSize - 1, box.hx() + margin);
   int yLow = std::max(0, box.ly() - margin);
   int yHigh = std::min(ySize - 1, box.hy() + margin);
-
-  if (oldTree) {
-    int treeXL = xSize - 1;
-    int treeXH = 0;
-    int treeYL = ySize - 1;
-    int treeYH = 0;
-    GRTreeNode::preorder(
-        oldTree, [&](const std::shared_ptr<GRTreeNode>& node) {
-          treeXL = std::min(treeXL, node->x());
-          treeXH = std::max(treeXH, node->x());
-          treeYL = std::min(treeYL, node->y());
-          treeYH = std::max(treeYH, node->y());
-        });
-    const int treePadding = std::max(6, margin / 2);
-    xLow = std::min(xLow, std::max(0, treeXL - treePadding));
-    xHigh = std::max(xHigh, std::min(xSize - 1, treeXH + treePadding));
-    yLow = std::min(yLow, std::max(0, treeYL - treePadding));
-    yHigh = std::max(yHigh, std::min(ySize - 1, treeYH + treePadding));
-  }
 
   if (xLow == xHigh) {
     if (xHigh + 1 < xSize) {
@@ -275,15 +267,29 @@ void MazeRoute::run()
   const auto& box = net_->getBoundingBox();
   const PointT center(box.cx(), box.cy());
   int startPinIndex = 0;
+  int64_t bestTotalDistance = std::numeric_limits<int64_t>::max();
   int64_t bestCenterDistance = std::numeric_limits<int64_t>::max();
   for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
     const auto& pseudoPin = graph_.getPseudoPin(pinIndex);
-    const int64_t distance = std::llabs(static_cast<int64_t>(pseudoPin.point.x())
-                                        - center.x())
-                             + std::llabs(static_cast<int64_t>(pseudoPin.point.y())
-                                          - center.y());
-    if (distance < bestCenterDistance) {
-      bestCenterDistance = distance;
+    int64_t totalDistance = 0;
+    for (int otherPin = 0; otherPin < numPseudoPins; otherPin++) {
+      if (otherPin == pinIndex) {
+        continue;
+      }
+      const auto& other = graph_.getPseudoPin(otherPin);
+      totalDistance += std::llabs(static_cast<int64_t>(pseudoPin.point.x())
+                                  - other.point.x());
+      totalDistance += std::llabs(static_cast<int64_t>(pseudoPin.point.y())
+                                  - other.point.y());
+    }
+    const int64_t centerDistance
+        = std::llabs(static_cast<int64_t>(pseudoPin.point.x()) - center.x())
+          + std::llabs(static_cast<int64_t>(pseudoPin.point.y()) - center.y());
+    if (totalDistance < bestTotalDistance
+        || (totalDistance == bestTotalDistance
+            && centerDistance < bestCenterDistance)) {
+      bestTotalDistance = totalDistance;
+      bestCenterDistance = centerDistance;
       startPinIndex = pinIndex;
     }
   }

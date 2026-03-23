@@ -1043,18 +1043,27 @@ void CUGR::strictWirelengthCompaction()
   });
 
   const int totalNets = static_cast<int>(netIndices.size());
+  static int strictCallCount = 0;
+  const bool useXAxisWavefront = (strictCallCount % 2 == 0);
+  strictCallCount++;
   const int compactionBudget
-      = std::min(totalNets, std::max(4096, totalNets / 5));
+      = std::min(totalNets, std::max(8192, (totalNets * 4) / 5));
   if (compactionBudget <= 0) {
     return;
   }
 
   const int longNetRank
-      = std::min(compactionBudget - 1, std::max(0, compactionBudget / 5));
+      = std::min(compactionBudget - 1, std::max(0, compactionBudget / 6));
   const uint64_t longWireThreshold
       = routedScores[netIndices[longNetRank]].wire_length;
   const int denseMazeBudget
-      = std::min(compactionBudget, std::max(384, compactionBudget / 5));
+      = std::min(compactionBudget, std::max(1024, compactionBudget / 3));
+  std::vector<int> scheduledNetIndices = buildSpatialCompactionOrder(
+      netIndices, gr_nets_, compactionBudget, useXAxisWavefront);
+  if (scheduledNetIndices.empty()) {
+    scheduledNetIndices.assign(netIndices.begin(),
+                               netIndices.begin() + compactionBudget);
+  }
 
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
@@ -1062,8 +1071,9 @@ void CUGR::strictWirelengthCompaction()
   int accepted = 0;
   int acceptedPattern = 0;
   int acceptedMaze = 0;
-  for (int rank = 0; rank < compactionBudget; rank++) {
-    const int netIndex = netIndices[rank];
+  const int scheduledCount = static_cast<int>(scheduledNetIndices.size());
+  for (int rank = 0; rank < scheduledCount; rank++) {
+    const int netIndex = scheduledNetIndices[rank];
     GRNet* net = gr_nets_[netIndex].get();
     const auto oldTree = net->getRoutingTree();
     if (!oldTree) {
@@ -1103,20 +1113,24 @@ void CUGR::strictWirelengthCompaction()
 
     const bool runMazeCandidate
         = rank < denseMazeBudget || oldScore.overflow_edges > 0
-          || oldScore.wire_length >= longWireThreshold;
+          || oldScore.wire_length >= longWireThreshold
+          || oldScore.via_count >= 8;
     if (runMazeCandidate) {
       const int hp = net->getBoundingBox().hp();
       const int pins = net->getNumPins();
       int interval = 4;
-      if (rank < denseMazeBudget / 2 || oldScore.overflow_edges > 0) {
+      if (rank < denseMazeBudget * 2 / 3 || oldScore.overflow_edges > 0) {
         interval = 3;
       } else if (pins <= 3 && hp <= 80) {
         interval = 5;
       }
-      const int maxMazeCandidates = rank < denseMazeBudget / 4 ? 3 : 2;
+      const int maxMazeCandidates = rank < denseMazeBudget / 6
+                                        ? 5
+                                        : (rank < denseMazeBudget / 2 ? 4 : 3);
       const auto candidateGrids
           = buildMazeCandidateGrids(interval,
-                                    rank + oldScore.via_count * 3,
+                                    rank + oldScore.via_count * 3
+                                        + strictCallCount * 31,
                                     hp,
                                     pins,
                                     maxMazeCandidates);
@@ -1151,7 +1165,10 @@ void CUGR::strictWirelengthCompaction()
     grid_graph_->updateWireCostView(wireCostView, bestTree);
   }
 
-  logger_->report("stage 7 accepted {} net updates ({} pattern / {} maze).",
+  logger_->report("stage 7 scheduled {} nets (axis={}): accepted {} updates "
+                  "({} pattern / {} maze).",
+                  scheduledCount,
+                  useXAxisWavefront ? "x" : "y",
                   accepted,
                   acceptedPattern,
                   acceptedMaze);
@@ -1196,11 +1213,11 @@ void CUGR::route()
   finalPatternTighten();
   grid_graph_->setStageCostScales(0.24, 0.26, 1.45);
   globalCompaction();
-  grid_graph_->setStageCostScales(0.18, 0.20, 1.60);
+  grid_graph_->setStageCostScales(0.16, 0.18, 1.55);
   strictWirelengthCompaction();
-  grid_graph_->setStageCostScales(0.12, 0.14, 1.75);
+  grid_graph_->setStageCostScales(0.09, 0.11, 1.70);
   strictWirelengthCompaction();
-  grid_graph_->setStageCostScales(0.08, 0.10, 1.45);
+  grid_graph_->setStageCostScales(0.03, 0.04, 1.55);
   strictWirelengthCompaction();
 
   printStatistics();
