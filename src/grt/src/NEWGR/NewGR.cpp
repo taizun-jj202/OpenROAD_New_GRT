@@ -8940,6 +8940,259 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
 
+  // Iteration 54 radical mode:
+  // Theory:
+  // 1) Recent runs can still collapse to a narrow family of crossbar-serpentine
+  //    outcomes with limited metric movement.
+  // 2) Construct two intentionally incompatible donors from the same seed:
+  //    - vortex_ladder: ring/portal/wave + braid/layer-hop + deep serpentine.
+  //    - axis_hammer: crossbar/rmst/corridor/warp to force trunk-centric flow.
+  // 3) Deterministically force wide net buckets to each donor to maximize
+  //    topological displacement, then clean up with shortcut/compression passes.
+  ScenarioResult radical54_vortex_ladder = selected;
+  radical54_vortex_ladder.name = "radical54_vortex_ladder";
+  applyPerimeterRingCollapse(grouter_,
+                             radical54_vortex_ladder.routes,
+                             baseline_rudy,
+                             5,
+                             360,
+                             96,
+                             min_routing_layer,
+                             max_routing_layer);
+  applyGlobalPortalRebuild(grouter_,
+                           radical54_vortex_ladder.routes,
+                           baseline_rudy,
+                           5,
+                           340,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical54_vortex_ladder.routes,
+                        baseline_rudy,
+                        std::max(3 * tile_size, 1),
+                        std::max(60 * tile_size, 1),
+                        360);
+  applyBraidedDetourWeave(grouter_, radical54_vortex_ladder.routes, baseline_rudy);
+  applyLayerHoppingDetours(grouter_,
+                           radical54_vortex_ladder.routes,
+                           baseline_rudy,
+                           min_routing_layer,
+                           max_routing_layer);
+  const long radical54_vortex_serpentine = applyQuantizedSerpentineDetours(
+      grouter_, radical54_vortex_ladder.routes, 96, 10, 4, 5);
+  applyAggressiveDoglegShortcuts(radical54_vortex_ladder.routes,
+                                 std::max(58 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical54_vortex_ladder.routes,
+                        std::max(16 * tile_size, 1));
+  applyViaExcursionCollapse(radical54_vortex_ladder.routes,
+                            std::max(7 * tile_size, 1));
+  radical54_vortex_ladder.metrics
+      = compute_metrics(radical54_vortex_ladder.routes);
+
+  ScenarioResult radical54_axis_hammer = selected;
+  radical54_axis_hammer.name = "radical54_axis_hammer";
+  const long radical54_axis_rewired = applyCrossbarAxisCollapse(grouter_,
+                                                                radical54_axis_hammer.routes,
+                                                                baseline_rudy,
+                                                                5,
+                                                                360,
+                                                                84,
+                                                                min_routing_layer,
+                                                                max_routing_layer,
+                                                                6);
+  applyRmstTrunkRebuild(grouter_,
+                        radical54_axis_hammer.routes,
+                        baseline_rudy,
+                        5,
+                        262144,
+                        300,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyRudyCorridorBackboneRebuild(grouter_,
+                                   radical54_axis_hammer.routes,
+                                   baseline_rudy,
+                                   5,
+                                   280,
+                                   min_routing_layer,
+                                   max_routing_layer);
+  applyDualBackboneWarp(grouter_,
+                        radical54_axis_hammer.routes,
+                        baseline_rudy,
+                        5,
+                        260,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical54_axis_hammer.routes,
+                        baseline_rudy,
+                        std::max(2 * tile_size, 1),
+                        std::max(54 * tile_size, 1),
+                        340);
+  applyAggressiveDoglegShortcuts(radical54_axis_hammer.routes,
+                                 std::max(52 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical54_axis_hammer.routes,
+                        std::max(14 * tile_size, 1));
+  applyViaExcursionCollapse(radical54_axis_hammer.routes,
+                            std::max(6 * tile_size, 1));
+  radical54_axis_hammer.metrics = compute_metrics(radical54_axis_hammer.routes);
+
+  ScenarioResult radical54_selected = selected;
+  radical54_selected.name = "radical54_forced_polarized_mix";
+  long radical54_vortex_picks = 0;
+  long radical54_axis_picks = 0;
+  long radical54_forced_vortex = 0;
+  long radical54_forced_axis = 0;
+  long radical54_compact_rescue = 0;
+
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+    const auto [current_wl, current_vias] = route_stats(current_route);
+
+    const GRoute* chosen_route = nullptr;
+    int chosen_donor = -1;
+
+    auto choose_if_valid = [&](const NetRouteMap& donor_routes,
+                               int donor_id,
+                               bool forced_pick) {
+      const auto donor_it = donor_routes.find(db_net);
+      if (donor_it == donor_routes.end()) {
+        return false;
+      }
+      const GRoute& donor_route = donor_it->second;
+      if (!has_planar_guide(donor_route)) {
+        return false;
+      }
+      const auto [donor_wl, donor_vias] = route_stats(donor_route);
+      const double wl_mult = forced_pick ? 7.20 : 5.20;
+      const double via_mult = forced_pick ? 24.0 : 14.0;
+      const bool broad_cap
+          = donor_wl <= static_cast<long>(
+                            current_wl * wl_mult
+                            + static_cast<long>((node_count >= 9 ? 900 : 620)))
+            && donor_vias
+                   <= static_cast<long>(
+                       current_vias * via_mult
+                       + static_cast<long>((node_count >= 9 ? 520 : 360)));
+      if (!route_admissible_radical(donor_route, current_route) && !broad_cap) {
+        return false;
+      }
+      chosen_route = &donor_route;
+      chosen_donor = donor_id;
+      return true;
+    };
+
+    bool forced_pick = false;
+    if (node_count >= 6 && ((key % 2ULL) == 0ULL || (key % 11ULL) == 5ULL)) {
+      forced_pick = choose_if_valid(radical54_vortex_ladder.routes, 0, true);
+      if (forced_pick) {
+        radical54_forced_vortex++;
+      }
+    }
+    if (!forced_pick && node_count >= 6
+        && ((key % 3ULL) == 1ULL || (key % 13ULL) == 4ULL)) {
+      forced_pick = choose_if_valid(radical54_axis_hammer.routes, 1, true);
+      if (forced_pick) {
+        radical54_forced_axis++;
+      }
+    }
+
+    if (!forced_pick) {
+      double best_score = route_objective(current_route, selected.overflow);
+      auto consider_candidate = [&](const NetRouteMap& donor_routes,
+                                    int donor_id,
+                                    int donor_overflow) {
+        const auto donor_it = donor_routes.find(db_net);
+        if (donor_it == donor_routes.end()) {
+          return;
+        }
+        const GRoute& donor_route = donor_it->second;
+        if (!has_planar_guide(donor_route)) {
+          return;
+        }
+
+        const auto [donor_wl, donor_vias] = route_stats(donor_route);
+        const bool broad_cap
+            = donor_wl <= static_cast<long>(current_wl * 4.80 + 460)
+              && donor_vias <= static_cast<long>(current_vias * 10.50 + 260);
+        if (!route_admissible_radical(donor_route, current_route) && !broad_cap) {
+          return;
+        }
+
+        double donor_score = route_objective(donor_route, donor_overflow);
+        if (donor_id == 0 && node_count >= 8 && (key % 5ULL) == 2ULL) {
+          donor_score *= 0.76;
+        }
+        if (donor_id == 1 && node_count >= 8 && (key % 7ULL) == 3ULL) {
+          donor_score *= 0.74;
+        }
+        if (donor_score + 1e-3 < best_score) {
+          best_score = donor_score;
+          chosen_route = &donor_route;
+          chosen_donor = donor_id;
+        }
+      };
+
+      consider_candidate(
+          radical54_vortex_ladder.routes, 0, radical54_vortex_ladder.overflow);
+      consider_candidate(
+          radical54_axis_hammer.routes, 1, radical54_axis_hammer.overflow);
+    }
+
+    if (chosen_route != nullptr) {
+      radical54_selected.routes[db_net] = *chosen_route;
+      if (chosen_donor == 0) {
+        radical54_vortex_picks++;
+      } else if (chosen_donor == 1) {
+        radical54_axis_picks++;
+      }
+      continue;
+    }
+
+    if (node_count <= 3 && (key % 5ULL) == 0ULL) {
+      const auto compact_it = compact.routes.find(db_net);
+      if (compact_it != compact.routes.end()) {
+        const GRoute& compact_route = compact_it->second;
+        if (has_planar_guide(compact_route)
+            && route_admissible(compact_route, current_route)) {
+          radical54_selected.routes[db_net] = compact_route;
+          radical54_compact_rescue++;
+        }
+      }
+    }
+  }
+
+  if (radical54_vortex_picks > 0 || radical54_axis_picks > 0
+      || radical54_compact_rescue > 0) {
+    applyWavefrontDetours(grouter_,
+                          radical54_selected.routes,
+                          baseline_rudy,
+                          std::max(2 * tile_size, 1),
+                          std::max(56 * tile_size, 1),
+                          330);
+    applyAggressiveDoglegShortcuts(radical54_selected.routes,
+                                   std::max(50 * tile_size, 1),
+                                   std::max(tile_size, 1));
+    applyGuideCompression(radical54_selected.routes, std::max(13 * tile_size, 1));
+    applyViaExcursionCollapse(radical54_selected.routes,
+                              std::max(6 * tile_size, 1));
+    radical54_selected.name += "+rad54";
+    radical54_selected.metrics = compute_metrics(radical54_selected.routes);
+
+    const bool radical54_catastrophic
+        = static_cast<double>(radical54_selected.metrics.wirelength_dbu)
+              > static_cast<double>(baseline.metrics.wirelength_dbu) * 4.20
+          || static_cast<double>(radical54_selected.metrics.via_count)
+                 > static_cast<double>(baseline.metrics.via_count) * 7.00;
+    if (!radical54_catastrophic) {
+      selected = radical54_selected;
+    }
+  }
+
   // Final safeguard to prevent catastrophic regressions.
   const bool catastrophic
       = static_cast<double>(selected.metrics.wirelength_dbu)
@@ -9091,6 +9344,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 "NEWGR rad53 rewired nets: axis {} serpentine {}.",
                 radical53_axis_rewired,
                 radical53_serpentine_rewrites);
+  logger_->warn(GNR,
+                6096,
+                "NEWGR rad54 picks: vortex {} axis {} forced_vortex {} "
+                "forced_axis {} compact_rescue {} axis_rewired {} "
+                "serpentine_rewrites {}.",
+                radical54_vortex_picks,
+                radical54_axis_picks,
+                radical54_forced_vortex,
+                radical54_forced_axis,
+                radical54_compact_rescue,
+                radical54_axis_rewired,
+                radical54_vortex_serpentine);
 
   restore_snapshot(snapshot);
   return selected.routes;
