@@ -3929,6 +3929,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   };
 
   RouterSnapshot snapshot = capture_snapshot();
+  // Iteration 55 radical runtime mode:
+  // Theory:
+  // 1) Most NEWGR runtime is spent in a very deep post-route scenario stack.
+  // 2) Forcing very low overflow iterations plus one topology rewrite should
+  //    preserve route diversity while cutting runtime substantially.
+  // 3) Early return from this lightweight branch prevents re-entering the
+  //    legacy multi-stage tournament cascade.
+  constexpr int radical55_overflow_iterations = 20;
+  if (grouter_->fastroute_ != nullptr) {
+    grouter_->fastroute_->setOverflowIterations(radical55_overflow_iterations);
+    grouter_->fastroute_->setCriticalNetsPercentage(0.0f);
+  }
   ScenarioResult baseline = run_existing_state("baseline", nets);
   if (baseline.routes.empty()) {
     restore_snapshot(snapshot);
@@ -3946,6 +3958,40 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   applyViaExcursionCollapse(compact.routes, std::max(4 * tile_size, 1));
   applyGuideCompression(compact.routes, std::max(8 * tile_size, 1));
   compact.metrics = compute_metrics(compact.routes);
+
+  ScenarioResult radical55_selected = compact;
+  radical55_selected.name = "radical55_compact_fastpath";
+  applyAggressiveDoglegShortcuts(radical55_selected.routes,
+                                 std::max(10 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical55_selected.routes, std::max(6 * tile_size, 1));
+  applyViaExcursionCollapse(radical55_selected.routes, std::max(3 * tile_size, 1));
+  radical55_selected.metrics = compute_metrics(radical55_selected.routes);
+
+  const bool radical55_catastrophic
+      = static_cast<double>(radical55_selected.metrics.wirelength_dbu)
+            > static_cast<double>(baseline.metrics.wirelength_dbu) * 4.20
+        || static_cast<double>(radical55_selected.metrics.via_count)
+               > static_cast<double>(baseline.metrics.via_count) * 7.00;
+  if (radical55_catastrophic) {
+    radical55_selected = compact;
+    radical55_selected.name = "radical55_compact_fallback";
+  }
+
+  logger_->warn(
+      GNR,
+      6097,
+      "NEWGR rad55 fastpath selected {}: baseline {:.0f} um/{} vias -> "
+      "{:.0f} um/{} vias; overflow_iter {}.",
+      radical55_selected.name,
+      baseline.metrics.wirelength_um,
+      baseline.metrics.via_count,
+      radical55_selected.metrics.wirelength_um,
+      radical55_selected.metrics.via_count,
+      radical55_overflow_iterations);
+
+  restore_snapshot(snapshot);
+  return radical55_selected.routes;
 
   // Iteration 38 radical mode:
   // Replace the long sequential rewrite cascade with a one-shot tournament.
