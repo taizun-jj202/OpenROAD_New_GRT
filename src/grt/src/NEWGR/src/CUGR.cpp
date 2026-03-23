@@ -419,8 +419,8 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
     return lhs < rhs;
   });
   const int detourBudget
-      = std::max(96, static_cast<int>(netIndices.size() / 8));
-  const int minOverflowForDetour = 3;
+      = std::max(128, static_cast<int>(netIndices.size() / 6));
+  const int minOverflowForDetour = 2;
   if (overflowEdges[netIndices.front()] < minOverflowForDetour) {
     logger_->report("stage 2 skipped: overflow is below detour trigger.");
     updateOverflowNets(netIndices);
@@ -1055,11 +1055,11 @@ void CUGR::strictWirelengthCompaction()
           / static_cast<double>(hp);
   }
   std::sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
-    if (routedScores[lhs].overflow_edges != routedScores[rhs].overflow_edges) {
-      return routedScores[lhs].overflow_edges > routedScores[rhs].overflow_edges;
-    }
     if (std::abs(detourRatios[lhs] - detourRatios[rhs]) > 1e-9) {
       return detourRatios[lhs] > detourRatios[rhs];
+    }
+    if (routedScores[lhs].overflow_edges != routedScores[rhs].overflow_edges) {
+      return routedScores[lhs].overflow_edges > routedScores[rhs].overflow_edges;
     }
     if (routedScores[lhs].wire_length != routedScores[rhs].wire_length) {
       return routedScores[lhs].wire_length > routedScores[rhs].wire_length;
@@ -1084,7 +1084,7 @@ void CUGR::strictWirelengthCompaction()
       = std::min(compactionBudget - 1, std::max(0, compactionBudget / 5));
   const double detourRatioThreshold = detourRatios[netIndices[detourRank]];
   const int denseMazeBudget
-      = std::min(compactionBudget, std::max(768, compactionBudget / 4));
+      = std::min(compactionBudget, std::max(1024, compactionBudget / 3));
   std::vector<int> scheduledNetIndices = buildSpatialCompactionOrder(
       netIndices, gr_nets_, compactionBudget, useXAxisWavefront);
   if (scheduledNetIndices.empty()) {
@@ -1156,8 +1156,8 @@ void CUGR::strictWirelengthCompaction()
         interval = 5;
       }
       const int maxMazeCandidates = rank < denseMazeBudget / 10
-                                        ? 5
-                                        : (rank < denseMazeBudget / 2 ? 4 : 3);
+                                        ? 6
+                                        : (rank < denseMazeBudget / 2 ? 5 : 4);
       const auto candidateGrids
           = buildMazeCandidateGrids(interval,
                                     rank + oldScore.via_count * 3
@@ -1252,6 +1252,16 @@ void CUGR::route()
   strictWirelengthCompaction();
   grid_graph_->setStageCostScales(0.0, 0.01, 0.92);
   strictWirelengthCompaction();
+  updateOverflowNets(netIndices);
+  if (!netIndices.empty()) {
+    // Final overflow cleanup with a moderate congestion weight; this follows
+    // FastRoute/SPRoute RRR intuition that a small late cleanup reduces
+    // detailed-route detours.
+    grid_graph_->setStageCostScales(0.24, 0.60, 1.02);
+    mazeRoute(netIndices);
+    grid_graph_->setStageCostScales(0.02, 0.03, 0.90);
+    strictWirelengthCompaction();
+  }
 
   printStatistics();
   if (constants_.write_heatmap) {
