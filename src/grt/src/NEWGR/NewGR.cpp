@@ -4090,6 +4090,95 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         nets_taken_from_corridor_ring++;
       }
     }
+    auto route_admissible_phaseflip = [&](const GRoute& candidate,
+                                          const GRoute& reference) {
+      const auto [cand_wl, cand_vias] = route_stats(candidate);
+      const auto [ref_wl, ref_vias] = route_stats(reference);
+      if (ref_wl <= 0) {
+        return true;
+      }
+      const long wl_cap
+          = std::max(ref_wl + static_cast<long>(30 * tile_size),
+                     static_cast<long>(
+                         std::ceil(static_cast<double>(ref_wl) * 3.10)));
+      const long via_cap
+          = std::max(ref_vias + 30L,
+                     static_cast<long>(
+                         std::ceil(static_cast<double>(ref_vias) * 6.40 + 30.0)));
+      return cand_wl <= wl_cap && cand_vias <= via_cap;
+    };
+
+    long phaseflip_corridor_nets = 0;
+    long phaseflip_shock_nets = 0;
+    long phaseflip_vortex_nets = 0;
+    long phaseflip_ring_nets = 0;
+    for (const auto& [db_net, current_route] : selected.routes) {
+      const auto key
+          = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+      const int node_count
+          = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+
+      const GRoute* donor_route = nullptr;
+      int donor_class = -1;
+      auto vortex_it = corridor_vortex.routes.find(db_net);
+      auto ring_it = corridor_ring.routes.find(db_net);
+      auto shock_it = corridor_shock.routes.find(db_net);
+      auto corridor_it = corridor.routes.find(db_net);
+
+      if (node_count >= 14) {
+        const int bucket = static_cast<int>(key % 3ULL);
+        if (bucket == 0 && vortex_it != corridor_vortex.routes.end()) {
+          donor_route = &vortex_it->second;
+          donor_class = 0;
+        } else if (bucket == 1 && ring_it != corridor_ring.routes.end()) {
+          donor_route = &ring_it->second;
+          donor_class = 1;
+        } else if (shock_it != corridor_shock.routes.end()) {
+          donor_route = &shock_it->second;
+          donor_class = 2;
+        }
+      } else if (node_count >= 9) {
+        if ((key % 2ULL) == 0ULL && shock_it != corridor_shock.routes.end()) {
+          donor_route = &shock_it->second;
+          donor_class = 2;
+        } else if (ring_it != corridor_ring.routes.end()) {
+          donor_route = &ring_it->second;
+          donor_class = 1;
+        }
+      } else if (node_count >= 5 && (key % 4ULL) == 1ULL
+                 && corridor_it != corridor.routes.end()) {
+        donor_route = &corridor_it->second;
+        donor_class = 3;
+      }
+
+      if (donor_route == nullptr || !has_planar_guide(*donor_route)
+          || !route_admissible_phaseflip(*donor_route, current_route)) {
+        continue;
+      }
+
+      selected.routes[db_net] = *donor_route;
+      switch (donor_class) {
+        case 0:
+          phaseflip_vortex_nets++;
+          break;
+        case 1:
+          phaseflip_ring_nets++;
+          break;
+        case 2:
+          phaseflip_shock_nets++;
+          break;
+        case 3:
+          phaseflip_corridor_nets++;
+          break;
+        default:
+          break;
+      }
+    }
+    if (phaseflip_corridor_nets > 0 || phaseflip_shock_nets > 0
+        || phaseflip_vortex_nets > 0 || phaseflip_ring_nets > 0) {
+      selected.name += "+phaseflip36";
+    }
+
     applyWavefrontDetours(grouter_,
                           selected.routes,
                           baseline_rudy,
@@ -4148,6 +4237,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   forced_shock_buckets,
                   forced_vortex_buckets,
                   forced_ring_buckets);
+    logger_->warn(GNR,
+                  6043,
+                  "NEWGR corridor phaseflip36 picks: corridor {} shock {} "
+                  "vortex {} ring {}.",
+                  phaseflip_corridor_nets,
+                  phaseflip_shock_nets,
+                  phaseflip_vortex_nets,
+                  phaseflip_ring_nets);
 
     restore_snapshot(snapshot);
     return selected.routes;
