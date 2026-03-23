@@ -1275,6 +1275,97 @@ void applyViaExcursionCollapse(NetRouteMap& routes, int max_planar_excursion)
   }
 }
 
+void applyAggressiveDoglegShortcuts(NetRouteMap& routes,
+                                    int max_middle_len,
+                                    int min_wirelength_gain)
+{
+  max_middle_len = std::max(max_middle_len, 1);
+  min_wirelength_gain = std::max(min_wirelength_gain, 1);
+
+  for (auto& [db_net, route] : routes) {
+    static_cast<void>(db_net);
+    if (route.size() < 3) {
+      continue;
+    }
+
+    std::vector<GSegment> current = route;
+    bool changed = false;
+
+    for (int round = 0; round < 4; ++round) {
+      if (current.size() < 3) {
+        break;
+      }
+
+      bool round_changed = false;
+      std::vector<GSegment> rewritten;
+      rewritten.reserve(current.size());
+
+      for (size_t idx = 0; idx < current.size();) {
+        if (idx + 2 < current.size()) {
+          const GSegment& first = current[idx];
+          const GSegment& middle = current[idx + 1];
+          const GSegment& last = current[idx + 2];
+
+          const bool contiguous = samePointAndLayer(first, true, middle, true)
+                                  && samePointAndLayer(middle, false, last, true);
+          const bool same_layer = !first.isVia() && !middle.isVia() && !last.isVia()
+                                  && first.init_layer == first.final_layer
+                                  && middle.init_layer == middle.final_layer
+                                  && last.init_layer == last.final_layer
+                                  && first.init_layer == middle.init_layer
+                                  && middle.init_layer == last.init_layer;
+
+          if (contiguous && same_layer) {
+            const bool hvh = isPlanarHorizontal(first) && isPlanarVertical(middle)
+                             && isPlanarHorizontal(last)
+                             && first.init_y == last.final_y;
+            const bool vhv = isPlanarVertical(first) && isPlanarHorizontal(middle)
+                             && isPlanarVertical(last)
+                             && first.init_x == last.final_x;
+
+            if (hvh || vhv) {
+              const long middle_len = std::abs(middle.final_x - middle.init_x)
+                                      + std::abs(middle.final_y - middle.init_y);
+              const long old_len = first.length() + middle.length() + last.length();
+              const GSegment direct(first.init_x,
+                                    first.init_y,
+                                    first.init_layer,
+                                    last.final_x,
+                                    last.final_y,
+                                    last.final_layer);
+              const long new_len = std::abs(direct.final_x - direct.init_x)
+                                   + std::abs(direct.final_y - direct.init_y);
+              const long gain = old_len - new_len;
+
+              if (middle_len <= max_middle_len && gain >= min_wirelength_gain) {
+                appendCompressedSegment(rewritten, direct);
+                idx += 3;
+                round_changed = true;
+                continue;
+              }
+            }
+          }
+        }
+
+        appendCompressedSegment(rewritten, current[idx]);
+        ++idx;
+      }
+
+      if (!rewritten.empty()) {
+        current.swap(rewritten);
+      }
+      if (!round_changed) {
+        break;
+      }
+      changed = true;
+    }
+
+    if (changed && !current.empty()) {
+      route.swap(current);
+    }
+  }
+}
+
 void applyWavefrontDetours(GlobalRouter* grouter,
                            NetRouteMap& routes,
                            const RudyGrid& normalized_rudy,
@@ -1563,6 +1654,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   sculpted.name = "field_sculpted";
   bool sculpted_available = false;
   long nets_taken_from_sculpted = 0;
+  long nets_taken_from_shortcuts = 0;
   try {
     for (Net* net : nets) {
       if (net != nullptr && net->getDbNet() != nullptr) {
@@ -1697,19 +1789,66 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       selected.routes[db_net] = baseline_route;
     }
   }
+
+  ScenarioResult shortcut = selected;
+  shortcut.name = "ortholine_shortcut";
+  applyAggressiveDoglegShortcuts(shortcut.routes,
+                                 std::max(30 * tile_size, 1),
+                                 std::max(2 * tile_size, 1));
+  applyViaExcursionCollapse(shortcut.routes, std::max(14 * tile_size, 1));
+  applyGuideCompression(shortcut.routes, std::max(24 * tile_size, 1));
+  shortcut.metrics = compute_metrics(shortcut.routes);
+
+  for (const auto& [db_net, route] : selected.routes) {
+    auto shortcut_it = shortcut.routes.find(db_net);
+    if (shortcut_it == shortcut.routes.end()) {
+      continue;
+    }
+    const GRoute& shortcut_route = shortcut_it->second;
+
+    const bool base_valid = has_planar_guide(route);
+    const bool shortcut_valid = has_planar_guide(shortcut_route);
+    if (!shortcut_valid && base_valid) {
+      continue;
+    }
+    if (shortcut_valid && !base_valid) {
+      selected.routes[db_net] = shortcut_route;
+      nets_taken_from_shortcuts++;
+      continue;
+    }
+
+    const double base_score = route_score(route, selected.overflow);
+    const double shortcut_score = route_score(shortcut_route, selected.overflow);
+    bool use_shortcut = shortcut_score + 1e-3 < base_score;
+    if (!use_shortcut && shortcut_score <= base_score * 1.015) {
+      const auto key
+          = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+      use_shortcut = (key % 5ULL) == 0ULL;
+    }
+    if (use_shortcut) {
+      selected.routes[db_net] = shortcut_route;
+      nets_taken_from_shortcuts++;
+    }
+  }
+  selected.name += "+ortholine";
+  selected.metrics = compute_metrics(selected.routes);
+
   const RouteMetrics pre_wave_metrics = compute_metrics(selected.routes);
   applyWavefrontDetours(grouter_,
                         selected.routes,
                         baseline_rudy,
-                        std::max(12 * tile_size, 1),
-                        std::max(3 * tile_size, 1),
-                        72);
-  applyGuideCompression(selected.routes, std::max(6 * tile_size, 1));
-  applyViaExcursionCollapse(selected.routes, std::max(3 * tile_size, 1));
+                        std::max(20 * tile_size, 1),
+                        std::max(2 * tile_size, 1),
+                        22);
+  applyAggressiveDoglegShortcuts(selected.routes,
+                                 std::max(18 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(selected.routes, std::max(8 * tile_size, 1));
+  applyViaExcursionCollapse(selected.routes, std::max(5 * tile_size, 1));
   selected.metrics = compute_metrics(selected.routes);
   logger_->warn(GNR,
                 6021,
-                "NEWGR wavefront detour pass: wl delta {:+.0f} um, via delta "
+                "NEWGR wavefront escape pass: wl delta {:+.0f} um, via delta "
                 "{:+d}.",
                 selected.metrics.wirelength_um - pre_wave_metrics.wirelength_um,
                 selected.metrics.via_count - pre_wave_metrics.via_count);
@@ -1722,6 +1861,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = sculpted.metrics.wirelength_um - baseline.metrics.wirelength_um;
   const long sculpted_delta_vias
       = sculpted.metrics.via_count - baseline.metrics.via_count;
+  const double shortcut_delta_wl
+      = shortcut.metrics.wirelength_um - baseline.metrics.wirelength_um;
+  const long shortcut_delta_vias
+      = shortcut.metrics.via_count - baseline.metrics.via_count;
   const double selected_delta_wl
       = selected.metrics.wirelength_um - baseline.metrics.wirelength_um;
   const long selected_delta_vias
@@ -1748,6 +1891,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 sculpted_delta_vias,
                 sculpted.overflow);
   logger_->warn(GNR,
+                6022,
+                "NEWGR candidate {}: wl {:.0f} um vias {} (delta wl {:+.0f} "
+                "um, delta vias {:+d}, overflow {}).",
+                shortcut.name,
+                shortcut.metrics.wirelength_um,
+                shortcut.metrics.via_count,
+                shortcut_delta_wl,
+                shortcut_delta_vias,
+                selected.overflow);
+  logger_->warn(GNR,
                 6018,
                 "NEWGR selected {} over baseline {:.0f} um vias {} -> {:.0f} "
                 "um vias {} (delta wl {:+.0f} um, delta vias {:+d}).",
@@ -1760,9 +1913,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 selected_delta_vias);
   logger_->warn(GNR,
                 6020,
-                "NEWGR blended {} nets from {} into final selection.",
+                "NEWGR blended {} nets from {} and {} nets from {} into final "
+                "selection.",
                 nets_taken_from_sculpted,
-                sculpted.name);
+                sculpted.name,
+                nets_taken_from_shortcuts,
+                shortcut.name);
 
   restore_snapshot(snapshot);
   return selected.routes;
