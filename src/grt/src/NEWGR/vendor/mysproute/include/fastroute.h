@@ -652,7 +652,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	// - BALANCED : compromise between the two.
 	if (algo == Astar) {
 		noADJ = (newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL
-		         || newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_WL);
+		         || newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_WL
+		         || newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_MIX);
 		if (newgr_capacity_profile == NEWGR_CAP_PROFILE_WL_FOCUSED) {
 			ENLARGE = 36;
 			ESTEP1 = 8;
@@ -703,8 +704,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			// Radical shortest-path profile:
 			// minimize detours aggressively and rely on selective deterministic
 			// bursts to break early hotspots.
-			ENLARGE = 18;
-			ESTEP1 = 3;
+			ENLARGE = 16;
+			ESTEP1 = 2;
 			ESTEP2 = 2;
 			ESTEP3 = 1;
 			CSTEP1 = 1;
@@ -712,7 +713,21 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			CSTEP3 = 1;
 			LVIter = 1;
 			VIA = 0;
-			astar_weight = 0.50f;
+			astar_weight = 0.46f;
+		} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_MIX) {
+			// Radical mixed profile:
+			// combine CUGR-style hotspot reserve + SPRoute deterministic warmup
+			// with very tight FastRoute-like shortest-path windows.
+			ENLARGE = 14;
+			ESTEP1 = 2;
+			ESTEP2 = 1;
+			ESTEP3 = 1;
+			CSTEP1 = 1;
+			CSTEP2 = 1;
+			CSTEP3 = 1;
+			LVIter = 1;
+			VIA = 1;
+			astar_weight = 0.46f;
 		} else {
 			ENLARGE = 40;
 			ESTEP1 = 9;
@@ -787,9 +802,16 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			VIA = 0;
 		} else if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_WL) {
 			VIA = 0;
+		} else if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_MIX) {
+			VIA = 1;
 		}
-		//viacost = VIA;
-		viacost = 0;
+		if (algo == Astar
+		    && (newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_MIX
+		        || newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_WL)) {
+			viacost = 1;
+		} else {
+			viacost = 0;
+		}
 		gen_brk_RSMT(FALSE, FALSE, FALSE, FALSE, noADJ);
 		printf("first L\n");
 		routeLAll(TRUE);
@@ -947,7 +969,9 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 				} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL) {
 					enlarge_limit = max(5, max(xGrid, yGrid) / 14);
 				} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_WL) {
-					enlarge_limit = max(4, max(xGrid, yGrid) / 16);
+					enlarge_limit = max(3, max(xGrid, yGrid) / 18);
+				} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_MIX) {
+					enlarge_limit = max(3, max(xGrid, yGrid) / 18);
 				} else {
 					enlarge_limit = max(7, max(xGrid, yGrid) / 9);
 				}
@@ -1019,6 +1043,11 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 				           && i <= 2
 				           && totalOverflow > 1500) {
 					active_algo = DetPart_Astar_Local;
+				} else if (algo == Astar
+				           && newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_MIX
+				           && i <= 1
+				           && totalOverflow > 900) {
+					active_algo = DetPart_Astar_Local;
 				}
 				// CUGR/FastRoute-style annealing:
 				// high-overflow rounds prioritize escape; late rounds prioritize
@@ -1043,12 +1072,21 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 					}
 				} else if (algo == Astar
 				           && newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_WL) {
-					if (totalOverflow > 2800) {
-						round_astar_weight = 0.66f;
+					if (totalOverflow > 2500) {
+						round_astar_weight = 0.60f;
 					} else if (totalOverflow > 500) {
-						round_astar_weight = 0.50f;
+						round_astar_weight = 0.44f;
 					} else {
-						round_astar_weight = 0.35f;
+						round_astar_weight = 0.28f;
+					}
+				} else if (algo == Astar
+				           && newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_MIX) {
+					if (totalOverflow > 2200) {
+						round_astar_weight = 0.60f;
+					} else if (totalOverflow > 450) {
+						round_astar_weight = 0.46f;
+					} else {
+						round_astar_weight = 0.30f;
 					}
 				}
 

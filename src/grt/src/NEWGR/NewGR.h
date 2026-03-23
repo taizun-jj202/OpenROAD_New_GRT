@@ -26,6 +26,8 @@ class NewGR
   CUGR* cugr_;
   utl::Logger* logger_;
   std::unique_ptr<NewgrEngine> engine_;
+  int last_total_overflow_{0};
+  bool used_fastroute_last_run_{false};
 };
 
 }  // namespace grt

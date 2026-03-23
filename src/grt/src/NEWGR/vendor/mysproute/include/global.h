@@ -18,6 +18,7 @@ float max_rudy;
 #define NEWGR_CAP_PROFILE_3D_SHORT 3
 #define NEWGR_CAP_PROFILE_ULTRA_WL 4
 #define NEWGR_CAP_PROFILE_RADICAL_WL 5
+#define NEWGR_CAP_PROFILE_RADICAL_MIX 6
 int newgr_capacity_profile = NEWGR_CAP_PROFILE_BALANCED;
 
 // NEWGR hybrid policy:
@@ -63,19 +64,26 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 			= (newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL);
 		const bool radical_wl_profile
 			= (newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_WL);
+		const bool radical_mix_profile
+			= (newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_MIX);
 		// In low congestion regions, keep hard capacity to avoid unnecessary
 		// global-route detours that tend to increase wirelength.
 		if (rudy < 1.0) {
-			adj = (ultra_wl_profile || radical_wl_profile) ? 1.0f
+			adj = (ultra_wl_profile || radical_wl_profile || radical_mix_profile) ? 1.0f
 			                       : (wl_profile ? 1.0f : (dr_profile ? 0.93f : (short3d_profile ? 0.98f : 0.97f)));
 		} else if (rudy < 2.0) {
-			adj = radical_wl_profile ? ((layerID <= 1) ? 0.99f : 1.0f)
+			adj = radical_mix_profile ? ((layerID <= 2) ? 0.995f : 1.0f)
+			                         : (radical_wl_profile ? ((layerID <= 1) ? 0.995f : 1.0f)
 			                         : (ultra_wl_profile ? 1.0f
-			                       : (wl_profile ? 0.98f : (dr_profile ? 0.88f : (short3d_profile ? 0.94f : 0.95f))));
+			                       : (wl_profile ? 0.98f : (dr_profile ? 0.88f : (short3d_profile ? 0.94f : 0.95f)))));
+		} else if (rudy < 3.5 && radical_mix_profile) {
+			adj = (layerID <= 2) ? 0.99f : 1.0f;
+		} else if (rudy < 5.0 && radical_mix_profile) {
+			adj = (layerID <= 1) ? 0.965f : ((layerID <= 3) ? 0.98f : 1.0f);
 		} else if (rudy < 3.5 && radical_wl_profile) {
-			adj = (layerID <= 2) ? 0.98f : 1.0f;
+			adj = (layerID <= 2) ? 0.99f : 1.0f;
 		} else if (rudy < 5.5 && radical_wl_profile) {
-			adj = (layerID <= 1) ? 0.95f : ((layerID <= 3) ? 0.97f : 1.0f);
+			adj = (layerID <= 1) ? 0.965f : ((layerID <= 3) ? 0.98f : 1.0f);
 		} else if (rudy < 4.0 && ultra_wl_profile) {
 			adj = (layerID <= 1) ? 0.96f : ((layerID <= 3) ? 0.98f : 1.0f);
 		} else
@@ -113,12 +121,26 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 		// toward upper layers to avoid long 2D detours on congested lower metals.
 		if (radical_wl_profile) {
 			if (layerID <= 1 && rudy > 7.0f) {
-				adj -= 0.04f;
+				adj -= 0.03f;
 			} else if (layerID <= 3 && rudy > 8.0f) {
-				adj -= 0.02f;
+				adj -= 0.015f;
 			}
 			if (layerID >= 5) {
 				adj += (rudy > 2.0f) ? 0.05f : 0.03f;
+			}
+		}
+		// Radical mixed profile:
+		// blend CUGR-style hotspot reserve with FastRoute-like tight WL bias.
+		if (radical_mix_profile) {
+			if (layerID <= 1 && rudy > 6.2f) {
+				adj -= 0.065f;
+			} else if (layerID <= 3 && rudy > 7.2f) {
+				adj -= 0.04f;
+			}
+			if (layerID >= 5 && rudy > 1.8f) {
+				adj += 0.06f;
+			} else if (layerID >= 4 && rudy > 3.0f) {
+				adj += 0.03f;
 			}
 		}
 		// CUGR-like 3D preference for NEWGR:
@@ -137,16 +159,18 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 
 		// Keep a reserve in severe hotspots; reserve depth depends on profile.
 		const float hotspot_adj_floor
-			= radical_wl_profile ? 0.93f
+			= radical_mix_profile ? 0.91f
+			                     : (radical_wl_profile ? 0.93f
 			                     : (ultra_wl_profile ? 0.90f
-			                   : (wl_profile ? 0.92f : (dr_profile ? 0.82f : (short3d_profile ? 0.85f : 0.88f))));
+			                   : (wl_profile ? 0.92f : (dr_profile ? 0.82f : (short3d_profile ? 0.85f : 0.88f)))));
 		if (rudy > 8.0f && adj > hotspot_adj_floor) {
 			adj = hotspot_adj_floor;
 		}
 		if (adj > 1.0f) {
 			adj = 1.0f;
 		}
-		const float min_adj = radical_wl_profile ? 0.75f : 0.65f;
+		const float min_adj = radical_mix_profile ? 0.73f
+		                 : (radical_wl_profile ? 0.75f : 0.65f);
 		if (adj < min_adj) {
 			adj = min_adj;
 		}

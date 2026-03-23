@@ -145,8 +145,10 @@ RouteMetrics computeRouteMetrics(const SprouteGridData& grid,
     }
   }
   metrics.congestion_risk = computeCongestionRisk(grid);
-  metrics.proxy_cost = metrics.wirelength + metrics.vias * 8
-                       + metrics.congestion_risk / 32;
+  // Proxy is intentionally risk-heavy because detailed-route wirelength
+  // regresses when global-route hotspots are left unresolved.
+  metrics.proxy_cost = metrics.wirelength + metrics.vias * 12
+                       + metrics.congestion_risk / 24;
   return metrics;
 }
 
@@ -156,6 +158,9 @@ bool isBetterCandidate(const CandidateResult& lhs, const CandidateResult& rhs)
     return lhs.overflow < rhs.overflow;
   }
 
+  if (lhs.metrics.proxy_cost != rhs.metrics.proxy_cost) {
+    return lhs.metrics.proxy_cost < rhs.metrics.proxy_cost;
+  }
   if (lhs.metrics.wirelength != rhs.metrics.wirelength) {
     return lhs.metrics.wirelength < rhs.metrics.wirelength;
   }
@@ -164,9 +169,6 @@ bool isBetterCandidate(const CandidateResult& lhs, const CandidateResult& rhs)
   }
   if (lhs.metrics.congestion_risk != rhs.metrics.congestion_risk) {
     return lhs.metrics.congestion_risk < rhs.metrics.congestion_risk;
-  }
-  if (lhs.metrics.proxy_cost != rhs.metrics.proxy_cost) {
-    return lhs.metrics.proxy_cost < rhs.metrics.proxy_cost;
   }
   return false;
 }
@@ -194,6 +196,8 @@ const char* capacityProfileName(int profile)
       return "ULTRA_WL";
     case NEWGR_CAP_PROFILE_RADICAL_WL:
       return "RADICAL_WL";
+    case NEWGR_CAP_PROFILE_RADICAL_MIX:
+      return "RADICAL_MIX";
     case NEWGR_CAP_PROFILE_WL_FOCUSED:
       return "WL_FOCUSED";
     case NEWGR_CAP_PROFILE_DR_FOCUSED:
@@ -365,9 +369,9 @@ NetRouteMap NewgrEngine::run()
     return candidate;
   };
 
-  // Drastic single-profile experiment:
-  // keep one aggressive RADICAL_WL candidate to avoid cross-candidate
-  // overfitting on global-route metrics.
+  // Keep a single clean candidate run.
+  // The embedded SPRoute core keeps global state between invocations, so
+  // multi-candidate evaluation in one process can contaminate comparisons.
   CandidateResult best = run_candidate(Algo::Astar,
                                        520,
                                        NEWGR_CAP_PROFILE_RADICAL_WL,
