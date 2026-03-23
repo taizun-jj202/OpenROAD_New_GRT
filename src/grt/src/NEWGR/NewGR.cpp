@@ -4194,22 +4194,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
     if (compact_exploration_mode) {
       const ScenarioResult* aggressive_wl_ptr = forced_wl_ptr;
-      const long via_drop_guard = wl_anchor != nullptr
-                                      ? std::max<long>(
-                                            360L,
-                                            static_cast<long>(std::ceil(
-                                                static_cast<double>(
-                                                    wl_anchor->metrics.via_count)
-                                                * 0.0065)))
-                                      : 0L;
       for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 2>{
                absolute_wl_ptr, min_wl_wide_ptr}) {
         if (candidate == nullptr) {
-          continue;
-        }
-        if (wl_anchor != nullptr
-            && candidate->metrics.via_count + via_drop_guard
-                   < wl_anchor->metrics.via_count) {
           continue;
         }
         if (aggressive_wl_ptr == nullptr
@@ -4259,10 +4246,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00010)));
       const long via_gain_floor = std::max<long>(120L, tile_size * 5L);
       const long via_trade_guard = std::max<long>(64L, tile_size * 3L);
-      const long via_drop_guard = std::max<long>(
-          360L,
-          static_cast<long>(std::ceil(
-              static_cast<double>(wl_anchor->metrics.via_count) * 0.0065)));
 
       const ScenarioResult* pareto_upgrade = nullptr;
       for (const ScenarioResult* candidate : wl_champion_pool) {
@@ -4276,13 +4259,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                      <= wl_anchor->metrics.detour_dbu + detour_guard
               && candidate->metrics.near_capacity_edges
                      <= wl_anchor->metrics.near_capacity_edges + hotspot_guard;
-        const bool via_reserve_guard
-            = candidate->metrics.via_count + via_drop_guard
-              >= wl_anchor->metrics.via_count;
         if (!structural_guard) {
-          continue;
-        }
-        if (!via_reserve_guard) {
           continue;
         }
 
@@ -4336,15 +4313,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00010)));
       const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
       const long via_guard = std::max<long>(120L, tile_size * 5L);
-      const long via_drop_guard = std::max<long>(
-          360L,
-          static_cast<long>(std::ceil(
-              static_cast<double>(wl_anchor->metrics.via_count) * 0.0065)));
       const bool via_guard_ok
           = forced_wl_ptr->metrics.via_count <= wl_anchor->metrics.via_count + via_guard;
-      const bool via_reserve_guard
-          = forced_wl_ptr->metrics.via_count + via_drop_guard
-            >= wl_anchor->metrics.via_count;
       const long detour_guard = std::max<long>(tile_size * 20L, 10000L);
       const long high_layer_guard = std::max<long>(
           tile_size * 28L,
@@ -4382,13 +4352,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             && (forced_wl_ptr->metrics.via_count <= wl_anchor->metrics.via_count)
             && structural_guard;
 
-      if (!(via_reserve_guard
-            && ((wl_gain >= min_wl_gain && proxy_guard && via_guard_ok
-             && structural_guard)
+      if (!((wl_gain >= min_wl_gain && proxy_guard && via_guard_ok
+           && structural_guard)
             || proxy_dominant_upgrade
             || via_dominant_upgrade
             || equal_wl_via_win
-            || strict_dominates))) {
+            || strict_dominates)) {
         forced_wl_ptr = wl_anchor;
       } else {
         logger_->info(
