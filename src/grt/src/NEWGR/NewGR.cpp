@@ -1275,6 +1275,174 @@ void applyViaExcursionCollapse(NetRouteMap& routes, int max_planar_excursion)
   }
 }
 
+void applyWavefrontDetours(GlobalRouter* grouter,
+                           NetRouteMap& routes,
+                           const RudyGrid& normalized_rudy,
+                           int min_segment_len,
+                           int detour_amplitude,
+                           int coverage_percent)
+{
+  if (grouter == nullptr || grouter->grid() == nullptr || routes.empty()) {
+    return;
+  }
+
+  Grid* grid = grouter->grid();
+  const int tile = std::max(grid->getTileSize(), 1);
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+  const int x_max = grid->getXMax();
+  const int y_max = grid->getYMax();
+  const int x_tiles = normalized_rudy.empty() ? 0 : normalized_rudy.size();
+  const int y_tiles
+      = normalized_rudy.empty() ? 0 : normalized_rudy.front().size();
+
+  min_segment_len = std::max(min_segment_len, tile * 2);
+  detour_amplitude = std::max(detour_amplitude, tile);
+  coverage_percent = std::clamp(coverage_percent, 1, 100);
+
+  auto to_grid_x = [&](int x) {
+    if (x_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((x - x_min) / tile, 0, x_tiles - 1);
+  };
+  auto to_grid_y = [&](int y) {
+    if (y_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((y - y_min) / tile, 0, y_tiles - 1);
+  };
+
+  auto choose_detour_coord = [&](int straight_coord,
+                                 int sample_coord_a,
+                                 int sample_coord_b,
+                                 bool horizontal,
+                                 std::uint64_t key) {
+    const int low = horizontal ? y_min + tile : x_min + tile;
+    const int high = horizontal ? y_max - tile : x_max - tile;
+    if (low >= high) {
+      return straight_coord;
+    }
+
+    const int pos = std::clamp(straight_coord + detour_amplitude, low, high);
+    const int neg = std::clamp(straight_coord - detour_amplitude, low, high);
+    if (pos == straight_coord && neg == straight_coord) {
+      return straight_coord;
+    }
+
+    const int mid_coord = (sample_coord_a + sample_coord_b) / 2;
+    const int gx_pos = horizontal ? to_grid_x(mid_coord) : to_grid_x(pos);
+    const int gy_pos = horizontal ? to_grid_y(pos) : to_grid_y(mid_coord);
+    const int gx_neg = horizontal ? to_grid_x(mid_coord) : to_grid_x(neg);
+    const int gy_neg = horizontal ? to_grid_y(neg) : to_grid_y(mid_coord);
+    const float pos_rudy = sampleRudyAt(normalized_rudy, gx_pos, gy_pos);
+    const float neg_rudy = sampleRudyAt(normalized_rudy, gx_neg, gy_neg);
+
+    if (std::fabs(pos_rudy - neg_rudy) < 0.04f) {
+      return ((key >> 2U) & 1ULL) == 0ULL ? pos : neg;
+    }
+    return pos_rudy < neg_rudy ? pos : neg;
+  };
+
+  for (auto& [db_net, route] : routes) {
+    if (route.empty()) {
+      continue;
+    }
+
+    const std::uint64_t net_key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    std::vector<GSegment> transformed;
+    transformed.reserve(route.size() * 4);
+
+    for (size_t seg_idx = 0; seg_idx < route.size(); ++seg_idx) {
+      const GSegment& segment = route[seg_idx];
+      const bool planar
+          = !segment.isVia() && segment.init_layer == segment.final_layer;
+      const bool horizontal = planar && segment.init_y == segment.final_y
+                              && segment.init_x != segment.final_x;
+      const bool vertical = planar && segment.init_x == segment.final_x
+                            && segment.init_y != segment.final_y;
+      const long length = segment.length();
+      const std::uint64_t key
+          = net_key + static_cast<std::uint64_t>(seg_idx) * 131ULL;
+      const bool selected = static_cast<int>(key % 100ULL) < coverage_percent;
+      const bool candidate
+          = selected && (horizontal || vertical) && length >= min_segment_len;
+      if (!candidate) {
+        transformed.push_back(segment);
+        continue;
+      }
+
+      if (horizontal) {
+        const int x0 = segment.init_x;
+        const int x1 = segment.final_x;
+        const int y = segment.init_y;
+        const int p1 = x0 + (x1 - x0) / 3;
+        const int p2 = x0 + (2 * (x1 - x0)) / 3;
+        if (p1 == x0 || p2 == x1 || p1 == p2) {
+          transformed.push_back(segment);
+          continue;
+        }
+
+        const int detour_y = choose_detour_coord(y, p1, p2, true, key);
+        if (detour_y == y) {
+          transformed.push_back(segment);
+          continue;
+        }
+
+        appendSegment(transformed, x0, y, segment.init_layer, p1, y, segment.init_layer);
+        appendSegment(
+            transformed, p1, y, segment.init_layer, p1, detour_y, segment.init_layer);
+        appendSegment(transformed,
+                      p1,
+                      detour_y,
+                      segment.init_layer,
+                      p2,
+                      detour_y,
+                      segment.init_layer);
+        appendSegment(
+            transformed, p2, detour_y, segment.init_layer, p2, y, segment.init_layer);
+        appendSegment(transformed, p2, y, segment.init_layer, x1, y, segment.init_layer);
+        continue;
+      }
+
+      const int x = segment.init_x;
+      const int y0 = segment.init_y;
+      const int y1 = segment.final_y;
+      const int p1 = y0 + (y1 - y0) / 3;
+      const int p2 = y0 + (2 * (y1 - y0)) / 3;
+      if (p1 == y0 || p2 == y1 || p1 == p2) {
+        transformed.push_back(segment);
+        continue;
+      }
+
+      const int detour_x = choose_detour_coord(x, p1, p2, false, key);
+      if (detour_x == x) {
+        transformed.push_back(segment);
+        continue;
+      }
+
+      appendSegment(transformed, x, y0, segment.init_layer, x, p1, segment.init_layer);
+      appendSegment(
+          transformed, x, p1, segment.init_layer, detour_x, p1, segment.init_layer);
+      appendSegment(transformed,
+                    detour_x,
+                    p1,
+                    segment.init_layer,
+                    detour_x,
+                    p2,
+                    segment.init_layer);
+      appendSegment(
+          transformed, detour_x, p2, segment.init_layer, x, p2, segment.init_layer);
+      appendSegment(transformed, x, p2, segment.init_layer, x, y1, segment.init_layer);
+    }
+
+    if (!transformed.empty()) {
+      route.swap(transformed);
+    }
+  }
+}
+
 }  // namespace
 
 NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
@@ -1529,7 +1697,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       selected.routes[db_net] = baseline_route;
     }
   }
+  const RouteMetrics pre_wave_metrics = compute_metrics(selected.routes);
+  applyWavefrontDetours(grouter_,
+                        selected.routes,
+                        baseline_rudy,
+                        std::max(12 * tile_size, 1),
+                        std::max(3 * tile_size, 1),
+                        72);
+  applyGuideCompression(selected.routes, std::max(6 * tile_size, 1));
+  applyViaExcursionCollapse(selected.routes, std::max(3 * tile_size, 1));
   selected.metrics = compute_metrics(selected.routes);
+  logger_->warn(GNR,
+                6021,
+                "NEWGR wavefront detour pass: wl delta {:+.0f} um, via delta "
+                "{:+d}.",
+                selected.metrics.wirelength_um - pre_wave_metrics.wirelength_um,
+                selected.metrics.via_count - pre_wave_metrics.via_count);
 
   const double compact_delta_wl
       = compact.metrics.wirelength_um - baseline.metrics.wirelength_um;
