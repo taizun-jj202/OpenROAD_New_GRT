@@ -113,6 +113,20 @@ uint64_t routeCostForPins(const RouteScore& score, int pin_count)
   return score.wirelength + score.vias * via_weight;
 }
 
+uint64_t envelopeRouteValue(const RouteScore& score,
+                            const RouteLayerUsage& usage,
+                            int pin_count)
+{
+  // Envelope pass is wirelength-dominant; vias and low-layer pressure are
+  // secondary guards to avoid pathological detailed-routing outcomes.
+  const uint64_t via_weight
+      = (pin_count <= 8) ? 4 : ((pin_count <= 24) ? 5 : 7);
+  const uint64_t low_layer_divisor
+      = (pin_count <= 8) ? 44 : ((pin_count <= 24) ? 56 : 72);
+  return score.wirelength + score.vias * via_weight
+         + usage.low_layer_wl / low_layer_divisor;
+}
+
 uint64_t minSwapWirelengthGain(int pin_count)
 {
   if (pin_count <= 4) {
@@ -1730,6 +1744,7 @@ NetRouteMap buildRadicalEnvelopeHybrid(
     if (base_it == hybrid_routes.end() || base_it->second.empty()) {
       const GRoute* best_missing_route = nullptr;
       RouteScore best_missing_score;
+      RouteLayerUsage best_missing_usage;
       uint64_t best_missing_cost = std::numeric_limits<uint64_t>::max();
       for (const NetRouteMap* donor_set : donor_route_sets) {
         if (donor_set == nullptr) {
@@ -1744,16 +1759,20 @@ NetRouteMap buildRadicalEnvelopeHybrid(
         if (donor_score.segments == 0) {
           continue;
         }
-        const uint64_t donor_cost = routeCostForPins(donor_score, pin_count);
+        const RouteLayerUsage donor_usage = analyzeRouteLayerUsage(*donor_route);
+        const uint64_t donor_cost
+            = envelopeRouteValue(donor_score, donor_usage, pin_count);
         if (donor_cost < best_missing_cost
             || (donor_cost == best_missing_cost
                 && donor_score.wirelength < best_missing_score.wirelength)) {
           best_missing_route = donor_route;
           best_missing_score = donor_score;
+          best_missing_usage = donor_usage;
           best_missing_cost = donor_cost;
         }
       }
       if (best_missing_route != nullptr) {
+        (void) best_missing_usage;
         hybrid_routes[db_net] = *best_missing_route;
         ++stats.added_missing_nets;
       }
@@ -1770,8 +1789,7 @@ NetRouteMap buildRadicalEnvelopeHybrid(
     const GRoute* best_route = nullptr;
     RouteScore best_score = base_score;
     RouteLayerUsage best_usage = base_usage;
-    uint64_t best_value = routeCostForPins(base_score, pin_count)
-                          + base_usage.low_layer_wl / 12;
+    uint64_t best_value = envelopeRouteValue(base_score, base_usage, pin_count);
 
     for (const NetRouteMap* donor_set : donor_route_sets) {
       if (donor_set == nullptr) {
@@ -1804,26 +1822,44 @@ NetRouteMap buildRadicalEnvelopeHybrid(
             + ((pin_count <= 20) ? 2 : ((pin_count <= 40) ? 3 : 4));
       if (via_increase > via_limit
           && wl_gain
-                 < via_increase * 210 + std::max<int64_t>(0, low_layer_delta) / 5
-                       + static_cast<int64_t>(110)) {
+                 < via_increase * 150 + std::max<int64_t>(0, low_layer_delta) / 8
+                       + static_cast<int64_t>(90)) {
         ++stats.skipped_by_via_guard;
         continue;
       }
       if (low_layer_delta > 0
           && wl_gain
-                 < low_layer_delta / 6 + static_cast<int64_t>(120)) {
+                 < low_layer_delta / 10 + static_cast<int64_t>(80)) {
         ++stats.skipped_by_layer_guard;
         continue;
       }
 
-      const uint64_t donor_value = routeCostForPins(donor_score, pin_count)
-                                   + donor_usage.low_layer_wl / 12;
-      const bool better_cost
-          = donor_value + minWirelengthSweepGain(pin_count) < best_value;
+      const uint64_t donor_value
+          = envelopeRouteValue(donor_score, donor_usage, pin_count);
+      const int64_t wl_vs_best = static_cast<int64_t>(best_score.wirelength)
+                                 - static_cast<int64_t>(donor_score.wirelength);
+      const int64_t via_vs_best = std::max<int64_t>(
+          0,
+          static_cast<int64_t>(donor_score.vias)
+              - static_cast<int64_t>(best_score.vias));
+      const int64_t low_layer_vs_best = std::max<int64_t>(
+          0,
+          static_cast<int64_t>(donor_usage.low_layer_wl)
+              - static_cast<int64_t>(best_usage.low_layer_wl));
+      const int64_t via_tradeoff_penalty
+          = via_vs_best * ((pin_count <= 16) ? 45 : ((pin_count <= 32) ? 60 : 80));
+      const int64_t low_layer_tradeoff_penalty
+          = low_layer_vs_best / ((pin_count <= 16) ? 22 : 30);
       const bool better_wirelength
-          = donor_value < best_value
-            && donor_score.wirelength < best_score.wirelength;
-      if (better_cost || better_wirelength) {
+          = donor_score.wirelength + minWirelengthSweepGain(pin_count)
+            < best_score.wirelength;
+      const bool better_cost
+          = donor_value + minInterleavedWirelengthGain(pin_count) / 2 < best_value;
+      const bool stronger_tradeoff
+          = wl_vs_best
+            > via_tradeoff_penalty + low_layer_tradeoff_penalty
+                  + static_cast<int64_t>(20);
+      if (better_wirelength || better_cost || stronger_tradeoff) {
         best_route = donor_route;
         best_score = donor_score;
         best_usage = donor_usage;
