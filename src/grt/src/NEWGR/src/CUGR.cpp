@@ -312,11 +312,14 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
           && baseline_overflow
                  <= constants_.stage3_full_grid_overflow_threshold + 2
           && baseline_stretch >= 1.08;
+    const bool ultra_wirelength_mode
+        = aggressive_wirelength_mode && baseline_stretch >= 1.16
+          && hpwl >= constants_.stage3_full_grid_hpwl_threshold;
     const double stage3_wl_overflow_slack
-        = aggressive_wirelength_mode ? 11.5 : 7.0;
+        = ultra_wirelength_mode ? 14.0 : (aggressive_wirelength_mode ? 11.5 : 7.0);
     const bool overflow_driven = baseline_overflow > 0;
     const bool very_high_stretch
-        = baseline_stretch >= (aggressive_wirelength_mode ? 1.22 : 1.30);
+        = baseline_stretch >= (aggressive_wirelength_mode ? 1.16 : 1.26);
     const bool wide_bbox = bbox.width() >= bbox.height();
     const int base_sparse = std::clamp(hpwl >= 240 ? 8 : (hpwl >= 120 ? 7 : 6),
                                        4,
@@ -352,6 +355,25 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
                     (base_sparse + 1) / 2,
                     (base_sparse - 1) / 2);
     }
+    if (aggressive_wirelength_mode) {
+      const int tighter_sparse = std::max(2, base_sparse - 2);
+      addMazeConfig(tighter_sparse, tighter_sparse, 0, 0);
+      addMazeConfig(
+          tighter_sparse, tighter_sparse, tighter_sparse / 2, tighter_sparse / 2);
+      if (wide_bbox) {
+        addMazeConfig(base_sparse + 1, tighter_sparse, 0, 0);
+        addMazeConfig(base_sparse + 1,
+                      tighter_sparse,
+                      (base_sparse + 1) / 3,
+                      std::max(1, tighter_sparse / 3));
+      } else {
+        addMazeConfig(tighter_sparse, base_sparse + 1, 0, 0);
+        addMazeConfig(tighter_sparse,
+                      base_sparse + 1,
+                      std::max(1, tighter_sparse / 3),
+                      (base_sparse + 1) / 3);
+      }
+    }
     if (constants_.stage3_full_offset_sweep
         && hpwl >= constants_.stage3_full_offset_hpwl_threshold) {
       for (int offset_x = 0;
@@ -377,7 +399,13 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         }
       }
     }
-    int stage3_cfg_budget = overflow_driven ? 6 : 3;
+    int stage3_cfg_budget = overflow_driven ? 8 : 4;
+    if (aggressive_wirelength_mode) {
+      stage3_cfg_budget += 2;
+    }
+    if (ultra_wirelength_mode) {
+      stage3_cfg_budget += 2;
+    }
     if (hpwl >= constants_.stage3_full_grid_hpwl_threshold) {
       stage3_cfg_budget++;
     }
@@ -424,7 +452,8 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       patternRoute.run();
       considerCandidate(net->getRoutingTree(), /*is_baseline_candidate*/ false);
       evaluated_candidates++;
-      if (!overflow_driven && best_tree && !best_is_baseline
+      if (!overflow_driven && !aggressive_wirelength_mode && best_tree
+          && !best_is_baseline
           && best_stats.overflow <= baseline_overflow
           && best_stats.wirelength + 20 < original_stats.wirelength) {
         break;
@@ -438,10 +467,17 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         && hpwl >= constants_.stage3_wl_only_hpwl_threshold
         && net->getNumPins() > 2) {
       const int wl_config_limit = std::max(1, constants_.stage3_wl_config_limit);
-      const int wl_bonus_runs = aggressive_wirelength_mode ? 2 : 0;
-      int wl_runs = std::min(stage3_cfg_budget, wl_config_limit + wl_bonus_runs);
-      if (!overflow_driven) {
+      const int wl_bonus_runs = aggressive_wirelength_mode
+                                    ? (ultra_wirelength_mode ? 4 : 3)
+                                    : 1;
+      int wl_runs
+          = std::min(stage3_cfg_budget + (aggressive_wirelength_mode ? 2 : 0),
+                     wl_config_limit + wl_bonus_runs);
+      if (!overflow_driven && !aggressive_wirelength_mode) {
         wl_runs = std::min(wl_runs, 2);
+      }
+      if (aggressive_wirelength_mode) {
+        wl_runs = std::max(wl_runs, std::min(stage3_cfg_budget, 4));
       }
       const double wl_via_cost_scale
           = std::clamp(constants_.stage3_wl_via_cost_scale
@@ -480,11 +516,11 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         && net->getNumPins() >= 3
         && net->getNumPins() <= constants_.stage3_full_grid_pin_limit
         && baseline_overflow <= constants_.stage3_full_grid_overflow_threshold
-        && (overflow_driven || very_high_stretch)
+        && (overflow_driven || very_high_stretch || aggressive_wirelength_mode)
         && baseline_stretch
                >= (aggressive_wirelength_mode
                        ? std::max(1.05,
-                                  constants_.stage3_full_grid_min_stretch - 0.08)
+                                  constants_.stage3_full_grid_min_stretch - 0.12)
                        : constants_.stage3_full_grid_min_stretch)) {
       const double full_grid_via_scale = std::clamp(
           constants_.stage3_full_grid_via_cost_scale, 0.0, 1.0);
@@ -502,6 +538,24 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         fullGridPatternRoute.run();
         considerCandidate(net->getRoutingTree(), /*is_baseline_candidate*/ false);
         evaluated_candidates++;
+      }
+      if (ultra_wirelength_mode) {
+        constexpr double kUltraViaScale = 0.0;
+        MazeRoute ultraFullGridWlMaze(net, grid_graph_.get(), logger_);
+        ultraFullGridWlMaze.constructSparsifiedGraph(
+            wireLengthCostView, SparseGrid(1, 1, 0, 0), kUltraViaScale);
+        ultraFullGridWlMaze.run();
+        const std::shared_ptr<SteinerTreeNode> ultra_full_grid_tree
+            = ultraFullGridWlMaze.getSteinerTree();
+        if (ultra_full_grid_tree) {
+          PatternRoute ultraPatternRoute(
+              net, grid_graph_.get(), stt_builder_, constants_, logger_);
+          ultraPatternRoute.setSteinerTree(ultra_full_grid_tree);
+          ultraPatternRoute.constructRoutingDAG();
+          ultraPatternRoute.run();
+          considerCandidate(net->getRoutingTree(), /*is_baseline_candidate*/ false);
+          evaluated_candidates++;
+        }
       }
     }
 
