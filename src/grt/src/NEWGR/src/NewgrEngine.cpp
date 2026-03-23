@@ -1,6 +1,8 @@
 #include "NewgrEngine.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -58,6 +60,87 @@ const Edge3D& verticalEdge(const SprouteGridData& grid,
   return v_edges3D[idx];
 }
 
+struct GridPoint
+{
+  int x{0};
+  int y{0};
+  int l{0};
+};
+
+uint64_t packPoint(const GridPoint& point)
+{
+  constexpr uint64_t mask = 0x1FFFFF;
+  return (static_cast<uint64_t>(point.x) & mask)
+         | ((static_cast<uint64_t>(point.y) & mask) << 21)
+         | ((static_cast<uint64_t>(point.l) & mask) << 42);
+}
+
+bool canMergeMiddlePoint(const GridPoint& a,
+                         const GridPoint& b,
+                         const GridPoint& c)
+{
+  if (a.l == b.l && b.l == c.l) {
+    if (a.x == b.x && b.x == c.x) {
+      return true;
+    }
+    if (a.y == b.y && b.y == c.y) {
+      return true;
+    }
+  }
+  if (a.x == b.x && b.x == c.x && a.y == b.y && b.y == c.y) {
+    return std::abs(a.l - c.l) <= 1;
+  }
+  return false;
+}
+
+std::vector<GridPoint> simplifyGridPath(const Route& edge_route)
+{
+  std::vector<GridPoint> path;
+  path.reserve(edge_route.routelen + 1);
+  for (int i = 0; i <= edge_route.routelen; ++i) {
+    path.push_back(
+        {edge_route.gridsX[i], edge_route.gridsY[i], edge_route.gridsL[i]});
+  }
+
+  std::vector<GridPoint> simple_path;
+  simple_path.reserve(path.size());
+  std::unordered_map<uint64_t, size_t> last_seen;
+  last_seen.reserve(path.size() * 2);
+
+  for (const GridPoint& point : path) {
+    const uint64_t key = packPoint(point);
+    const auto found = last_seen.find(key);
+    if (found != last_seen.end()) {
+      const size_t keep = found->second + 1;
+      for (size_t i = keep; i < simple_path.size(); ++i) {
+        last_seen.erase(packPoint(simple_path[i]));
+      }
+      simple_path.resize(keep);
+      continue;
+    }
+    last_seen[key] = simple_path.size();
+    simple_path.push_back(point);
+  }
+
+  std::vector<GridPoint> compact_path;
+  compact_path.reserve(simple_path.size());
+  for (const GridPoint& point : simple_path) {
+    compact_path.push_back(point);
+    while (compact_path.size() >= 3) {
+      const size_t n = compact_path.size();
+      const GridPoint& a = compact_path[n - 3];
+      const GridPoint& b = compact_path[n - 2];
+      const GridPoint& c = compact_path[n - 1];
+      if (!canMergeMiddlePoint(a, b, c)) {
+        break;
+      }
+      compact_path.erase(compact_path.end() - 2);
+    }
+  }
+
+  return compact_path;
+}
+
 }  // namespace
 
 NewgrEngine::NewgrEngine(utl::Logger* logger) : logger_(logger)
@@ -103,8 +186,8 @@ NetRouteMap NewgrEngine::run()
                /*OutFileName=*/"",
                congestion_map,
                timer,
-               /*maxMazeRound=*/500,
-               Algo::FineGrain);
+               /*maxMazeRound=*/700,
+               Algo::Astar);
   timer.stop();
   last_total_overflow_ = totalOverflow;
 
@@ -316,14 +399,17 @@ void NewgrEngine::appendRouteSegments(int net_id, GRoute& route) const
         || edge_route.gridsY == nullptr || edge_route.gridsL == nullptr) {
       continue;
     }
-    for (int i = 0; i < edge_route.routelen; ++i) {
-      const int x0 = edge_route.gridsX[i];
-      const int y0 = edge_route.gridsY[i];
-      const int l0 = edge_route.gridsL[i];
-      const int x1 = edge_route.gridsX[i + 1];
-      const int y1 = edge_route.gridsY[i + 1];
-      const int l1 = edge_route.gridsL[i + 1];
-      addSegment(route, x0, y0, l0, x1, y1, l1);
+    const std::vector<GridPoint> simplified_path = simplifyGridPath(edge_route);
+    if (simplified_path.size() < 2) {
+      continue;
+    }
+    for (size_t i = 0; i + 1 < simplified_path.size(); ++i) {
+      const GridPoint& p0 = simplified_path[i];
+      const GridPoint& p1 = simplified_path[i + 1];
+      if (p0.x == p1.x && p0.y == p1.y && p0.l == p1.l) {
+        continue;
+      }
+      addSegment(route, p0.x, p0.y, p0.l, p1.x, p1.y, p1.l);
     }
   }
 }

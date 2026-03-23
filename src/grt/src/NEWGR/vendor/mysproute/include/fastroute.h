@@ -643,6 +643,19 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	bmfl = BIG_INT;
 	minofl = BIG_INT;
 
+	// NEWGR policy for wirelength: when using A*, keep expansion tighter and
+	// reduce congestion inflation so shortest paths are favored unless needed.
+	if (algo == Astar) {
+		ENLARGE = 48;
+		ESTEP1 = 10;
+		ESTEP2 = 8;
+		ESTEP3 = 6;
+		CSTEP1 = 1;
+		CSTEP2 = 1;
+		CSTEP3 = 2;
+		LVIter = 1;
+	}
+
      //galois::substrate::PerThreadStorage<THREAD_LOCAL_STORAGE> thread_local_storage;
     galois::setActiveThreads(numThreads);
     galois::on_each( 
@@ -841,7 +854,9 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			}
 
 			 
-			const int enlarge_limit = max(8, max(xGrid, yGrid) / 7);
+			const int enlarge_limit = (algo == Astar)
+			                              ? max(6, max(xGrid, yGrid) / 10)
+			                              : max(8, max(xGrid, yGrid) / 7);
 			enlarge = min(enlarge, enlarge_limit);
 			//std::cout << "costheight : " << costheight << " enlarge: " << enlarge << std::endl; 
 			costheight+=cost_step;
