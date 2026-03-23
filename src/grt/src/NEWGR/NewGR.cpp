@@ -502,8 +502,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   const int64_t global_base_via_budget
-      = std::max<int64_t>(16, baseline_total_vias / 4000);
-  const int64_t global_wl_to_via_credit = std::max<int64_t>(8, tile_size / 2);
+      = std::max<int64_t>(20, baseline_total_vias / 3600);
+  const int64_t global_wl_to_via_credit = std::max<int64_t>(6, tile_size / 3);
 
   int selected_from_balanced = 0;
   int selected_from_wl = 0;
@@ -525,7 +525,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     GRoute& route = route_it->second;
     const RouteScore baseline_score = ordered_net.baseline_score;
     const SelectionPolicy policy = buildSelectionPolicy(baseline_score, tile_size);
-    const int64_t congestion_tradeoff = policy.long_net ? 0 : (policy.medium_net ? 1 : 2);
+    const int64_t congestion_tradeoff = policy.long_net ? 0 : 1;
 
     RouteScore best_score = baseline_score;
     int64_t best_congestion_cost
@@ -602,12 +602,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         const int64_t wl_drop_vs_best
             = std::max<int64_t>(0, best_score.wirelength - candidate_score.wirelength);
         const int64_t congestion_delta = candidate_congestion_cost - best_congestion_cost;
-        const int64_t allowed_delta = policy.long_net
-                                          ? std::max<int64_t>(10, best_congestion_cost / 7)
-                                          : std::max<int64_t>(6, best_congestion_cost / 12);
-        const int64_t required_wl_drop = policy.long_net
-                                             ? std::max<int64_t>(1, tile_size / 8)
-                                             : std::max<int64_t>(1, tile_size / 5);
+        const int64_t allowed_delta
+            = policy.long_net ? std::max<int64_t>(12, best_congestion_cost / 6)
+                              : (policy.medium_net
+                                     ? std::max<int64_t>(8, best_congestion_cost / 10)
+                                     : std::max<int64_t>(6, best_congestion_cost / 12));
+        const int64_t required_wl_drop
+            = policy.long_net ? std::max<int64_t>(1, tile_size / 9)
+                              : (policy.medium_net
+                                     ? std::max<int64_t>(1, tile_size / 6)
+                                     : std::max<int64_t>(1, tile_size / 5));
         if (congestion_delta > allowed_delta && wl_drop_vs_best < required_wl_drop) {
           return;
         }
@@ -632,14 +636,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     const int64_t wirelength_min_wl_drop
         = policy.long_net
+              ? std::max<int64_t>(1, tile_size / 22)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 16)
+                                   : std::max<int64_t>(1, tile_size / 11));
+    const int64_t data_min_wl_drop
+        = policy.long_net
               ? std::max<int64_t>(1, tile_size / 18)
               : (policy.medium_net ? std::max<int64_t>(1, tile_size / 14)
                                    : std::max<int64_t>(1, tile_size / 10));
-    const int64_t data_min_wl_drop
-        = policy.long_net
-              ? std::max<int64_t>(1, tile_size / 14)
-              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 12)
-                                   : std::max<int64_t>(1, tile_size / 9));
     consider(wirelength_routes,
              RouteSource::kNewgrWirelength,
              wirelength_min_wl_drop,
@@ -695,13 +699,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const int64_t allowed_congestion_delta
           = policy.long_net ? std::max<int64_t>(10, best_congestion_cost / 4)
                             : (policy.medium_net
-                                   ? std::max<int64_t>(8, best_congestion_cost / 6)
-                                   : std::max<int64_t>(6, best_congestion_cost / 8));
+                                   ? std::max<int64_t>(9, best_congestion_cost / 5)
+                                   : std::max<int64_t>(7, best_congestion_cost / 7));
       const int64_t champion_min_wl_gain
-          = policy.long_net ? std::max<int64_t>(1, tile_size / 6)
+          = policy.long_net ? std::max<int64_t>(1, tile_size / 7)
                             : (policy.medium_net
-                                   ? std::max<int64_t>(1, tile_size / 5)
-                                   : std::max<int64_t>(1, tile_size / 4));
+                                   ? std::max<int64_t>(1, tile_size / 6)
+                                   : std::max<int64_t>(1, tile_size / 5));
       const int64_t champion_force_gain
           = policy.long_net ? std::max<int64_t>(2, tile_size / 3)
                             : std::max<int64_t>(2, tile_size / 2);
