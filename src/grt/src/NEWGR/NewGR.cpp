@@ -1427,6 +1427,166 @@ int chooseDominantLayer(const std::vector<RouteNode>& nodes,
   return best_layer;
 }
 
+int chooseAxisCoordinate(const std::vector<RouteNode>& nodes,
+                         bool choose_x_axis,
+                         const RudyGrid& normalized_rudy,
+                         Grid* grid,
+                         int search_radius_tiles)
+{
+  if (nodes.empty() || grid == nullptr) {
+    return 0;
+  }
+
+  std::vector<int> coords;
+  coords.reserve(nodes.size());
+  for (const RouteNode& node : nodes) {
+    coords.push_back(choose_x_axis ? node.x : node.y);
+  }
+  std::sort(coords.begin(), coords.end());
+  const int median_coord = coords[coords.size() / 2];
+
+  const int tile = std::max(grid->getTileSize(), 1);
+  const int min_coord = choose_x_axis ? grid->getXMin() : grid->getYMin();
+  const int max_coord = choose_x_axis ? grid->getXMax() : grid->getYMax();
+  int best_coord = std::clamp(median_coord, min_coord, max_coord);
+
+  if (normalized_rudy.empty() || normalized_rudy.front().empty()) {
+    return best_coord;
+  }
+
+  const int x_tiles = normalized_rudy.size();
+  const int y_tiles = normalized_rudy.front().size();
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+  const int radius = std::max(search_radius_tiles, 0) * tile;
+  const int lower = std::clamp(median_coord - radius, min_coord, max_coord);
+  const int upper = std::clamp(median_coord + radius, min_coord, max_coord);
+  const int step = std::max(tile, 1);
+
+  double best_cost = std::numeric_limits<double>::max();
+  for (int candidate = lower; candidate <= upper; candidate += step) {
+    long long manhattan_cost = 0;
+    float rudy_acc = 0.0f;
+    int rudy_samples = 0;
+
+    for (const RouteNode& node : nodes) {
+      const int node_coord = choose_x_axis ? node.x : node.y;
+      manhattan_cost += std::abs(candidate - node_coord);
+
+      const int sample_x
+          = choose_x_axis ? candidate : std::clamp(node.x, x_min, grid->getXMax());
+      const int sample_y
+          = choose_x_axis ? std::clamp(node.y, y_min, grid->getYMax()) : candidate;
+      const int gx = std::clamp((sample_x - x_min) / tile, 0, x_tiles - 1);
+      const int gy = std::clamp((sample_y - y_min) / tile, 0, y_tiles - 1);
+      rudy_acc += normalized_rudy[gx][gy];
+      rudy_samples++;
+    }
+
+    const float avg_rudy
+        = rudy_samples > 0 ? rudy_acc / static_cast<float>(rudy_samples) : 0.0f;
+    const double cost = static_cast<double>(manhattan_cost)
+                        + static_cast<double>(tile) * 5.0
+                              * static_cast<double>(avg_rudy);
+    if (cost < best_cost) {
+      best_cost = cost;
+      best_coord = candidate;
+    }
+  }
+
+  return std::clamp(best_coord, min_coord, max_coord);
+}
+
+long applyCrossbarAxisCollapse(GlobalRouter* grouter,
+                               NetRouteMap& routes,
+                               const RudyGrid& normalized_rudy,
+                               int min_unique_nodes,
+                               int max_unique_nodes,
+                               int coverage_percent,
+                               int min_layer,
+                               int max_layer,
+                               int search_radius_tiles)
+{
+  if (grouter == nullptr || grouter->grid() == nullptr || routes.empty()) {
+    return 0;
+  }
+
+  Grid* grid = grouter->grid();
+  const int x_min = grid->getXMin();
+  const int x_max = grid->getXMax();
+  const int y_min = grid->getYMin();
+  const int y_max = grid->getYMax();
+  min_unique_nodes = std::max(min_unique_nodes, 3);
+  max_unique_nodes = std::max(max_unique_nodes, min_unique_nodes);
+  coverage_percent = std::clamp(coverage_percent, 1, 100);
+  min_layer = std::max(min_layer, 0);
+  max_layer = std::max(max_layer, min_layer);
+
+  long rewired_nets = 0;
+  for (auto& [db_net, route] : routes) {
+    if (route.empty()) {
+      continue;
+    }
+
+    const auto net_key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    if (static_cast<int>(net_key % 100ULL) >= coverage_percent) {
+      continue;
+    }
+
+    const std::vector<RouteNode> nodes = collectUniqueRouteNodes(route);
+    const int node_count = static_cast<int>(nodes.size());
+    if (node_count < min_unique_nodes || node_count > max_unique_nodes) {
+      continue;
+    }
+
+    const int trunk_layer = chooseDominantLayer(nodes, min_layer, max_layer);
+    const int axis_x = chooseAxisCoordinate(
+        nodes, true, normalized_rudy, grid, search_radius_tiles);
+    const int axis_y = chooseAxisCoordinate(
+        nodes, false, normalized_rudy, grid, search_radius_tiles);
+
+    std::vector<GSegment> rebuilt;
+    rebuilt.reserve(nodes.size() * 5 + 8);
+    for (size_t idx = 0; idx < nodes.size(); ++idx) {
+      int cur_x = std::clamp(nodes[idx].x, x_min, x_max);
+      int cur_y = std::clamp(nodes[idx].y, y_min, y_max);
+      int cur_layer = std::clamp(nodes[idx].layer, min_layer, max_layer);
+
+      if (cur_layer != trunk_layer) {
+        const int step = trunk_layer > cur_layer ? 1 : -1;
+        while (cur_layer != trunk_layer) {
+          const int next_layer = cur_layer + step;
+          appendSegment(
+              rebuilt, cur_x, cur_y, cur_layer, cur_x, cur_y, next_layer);
+          cur_layer = next_layer;
+        }
+      }
+
+      const bool x_first
+          = ((net_key + static_cast<std::uint64_t>(idx) * 17ULL) & 1ULL) == 0ULL;
+      if (x_first) {
+        appendSegment(
+            rebuilt, cur_x, cur_y, trunk_layer, axis_x, cur_y, trunk_layer);
+        appendSegment(
+            rebuilt, axis_x, cur_y, trunk_layer, axis_x, axis_y, trunk_layer);
+      } else {
+        appendSegment(
+            rebuilt, cur_x, cur_y, trunk_layer, cur_x, axis_y, trunk_layer);
+        appendSegment(
+            rebuilt, cur_x, axis_y, trunk_layer, axis_x, axis_y, trunk_layer);
+      }
+    }
+
+    if (!rebuilt.empty()) {
+      route.swap(rebuilt);
+      rewired_nets++;
+    }
+  }
+
+  return rewired_nets;
+}
+
 struct GlobalPortal
 {
   int x = 0;
@@ -8292,6 +8452,46 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
 
+  // Iteration 51 radical mode:
+  // Theory:
+  // 1) A large fraction of wirelength can come from many independent
+  //    local Manhattan decisions that never share a strong global backbone.
+  // 2) Rebuilding eligible nets into a deterministic crossbar star
+  //    (dominant layer + low-RUDY X/Y axes) creates aggressive trunk sharing
+  //    and forces a qualitatively different topology.
+  // 3) Even if quality regresses, this should produce a meaningful metric
+  //    shift instead of converging back to previous equilibrium.
+  long radical51_crossbar_rewired = 0;
+  ScenarioResult radical51_crossbar = selected;
+  radical51_crossbar.name = "radical51_crossbar_axis";
+  radical51_crossbar_rewired = applyCrossbarAxisCollapse(grouter_,
+                                                          radical51_crossbar.routes,
+                                                          baseline_rudy,
+                                                          4,
+                                                          180,
+                                                          44,
+                                                          min_routing_layer,
+                                                          max_routing_layer,
+                                                          6);
+  if (radical51_crossbar_rewired > 0) {
+    applyAggressiveDoglegShortcuts(radical51_crossbar.routes,
+                                   std::max(36 * tile_size, 1),
+                                   std::max(tile_size, 1));
+    applyGuideCompression(radical51_crossbar.routes, std::max(10 * tile_size, 1));
+    applyViaExcursionCollapse(radical51_crossbar.routes,
+                              std::max(4 * tile_size, 1));
+    radical51_crossbar.metrics = compute_metrics(radical51_crossbar.routes);
+    const bool radical51_catastrophic
+        = static_cast<double>(radical51_crossbar.metrics.wirelength_dbu)
+              > static_cast<double>(baseline.metrics.wirelength_dbu) * 4.20
+          || static_cast<double>(radical51_crossbar.metrics.via_count)
+                 > static_cast<double>(baseline.metrics.via_count) * 7.00;
+    if (!radical51_catastrophic) {
+      radical51_crossbar.name += "+rad51";
+      selected = radical51_crossbar;
+    }
+  }
+
   // Final safeguard to prevent catastrophic regressions.
   const bool catastrophic
       = static_cast<double>(selected.metrics.wirelength_dbu)
@@ -8424,6 +8624,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 radical50_forced_orbital,
                 radical50_forced_spine,
                 radical50_compact_rescue);
+  logger_->warn(GNR,
+                6093,
+                "NEWGR rad51 rewired nets: {}.",
+                radical51_crossbar_rewired);
 
   restore_snapshot(snapshot);
   return selected.routes;
