@@ -654,9 +654,9 @@ void appendSegment(std::vector<GSegment>& route,
   route.emplace_back(x0, y0, l0, x1, y1, l1);
 }
 
-void applyBraidedDetourWeave(GlobalRouter* grouter,
-                             NetRouteMap& routes,
-                             const RudyGrid& normalized_rudy)
+[[maybe_unused]] void applyBraidedDetourWeave(GlobalRouter* grouter,
+                                              NetRouteMap& routes,
+                                              const RudyGrid& normalized_rudy)
 {
   if (grouter == nullptr || grouter->grid() == nullptr || routes.empty()) {
     return;
@@ -839,11 +839,11 @@ void applyBraidedDetourWeave(GlobalRouter* grouter,
   }
 }
 
-void applyLayerHoppingDetours(GlobalRouter* grouter,
-                              NetRouteMap& routes,
-                              const RudyGrid& normalized_rudy,
-                              int min_layer,
-                              int max_layer)
+[[maybe_unused]] void applyLayerHoppingDetours(GlobalRouter* grouter,
+                                               NetRouteMap& routes,
+                                               const RudyGrid& normalized_rudy,
+                                               int min_layer,
+                                               int max_layer)
 {
   if (grouter == nullptr || grouter->grid() == nullptr || routes.empty()) {
     return;
@@ -1383,23 +1383,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                             : 1;
   const RudyGrid baseline_rudy = compute_current_rudy();
 
-  // Candidate A: post-route geometric rewiring.
-  ScenarioResult rewired = baseline;
-  rewired.name = "baseline_rewired";
-  applyLayerHoppingDetours(grouter_,
-                           rewired.routes,
-                           baseline_rudy,
-                           min_routing_layer,
-                           max_routing_layer);
-  applyBraidedDetourWeave(grouter_, rewired.routes, baseline_rudy);
-  applyViaExcursionCollapse(rewired.routes, std::max(10 * tile_size, 1));
-  applyGuideCompression(rewired.routes, std::max(14 * tile_size, 1));
-  rewired.metrics = compute_metrics(rewired.routes);
+  // Candidate A: compress baseline routes instead of geometric detours.
+  ScenarioResult compact = baseline;
+  compact.name = "baseline_compact";
+  applyViaExcursionCollapse(compact.routes, std::max(4 * tile_size, 1));
+  applyGuideCompression(compact.routes, std::max(8 * tile_size, 1));
+  compact.metrics = compute_metrics(compact.routes);
 
-  // Candidate B: reroute after aggressive RUDY/backbone capacity sculpting.
-  ScenarioResult sculpted = rewired;
+  // Candidate B: reroute with strong but wirelength-oriented capacity sculpting.
+  ScenarioResult sculpted = compact;
   sculpted.name = "field_sculpted";
   bool sculpted_available = false;
+  long nets_taken_from_sculpted = 0;
   try {
     for (Net* net : nets) {
       if (net != nullptr && net->getDbNet() != nullptr) {
@@ -1407,81 +1402,70 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
 
-    const auto hotspots = extractTopRudyHotspots(baseline_rudy, 128);
+    const auto hotspots = extractTopRudyHotspots(baseline_rudy, 96);
     const PlanarEdgeUsage baseline_usage
-        = computeNormalizedBackboneUsage(grouter_, baseline.routes);
+        = computeNormalizedBackboneUsage(grouter_, compact.routes);
+    const bool prefer_horizontal
+        = grouter_->grid() != nullptr
+          && grouter_->grid()->getXGrids() >= grouter_->grid()->getYGrids();
     applyAggressiveCapacityField(grouter_,
                                  baseline_rudy,
                                  hotspots,
                                  min_routing_layer,
                                  max_routing_layer,
-                                 0.55f,
-                                 0.16f,
+                                 0.62f,
                                  0.18f,
-                                 1.34f,
-                                 0.48f,
-                                 true);
+                                 0.40f,
+                                 1.18f,
+                                 0.22f,
+                                 prefer_horizontal);
     applyLayerPolarityField(grouter_,
                             baseline_rudy,
                             min_routing_layer,
                             max_routing_layer,
-                            1.36f,
-                            0.24f,
-                            0.52f);
+                            1.22f,
+                            0.52f,
+                            0.48f);
     applyBackboneCapacityReinforcement(grouter_,
                                        baseline_rudy,
                                        baseline_usage,
                                        min_routing_layer,
                                        max_routing_layer,
-                                       0.45f,
-                                       1.50f,
-                                       1.55f);
+                                       0.70f,
+                                       1.25f,
+                                       1.05f);
     applyHotspotPenalties(grouter_,
                           hotspots,
                           min_routing_layer,
                           max_routing_layer,
-                          3,
-                          0.28f,
-                          0.82f);
+                          2,
+                          0.62f,
+                          0.35f);
     applySoftCapacityScaling(grouter_,
                              baseline_rudy,
                              min_routing_layer,
                              max_routing_layer,
-                             0.26f,
-                             0.92f,
-                             8.5f,
-                             0.52f);
+                             0.48f,
+                             0.95f,
+                             5.0f,
+                             0.50f);
 
     sculpted = run_existing_state("field_sculpted", nets);
-    applyViaExcursionCollapse(sculpted.routes, std::max(6 * tile_size, 1));
-    applyGuideCompression(sculpted.routes, std::max(10 * tile_size, 1));
+    applyViaExcursionCollapse(sculpted.routes, std::max(4 * tile_size, 1));
+    applyGuideCompression(sculpted.routes, std::max(8 * tile_size, 1));
     sculpted.metrics = compute_metrics(sculpted.routes);
     sculpted_available = !sculpted.routes.empty();
   } catch (...) {
     logger_->warn(GNR,
                   6019,
                   "NEWGR field_sculpted candidate failed; reverting to "
-                  "baseline_rewired.");
-    sculpted = rewired;
+                  "baseline_compact.");
+    sculpted = compact;
     sculpted.name = "field_sculpted_failed";
   }
 
-  auto prefer_wirelength_then_vias = [](const ScenarioResult& lhs,
-                                        const ScenarioResult& rhs) {
-    if (lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
-      return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
-    }
-    if (lhs.metrics.via_count != rhs.metrics.via_count) {
-      return lhs.metrics.via_count < rhs.metrics.via_count;
-    }
-    return lhs.overflow < rhs.overflow;
-  };
-
-  ScenarioResult selected = rewired;
-  if (sculpted_available) {
-    selected = prefer_wirelength_then_vias(rewired, sculpted) ? rewired
-                                                               : sculpted;
-  }
+  ScenarioResult selected = compact;
+  selected.name = "netblend_compact";
   auto has_planar_guide = [](const GRoute& route) {
     for (const GSegment& segment : route) {
       if (!segment.isVia()
@@ -1492,7 +1476,53 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
     return false;
   };
-  for (const auto& [db_net, baseline_route] : baseline.routes) {
+  auto route_score = [&](const GRoute& route, int scenario_overflow) {
+    long route_wl = 0;
+    long route_vias = 0;
+    for (const GSegment& segment : route) {
+      if (segment.isVia()) {
+        route_vias++;
+      } else {
+        route_wl += std::abs(segment.final_x - segment.init_x)
+                    + std::abs(segment.final_y - segment.init_y);
+      }
+    }
+    const double via_weight = static_cast<double>(tile_size) * 2.2;
+    const double overflow_penalty
+        = static_cast<double>(std::max(scenario_overflow, 0))
+          * static_cast<double>(tile_size) * 8.0;
+    return static_cast<double>(route_wl)
+           + via_weight * static_cast<double>(route_vias) + overflow_penalty;
+  };
+
+  if (sculpted_available) {
+    selected.name = "netblend_field_sculpted";
+    for (const auto& [db_net, compact_route] : compact.routes) {
+      auto sculpted_it = sculpted.routes.find(db_net);
+      if (sculpted_it == sculpted.routes.end()) {
+        continue;
+      }
+      const GRoute& sculpted_route = sculpted_it->second;
+      const bool compact_valid = has_planar_guide(compact_route);
+      const bool sculpted_valid = has_planar_guide(sculpted_route);
+      if (!sculpted_valid && compact_valid) {
+        continue;
+      }
+      if (sculpted_valid && !compact_valid) {
+        selected.routes[db_net] = sculpted_route;
+        nets_taken_from_sculpted++;
+        continue;
+      }
+      const double compact_score = route_score(compact_route, compact.overflow);
+      const double sculpted_score = route_score(sculpted_route, sculpted.overflow);
+      if (sculpted_score + 1e-3 < compact_score) {
+        selected.routes[db_net] = sculpted_route;
+        nets_taken_from_sculpted++;
+      }
+    }
+  }
+
+  for (const auto& [db_net, baseline_route] : compact.routes) {
     auto selected_it = selected.routes.find(db_net);
     if (selected_it == selected.routes.end()
         || !has_planar_guide(selected_it->second)) {
@@ -1501,10 +1531,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
   selected.metrics = compute_metrics(selected.routes);
 
-  const double rewired_delta_wl
-      = rewired.metrics.wirelength_um - baseline.metrics.wirelength_um;
-  const long rewired_delta_vias
-      = rewired.metrics.via_count - baseline.metrics.via_count;
+  const double compact_delta_wl
+      = compact.metrics.wirelength_um - baseline.metrics.wirelength_um;
+  const long compact_delta_vias
+      = compact.metrics.via_count - baseline.metrics.via_count;
   const double sculpted_delta_wl
       = sculpted.metrics.wirelength_um - baseline.metrics.wirelength_um;
   const long sculpted_delta_vias
@@ -1518,12 +1548,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 6016,
                 "NEWGR candidate {}: wl {:.0f} um vias {} (delta wl {:+.0f} "
                 "um, delta vias {:+d}, overflow {}).",
-                rewired.name,
-                rewired.metrics.wirelength_um,
-                rewired.metrics.via_count,
-                rewired_delta_wl,
-                rewired_delta_vias,
-                rewired.overflow);
+                compact.name,
+                compact.metrics.wirelength_um,
+                compact.metrics.via_count,
+                compact_delta_wl,
+                compact_delta_vias,
+                compact.overflow);
   logger_->warn(GNR,
                 6017,
                 "NEWGR candidate {}: wl {:.0f} um vias {} (delta wl {:+.0f} "
@@ -1545,6 +1575,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 selected.metrics.via_count,
                 selected_delta_wl,
                 selected_delta_vias);
+  logger_->warn(GNR,
+                6020,
+                "NEWGR blended {} nets from {} into final selection.",
+                nets_taken_from_sculpted,
+                sculpted.name);
 
   restore_snapshot(snapshot);
   return selected.routes;
