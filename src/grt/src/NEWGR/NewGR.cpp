@@ -94,6 +94,28 @@ struct RouteEdgeStats
   EdgeCountMap edge_counts;
 };
 
+double estimateDetailedRouteProxyCost(const RouteMetrics& metrics, int tile_size)
+{
+  // Detailed routing quality proxy:
+  // - Keep wirelength first-order.
+  // - Bias toward lower-via, lower-layer-span topologies (SPRoute/CUGR mix).
+  // - Include a small detour term to avoid pathological guide zig-zags.
+  // - Keep overflow terms dominant when present.
+  const double via_term
+      = static_cast<double>(metrics.via_count) * static_cast<double>(tile_size) * 0.34;
+  const double detour_term = static_cast<double>(metrics.detour_dbu) * 0.10;
+  const double high_layer_term = static_cast<double>(metrics.high_layer_dbu) * 0.030;
+  const double layer_span_term
+      = static_cast<double>(metrics.layer_span_sum) * static_cast<double>(tile_size) * 0.50;
+  const double overflow_term
+      = static_cast<double>(metrics.overflow_edges) * static_cast<double>(tile_size) * 80.0
+        + static_cast<double>(metrics.overflow_ratio_sum)
+              * static_cast<double>(tile_size)
+              * 180.0;
+  return static_cast<double>(metrics.wirelength_dbu) + via_term + detour_term
+         + high_layer_term + layer_span_term + overflow_term;
+}
+
 long getRouteBBoxHpwl(const GRoute& route)
 {
   int min_x = std::numeric_limits<int>::max();
@@ -1561,6 +1583,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const int wl_source_count = std::min<int>(14, ranked.size());
     const int ultra_wl_source_count = std::min<int>(26, ranked.size());
     const int wl_safe_source_count = std::min<int>(12, ranked.size());
+    const int layer_compact_source_count = std::min<int>(20, ranked.size());
     const int balanced_source_count = std::min<int>(8, ranked.size());
     const int softcap_source_count = std::min<int>(16, ranked.size());
     const int consensus_source_count = std::min<int>(22, ranked.size());
@@ -1575,6 +1598,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 8L);
     const long wl_safe_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 10L);
+    const long layer_compact_via_weight
+        = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 16L);
     append_hybrid("hybrid-netmix-wl", wl_source_count, 0, 0.24, 0.50, 6010);
     append_hybrid(
         "hybrid-netmix-ultra-wl", ultra_wl_source_count, 0, 0.40, 0.95, 6013);
@@ -1596,6 +1621,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   0.030,
                   0.45,
                   1.15);
+    append_hybrid("hybrid-netmix-layer-compact",
+                  layer_compact_source_count,
+                  layer_compact_via_weight,
+                  0.78,
+                  0.72,
+                  6020,
+                  0.080,
+                  1.10,
+                  1.45);
     append_hybrid("hybrid-netmix-balanced",
                   balanced_source_count,
                   balanced_via_weight,
@@ -1684,16 +1718,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = std::max<long>(24, static_cast<long>(std::ceil(shortest_wl * 0.00008)));
   const long tie_quality_wl_band
       = std::max<long>(80, static_cast<long>(std::ceil(shortest_wl * 0.0025)));
+  const int final_tile_size = std::max(grouter_->grid_->getTileSize(), 1);
   auto wirelength_with_quality_tie_better = [&](const ScenarioResult& lhs,
                                                 const ScenarioResult& rhs) {
     const long wl_gap = std::llabs(lhs.metrics.wirelength_dbu
                                    - rhs.metrics.wirelength_dbu);
-    if (wl_gap <= tie_quality_wl_band && lhs.metrics.detour_dbu != rhs.metrics.detour_dbu) {
-      return lhs.metrics.detour_dbu < rhs.metrics.detour_dbu;
-    }
-    if (wl_gap <= tie_quality_wl_band
-        && lhs.metrics.high_layer_dbu != rhs.metrics.high_layer_dbu) {
-      return lhs.metrics.high_layer_dbu < rhs.metrics.high_layer_dbu;
+    if (wl_gap <= tie_quality_wl_band) {
+      const double lhs_proxy
+          = estimateDetailedRouteProxyCost(lhs.metrics, final_tile_size);
+      const double rhs_proxy
+          = estimateDetailedRouteProxyCost(rhs.metrics, final_tile_size);
+      if (std::abs(lhs_proxy - rhs_proxy) > 1e-3) {
+        return lhs_proxy < rhs_proxy;
+      }
     }
     if (wl_gap <= tie_via_wl_band && lhs.metrics.via_count != rhs.metrics.via_count) {
       return lhs.metrics.via_count < rhs.metrics.via_count;
