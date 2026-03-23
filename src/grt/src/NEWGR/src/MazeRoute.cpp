@@ -269,10 +269,10 @@ void MazeRoute::run()
       return true;
     }
     // Wirelength-first tie breaking with bounded congestion-cost regression.
-    constexpr uint64_t kStrongWireGain = 8;
-    constexpr uint64_t kModerateWireGain = 3;
-    constexpr double kCostSlackForWireGain = 1.22;
-    constexpr double kCostSlackForModerateWireGain = 1.32;
+    constexpr uint64_t kStrongWireGain = 10;
+    constexpr uint64_t kModerateWireGain = 4;
+    constexpr double kCostSlackForWireGain = 1.18;
+    constexpr double kCostSlackForModerateWireGain = 1.26;
     if (candidate.unique_wirelength + kStrongWireGain
             < current_best.unique_wirelength
         && candidate.total_cost <= current_best.total_cost * kCostSlackForWireGain) {
@@ -285,13 +285,7 @@ void MazeRoute::run()
         && candidate.unique_vias <= current_best.unique_vias + 4) {
       return true;
     }
-    if (candidate.unique_wirelength < current_best.unique_wirelength
-        && candidate.total_cost <= current_best.total_cost * 1.40
-        && candidate.unique_vias <= current_best.unique_vias + 6) {
-      return true;
-    }
-    if (candidate.total_cost + kCostEpsilon < current_best.total_cost
-        && candidate.unique_wirelength <= current_best.unique_wirelength + 12) {
+    if (candidate.total_cost + kCostEpsilon < current_best.total_cost) {
       return true;
     }
     if (std::abs(candidate.total_cost - current_best.total_cost) <= kCostEpsilon
@@ -310,7 +304,7 @@ void MazeRoute::run()
       return true;
     }
     if (candidate.unique_wirelength < current_best.unique_wirelength
-        && candidate.total_cost <= current_best.total_cost * 1.18
+        && candidate.total_cost <= current_best.total_cost * 1.12
         && candidate.unique_vias <= current_best.unique_vias + 3) {
       return true;
     }
@@ -928,15 +922,7 @@ void MazeRoute::run()
   runPairCandidate(min_x_seed, max_x_seed);
   runPairCandidate(min_y_seed, max_y_seed);
   runPairCandidate(center_seed, far_seed);
-  runPairCandidate(min_x_seed, max_y_seed);
-  runPairCandidate(max_x_seed, min_y_seed);
   runPairCandidate(far_pair_lhs, far_pair_rhs);
-  if (num_pins <= 64) {
-    runPairCandidate(center_seed, min_x_seed);
-    runPairCandidate(center_seed, max_x_seed);
-    runPairCandidate(center_seed, min_y_seed);
-    runPairCandidate(center_seed, max_y_seed);
-  }
 
   for (const int seed : seeds) {
     RunResult candidate = runFromSeed(seed);
