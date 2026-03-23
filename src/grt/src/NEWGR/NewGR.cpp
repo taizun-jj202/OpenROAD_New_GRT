@@ -1,6 +1,7 @@
 #include "NEWGR/NewGR.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -76,6 +77,14 @@ struct NetOrderFeatures
   int layer_span = 1;
   int port_count = 0;
   float slack = 0.0f;
+  double score = 0.0;
+};
+
+struct NetRouteCost
+{
+  long wirelength_dbu = 0;
+  long via_count = 0;
+  double hotspot_exposure = 0.0;
   double score = 0.0;
 };
 
@@ -725,6 +734,128 @@ void appendUniqueRouteSegment(GRoute& route, const GSegment& segment)
   route.push_back(segment);
 }
 
+std::int64_t makeGridKey(int gx, int gy)
+{
+  return (static_cast<std::int64_t>(gx) << 32)
+         | static_cast<std::uint32_t>(gy);
+}
+
+std::map<std::int64_t, float> buildHotspotSeverityMap(const std::vector<Hotspot>& hotspots)
+{
+  std::map<std::int64_t, float> severity_map;
+  for (const Hotspot& hotspot : hotspots) {
+    const std::int64_t key = makeGridKey(hotspot.gx, hotspot.gy);
+    auto [it, inserted] = severity_map.emplace(key, hotspot.severity);
+    if (!inserted) {
+      it->second = std::max(it->second, hotspot.severity);
+    }
+  }
+  return severity_map;
+}
+
+NetRouteCost computeNetRouteCost(const GRoute& route,
+                                 int tile_size,
+                                 int x_min,
+                                 int y_min,
+                                 int x_grids,
+                                 int y_grids,
+                                 const std::map<std::int64_t, float>& hotspot_map)
+{
+  NetRouteCost cost;
+  tile_size = std::max(tile_size, 1);
+  x_grids = std::max(x_grids, 1);
+  y_grids = std::max(y_grids, 1);
+
+  const auto to_grid = [&](int x, int y) {
+    const int gx = std::clamp((x - x_min) / tile_size, 0, x_grids - 1);
+    const int gy = std::clamp((y - y_min) / tile_size, 0, y_grids - 1);
+    return std::pair<int, int>{gx, gy};
+  };
+  const auto sample_hotspot = [&](int x, int y) {
+    const auto [gx, gy] = to_grid(x, y);
+    auto it = hotspot_map.find(makeGridKey(gx, gy));
+    if (it != hotspot_map.end()) {
+      cost.hotspot_exposure += static_cast<double>(it->second);
+    }
+  };
+
+  for (const GSegment& segment : route) {
+    if (segment.isVia()) {
+      cost.via_count++;
+      sample_hotspot(segment.init_x, segment.init_y);
+      continue;
+    }
+
+    const long seg_length = static_cast<long>(std::abs(segment.final_x - segment.init_x)
+                                              + std::abs(segment.final_y - segment.init_y));
+    cost.wirelength_dbu += seg_length;
+
+    sample_hotspot(segment.init_x, segment.init_y);
+    sample_hotspot(segment.final_x, segment.final_y);
+    sample_hotspot((segment.init_x + segment.final_x) / 2,
+                   (segment.init_y + segment.final_y) / 2);
+  }
+
+  const double via_weight = static_cast<double>(tile_size) * 2.8;
+  const double hotspot_weight = static_cast<double>(tile_size) * 4.0;
+  cost.score = static_cast<double>(cost.wirelength_dbu)
+               + via_weight * static_cast<double>(cost.via_count)
+               + hotspot_weight * cost.hotspot_exposure;
+  return cost;
+}
+
+int applySelectiveNetRouteGrafting(NetRouteMap& base_routes,
+                                   const NetRouteMap& alternate_routes,
+                                   int tile_size,
+                                   int x_min,
+                                   int y_min,
+                                   int x_grids,
+                                   int y_grids,
+                                   const std::map<std::int64_t, float>& hotspot_map)
+{
+  int replaced_nets = 0;
+  const long min_wl_gain = std::max(2 * tile_size, 1);
+
+  for (auto& [db_net, base_route] : base_routes) {
+    auto alt_it = alternate_routes.find(db_net);
+    if (alt_it == alternate_routes.end()) {
+      continue;
+    }
+
+    const NetRouteCost base_cost = computeNetRouteCost(base_route,
+                                                       tile_size,
+                                                       x_min,
+                                                       y_min,
+                                                       x_grids,
+                                                       y_grids,
+                                                       hotspot_map);
+    const NetRouteCost alt_cost = computeNetRouteCost(alt_it->second,
+                                                      tile_size,
+                                                      x_min,
+                                                      y_min,
+                                                      x_grids,
+                                                      y_grids,
+                                                      hotspot_map);
+
+    // Accept alternate routes only when they strictly improve local length
+    // without worsening via count and while preserving hotspot pressure.
+    const bool wl_better
+        = (base_cost.wirelength_dbu - alt_cost.wirelength_dbu) >= min_wl_gain;
+    const bool via_not_worse = alt_cost.via_count <= base_cost.via_count;
+    const bool hotspot_not_worse
+        = alt_cost.hotspot_exposure <= (base_cost.hotspot_exposure + 0.20);
+    const bool score_better = alt_cost.score + static_cast<double>(tile_size)
+                              < base_cost.score;
+
+    if (wl_better && via_not_worse && hotspot_not_worse && score_better) {
+      base_route = alt_it->second;
+      replaced_nets++;
+    }
+  }
+
+  return replaced_nets;
+}
+
 void applyCugrStyleGuidePatching(GlobalRouter* grouter,
                                  NetRouteMap& routes,
                                  int min_routing_layer,
@@ -1171,6 +1302,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   std::vector<Hotspot> hotspots = collect_hotspots();
   const std::vector<Hotspot> focused_hotspots
       = focus_hotspots(hotspots, hotspots.size(), 0.6f);
+  const std::map<std::int64_t, float> hotspot_map
+      = buildHotspotSeverityMap(focused_hotspots);
 
   RudyGrid normalized_rudy;
   if (Rudy* rudy = grouter_->getRudy()) {
@@ -1432,6 +1565,59 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(result));
   }
 
+  auto find_scenario_result = [&](const std::string& name) -> ScenarioResult* {
+    for (ScenarioResult& result : scenario_results) {
+      if (result.name == name) {
+        return &result;
+      }
+    }
+    return nullptr;
+  };
+
+  if (ScenarioResult* sporder = find_scenario_result("sporder-shortest")) {
+    if (ScenarioResult* spatial
+        = find_scenario_result("spatial-roundrobin-turbo")) {
+      ScenarioResult fusion;
+      fusion.name = "spatial-wirelength-grafting";
+      fusion.routes = sporder->routes;
+
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      const int x_min = grouter_->grid_->getXMin();
+      const int y_min = grouter_->grid_->getYMin();
+      const int x_grids = grouter_->grid_->getXGrids();
+      const int y_grids = grouter_->grid_->getYGrids();
+
+      const int spatial_swaps = applySelectiveNetRouteGrafting(fusion.routes,
+                                                               spatial->routes,
+                                                               tile_size,
+                                                               x_min,
+                                                               y_min,
+                                                               x_grids,
+                                                               y_grids,
+                                                               hotspot_map);
+      if (ScenarioResult* direct_focus = find_scenario_result("wl-direct-focused")) {
+        applySelectiveNetRouteGrafting(fusion.routes,
+                                       direct_focus->routes,
+                                       tile_size,
+                                       x_min,
+                                       y_min,
+                                       x_grids,
+                                       y_grids,
+                                       hotspot_map);
+      }
+
+      fusion.metrics = compute_metrics(fusion.routes);
+      logger_->info(GNR,
+                    6008,
+                    "NEWGR scenario {} [hybrid]: wirelength {:.0f} um, vias {}, grafted nets {}",
+                    fusion.name,
+                    fusion.metrics.wirelength_um,
+                    fusion.metrics.via_count,
+                    spatial_swaps);
+      scenario_results.push_back(std::move(fusion));
+    }
+  }
+
   const long baseline_vias = baseline.metrics.via_count;
   auto better_result = [baseline_vias](const ScenarioResult& lhs,
                                        const ScenarioResult& rhs) {
@@ -1454,11 +1640,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
 
-    if (lhs_wl != rhs_wl) {
-      return lhs_wl < rhs_wl;
-    }
     if (lhs.metrics.via_count != rhs.metrics.via_count) {
       return lhs.metrics.via_count < rhs.metrics.via_count;
+    }
+    if (lhs_wl != rhs_wl) {
+      return lhs_wl < rhs_wl;
     }
     return lhs.metrics.score < rhs.metrics.score;
   };
@@ -1496,9 +1682,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 final_result.metrics.wirelength_um,
                 final_result.metrics.via_count);
 
-  if (final_result.name == "cugr-softcap-wirelength"
-      || final_result.name == "sporder-shortest"
-      || final_result.name == "wl-direct-focused") {
+  if (final_result.name == "cugr-softcap-wirelength") {
     applyCugrStyleGuidePatching(grouter_,
                                 final_result.routes,
                                 min_routing_layer,
