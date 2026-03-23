@@ -3160,6 +3160,205 @@ void applyRudyCorridorBackboneRebuild(GlobalRouter* grouter,
   }
 }
 
+void applyPerimeterRingCollapse(GlobalRouter* grouter,
+                                NetRouteMap& routes,
+                                const RudyGrid& normalized_rudy,
+                                int min_unique_nodes,
+                                int coverage_percent,
+                                int expansion_tiles,
+                                int min_layer,
+                                int max_layer)
+{
+  if (grouter == nullptr || grouter->grid() == nullptr || routes.empty()) {
+    return;
+  }
+
+  Grid* grid = grouter->grid();
+  const int tile = std::max(grid->getTileSize(), 1);
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+  const int x_max = grid->getXMax();
+  const int y_max = grid->getYMax();
+  const int x_tiles = normalized_rudy.empty()
+                          ? std::max(grid->getXGrids(), 1)
+                          : static_cast<int>(normalized_rudy.size());
+  const int y_tiles = normalized_rudy.empty()
+                          ? std::max(grid->getYGrids(), 1)
+                          : static_cast<int>(normalized_rudy.front().size());
+
+  min_unique_nodes = std::max(min_unique_nodes, 3);
+  coverage_percent = std::clamp(coverage_percent, 1, 100);
+  expansion_tiles = std::max(expansion_tiles, 1);
+  min_layer = std::max(min_layer, 0);
+  max_layer = std::max(max_layer, min_layer);
+
+  auto to_grid_x = [&](int x) {
+    if (x_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((x - x_min) / tile, 0, x_tiles - 1);
+  };
+  auto to_grid_y = [&](int y) {
+    if (y_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((y - y_min) / tile, 0, y_tiles - 1);
+  };
+
+  for (auto& [db_net, route] : routes) {
+    if (route.empty()) {
+      continue;
+    }
+
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    if (static_cast<int>(key % 100ULL) >= coverage_percent) {
+      continue;
+    }
+
+    const std::vector<RouteNode> nodes = collectUniqueRouteNodes(route);
+    if (static_cast<int>(nodes.size()) < min_unique_nodes) {
+      continue;
+    }
+
+    int min_x = std::clamp(nodes.front().x, x_min, x_max);
+    int max_x = min_x;
+    int min_y = std::clamp(nodes.front().y, y_min, y_max);
+    int max_y = min_y;
+    for (const RouteNode& node : nodes) {
+      const int x = std::clamp(node.x, x_min, x_max);
+      const int y = std::clamp(node.y, y_min, y_max);
+      min_x = std::min(min_x, x);
+      max_x = std::max(max_x, x);
+      min_y = std::min(min_y, y);
+      max_y = std::max(max_y, y);
+    }
+
+    const int pad = expansion_tiles * tile;
+    int ring_left = std::clamp(min_x - pad, x_min, x_max);
+    int ring_right = std::clamp(max_x + pad, x_min, x_max);
+    int ring_bottom = std::clamp(min_y - pad, y_min, y_max);
+    int ring_top = std::clamp(max_y + pad, y_min, y_max);
+
+    if (ring_left >= ring_right) {
+      ring_left = std::max(x_min, min_x - tile);
+      ring_right = std::min(x_max, max_x + tile);
+      if (ring_left >= ring_right) {
+        ring_left = std::max(x_min, ring_left - tile);
+        ring_right = std::min(x_max, ring_right + tile);
+      }
+    }
+    if (ring_bottom >= ring_top) {
+      ring_bottom = std::max(y_min, min_y - tile);
+      ring_top = std::min(y_max, max_y + tile);
+      if (ring_bottom >= ring_top) {
+        ring_bottom = std::max(y_min, ring_bottom - tile);
+        ring_top = std::min(y_max, ring_top + tile);
+      }
+    }
+
+    if (ring_left >= ring_right || ring_bottom >= ring_top) {
+      continue;
+    }
+
+    const int trunk_layer = chooseDominantLayer(nodes, min_layer, max_layer);
+    const int spine_x = (ring_left + ring_right) / 2;
+    const int spine_y = (ring_bottom + ring_top) / 2;
+    std::vector<GSegment> rebuilt;
+    rebuilt.reserve(nodes.size() * 6 + 18);
+
+    for (size_t idx = 0; idx < nodes.size(); ++idx) {
+      int cur_x = std::clamp(nodes[idx].x, x_min, x_max);
+      int cur_y = std::clamp(nodes[idx].y, y_min, y_max);
+      int cur_layer = nodes[idx].layer;
+
+      if (cur_layer != trunk_layer) {
+        const int step = (trunk_layer > cur_layer) ? 1 : -1;
+        while (cur_layer != trunk_layer) {
+          const int next_layer = cur_layer + step;
+          appendSegment(
+              rebuilt, cur_x, cur_y, cur_layer, cur_x, cur_y, next_layer);
+          cur_layer = next_layer;
+        }
+      }
+
+      struct Candidate
+      {
+        int x = 0;
+        int y = 0;
+        bool horizontal_first = true;
+        double cost = std::numeric_limits<double>::max();
+        long dist = std::numeric_limits<long>::max();
+      };
+      Candidate best{};
+      const std::array<std::pair<int, int>, 4> anchors{
+          std::pair<int, int>{std::clamp(cur_x, ring_left, ring_right), ring_bottom},
+          std::pair<int, int>{ring_right, std::clamp(cur_y, ring_bottom, ring_top)},
+          std::pair<int, int>{std::clamp(cur_x, ring_left, ring_right), ring_top},
+          std::pair<int, int>{ring_left, std::clamp(cur_y, ring_bottom, ring_top)}};
+
+      for (const auto& [ax, ay] : anchors) {
+        const long dist = std::abs(cur_x - ax) + std::abs(cur_y - ay);
+        const int gx0 = to_grid_x(cur_x);
+        const int gy0 = to_grid_y(cur_y);
+        const int gx1 = to_grid_x(ax);
+        const int gy1 = to_grid_y(ay);
+        const float h_rudy
+            = estimatePathRudy(normalized_rudy, gx0, gy0, gx1, gy1, true);
+        const float v_rudy
+            = estimatePathRudy(normalized_rudy, gx0, gy0, gx1, gy1, false);
+        const bool horizontal_first = h_rudy <= v_rudy;
+        const double congestion = static_cast<double>(std::min(h_rudy, v_rudy));
+        const double orient
+            = horizontal_first ? static_cast<double>(h_rudy)
+                               : static_cast<double>(v_rudy);
+        const double cost = static_cast<double>(dist)
+                            + static_cast<double>(tile) * 4.2 * congestion
+                            + static_cast<double>(tile) * 0.7 * orient;
+        if (cost + 1e-9 < best.cost
+            || (std::abs(cost - best.cost) <= 1e-9 && dist < best.dist)) {
+          best = Candidate{ax, ay, horizontal_first, cost, dist};
+        }
+      }
+
+      if (best.horizontal_first) {
+        appendSegment(
+            rebuilt, cur_x, cur_y, trunk_layer, best.x, cur_y, trunk_layer);
+        appendSegment(
+            rebuilt, best.x, cur_y, trunk_layer, best.x, best.y, trunk_layer);
+      } else {
+        appendSegment(
+            rebuilt, cur_x, cur_y, trunk_layer, cur_x, best.y, trunk_layer);
+        appendSegment(
+            rebuilt, cur_x, best.y, trunk_layer, best.x, best.y, trunk_layer);
+      }
+    }
+
+    appendSegment(
+        rebuilt, ring_left, ring_bottom, trunk_layer, ring_right, ring_bottom, trunk_layer);
+    appendSegment(
+        rebuilt, ring_right, ring_bottom, trunk_layer, ring_right, ring_top, trunk_layer);
+    appendSegment(
+        rebuilt, ring_right, ring_top, trunk_layer, ring_left, ring_top, trunk_layer);
+    appendSegment(
+        rebuilt, ring_left, ring_top, trunk_layer, ring_left, ring_bottom, trunk_layer);
+
+    appendSegment(
+        rebuilt, ring_left, spine_y, trunk_layer, ring_right, spine_y, trunk_layer);
+    appendSegment(
+        rebuilt, spine_x, ring_bottom, trunk_layer, spine_x, ring_top, trunk_layer);
+
+    std::vector<GSegment> compressed;
+    compressed.reserve(rebuilt.size());
+    for (const GSegment& segment : rebuilt) {
+      appendCompressedSegment(compressed, segment);
+    }
+    if (!compressed.empty()) {
+      route.swap(compressed);
+    }
+  }
+}
+
 void applyWavefrontDetours(GlobalRouter* grouter,
                            NetRouteMap& routes,
                            const RudyGrid& normalized_rudy,
@@ -3520,11 +3719,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     sculpted.name = "field_sculpted_failed";
   }
 
-  // Iteration 31 radical mode:
-  // Build three topology-breaking corridor candidates:
+  // Iteration 32 radical mode:
+  // Build four topology-breaking corridor candidates:
   // 1) corridor_hyper: low-RUDY corridor backbone rebuild.
   // 2) corridor_shockwave: corridor backbone plus an aggressive wave pass.
   // 3) corridor_portal_vortex: portal hypergraph + dual-backbone warp.
+  // 4) corridor_perimeter_ring: expanded bbox ring collapse.
   // Then run a deterministic per-net tournament with explicit forcing buckets
   // so a larger fraction of medium/large nets are rewritten each run.
   const bool use_corridor_mode
@@ -3590,14 +3790,39 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     applyViaExcursionCollapse(corridor_vortex.routes, std::max(4 * tile_size, 1));
     corridor_vortex.metrics = compute_metrics(corridor_vortex.routes);
 
+    ScenarioResult corridor_ring = compact;
+    corridor_ring.name = "corridor_perimeter_ring";
+    applyPerimeterRingCollapse(grouter_,
+                               corridor_ring.routes,
+                               baseline_rudy,
+                               3,
+                               100,
+                               6,
+                               min_routing_layer,
+                               max_routing_layer);
+    applyWavefrontDetours(grouter_,
+                          corridor_ring.routes,
+                          baseline_rudy,
+                          std::max(2 * tile_size, 1),
+                          std::max(12 * tile_size, 1),
+                          100);
+    applyAggressiveDoglegShortcuts(corridor_ring.routes,
+                                   std::max(8 * tile_size, 1),
+                                   std::max(tile_size, 1));
+    applyGuideCompression(corridor_ring.routes, std::max(5 * tile_size, 1));
+    applyViaExcursionCollapse(corridor_ring.routes, std::max(3 * tile_size, 1));
+    corridor_ring.metrics = compute_metrics(corridor_ring.routes);
+
     ScenarioResult selected = compact;
     selected.name = "corridor_vortex_tournament";
     long nets_taken_from_corridor = 0;
     long nets_taken_from_corridor_shock = 0;
     long nets_taken_from_corridor_vortex = 0;
+    long nets_taken_from_corridor_ring = 0;
     long forced_shock_buckets = 0;
     long forced_vortex_buckets = 0;
     long forced_corridor_buckets = 0;
+    long forced_ring_buckets = 0;
 
     auto has_planar_guide = [](const GRoute& route) {
       for (const GSegment& segment : route) {
@@ -3681,13 +3906,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         continue;
       }
       const GRoute& corridor_vortex_route = corridor_vortex_it->second;
+      auto corridor_ring_it = corridor_ring.routes.find(db_net);
+      if (corridor_ring_it == corridor_ring.routes.end()) {
+        continue;
+      }
+      const GRoute& corridor_ring_route = corridor_ring_it->second;
 
       const bool compact_valid = has_planar_guide(compact_route);
       const bool corridor_valid = has_planar_guide(corridor_route);
       const bool shock_valid = has_planar_guide(corridor_shock_route);
       const bool vortex_valid = has_planar_guide(corridor_vortex_route);
+      const bool ring_valid = has_planar_guide(corridor_ring_route);
 
       if (!compact_valid) {
+        if (ring_valid) {
+          selected.routes[db_net] = corridor_ring_route;
+          nets_taken_from_corridor_ring++;
+          continue;
+        }
         if (vortex_valid) {
           selected.routes[db_net] = corridor_vortex_route;
           nets_taken_from_corridor_vortex++;
@@ -3710,17 +3946,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const auto [corr_wl, corr_vias] = route_stats(corridor_route);
       const auto [shock_wl, shock_vias] = route_stats(corridor_shock_route);
       const auto [vortex_wl, vortex_vias] = route_stats(corridor_vortex_route);
+      const auto [ring_wl, ring_vias] = route_stats(corridor_ring_route);
       const double compact_score = route_score(compact_route, compact.overflow);
       const double corridor_score = route_score(corridor_route, corridor.overflow);
       const double shock_score
           = route_score(corridor_shock_route, corridor_shock.overflow);
       const double vortex_score
           = route_score(corridor_vortex_route, corridor_vortex.overflow);
+      const double ring_score
+          = route_score(corridor_ring_route, corridor_ring.overflow);
       const int node_count
           = static_cast<int>(collectUniqueRouteNodes(compact_route).size());
       const auto key
           = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
-      const unsigned phase = static_cast<unsigned>(key % 8ULL);
+      const unsigned phase = static_cast<unsigned>(key % 10ULL);
 
       const bool corridor_ok
           = corridor_valid && route_admissible_strict(corridor_route, compact_route);
@@ -3728,6 +3967,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = shock_valid && route_admissible_loose(corridor_shock_route, compact_route);
       const bool vortex_ok
           = vortex_valid && route_admissible_loose(corridor_vortex_route, compact_route);
+      const bool ring_ok
+          = ring_valid && route_admissible_loose(corridor_ring_route, compact_route);
+
+      if (ring_ok && node_count >= 7 && (phase == 0U || phase == 4U)
+          && ring_score <= compact_score * 2.10) {
+        selected.routes[db_net] = corridor_ring_route;
+        nets_taken_from_corridor_ring++;
+        forced_ring_buckets++;
+        continue;
+      }
 
       bool forced_pick = false;
       if (vortex_ok && node_count >= 10 && (phase == 1U || phase == 5U)
@@ -3768,6 +4017,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         forced_shock_buckets++;
         forced_pick = true;
       }
+      if (!forced_pick && ring_ok && node_count >= 14 && phase == 9U
+          && ring_wl <= static_cast<long>(compact_wl * 1.70)
+          && ring_vias <= static_cast<long>(compact_vias * 6.20 + 22)) {
+        selected.routes[db_net] = corridor_ring_route;
+        nets_taken_from_corridor_ring++;
+        forced_ring_buckets++;
+        forced_pick = true;
+      }
       if (forced_pick) {
         continue;
       }
@@ -3778,7 +4035,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         kCompact,
         kCorridor,
         kShock,
-        kVortex
+        kVortex,
+        kRing
       };
       CorridorPick pick = CorridorPick::kCompact;
       if (corridor_ok && corridor_score + 1e-3 < best_score) {
@@ -3790,7 +4048,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         pick = CorridorPick::kShock;
       }
       if (vortex_ok && vortex_score + 1e-3 < best_score) {
+        best_score = vortex_score;
         pick = CorridorPick::kVortex;
+      }
+      if (ring_ok && ring_score + 1e-3 < best_score) {
+        best_score = ring_score;
+        pick = CorridorPick::kRing;
       }
 
       if (pick == CorridorPick::kShock) {
@@ -3801,6 +4064,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       if (pick == CorridorPick::kVortex) {
         selected.routes[db_net] = corridor_vortex_route;
         nets_taken_from_corridor_vortex++;
+        continue;
+      }
+      if (pick == CorridorPick::kRing) {
+        selected.routes[db_net] = corridor_ring_route;
+        nets_taken_from_corridor_ring++;
         continue;
       }
       if (pick == CorridorPick::kCorridor) {
@@ -3814,6 +4082,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           && (phase == 4U || phase == 5U)) {
         selected.routes[db_net] = corridor_route;
         nets_taken_from_corridor++;
+      } else if (ring_ok && node_count >= 11 && (phase == 6U || phase == 8U)
+                 && ring_wl <= static_cast<long>(compact_wl * 1.40)
+                 && ring_vias
+                        <= static_cast<long>(compact_vias * 4.40 + 16)) {
+        selected.routes[db_net] = corridor_ring_route;
+        nets_taken_from_corridor_ring++;
       }
     }
     applyWavefrontDetours(grouter_,
@@ -3830,6 +4104,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                          70,
                                          min_routing_layer,
                                          max_routing_layer);
+    applyPerimeterRingCollapse(grouter_,
+                               selected.routes,
+                               baseline_rudy,
+                               4,
+                               62,
+                               3,
+                               min_routing_layer,
+                               max_routing_layer);
     applyAggressiveDoglegShortcuts(selected.routes,
                                    std::max(14 * tile_size, 1),
                                    std::max(tile_size, 1));
@@ -3856,14 +4138,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     logger_->warn(GNR,
                   6042,
                   "NEWGR corridor blend counters: corridor {} corridor_shock {} "
-                  "corridor_vortex {} forced_corridor {} forced_shock {} "
-                  "forced_vortex {}.",
+                  "corridor_vortex {} corridor_ring {} forced_corridor {} "
+                  "forced_shock {} forced_vortex {} forced_ring {}.",
                   nets_taken_from_corridor,
                   nets_taken_from_corridor_shock,
                   nets_taken_from_corridor_vortex,
+                  nets_taken_from_corridor_ring,
                   forced_corridor_buckets,
                   forced_shock_buckets,
-                  forced_vortex_buckets);
+                  forced_vortex_buckets,
+                  forced_ring_buckets);
 
     restore_snapshot(snapshot);
     return selected.routes;
