@@ -71,7 +71,7 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
                              const int baseline_overflow)
 {
   constexpr double kOverflowEpsilon = 1e-6;
-  constexpr double kAllowedOverflowIncreaseForWlGain = 16.0;
+  constexpr double kAllowedOverflowIncreaseForWlGain = 8.0;
   constexpr double kStrongOverflowDropThreshold = 20.0;
 
   // Wirelength-first objective:
@@ -85,7 +85,7 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
       = current_best.total_overflow - candidate.total_overflow;
   if (overflow_drop > kStrongOverflowDropThreshold) {
     // Accept a large overflow reduction even without immediate WL gain.
-    constexpr int64_t kMaxWirelengthTradeoff = 40;
+    constexpr int64_t kMaxWirelengthTradeoff = 28;
     if (candidate.wirelength
         > current_best.wirelength + kMaxWirelengthTradeoff) {
       return false;
@@ -524,7 +524,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         if (!tree) {
           return;
         }
-        constexpr int kRecoveryOverflowSlack = 2;
+        constexpr int kRecoveryOverflowSlack = 0;
         // Evaluate overflow after adding the candidate tree back to the live
         // graph. This avoids selecting routes that appear legal in rip-up mode
         // but create new overflows once committed.
@@ -709,6 +709,35 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
               wlPatternRoute.run();
               considerCandidate(net->getRoutingTree());
             }
+          }
+        }
+
+        // FastRoute-inspired critical-net intensification:
+        // for the highest-HPWL candidates, run a full-grid maze search with
+        // wirelength-only costs to aggressively shorten trunks/branches.
+        const bool enable_full_grid_maze
+            = constants_.recovery_use_full_grid_maze
+              && deep_search
+              && candidateIndex < std::max(1, constants_.recovery_full_grid_top_n)
+              && candidates[candidateIndex].hpwl
+                     >= constants_.recovery_full_grid_hpwl_threshold;
+        if (enable_full_grid_maze) {
+          GridGraphView<CostT> fullGridWlOnlyView;
+          grid_graph_->extractWireLengthCostView(fullGridWlOnlyView);
+          const double full_grid_via_scale
+              = std::clamp(constants_.recovery_full_grid_via_cost_scale, 0.0, 1.0);
+          MazeRoute fullGridMaze(net, grid_graph_.get(), logger_);
+          fullGridMaze.constructSparsifiedGraph(
+              fullGridWlOnlyView, SparseGrid(1, 1, 0, 0), full_grid_via_scale);
+          fullGridMaze.run();
+          if (const std::shared_ptr<SteinerTreeNode> full_grid_tree
+              = fullGridMaze.getSteinerTree()) {
+            PatternRoute fullGridPatternRoute(
+                net, grid_graph_.get(), stt_builder_, constants_, logger_);
+            fullGridPatternRoute.setSteinerTree(full_grid_tree);
+            fullGridPatternRoute.constructRoutingDAG();
+            fullGridPatternRoute.run();
+            considerCandidate(net->getRoutingTree());
           }
         }
       }

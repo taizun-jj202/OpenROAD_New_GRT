@@ -341,7 +341,7 @@ void MazeRoute::run()
     }
 
     // Runtime guardrail: use the metric closure only for small/medium nets.
-    constexpr int kMaxMetricClosurePins = 40;
+    constexpr int kMaxMetricClosurePins = 72;
     if (num_pins > kMaxMetricClosurePins) {
       return result;
     }
@@ -609,9 +609,9 @@ void MazeRoute::run()
   } else if (num_pins <= 32) {
     max_seeds = 12;
   } else if (num_pins <= 64) {
-    max_seeds = 8;
+    max_seeds = 12;
   } else {
-    max_seeds = 6;
+    max_seeds = 10;
   }
   if (max_seeds < static_cast<int>(seeds.size())) {
     seeds.resize(max_seeds);
