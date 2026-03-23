@@ -51,6 +51,7 @@ class NewgrEngine
   NetRouteMap runSmallNetAware();
   NetRouteMap runAstarClassic();
   NetRouteMap runRudyDriven();
+  NetRouteMap runLocalPolish();
 
   const NewgrInput& getInput() const { return input_; }
   int getTotalOverflow() const { return last_total_overflow_; }

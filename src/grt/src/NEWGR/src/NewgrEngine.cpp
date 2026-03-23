@@ -135,6 +135,13 @@ NetRouteMap NewgrEngine::runRudyDriven()
                        /*warn_id=*/407);
 }
 
+NetRouteMap NewgrEngine::runLocalPolish()
+{
+  return runWithConfig(/*max_maze_round=*/140,
+                       static_cast<int>(Algo::DetPart_Astar_Local),
+                       /*warn_id=*/410);
+}
+
 NetRouteMap NewgrEngine::runWithConfig(int max_maze_round, int algo_id, int warn_id)
 {
   if (!input_ready_) {
