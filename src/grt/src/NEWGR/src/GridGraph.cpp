@@ -518,7 +518,9 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   const auto& boundingBox = net->getBoundingBox();
   const PointT netCenter(boundingBox.cx(), boundingBox.cy());
   for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
-    std::pair<int, int> bestAccessDist = {0, std::numeric_limits<int>::max()};
+    int bestAccessibility = -1;
+    int bestLayerPenalty = std::numeric_limits<int>::max();
+    int bestDistance = std::numeric_limits<int>::max();
     int bestIndex = -1;
     for (int index = 0; index < accessPoints.size(); index++) {
       const GRPoint& point = accessPoints[index];
@@ -537,16 +539,23 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       } else {
         accessibility = 1;
       }
+      const int layerPenalty
+          = std::max(point.getLayerIdx() - constants_.min_routing_layer, 0);
       const int distance
           = abs(netCenter.x() - point.x()) + abs(netCenter.y() - point.y());
-      if (accessibility > bestAccessDist.first
-          || (accessibility == bestAccessDist.first
-              && distance < bestAccessDist.second)) {
+      if (accessibility > bestAccessibility
+          || (accessibility == bestAccessibility
+              && layerPenalty < bestLayerPenalty)
+          || (accessibility == bestAccessibility
+              && layerPenalty == bestLayerPenalty
+              && distance < bestDistance)) {
         bestIndex = index;
-        bestAccessDist = {accessibility, distance};
+        bestAccessibility = accessibility;
+        bestLayerPenalty = layerPenalty;
+        bestDistance = distance;
       }
     }
-    if (bestAccessDist.first == 0) {
+    if (bestAccessibility == 0) {
       logger_->warn(utl::GRT, 7001, "pin is hard to access.");
     }
     const PointT selectedPoint = accessPoints[bestIndex];

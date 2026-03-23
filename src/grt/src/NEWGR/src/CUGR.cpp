@@ -298,8 +298,8 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       // Large nets dominate total wirelength; bias candidate selection to
       // compact geometry even at moderate via cost.
       if (pinCount >= 8) {
-        wireWeight *= 1.6;
-        viaWeight *= 0.55;
+        wireWeight *= 1.45;
+        viaWeight *= 1.35;
       }
       if (hp >= 120.0) {
         wireWeight *= 1.35;
@@ -414,12 +414,12 @@ void CUGR::wirelengthPulseRoute(const std::vector<int>& allNetIndices)
       RouteScore bestScore;
       std::shared_ptr<GRTreeNode> bestTree = nullptr;
       auto scoreCandidate = [&](const std::shared_ptr<GRTreeNode>& candidateTree) {
-        double wireWeight = constants_.weight_wire_length * 2.6;
-        double viaWeight = constants_.weight_via_number * 0.85;
+        double wireWeight = constants_.weight_wire_length * 2.3;
+        double viaWeight = constants_.weight_via_number * 1.7;
         const double overflowWeight = constants_.weight_short_area * 2.3;
         if (hp >= 120 || net->getNumPins() >= 10) {
-          wireWeight *= 1.20;
-          viaWeight *= 1.10;
+          wireWeight *= 1.10;
+          viaWeight *= 1.35;
         }
         return scoreRouteTree(candidateTree,
                               *grid_graph_,
@@ -564,10 +564,10 @@ void CUGR::globalRebalanceRoute(const std::vector<int>& allNetIndices)
 
         double wireWeight = constants_.weight_wire_length
                             * (longNetsFirst ? 2.4 : 2.1);
-        double viaWeight = constants_.weight_via_number * 0.35;
+        double viaWeight = constants_.weight_via_number * 1.25;
         if (net->getNumPins() >= 12 || hp >= 140) {
-          wireWeight *= 1.35;
-          viaWeight *= 0.60;
+          wireWeight *= 1.15;
+          viaWeight *= 1.35;
         }
         const double overflowWeight
             = constants_.weight_short_area * (1.3 + 0.25 * round);
@@ -701,8 +701,8 @@ void CUGR::criticalCompactionRoute(const std::vector<int>& allNetIndices)
         const RouteScore candidateScore
             = scoreRouteTree(candidateTree,
                              *grid_graph_,
-                             5.2,
-                             2.1,
+                             4.6,
+                             4.4,
                              constants_.critical_compaction_overflow_weight);
         if (candidateScore.objective < bestScore.objective) {
           bestScore = candidateScore;

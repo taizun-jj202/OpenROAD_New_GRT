@@ -30,7 +30,7 @@ class BoxT;
 struct Constants
 {
   double weight_wire_length = 3.6;
-  double weight_via_number = 0.35;
+  double weight_via_number = 1.10;
   double weight_short_area = 380.0;
 
   int min_routing_layer = 1;
@@ -41,14 +41,14 @@ struct Constants
   double max_detour_ratio = 0.45;
   int target_detour_count = 36;
 
-  double via_multiplier = 1.05;
+  double via_multiplier = 1.22;
   double layer_depth_wire_penalty = 0.22;
-  double layer_depth_via_penalty = 0.42;
-  double layer_change_penalty = 0.45;
+  double layer_depth_via_penalty = 0.95;
+  double layer_change_penalty = 1.35;
 
   int mst_topology_pin_threshold = 6;
   double mst_bend_penalty = 4.8;
-  int hub_topology_pin_threshold = 12;
+  int hub_topology_pin_threshold = 8;
   int pin_access_layer_extension = 0;
   bool enable_early_detour_stage = false;
 
