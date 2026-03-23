@@ -153,9 +153,12 @@ void CUGR::route()
 
   patternRoute(netIndices);
 
-  patternRouteWithDetours(netIndices);
-
+  // Run maze reroute before detours so most overflow repairs come from a
+  // shortest-path engine instead of detour inflation.
   mazeRoute(netIndices);
+
+  // Keep detours as a final cleanup pass for residual difficult hotspots.
+  patternRouteWithDetours(netIndices);
 
   printStatistics();
   if (constants_.write_heatmap) {
@@ -250,13 +253,21 @@ NetRouteMap CUGR::getRoutes()
 
 void CUGR::sortNetIndices(std::vector<int>& netIndices) const
 {
-  std::vector<int> halfParameters(gr_nets_.size());
+  std::vector<double> priorities(gr_nets_.size(), 0.0);
+  std::vector<int> halfParameters(gr_nets_.size(), 0);
   for (int netIndex : netIndices) {
     auto& net = gr_nets_[netIndex];
-    halfParameters[netIndex] = net->getBoundingBox().hp();
+    const int hp = net->getBoundingBox().hp();
+    const int pins = std::max(net->getNumPins(), 2);
+    // FastRoute-inspired priority: protect large/high-fanout nets first.
+    priorities[netIndex] = static_cast<double>(hp) * (1.0 + std::log2(pins));
+    halfParameters[netIndex] = hp;
   }
   sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
-    return halfParameters[lhs] < halfParameters[rhs];
+    if (priorities[lhs] != priorities[rhs]) {
+      return priorities[lhs] > priorities[rhs];
+    }
+    return halfParameters[lhs] > halfParameters[rhs];
   });
 }
 

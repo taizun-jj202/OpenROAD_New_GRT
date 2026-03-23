@@ -29,8 +29,10 @@ class BoxT;
 
 struct Constants
 {
-  double weight_wire_length = 0.5;
-  double weight_via_number = 4.0;
+  // Wirelength-first weighting to counter NEWGR's CUGR-like over-detour
+  // behavior on large designs.
+  double weight_wire_length = 0.8;
+  double weight_via_number = 3.0;
   double weight_short_area = 500.0;
 
   int min_routing_layer = 1;
@@ -38,10 +40,12 @@ struct Constants
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.25;
-  int target_detour_count = 20;
+  // Keep detours as a final overflow repair tool instead of a broad
+  // topology-changing mechanism.
+  double max_detour_ratio = 0.10;
+  int target_detour_count = 8;
 
-  double via_multiplier = 2.0;
+  double via_multiplier = 1.4;
 
   double maze_logistic_slope = 0.5;
 
