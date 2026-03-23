@@ -196,7 +196,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   last_total_overflow_ = engine_->getTotalOverflow();
   used_fastroute_last_run_ = false;
 
-  if (grouter_->fastroute() != nullptr) {
+  const bool enable_fastroute_graft
+      = std::getenv("NEWGR_ENABLE_FASTROUTE_GRAFT") != nullptr;
+  if (enable_fastroute_graft && grouter_->fastroute() != nullptr) {
     NetRouteMap fastroute_routes = grouter_->fastroute()->run();
     const int fastroute_overflow = grouter_->fastroute()->totalOverflow();
     const RouteScore newgr_score = computeRouteScore(routes);
@@ -284,6 +286,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                     best_score.vias,
                     best_score.routed_nets);
     }
+  } else if (!enable_fastroute_graft && grouter_->fastroute() != nullptr) {
+    logger_->info(utl::GRT,
+                  6008,
+                  "NEWGR FastRoute net-graft is disabled (set "
+                  "NEWGR_ENABLE_FASTROUTE_GRAFT=1 to enable).");
   }
 
   grouter_->addRemainingGuides(routes, nets, min_routing_layer, max_routing_layer);

@@ -73,7 +73,7 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 			                       : (wl_profile ? 1.0f : (dr_profile ? 0.93f : (short3d_profile ? 0.98f : 0.97f)));
 		} else if (rudy < 2.0) {
 			adj = radical_mix_profile ? ((layerID <= 2) ? 0.995f : 1.0f)
-			                         : (radical_wl_profile ? ((layerID <= 1) ? 0.995f : 1.0f)
+			                         : (radical_wl_profile ? ((layerID <= 1) ? 0.99f : 1.0f)
 			                         : (ultra_wl_profile ? 1.0f
 			                       : (wl_profile ? 0.98f : (dr_profile ? 0.88f : (short3d_profile ? 0.94f : 0.95f)))));
 		} else if (rudy < 3.5 && radical_mix_profile) {
@@ -81,9 +81,9 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 		} else if (rudy < 5.0 && radical_mix_profile) {
 			adj = (layerID <= 1) ? 0.965f : ((layerID <= 3) ? 0.98f : 1.0f);
 		} else if (rudy < 3.5 && radical_wl_profile) {
-			adj = (layerID <= 2) ? 0.99f : 1.0f;
+			adj = (layerID <= 2) ? 0.98f : 1.0f;
 		} else if (rudy < 5.5 && radical_wl_profile) {
-			adj = (layerID <= 1) ? 0.965f : ((layerID <= 3) ? 0.98f : 1.0f);
+			adj = (layerID <= 1) ? 0.95f : ((layerID <= 3) ? 0.97f : 1.0f);
 		} else if (rudy < 4.0 && ultra_wl_profile) {
 			adj = (layerID <= 1) ? 0.96f : ((layerID <= 3) ? 0.98f : 1.0f);
 		} else
@@ -121,9 +121,9 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 		// toward upper layers to avoid long 2D detours on congested lower metals.
 		if (radical_wl_profile) {
 			if (layerID <= 1 && rudy > 7.0f) {
-				adj -= 0.03f;
+				adj -= 0.04f;
 			} else if (layerID <= 3 && rudy > 8.0f) {
-				adj -= 0.015f;
+				adj -= 0.02f;
 			}
 			if (layerID >= 5) {
 				adj += (rudy > 2.0f) ? 0.05f : 0.03f;
