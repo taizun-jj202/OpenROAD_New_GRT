@@ -3243,207 +3243,203 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   selected.name += "+wirehunter";
   selected.metrics = compute_metrics(selected.routes);
 
-  const RouteMetrics pre_wave_metrics = compute_metrics(selected.routes);
-  applyWavefrontDetours(grouter_,
-                        selected.routes,
-                        baseline_rudy,
-                        std::max(20 * tile_size, 1),
-                        std::max(2 * tile_size, 1),
-                        22);
-  applyAggressiveDoglegShortcuts(selected.routes,
-                                 std::max(18 * tile_size, 1),
-                                 std::max(tile_size, 1));
-  applyGuideCompression(selected.routes, std::max(8 * tile_size, 1));
-  applyViaExcursionCollapse(selected.routes, std::max(5 * tile_size, 1));
-
-  const RouteMetrics pre_spine_metrics = compute_metrics(selected.routes);
-  applyMedianSpineRebuild(selected.routes,
-                          6,
-                          72,
-                          min_routing_layer,
-                          max_routing_layer);
-  applyAggressiveDoglegShortcuts(selected.routes,
-                                 std::max(20 * tile_size, 1),
-                                 std::max(tile_size, 1));
-  applyGuideCompression(selected.routes, std::max(12 * tile_size, 1));
-  applyViaExcursionCollapse(selected.routes, std::max(6 * tile_size, 1));
-
-  const RouteMetrics pre_portal_metrics = compute_metrics(selected.routes);
-  applyGlobalPortalRebuild(grouter_,
-                           selected.routes,
-                           baseline_rudy,
-                           7,
-                           44,
-                           min_routing_layer,
-                           max_routing_layer);
-  applyAggressiveDoglegShortcuts(selected.routes,
-                                 std::max(14 * tile_size, 1),
-                                 std::max(tile_size, 1));
-  applyGuideCompression(selected.routes, std::max(8 * tile_size, 1));
-  applyViaExcursionCollapse(selected.routes, std::max(6 * tile_size, 1));
-
-  const RouteMetrics pre_rmst_metrics = compute_metrics(selected.routes);
-  applyRmstTrunkRebuild(grouter_,
-                        selected.routes,
-                        baseline_rudy,
-                        5,
-                        42,
-                        56,
-                        min_routing_layer,
-                        max_routing_layer);
-  applyAggressiveDoglegShortcuts(selected.routes,
-                                 std::max(10 * tile_size, 1),
-                                 std::max(tile_size / 2, 1));
-  applyGuideCompression(selected.routes, std::max(10 * tile_size, 1));
-  applyViaExcursionCollapse(selected.routes, std::max(5 * tile_size, 1));
-
-  const RouteMetrics pre_bipolar_metrics = compute_metrics(selected.routes);
-  applyBipolarPortalBackboneRebuild(grouter_,
-                                    selected.routes,
-                                    baseline_rudy,
-                                    8,
-                                    120,
-                                    74,
-                                    min_routing_layer,
-                                    max_routing_layer);
-  applyAggressiveDoglegShortcuts(selected.routes,
-                                 std::max(16 * tile_size, 1),
-                                 std::max(tile_size, 1));
-  applyGuideCompression(selected.routes, std::max(12 * tile_size, 1));
-  applyViaExcursionCollapse(selected.routes, std::max(6 * tile_size, 1));
-
-  const RouteMetrics pre_quadrant_metrics = compute_metrics(selected.routes);
+  // Radical move: replace chained unconditional post-rewrites with a
+  // deterministic candidate tournament and strict acceptance gates.
+  ScenarioResult radical_hyper = compact;
+  radical_hyper.name = "radical_hyper";
   applyQuadrantPortalHypergraphRebuild(grouter_,
-                                       selected.routes,
+                                       radical_hyper.routes,
                                        baseline_rudy,
-                                       6,
-                                       300,
-                                       92,
+                                       4,
+                                       220,
+                                       96,
                                        min_routing_layer,
                                        max_routing_layer);
-  applyAggressiveDoglegShortcuts(selected.routes,
-                                 std::max(12 * tile_size, 1),
+  applyBipolarPortalBackboneRebuild(grouter_,
+                                    radical_hyper.routes,
+                                    baseline_rudy,
+                                    4,
+                                    220,
+                                    96,
+                                    min_routing_layer,
+                                    max_routing_layer);
+  applyRmstTrunkRebuild(grouter_,
+                        radical_hyper.routes,
+                        baseline_rudy,
+                        3,
+                        90,
+                        96,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyAggressiveDoglegShortcuts(radical_hyper.routes,
+                                 std::max(28 * tile_size, 1),
                                  std::max(tile_size, 1));
-  applyGuideCompression(selected.routes, std::max(14 * tile_size, 1));
-  applyViaExcursionCollapse(selected.routes, std::max(7 * tile_size, 1));
+  applyGuideCompression(radical_hyper.routes, std::max(10 * tile_size, 1));
+  applyViaExcursionCollapse(radical_hyper.routes, std::max(5 * tile_size, 1));
+  radical_hyper.metrics = compute_metrics(radical_hyper.routes);
 
+  struct CandidateEntry
+  {
+    const char* name;
+    const ScenarioResult* scenario;
+  };
+
+  std::vector<CandidateEntry> candidates{
+      {"compact", &compact},
+      {"shortcut", &shortcut},
+      {"anisotropic", &anisotropic},
+      {"wirehunter", &wirelength_hunter},
+      {"radical_hyper", &radical_hyper}};
+  if (sculpted_available) {
+    candidates.push_back({"sculpted", &sculpted});
+  }
+
+  auto objective = [&](const RouteMetrics& metrics, int overflow) {
+    const double via_weight = static_cast<double>(tile_size) * 1.00;
+    const double overflow_penalty
+        = static_cast<double>(std::max(overflow, 0))
+          * static_cast<double>(tile_size) * 24.0;
+    return static_cast<double>(metrics.wirelength_dbu)
+           + via_weight * static_cast<double>(metrics.via_count)
+           + overflow_penalty;
+  };
+
+  auto scenario_admissible = [&](const ScenarioResult& scenario) {
+    const bool wl_guard
+        = static_cast<double>(scenario.metrics.wirelength_dbu)
+          <= static_cast<double>(baseline.metrics.wirelength_dbu) * 1.28;
+    const bool via_guard
+        = static_cast<double>(scenario.metrics.via_count)
+          <= static_cast<double>(baseline.metrics.via_count) * 1.90;
+    return wl_guard && via_guard;
+  };
+
+  auto route_admissible = [&](const GRoute& candidate, const GRoute& reference) {
+    const auto [cand_wl, cand_vias] = route_stats(candidate);
+    const auto [ref_wl, ref_vias] = route_stats(reference);
+    if (ref_wl <= 0) {
+      return true;
+    }
+    const long wl_cap
+        = std::max(ref_wl + static_cast<long>(8 * tile_size),
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_wl) * 1.55)));
+    const long via_cap
+        = std::max(ref_vias + 8L,
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_vias) * 2.80 + 4.0)));
+    return cand_wl <= wl_cap && cand_vias <= via_cap;
+  };
+
+  auto route_objective = [&](const GRoute& route, int overflow) {
+    const auto [route_wl, route_vias] = route_stats(route);
+    const double via_weight = static_cast<double>(tile_size) * 1.00;
+    const double overflow_penalty
+        = static_cast<double>(std::max(overflow, 0))
+          * static_cast<double>(tile_size) * 24.0;
+    return static_cast<double>(route_wl)
+           + via_weight * static_cast<double>(route_vias) + overflow_penalty;
+  };
+
+  selected = compact;
+  selected.name = "deterministic_tournament";
+  std::vector<long> tournament_picks(candidates.size(), 0);
+
+  for (const auto& [db_net, base_route] : compact.routes) {
+    const GRoute* best_route = &base_route;
+    int best_index = 0;
+    double best_score = route_objective(base_route, compact.overflow);
+    bool best_planar = has_planar_guide(base_route);
+
+    for (size_t idx = 1; idx < candidates.size(); ++idx) {
+      const ScenarioResult& scenario = *candidates[idx].scenario;
+      if (!scenario_admissible(scenario)) {
+        continue;
+      }
+
+      const auto it = scenario.routes.find(db_net);
+      if (it == scenario.routes.end()) {
+        continue;
+      }
+
+      const GRoute& candidate_route = it->second;
+      const bool candidate_planar = has_planar_guide(candidate_route);
+      if (!candidate_planar && best_planar) {
+        continue;
+      }
+      if (candidate_planar && !best_planar) {
+        best_route = &candidate_route;
+        best_index = static_cast<int>(idx);
+        best_score = route_objective(candidate_route, scenario.overflow);
+        best_planar = true;
+        continue;
+      }
+      if (!route_admissible(candidate_route, base_route)) {
+        continue;
+      }
+
+      const double candidate_score
+          = route_objective(candidate_route, scenario.overflow);
+      if (candidate_score + 1e-3 < best_score) {
+        best_route = &candidate_route;
+        best_index = static_cast<int>(idx);
+        best_score = candidate_score;
+        best_planar = candidate_planar;
+      }
+    }
+
+    selected.routes[db_net] = *best_route;
+    if (best_index >= 0
+        && best_index < static_cast<int>(tournament_picks.size())) {
+      tournament_picks[best_index]++;
+    }
+  }
   selected.metrics = compute_metrics(selected.routes);
-  logger_->warn(GNR,
-                6021,
-                "NEWGR wavefront escape pass: wl delta {:+.0f} um, via delta "
-                "{:+d}.",
-                selected.metrics.wirelength_um - pre_wave_metrics.wirelength_um,
-                selected.metrics.via_count - pre_wave_metrics.via_count);
-  logger_->warn(
-      GNR,
-      6025,
-      "NEWGR median spine rebuild: wl delta {:+.0f} um, via delta {:+d}.",
-      selected.metrics.wirelength_um - pre_spine_metrics.wirelength_um,
-      selected.metrics.via_count - pre_spine_metrics.via_count);
-  logger_->warn(GNR,
-                6026,
-                "NEWGR portal highway rebuild: wl delta {:+.0f} um, via delta "
-                "{:+d}.",
-                selected.metrics.wirelength_um - pre_portal_metrics.wirelength_um,
-                selected.metrics.via_count - pre_portal_metrics.via_count);
-  logger_->warn(GNR,
-                6027,
-                "NEWGR RMST trunk rebuild: wl delta {:+.0f} um, via delta "
-                "{:+d}.",
-                selected.metrics.wirelength_um - pre_rmst_metrics.wirelength_um,
-                selected.metrics.via_count - pre_rmst_metrics.via_count);
-  logger_->warn(GNR,
-                6028,
-                "NEWGR bipolar portal rebuild: wl delta {:+.0f} um, via delta "
-                "{:+d}.",
-                selected.metrics.wirelength_um - pre_bipolar_metrics.wirelength_um,
-                selected.metrics.via_count - pre_bipolar_metrics.via_count);
-  logger_->warn(GNR,
-                6031,
-                "NEWGR quadrant portal hypergraph: wl delta {:+.0f} um, via "
-                "delta {:+d}.",
-                selected.metrics.wirelength_um - pre_quadrant_metrics.wirelength_um,
-                selected.metrics.via_count - pre_quadrant_metrics.via_count);
 
-  const double compact_delta_wl
-      = compact.metrics.wirelength_um - baseline.metrics.wirelength_um;
-  const long compact_delta_vias
-      = compact.metrics.via_count - baseline.metrics.via_count;
-  const double sculpted_delta_wl
-      = sculpted.metrics.wirelength_um - baseline.metrics.wirelength_um;
-  const long sculpted_delta_vias
-      = sculpted.metrics.via_count - baseline.metrics.via_count;
-  const double shortcut_delta_wl
-      = shortcut.metrics.wirelength_um - baseline.metrics.wirelength_um;
-  const long shortcut_delta_vias
-      = shortcut.metrics.via_count - baseline.metrics.via_count;
-  const double anisotropic_delta_wl
-      = anisotropic.metrics.wirelength_um - baseline.metrics.wirelength_um;
-  const long anisotropic_delta_vias
-      = anisotropic.metrics.via_count - baseline.metrics.via_count;
-  const double wirelength_hunter_delta_wl
-      = wirelength_hunter.metrics.wirelength_um - baseline.metrics.wirelength_um;
-  const long wirelength_hunter_delta_vias
-      = wirelength_hunter.metrics.via_count - baseline.metrics.via_count;
+  ScenarioResult stabilized = selected;
+  stabilized.name = "stabilized_radical_hyper";
+  applyQuadrantPortalHypergraphRebuild(grouter_,
+                                       stabilized.routes,
+                                       baseline_rudy,
+                                       5,
+                                       180,
+                                       62,
+                                       min_routing_layer,
+                                       max_routing_layer);
+  applyAggressiveDoglegShortcuts(stabilized.routes,
+                                 std::max(16 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(stabilized.routes, std::max(10 * tile_size, 1));
+  applyViaExcursionCollapse(stabilized.routes, std::max(6 * tile_size, 1));
+  stabilized.metrics = compute_metrics(stabilized.routes);
+
+  if (scenario_admissible(stabilized)
+      && objective(stabilized.metrics, selected.overflow) + 1e-3
+             < objective(selected.metrics, selected.overflow)) {
+    selected = stabilized;
+  }
+
+  // Final safeguard to prevent catastrophic regressions.
+  const bool catastrophic
+      = static_cast<double>(selected.metrics.wirelength_dbu)
+            > static_cast<double>(baseline.metrics.wirelength_dbu) * 1.35
+        || static_cast<double>(selected.metrics.via_count)
+               > static_cast<double>(baseline.metrics.via_count) * 2.10;
+  if (catastrophic) {
+    selected = compact;
+    selected.name = "catastrophic_fallback_compact";
+  }
+  selected.metrics = compute_metrics(selected.routes);
+
   const double selected_delta_wl
       = selected.metrics.wirelength_um - baseline.metrics.wirelength_um;
   const long selected_delta_vias
       = selected.metrics.via_count - baseline.metrics.via_count;
-
   logger_->warn(GNR,
-                6016,
-                "NEWGR candidate {}: wl {:.0f} um vias {} (delta wl {:+.0f} "
-                "um, delta vias {:+d}, overflow {}).",
-                compact.name,
-                compact.metrics.wirelength_um,
-                compact.metrics.via_count,
-                compact_delta_wl,
-                compact_delta_vias,
-                compact.overflow);
-  logger_->warn(GNR,
-                6017,
-                "NEWGR candidate {}: wl {:.0f} um vias {} (delta wl {:+.0f} "
-                "um, delta vias {:+d}, overflow {}).",
-                sculpted.name,
-                sculpted.metrics.wirelength_um,
-                sculpted.metrics.via_count,
-                sculpted_delta_wl,
-                sculpted_delta_vias,
-                sculpted.overflow);
-  logger_->warn(GNR,
-                6022,
-                "NEWGR candidate {}: wl {:.0f} um vias {} (delta wl {:+.0f} "
-                "um, delta vias {:+d}, overflow {}).",
-                shortcut.name,
-                shortcut.metrics.wirelength_um,
-                shortcut.metrics.via_count,
-                shortcut_delta_wl,
-                shortcut_delta_vias,
-                selected.overflow);
-  logger_->warn(GNR,
-                6023,
-                "NEWGR candidate {}: wl {:.0f} um vias {} (delta wl {:+.0f} "
-                "um, delta vias {:+d}, overflow {}).",
-                anisotropic.name,
-                anisotropic.metrics.wirelength_um,
-                anisotropic.metrics.via_count,
-                anisotropic_delta_wl,
-                anisotropic_delta_vias,
-                selected.overflow);
-  logger_->warn(GNR,
-                6029,
-                "NEWGR candidate {}: wl {:.0f} um vias {} (delta wl {:+.0f} "
-                "um, delta vias {:+d}, overflow {}).",
-                wirelength_hunter.name,
-                wirelength_hunter.metrics.wirelength_um,
-                wirelength_hunter.metrics.via_count,
-                wirelength_hunter_delta_wl,
-                wirelength_hunter_delta_vias,
-                selected.overflow);
-  logger_->warn(GNR,
-                6018,
-                "NEWGR selected {} over baseline {:.0f} um vias {} -> {:.0f} "
-                "um vias {} (delta wl {:+.0f} um, delta vias {:+d}).",
+                6032,
+                "NEWGR deterministic tournament selected {}: baseline {:.0f} um/"
+                "{} vias -> {:.0f} um/{} vias (delta wl {:+.0f} um, delta "
+                "vias {:+d}).",
                 selected.name,
                 baseline.metrics.wirelength_um,
                 baseline.metrics.via_count,
@@ -3452,23 +3448,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 selected_delta_wl,
                 selected_delta_vias);
   logger_->warn(GNR,
-                6020,
-                "NEWGR blended {} nets from {} and {} nets from {} into final "
-                "selection.",
+                6033,
+                "NEWGR tournament picks: compact {} shortcut {} anisotropic {} "
+                "wirehunter {} radical_hyper {} sculpted {}.",
+                tournament_picks.size() > 0 ? tournament_picks[0] : 0,
+                tournament_picks.size() > 1 ? tournament_picks[1] : 0,
+                tournament_picks.size() > 2 ? tournament_picks[2] : 0,
+                tournament_picks.size() > 3 ? tournament_picks[3] : 0,
+                tournament_picks.size() > 4 ? tournament_picks[4] : 0,
+                tournament_picks.size() > 5 ? tournament_picks[5] : 0);
+  logger_->warn(GNR,
+                6034,
+                "NEWGR blend counters: sculpted {} shortcuts {} anisotropic {} "
+                "wirehunter {}.",
                 nets_taken_from_sculpted,
-                sculpted.name,
                 nets_taken_from_shortcuts,
-                shortcut.name);
-  logger_->warn(GNR,
-                6024,
-                "NEWGR blended {} nets from {} into anisotropic escape.",
                 nets_taken_from_anisotropic,
-                anisotropic.name);
-  logger_->warn(GNR,
-                6030,
-                "NEWGR blended {} nets from {} into wirelength hunter.",
-                nets_taken_from_wirelength_hunter,
-                wirelength_hunter.name);
+                nets_taken_from_wirelength_hunter);
 
   restore_snapshot(snapshot);
   return selected.routes;
