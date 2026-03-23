@@ -71,7 +71,7 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
                              const int baseline_overflow)
 {
   constexpr double kOverflowEpsilon = 1e-6;
-  constexpr double kAllowedOverflowIncreaseForWlGain = 8.0;
+  constexpr double kAllowedOverflowIncreaseForWlGain = 6.0;
   constexpr double kStrongOverflowDropThreshold = 20.0;
 
   // Wirelength-first objective:
@@ -85,7 +85,7 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
       = current_best.total_overflow - candidate.total_overflow;
   if (overflow_drop > kStrongOverflowDropThreshold) {
     // Accept a large overflow reduction even without immediate WL gain.
-    constexpr int64_t kMaxWirelengthTradeoff = 28;
+    constexpr int64_t kMaxWirelengthTradeoff = 24;
     if (candidate.wirelength
         > current_best.wirelength + kMaxWirelengthTradeoff) {
       return false;

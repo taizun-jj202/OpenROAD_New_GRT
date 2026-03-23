@@ -332,6 +332,197 @@ void MazeRoute::run()
     return result;
   };
 
+  // Trunk-first variant:
+  // connect a distant pin pair first, then grow the tree from the trunk.
+  auto runFromPinPair = [&](const int start_pin_index,
+                            const int second_pin_index) -> RunResult {
+    if (start_pin_index == second_pin_index) {
+      return runFromSeed(start_pin_index);
+    }
+
+    RunResult result;
+    const int num_vertices = graph_.getNumVertices();
+    const int num_pins = graph_.getNumPseudoPins();
+    if (num_vertices == 0 || num_pins == 0 || start_pin_index < 0
+        || start_pin_index >= num_pins || second_pin_index < 0
+        || second_pin_index >= num_pins) {
+      return result;
+    }
+
+    const int source_vertex = graph_.getPinVertex(start_pin_index);
+    const int target_vertex = graph_.getPinVertex(second_pin_index);
+    if (source_vertex < 0 || source_vertex >= num_vertices || target_vertex < 0
+        || target_vertex >= num_vertices) {
+      return result;
+    }
+
+    std::vector<CostT> min_costs(num_vertices,
+                                 std::numeric_limits<CostT>::max());
+    auto compareSolution = [&](const std::shared_ptr<Solution>& lhs,
+                               const std::shared_ptr<Solution>& rhs) {
+      return lhs->cost > rhs->cost;
+    };
+    std::priority_queue<std::shared_ptr<Solution>,
+                        std::vector<std::shared_ptr<Solution>>,
+                        decltype(compareSolution)>
+        queue(compareSolution);
+    auto updateSolution = [&](const std::shared_ptr<Solution>& solution) {
+      queue.push(solution);
+      if (solution->cost < min_costs[solution->vertex]) {
+        min_costs[solution->vertex] = solution->cost;
+      }
+    };
+
+    // 1) Build a shortest trunk between the chosen pin pair.
+    std::vector<CostT> dist(num_vertices, std::numeric_limits<CostT>::max());
+    std::vector<int> parent(num_vertices, -1);
+    using QueueItem = std::pair<CostT, int>;
+    std::priority_queue<QueueItem, std::vector<QueueItem>, std::greater<QueueItem>>
+        dijkstra_queue;
+    dist[source_vertex] = 0;
+    dijkstra_queue.emplace(0, source_vertex);
+
+    while (!dijkstra_queue.empty()) {
+      const auto [cost, vertex] = dijkstra_queue.top();
+      dijkstra_queue.pop();
+      if (cost > dist[vertex] + kCostEpsilon) {
+        continue;
+      }
+      if (vertex == target_vertex) {
+        break;
+      }
+      for (int edge_index = 0; edge_index < 3; edge_index++) {
+        const int next_vertex = graph_.getNextVertex(vertex, edge_index);
+        if (next_vertex < 0) {
+          continue;
+        }
+        const CostT next_cost = cost + graph_.getEdgeCost(vertex, edge_index);
+        if (next_cost + kCostEpsilon < dist[next_vertex]
+            || (std::abs(next_cost - dist[next_vertex]) <= kCostEpsilon
+                && (parent[next_vertex] < 0 || vertex < parent[next_vertex]))) {
+          dist[next_vertex] = next_cost;
+          parent[next_vertex] = vertex;
+          dijkstra_queue.emplace(next_cost, next_vertex);
+        }
+      }
+    }
+
+    if (!std::isfinite(dist[target_vertex])) {
+      return result;
+    }
+
+    std::vector<int> reverse_path;
+    reverse_path.reserve(64);
+    int vertex = target_vertex;
+    reverse_path.push_back(vertex);
+    const int max_steps = num_vertices + 1;
+    int steps = 0;
+    while (vertex != source_vertex && steps < max_steps) {
+      vertex = parent[vertex];
+      if (vertex < 0) {
+        return RunResult{};
+      }
+      reverse_path.push_back(vertex);
+      steps++;
+    }
+    if (vertex != source_vertex) {
+      return RunResult{};
+    }
+
+    std::shared_ptr<Solution> trunk_solution = nullptr;
+    for (auto it = reverse_path.rbegin(); it != reverse_path.rend(); ++it) {
+      trunk_solution = std::make_shared<Solution>(0, *it, trunk_solution);
+    }
+    if (!trunk_solution) {
+      return RunResult{};
+    }
+
+    result.solutions.reserve(num_pins);
+    result.solutions.emplace_back(trunk_solution);
+    result.total_cost = dist[target_vertex];
+    result.via_steps = 0;
+    for (int i = 1; i < static_cast<int>(reverse_path.size()); i++) {
+      const auto lhs = graph_.getPoint(reverse_path[i - 1]);
+      const auto rhs = graph_.getPoint(reverse_path[i]);
+      if (lhs.getLayerIdx() != rhs.getLayerIdx()) {
+        result.via_steps++;
+      }
+    }
+
+    std::vector<bool> visited(num_pins, false);
+    visited[start_pin_index] = true;
+    visited[second_pin_index] = true;
+    int num_detached = num_pins - 2;
+
+    // Add all trunk vertices as 0-cost frontier.
+    std::shared_ptr<Solution> temp = trunk_solution;
+    while (temp) {
+      updateSolution(std::make_shared<Solution>(0, temp->vertex, temp->prev));
+      temp = temp->prev;
+    }
+
+    // 2) Grow the remaining tree from the trunk frontier.
+    while (num_detached > 0) {
+      std::shared_ptr<Solution> found_solution;
+      int found_pin_index = -1;
+      while (!queue.empty()) {
+        auto solution = queue.top();
+        queue.pop();
+        found_pin_index = graph_.getVertexPin(solution->vertex);
+        if (found_pin_index != -1 && !visited[found_pin_index]) {
+          found_solution = std::move(solution);
+          break;
+        }
+        if (solution->cost > min_costs[solution->vertex]) {
+          continue;
+        }
+        for (int edge_index = 0; edge_index < 3; edge_index++) {
+          const int next_vertex
+              = graph_.getNextVertex(solution->vertex, edge_index);
+          if (next_vertex == -1
+              || (solution->prev && next_vertex == solution->prev->vertex)) {
+            continue;
+          }
+          const CostT next_cost
+              = solution->cost + graph_.getEdgeCost(solution->vertex, edge_index);
+          if (next_cost + kCostEpsilon < min_costs[next_vertex]) {
+            updateSolution(
+                std::make_shared<Solution>(next_cost, next_vertex, solution));
+          }
+        }
+      }
+
+      if (!found_solution || found_pin_index < 0) {
+        result.valid = false;
+        return result;
+      }
+
+      result.total_cost += found_solution->cost;
+      temp = found_solution;
+      while (temp && temp->prev) {
+        const auto curr_point = graph_.getPoint(temp->vertex);
+        const auto prev_point = graph_.getPoint(temp->prev->vertex);
+        if (curr_point.getLayerIdx() != prev_point.getLayerIdx()) {
+          result.via_steps++;
+        }
+        temp = temp->prev;
+      }
+
+      result.solutions.emplace_back(found_solution);
+      visited[found_pin_index] = true;
+      num_detached -= 1;
+
+      temp = std::move(found_solution);
+      while (temp && temp->cost != 0) {
+        updateSolution(std::make_shared<Solution>(0, temp->vertex, temp->prev));
+        temp = temp->prev;
+      }
+    }
+
+    result.valid = true;
+    return result;
+  };
+
   auto runMetricClosureMst = [&]() -> RunResult {
     RunResult result;
     const int num_vertices = graph_.getNumVertices();
@@ -341,7 +532,7 @@ void MazeRoute::run()
     }
 
     // Runtime guardrail: use the metric closure only for small/medium nets.
-    constexpr int kMaxMetricClosurePins = 72;
+    constexpr int kMaxMetricClosurePins = 56;
     if (num_pins > kMaxMetricClosurePins) {
       return result;
     }
@@ -529,6 +720,8 @@ void MazeRoute::run()
   int max_x_seed = 0;
   int min_y_seed = 0;
   int max_y_seed = 0;
+  int far_pair_lhs = -1;
+  int far_pair_rhs = -1;
   int best_center_dist = std::numeric_limits<int>::max();
   int best_far_dist = std::numeric_limits<int>::min();
   for (int pin_index = 0; pin_index < num_pins; pin_index++) {
@@ -554,6 +747,23 @@ void MazeRoute::run()
     }
     if (point.y() > graph_.getPseudoPin(max_y_seed).point.y()) {
       max_y_seed = pin_index;
+    }
+  }
+  // Track one globally farthest pair to reinforce long trunk candidates.
+  if (num_pins <= 96) {
+    int far_pair_dist = std::numeric_limits<int>::min();
+    for (int lhs = 0; lhs < num_pins; lhs++) {
+      const PointT lhs_point = graph_.getPseudoPin(lhs).point;
+      for (int rhs = lhs + 1; rhs < num_pins; rhs++) {
+        const PointT rhs_point = graph_.getPseudoPin(rhs).point;
+        const int dist = std::abs(lhs_point.x() - rhs_point.x())
+                         + std::abs(lhs_point.y() - rhs_point.y());
+        if (dist > far_pair_dist) {
+          far_pair_dist = dist;
+          far_pair_lhs = lhs;
+          far_pair_rhs = rhs;
+        }
+      }
     }
   }
 
@@ -618,6 +828,21 @@ void MazeRoute::run()
   }
 
   RunResult best_result = runMetricClosureMst();
+
+  auto runPairCandidate = [&](const int lhs, const int rhs) {
+    if (lhs < 0 || rhs < 0 || lhs >= num_pins || rhs >= num_pins || lhs == rhs) {
+      return;
+    }
+    RunResult pair_result = runFromPinPair(lhs, rhs);
+    if (isBetterResult(pair_result, best_result)) {
+      best_result = std::move(pair_result);
+    }
+  };
+  runPairCandidate(min_x_seed, max_x_seed);
+  runPairCandidate(min_y_seed, max_y_seed);
+  runPairCandidate(center_seed, far_seed);
+  runPairCandidate(far_pair_lhs, far_pair_rhs);
+
   for (const int seed : seeds) {
     RunResult candidate = runFromSeed(seed);
     if (isBetterResult(candidate, best_result)) {
