@@ -1177,9 +1177,7 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
                            + std::max(0, next_y - corridor_ymax);
       const int detour = detour_x + detour_y;
       if (detour > 0) {
-        const double detour_cost
-            = detour + 0.40 * static_cast<double>(detour * detour);
-        tmp += corridor_detour_penalty * detour_cost;
+        tmp += corridor_detour_penalty * detour;
       }
     }
 
@@ -1187,10 +1185,8 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
     // while still allowing turns when congestion requires it.
     if (is_turn) {
       const bool critical_net = nets_[net_id]->isCritical();
-      const int pin_count = std::max(2, nets_[net_id]->getNumPins());
-      const double base_turn_penalty = critical_net ? 1.55 : 2.35;
-      const double fanout_scale = pin_count > 8 ? 0.80 : 1.0;
-      tmp += base_turn_penalty * fanout_scale;
+      const double turn_penalty = critical_net ? 1.20 : 1.85;
+      tmp += turn_penalty;
     }
 
     if (add_via && d1[cur_y][cur_x] != 0) {
@@ -1271,9 +1267,8 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
 
       enlarge_ = std::min(origENG, (iter / 6 + 3) * treeedge->route.routelen);
       const int manhattan_len = treeedge->len;
-      const bool long_tree_edge = manhattan_len >= 28;
-      const int min_local_expand = long_tree_edge ? 3 : 2;
-      const double expand_ratio = long_tree_edge ? 0.20 : 0.12;
+      const int min_local_expand = 3;
+      const double expand_ratio = 0.22;
       const int dynamic_cap
           = min_local_expand
             + static_cast<int>(std::round(manhattan_len * expand_ratio));
@@ -1283,20 +1278,12 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
       const bool route_stretched
           = treeedge->route.last_routelen > 0
             && treeedge->route.routelen
-                   > static_cast<int>(1.30 * treeedge->route.last_routelen);
+                   > static_cast<int>(1.5 * treeedge->route.last_routelen);
       const double base_detour_penalty
-          = nets_[netID]->isCritical() || route_stretched
-                ? (long_tree_edge ? 3.60 : 4.20)
-                : (long_tree_edge ? 2.30 : 2.80);
+          = nets_[netID]->isCritical() || route_stretched ? 2.30 : 1.45;
       const double iter_relax
-          = std::clamp((iter - 1) / 80.0, 0.0, 0.30);
-      const double overflow_relax = total_overflow_ > 0
-                                        ? std::clamp(total_overflow_ / 3000.0,
-                                                     0.0,
-                                                     0.20)
-                                        : 0.0;
-      corridor_detour_penalty
-          = base_detour_penalty * (1.0 - iter_relax) * (1.0 - overflow_relax);
+          = std::clamp((iter - 1) / 60.0, 0.0, 0.35);
+      corridor_detour_penalty = base_detour_penalty * (1.0 - iter_relax);
 
       int decrease = 0;
 

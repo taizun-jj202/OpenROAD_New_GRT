@@ -1340,14 +1340,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const long lhs_wl = lhs.metrics.wirelength_dbu;
     const long rhs_wl = rhs.metrics.wirelength_dbu;
     const long wl_tie_window
-        = std::max<long>(18000, std::max(lhs_wl, rhs_wl) / 22000);
+        = std::max<long>(120000, std::max(lhs_wl, rhs_wl) / 8000);
     if (std::abs(lhs_wl - rhs_wl) > wl_tie_window) {
       return lhs_wl < rhs_wl;
     }
 
     if (baseline_vias > 0) {
       const long max_reasonable_via
-          = static_cast<long>(std::ceil(1.18 * baseline_vias));
+          = static_cast<long>(std::ceil(1.12 * baseline_vias));
       const bool lhs_via_ok = lhs.metrics.via_count <= max_reasonable_via;
       const bool rhs_via_ok = rhs.metrics.via_count <= max_reasonable_via;
       if (lhs_via_ok != rhs_via_ok) {
