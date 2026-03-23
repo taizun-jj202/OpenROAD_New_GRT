@@ -399,6 +399,14 @@ NetRouteMap NewgrEngine::run()
   if (isBetterCandidate(ultra_wl, best)) {
     best = std::move(ultra_wl);
   }
+  CandidateResult detpart_radical_mix = run_candidate(
+      Algo::DetPart_Astar_Local,
+      420,
+      NEWGR_CAP_PROFILE_RADICAL_MIX,
+      "DetPartLocal_RadicalMix");
+  if (isBetterCandidate(detpart_radical_mix, best)) {
+    best = std::move(detpart_radical_mix);
+  }
 
   if (best.overflow > 0) {
     CandidateResult short3d = run_candidate(Algo::Astar,
