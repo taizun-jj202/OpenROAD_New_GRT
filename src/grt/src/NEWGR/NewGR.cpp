@@ -856,6 +856,99 @@ int applySelectiveNetRouteGrafting(NetRouteMap& base_routes,
   return replaced_nets;
 }
 
+double computeWirelengthDominantObjective(const NetRouteCost& cost, int tile_size)
+{
+  const double via_weight = static_cast<double>(tile_size) * 1.65;
+  const double hotspot_weight = static_cast<double>(tile_size) * 2.10;
+  return static_cast<double>(cost.wirelength_dbu)
+         + via_weight * static_cast<double>(cost.via_count)
+         + hotspot_weight * cost.hotspot_exposure;
+}
+
+int applyMultiScenarioWirelengthFusion(
+    NetRouteMap& base_routes,
+    const std::vector<const NetRouteMap*>& donor_route_sets,
+    int tile_size,
+    int x_min,
+    int y_min,
+    int x_grids,
+    int y_grids,
+    const std::map<std::int64_t, float>& hotspot_map,
+    long min_wl_gain,
+    int via_slack,
+    double hotspot_slack)
+{
+  int replaced_nets = 0;
+  min_wl_gain = std::max(min_wl_gain, 1L);
+  via_slack = std::max(via_slack, 0);
+  hotspot_slack = std::max(hotspot_slack, 0.0);
+
+  for (auto& [db_net, base_route] : base_routes) {
+    const NetRouteCost base_cost = computeNetRouteCost(base_route,
+                                                       tile_size,
+                                                       x_min,
+                                                       y_min,
+                                                       x_grids,
+                                                       y_grids,
+                                                       hotspot_map);
+    const GRoute* chosen_route = &base_route;
+    NetRouteCost chosen_cost = base_cost;
+    double chosen_objective
+        = computeWirelengthDominantObjective(base_cost, tile_size);
+
+    for (const NetRouteMap* donor_routes : donor_route_sets) {
+      if (donor_routes == nullptr) {
+        continue;
+      }
+
+      const auto donor_it = donor_routes->find(db_net);
+      if (donor_it == donor_routes->end()) {
+        continue;
+      }
+
+      const NetRouteCost donor_cost = computeNetRouteCost(donor_it->second,
+                                                          tile_size,
+                                                          x_min,
+                                                          y_min,
+                                                          x_grids,
+                                                          y_grids,
+                                                          hotspot_map);
+      if (donor_cost.via_count > (base_cost.via_count + via_slack)) {
+        continue;
+      }
+      if (donor_cost.hotspot_exposure > (base_cost.hotspot_exposure + hotspot_slack)) {
+        continue;
+      }
+
+      const double donor_objective
+          = computeWirelengthDominantObjective(donor_cost, tile_size);
+      const bool wl_strictly_better
+          = donor_cost.wirelength_dbu
+            < (chosen_cost.wirelength_dbu - min_wl_gain);
+      const bool wl_tie_or_better
+          = donor_cost.wirelength_dbu <= chosen_cost.wirelength_dbu;
+      const bool objective_better
+          = donor_objective + (0.30 * static_cast<double>(tile_size))
+            < chosen_objective;
+
+      if (!wl_strictly_better && !(wl_tie_or_better && objective_better)) {
+        continue;
+      }
+
+      chosen_route = &donor_it->second;
+      chosen_cost = donor_cost;
+      chosen_objective = donor_objective;
+    }
+
+    if (chosen_route != &base_route) {
+      base_route = *chosen_route;
+      replaced_nets++;
+    }
+  }
+
+  return replaced_nets;
+}
+
 void applyCugrStyleGuidePatching(GlobalRouter* grouter,
                                  NetRouteMap& routes,
                                  int min_routing_layer,
@@ -1616,6 +1709,57 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                     spatial_swaps);
       scenario_results.push_back(std::move(fusion));
     }
+  }
+
+  if (ScenarioResult* sporder = find_scenario_result("sporder-shortest")) {
+    ScenarioResult fusion;
+    fusion.name = "multi-router-wirelength-fusion";
+    fusion.routes = sporder->routes;
+
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+
+    std::vector<const NetRouteMap*> donors;
+    donors.reserve(8);
+    const std::vector<std::string> donor_names{
+        "spatial-wirelength-grafting",
+        "wl-direct-focused",
+        "cugr-softcap-wirelength",
+        "wl-squeeze-hybrid",
+        "ultra-compact-bsp",
+        "spatial-roundrobin-turbo",
+        "bsp-scheduler",
+        "baseline"};
+    for (const std::string& donor_name : donor_names) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        donors.push_back(&donor->routes);
+      }
+    }
+
+    const int fused_swaps = applyMultiScenarioWirelengthFusion(
+        fusion.routes,
+        donors,
+        tile_size,
+        x_min,
+        y_min,
+        x_grids,
+        y_grids,
+        hotspot_map,
+        std::max(tile_size / 2, 1),
+        2,
+        0.45);
+    fusion.metrics = compute_metrics(fusion.routes);
+    logger_->info(GNR,
+                  6010,
+                  "NEWGR scenario {} [hybrid]: wirelength {:.0f} um, vias {}, fused nets {}",
+                  fusion.name,
+                  fusion.metrics.wirelength_um,
+                  fusion.metrics.via_count,
+                  fused_swaps);
+    scenario_results.push_back(std::move(fusion));
   }
 
   const long baseline_vias = baseline.metrics.via_count;
