@@ -4061,6 +4061,49 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const ScenarioResult* absolute_wl_ptr
         = find_scenario_by_name("hybrid-netmix-absolute-wl");
     const ScenarioResult* preferred_wl_ptr = nullptr;
+    const long via_drop_guard = wl_anchor != nullptr
+                                    ? std::max<long>(
+                                          360L,
+                                          static_cast<long>(std::ceil(
+                                              static_cast<double>(
+                                                  wl_anchor->metrics.via_count)
+                                              * 0.0085)))
+                                    : 0L;
+    const long deep_via_drop_wl_gain = wl_anchor != nullptr
+                                           ? std::max<long>(
+                                                 180L,
+                                                 static_cast<long>(std::ceil(
+                                                     static_cast<double>(
+                                                         wl_anchor->metrics.wirelength_dbu)
+                                                     * 0.00080)))
+                                           : 0L;
+    const long deep_via_drop_detour_bonus = std::max<long>(
+        9000L, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1) * 18L));
+    const long deep_via_drop_high_layer_bonus = wl_anchor != nullptr
+                                                    ? std::max<long>(
+                                                          2200000L,
+                                                          static_cast<long>(std::ceil(
+                                                              static_cast<double>(
+                                                                  wl_anchor->metrics.high_layer_dbu)
+                                                              * 0.016)))
+                                                    : 0L;
+    auto allow_aggressive_via_drop = [&](const ScenarioResult* candidate) {
+      if (wl_anchor == nullptr || candidate == nullptr) {
+        return true;
+      }
+      const long via_drop = wl_anchor->metrics.via_count - candidate->metrics.via_count;
+      if (via_drop <= via_drop_guard) {
+        return true;
+      }
+      const long wl_gain
+          = wl_anchor->metrics.wirelength_dbu - candidate->metrics.wirelength_dbu;
+      const bool structural_recovery
+          = candidate->metrics.detour_dbu + deep_via_drop_detour_bonus
+                <= wl_anchor->metrics.detour_dbu
+            && candidate->metrics.high_layer_dbu + deep_via_drop_high_layer_bonus
+                   <= wl_anchor->metrics.high_layer_dbu;
+      return wl_gain >= deep_via_drop_wl_gain && structural_recovery;
+    };
 
     if (wl_anchor != nullptr && wl_feedback_ptr != nullptr) {
       const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
@@ -4199,6 +4242,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         if (candidate == nullptr) {
           continue;
         }
+        if (!allow_aggressive_via_drop(candidate)) {
+          continue;
+        }
         if (aggressive_wl_ptr == nullptr
             || wirelength_first_better(*candidate, *aggressive_wl_ptr)) {
           aggressive_wl_ptr = candidate;
@@ -4250,6 +4296,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const ScenarioResult* pareto_upgrade = nullptr;
       for (const ScenarioResult* candidate : wl_champion_pool) {
         if (candidate == nullptr || candidate == wl_anchor) {
+          continue;
+        }
+        if (!allow_aggressive_via_drop(candidate)) {
           continue;
         }
         const bool structural_guard
@@ -4351,13 +4400,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = (forced_wl_ptr->metrics.wirelength_dbu <= wl_anchor->metrics.wirelength_dbu)
             && (forced_wl_ptr->metrics.via_count <= wl_anchor->metrics.via_count)
             && structural_guard;
+      const bool via_drop_guard_ok = allow_aggressive_via_drop(forced_wl_ptr);
 
       if (!((wl_gain >= min_wl_gain && proxy_guard && via_guard_ok
            && structural_guard)
             || proxy_dominant_upgrade
             || via_dominant_upgrade
             || equal_wl_via_win
-            || strict_dominates)) {
+            || strict_dominates)
+          || !via_drop_guard_ok) {
         forced_wl_ptr = wl_anchor;
       } else {
         logger_->info(
