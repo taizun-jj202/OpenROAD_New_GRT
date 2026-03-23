@@ -1902,6 +1902,278 @@ void applyRmstTrunkRebuild(GlobalRouter* grouter,
   }
 }
 
+void applyBipolarPortalBackboneRebuild(GlobalRouter* grouter,
+                                       NetRouteMap& routes,
+                                       const RudyGrid& normalized_rudy,
+                                       int min_unique_nodes,
+                                       int max_unique_nodes,
+                                       int coverage_percent,
+                                       int min_layer,
+                                       int max_layer)
+{
+  if (grouter == nullptr || grouter->grid() == nullptr || routes.empty()) {
+    return;
+  }
+
+  Grid* grid = grouter->grid();
+  const int tile = std::max(grid->getTileSize(), 1);
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+  const int x_max = grid->getXMax();
+  const int y_max = grid->getYMax();
+  const int x_tiles
+      = normalized_rudy.empty() ? 0 : static_cast<int>(normalized_rudy.size());
+  const int y_tiles = normalized_rudy.empty() ? 0
+                                              : static_cast<int>(
+                                                    normalized_rudy.front().size());
+
+  auto to_grid_x = [&](int x) {
+    if (x_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((x - x_min) / tile, 0, x_tiles - 1);
+  };
+  auto to_grid_y = [&](int y) {
+    if (y_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((y - y_min) / tile, 0, y_tiles - 1);
+  };
+
+  min_unique_nodes = std::max(min_unique_nodes, 3);
+  max_unique_nodes = std::max(max_unique_nodes, min_unique_nodes);
+  coverage_percent = std::clamp(coverage_percent, 1, 100);
+  min_layer = std::max(min_layer, 0);
+  max_layer = std::max(max_layer, min_layer);
+
+  for (auto& [db_net, route] : routes) {
+    if (route.empty()) {
+      continue;
+    }
+
+    const auto net_key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    if (static_cast<int>(net_key % 100ULL) >= coverage_percent) {
+      continue;
+    }
+
+    const std::vector<RouteNode> nodes = collectUniqueRouteNodes(route);
+    if (static_cast<int>(nodes.size()) < min_unique_nodes
+        || static_cast<int>(nodes.size()) > max_unique_nodes) {
+      continue;
+    }
+
+    std::vector<int> xs;
+    std::vector<int> ys;
+    xs.reserve(nodes.size());
+    ys.reserve(nodes.size());
+    int min_x = nodes.front().x;
+    int max_x = nodes.front().x;
+    int min_y = nodes.front().y;
+    int max_y = nodes.front().y;
+    for (const RouteNode& node : nodes) {
+      const int clamped_x = std::clamp(node.x, x_min, x_max);
+      const int clamped_y = std::clamp(node.y, y_min, y_max);
+      xs.push_back(clamped_x);
+      ys.push_back(clamped_y);
+      min_x = std::min(min_x, clamped_x);
+      max_x = std::max(max_x, clamped_x);
+      min_y = std::min(min_y, clamped_y);
+      max_y = std::max(max_y, clamped_y);
+    }
+    std::sort(xs.begin(), xs.end());
+    std::sort(ys.begin(), ys.end());
+    if (xs.empty() || ys.empty()) {
+      continue;
+    }
+
+    const int trunk_layer = chooseDominantLayer(nodes, min_layer, max_layer);
+    const int width = max_x - min_x;
+    const int height = max_y - min_y;
+    const bool horizontal_backbone = width >= height;
+
+    int anchor_a_x = xs[(xs.size() - 1) / 3];
+    int anchor_b_x = xs[(2 * (xs.size() - 1)) / 3];
+    int anchor_a_y = ys[(ys.size() - 1) / 3];
+    int anchor_b_y = ys[(2 * (ys.size() - 1)) / 3];
+    int backbone_x = xs[xs.size() / 2];
+    int backbone_y = ys[ys.size() / 2];
+
+    if (horizontal_backbone) {
+      float best_score = std::numeric_limits<float>::max();
+      int best_y = backbone_y;
+      for (int offset = -4; offset <= 4; ++offset) {
+        const int cand_y = std::clamp(backbone_y + offset * tile, y_min, y_max);
+        const float rudy = estimatePathRudy(normalized_rudy,
+                                            to_grid_x(anchor_a_x),
+                                            to_grid_y(cand_y),
+                                            to_grid_x(anchor_b_x),
+                                            to_grid_y(cand_y),
+                                            true);
+        const float score = rudy + 0.03f * static_cast<float>(std::abs(offset));
+        if (score < best_score) {
+          best_score = score;
+          best_y = cand_y;
+        }
+      }
+      backbone_y = best_y;
+      if (anchor_a_x == anchor_b_x) {
+        anchor_a_x = std::clamp(anchor_a_x - tile, x_min, x_max);
+        anchor_b_x = std::clamp(anchor_b_x + tile, x_min, x_max);
+      }
+    } else {
+      float best_score = std::numeric_limits<float>::max();
+      int best_x = backbone_x;
+      for (int offset = -4; offset <= 4; ++offset) {
+        const int cand_x = std::clamp(backbone_x + offset * tile, x_min, x_max);
+        const float rudy = estimatePathRudy(normalized_rudy,
+                                            to_grid_x(cand_x),
+                                            to_grid_y(anchor_a_y),
+                                            to_grid_x(cand_x),
+                                            to_grid_y(anchor_b_y),
+                                            false);
+        const float score = rudy + 0.03f * static_cast<float>(std::abs(offset));
+        if (score < best_score) {
+          best_score = score;
+          best_x = cand_x;
+        }
+      }
+      backbone_x = best_x;
+      if (anchor_a_y == anchor_b_y) {
+        anchor_a_y = std::clamp(anchor_a_y - tile, y_min, y_max);
+        anchor_b_y = std::clamp(anchor_b_y + tile, y_min, y_max);
+      }
+    }
+
+    std::vector<GSegment> rebuilt;
+    rebuilt.reserve(nodes.size() * 4 + 4);
+    for (size_t idx = 0; idx < nodes.size(); ++idx) {
+      int cur_x = std::clamp(nodes[idx].x, x_min, x_max);
+      int cur_y = std::clamp(nodes[idx].y, y_min, y_max);
+      int cur_layer = nodes[idx].layer;
+
+      if (cur_layer != trunk_layer) {
+        const int step = (trunk_layer > cur_layer) ? 1 : -1;
+        while (cur_layer != trunk_layer) {
+          const int next_layer = cur_layer + step;
+          appendSegment(
+              rebuilt, cur_x, cur_y, cur_layer, cur_x, cur_y, next_layer);
+          cur_layer = next_layer;
+        }
+      }
+
+      if (horizontal_backbone) {
+        const int dist_a = std::abs(cur_x - anchor_a_x);
+        const int dist_b = std::abs(cur_x - anchor_b_x);
+        const int target_x = dist_a <= dist_b ? anchor_a_x : anchor_b_x;
+        const float h_rudy = estimatePathRudy(normalized_rudy,
+                                              to_grid_x(cur_x),
+                                              to_grid_y(cur_y),
+                                              to_grid_x(target_x),
+                                              to_grid_y(backbone_y),
+                                              true);
+        const float v_rudy = estimatePathRudy(normalized_rudy,
+                                              to_grid_x(cur_x),
+                                              to_grid_y(cur_y),
+                                              to_grid_x(target_x),
+                                              to_grid_y(backbone_y),
+                                              false);
+        const bool horizontal_first = h_rudy <= v_rudy;
+        if (horizontal_first) {
+          appendSegment(
+              rebuilt, cur_x, cur_y, trunk_layer, target_x, cur_y, trunk_layer);
+          appendSegment(rebuilt,
+                        target_x,
+                        cur_y,
+                        trunk_layer,
+                        target_x,
+                        backbone_y,
+                        trunk_layer);
+        } else {
+          appendSegment(
+              rebuilt, cur_x, cur_y, trunk_layer, cur_x, backbone_y, trunk_layer);
+          appendSegment(rebuilt,
+                        cur_x,
+                        backbone_y,
+                        trunk_layer,
+                        target_x,
+                        backbone_y,
+                        trunk_layer);
+        }
+      } else {
+        const int dist_a = std::abs(cur_y - anchor_a_y);
+        const int dist_b = std::abs(cur_y - anchor_b_y);
+        const int target_y = dist_a <= dist_b ? anchor_a_y : anchor_b_y;
+        const float h_rudy = estimatePathRudy(normalized_rudy,
+                                              to_grid_x(cur_x),
+                                              to_grid_y(cur_y),
+                                              to_grid_x(backbone_x),
+                                              to_grid_y(target_y),
+                                              true);
+        const float v_rudy = estimatePathRudy(normalized_rudy,
+                                              to_grid_x(cur_x),
+                                              to_grid_y(cur_y),
+                                              to_grid_x(backbone_x),
+                                              to_grid_y(target_y),
+                                              false);
+        const bool horizontal_first = h_rudy <= v_rudy;
+        if (horizontal_first) {
+          appendSegment(
+              rebuilt, cur_x, cur_y, trunk_layer, backbone_x, cur_y, trunk_layer);
+          appendSegment(rebuilt,
+                        backbone_x,
+                        cur_y,
+                        trunk_layer,
+                        backbone_x,
+                        target_y,
+                        trunk_layer);
+        } else {
+          appendSegment(
+              rebuilt, cur_x, cur_y, trunk_layer, cur_x, target_y, trunk_layer);
+          appendSegment(rebuilt,
+                        cur_x,
+                        target_y,
+                        trunk_layer,
+                        backbone_x,
+                        target_y,
+                        trunk_layer);
+        }
+      }
+    }
+
+    if (horizontal_backbone) {
+      appendSegment(rebuilt,
+                    anchor_a_x,
+                    backbone_y,
+                    trunk_layer,
+                    anchor_b_x,
+                    backbone_y,
+                    trunk_layer);
+      appendSegment(
+          rebuilt, min_x, backbone_y, trunk_layer, max_x, backbone_y, trunk_layer);
+    } else {
+      appendSegment(rebuilt,
+                    backbone_x,
+                    anchor_a_y,
+                    trunk_layer,
+                    backbone_x,
+                    anchor_b_y,
+                    trunk_layer);
+      appendSegment(
+          rebuilt, backbone_x, min_y, trunk_layer, backbone_x, max_y, trunk_layer);
+    }
+
+    std::vector<GSegment> compressed;
+    compressed.reserve(rebuilt.size());
+    for (const GSegment& segment : rebuilt) {
+      appendCompressedSegment(compressed, segment);
+    }
+    if (!compressed.empty()) {
+      route.swap(compressed);
+    }
+  }
+}
+
 void connectNodeToMedianSpine(std::vector<GSegment>& rebuilt,
                               const RouteNode& node,
                               int spine_x,
@@ -2578,6 +2850,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   applyGuideCompression(selected.routes, std::max(10 * tile_size, 1));
   applyViaExcursionCollapse(selected.routes, std::max(5 * tile_size, 1));
 
+  const RouteMetrics pre_bipolar_metrics = compute_metrics(selected.routes);
+  applyBipolarPortalBackboneRebuild(grouter_,
+                                    selected.routes,
+                                    baseline_rudy,
+                                    8,
+                                    120,
+                                    74,
+                                    min_routing_layer,
+                                    max_routing_layer);
+  applyAggressiveDoglegShortcuts(selected.routes,
+                                 std::max(16 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(selected.routes, std::max(12 * tile_size, 1));
+  applyViaExcursionCollapse(selected.routes, std::max(6 * tile_size, 1));
+
   selected.metrics = compute_metrics(selected.routes);
   logger_->warn(GNR,
                 6021,
@@ -2603,6 +2890,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 "{:+d}.",
                 selected.metrics.wirelength_um - pre_rmst_metrics.wirelength_um,
                 selected.metrics.via_count - pre_rmst_metrics.via_count);
+  logger_->warn(GNR,
+                6028,
+                "NEWGR bipolar portal rebuild: wl delta {:+.0f} um, via delta "
+                "{:+d}.",
+                selected.metrics.wirelength_um - pre_bipolar_metrics.wirelength_um,
+                selected.metrics.via_count - pre_bipolar_metrics.via_count);
 
   const double compact_delta_wl
       = compact.metrics.wirelength_um - baseline.metrics.wirelength_um;
