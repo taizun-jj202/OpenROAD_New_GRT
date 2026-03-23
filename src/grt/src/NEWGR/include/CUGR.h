@@ -90,12 +90,12 @@ struct Constants
   // overflow-free nets and keep only wirelength-improving solutions.
   bool enable_wirelength_recovery = true;
   bool enable_wirelength_surgery = true;
-  int surgery_candidate_cap = 32;
+  int surgery_candidate_cap = 48;
   int surgery_hpwl_threshold = 96;
-  double surgery_min_stretch = 1.04;
-  int surgery_max_via_increase = 6;
+  double surgery_min_stretch = 1.02;
+  int surgery_max_via_increase = 8;
   double surgery_via_cost_scale_a = 0.0;
-  double surgery_via_cost_scale_b = 0.02;
+  double surgery_via_cost_scale_b = 0.08;
   bool recovery_use_maze = true;
   bool recovery_use_wirelength_maze = true;
   double recovery_wl_maze_via_cost_scale = 0.28;
@@ -115,7 +115,7 @@ struct Constants
   double recovery_late_pass_cap_scale = 0.35;
   double recovery_late_pass_deep_ratio_scale = 0.55;
   int recovery_late_pass_abs_cap = 24;
-  int recovery_late_pass_min_first_pass_accepts = 3;
+  int recovery_late_pass_min_first_pass_accepts = 1;
   int recovery_maze_sparse_x = 3;
   int recovery_maze_sparse_y = 3;
   double recovery_deep_ratio = 0.65;

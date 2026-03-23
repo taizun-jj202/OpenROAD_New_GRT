@@ -676,7 +676,20 @@ void CUGR::wirelengthSurgery(const std::vector<int>& netIndices)
   logger_->report("stage 3.5: wirelength surgery on {} / {} nets",
                   candidates.size(),
                   netIndices.size());
-  int accepted = 0;
+  struct SurgeryPlan
+  {
+    GRNet* net = nullptr;
+    std::shared_ptr<GRTreeNode> original_tree = nullptr;
+    RouteStats original_stats;
+    int original_overflow = 0;
+    int max_allowed_vias = 0;
+    std::shared_ptr<GRTreeNode> best_tree = nullptr;
+    RouteStats best_stats;
+    bool applied_candidate = false;
+  };
+
+  std::vector<SurgeryPlan> plans;
+  plans.reserve(candidates.size());
   for (const Candidate& candidate : candidates) {
     const int netIndex = candidate.index;
     GRNet* net = gr_nets_[netIndex].get();
@@ -684,22 +697,39 @@ void CUGR::wirelengthSurgery(const std::vector<int>& netIndices)
     if (!original_tree) {
       continue;
     }
-    const RouteStats original_stats
-        = measureRouteStats(grid_graph_.get(), original_tree);
-    const int original_overflow = grid_graph_->checkOverflow(original_tree);
-    const int max_allowed_vias
-        = original_stats.vias + std::max(0, constants_.surgery_max_via_increase);
 
-    grid_graph_->commitTree(original_tree, /*ripup*/ true);
+    SurgeryPlan plan;
+    plan.net = net;
+    plan.original_tree = original_tree;
+    plan.original_stats = measureRouteStats(grid_graph_.get(), original_tree);
+    plan.best_stats = plan.original_stats;
+    plan.original_overflow = grid_graph_->checkOverflow(original_tree);
+    plan.max_allowed_vias
+        = plan.original_stats.vias + std::max(0, constants_.surgery_max_via_increase);
+    plans.push_back(plan);
+  }
 
-    std::shared_ptr<GRTreeNode> best_tree = nullptr;
-    RouteStats best_stats = original_stats;
+  if (plans.empty()) {
+    logger_->report("stage 3.5 skipped (no routable candidates).");
+    return;
+  }
 
-    auto isImprovement = [](const RouteStats& lhs, const RouteStats& rhs) {
-      return lhs.wirelength < rhs.wirelength
-             || (lhs.wirelength == rhs.wirelength && lhs.vias < rhs.vias);
-    };
+  auto isImprovement = [](const RouteStats& lhs, const RouteStats& rhs) {
+    return lhs.wirelength < rhs.wirelength
+           || (lhs.wirelength == rhs.wirelength && lhs.vias < rhs.vias);
+  };
 
+  const CapacityT baseline_total_overflow = grid_graph_->getTotalOverflow();
+
+  // SPRoute-style batch mode:
+  // reroute selected nets against a frozen snapshot (all selected nets ripped
+  // up), then commit only legal improvements.
+  for (auto& plan : plans) {
+    grid_graph_->commitTree(plan.original_tree, /*ripup*/ true);
+  }
+
+  constexpr int kEvalOverflowSlack = 0;
+  for (auto& plan : plans) {
     auto considerCandidate = [&](const std::shared_ptr<GRTreeNode>& tree) {
       if (!tree) {
         return;
@@ -707,21 +737,21 @@ void CUGR::wirelengthSurgery(const std::vector<int>& netIndices)
       grid_graph_->commitTree(tree);
       const int overflow_after_commit = grid_graph_->checkOverflow(tree);
       grid_graph_->commitTree(tree, /*ripup*/ true);
-      if (overflow_after_commit > original_overflow) {
+      if (overflow_after_commit > plan.original_overflow + kEvalOverflowSlack) {
         return;
       }
       RouteStats stats = measureRouteStats(grid_graph_.get(), tree);
-      if (stats.vias > max_allowed_vias) {
+      if (stats.vias > plan.max_allowed_vias) {
         return;
       }
-      if (!best_tree || isImprovement(stats, best_stats)) {
-        best_tree = tree;
-        best_stats = stats;
+      if (!plan.best_tree || isImprovement(stats, plan.best_stats)) {
+        plan.best_tree = tree;
+        plan.best_stats = stats;
       }
     };
 
     for (const double via_scale : via_scales) {
-      MazeRoute fullGridMaze(net, grid_graph_.get(), logger_);
+      MazeRoute fullGridMaze(plan.net, grid_graph_.get(), logger_);
       fullGridMaze.constructSparsifiedGraph(
           wireLengthCostView, SparseGrid(1, 1, 0, 0), via_scale);
       fullGridMaze.run();
@@ -730,22 +760,60 @@ void CUGR::wirelengthSurgery(const std::vector<int>& netIndices)
         continue;
       }
       PatternRoute patternRoute(
-          net, grid_graph_.get(), stt_builder_, constants_, logger_);
+          plan.net, grid_graph_.get(), stt_builder_, constants_, logger_);
       patternRoute.setSteinerTree(maze_tree);
       patternRoute.constructRoutingDAG();
       patternRoute.run();
-      considerCandidate(net->getRoutingTree());
-    }
-
-    if (best_tree && isImprovement(best_stats, original_stats)) {
-      net->setRoutingTree(best_tree);
-      grid_graph_->commitTree(best_tree);
-      accepted++;
-    } else {
-      net->setRoutingTree(original_tree);
-      grid_graph_->commitTree(original_tree);
+      considerCandidate(plan.net->getRoutingTree());
     }
   }
+
+  int accepted = 0;
+  constexpr int kCommitOverflowSlack = 0;
+  for (auto& plan : plans) {
+    if (plan.best_tree && isImprovement(plan.best_stats, plan.original_stats)) {
+      plan.net->setRoutingTree(plan.best_tree);
+      grid_graph_->commitTree(plan.best_tree);
+      const int overflow_after_commit
+          = grid_graph_->checkOverflow(plan.best_tree);
+      if (overflow_after_commit > plan.original_overflow + kCommitOverflowSlack) {
+        grid_graph_->commitTree(plan.best_tree, /*ripup*/ true);
+        plan.net->setRoutingTree(plan.original_tree);
+        grid_graph_->commitTree(plan.original_tree);
+        continue;
+      }
+      plan.applied_candidate = true;
+      accepted++;
+    } else {
+      plan.net->setRoutingTree(plan.original_tree);
+      grid_graph_->commitTree(plan.original_tree);
+    }
+  }
+
+  constexpr CapacityT kTotalOverflowSlack = 0;
+  const CapacityT surgery_total_overflow = grid_graph_->getTotalOverflow();
+  if (surgery_total_overflow > baseline_total_overflow + kTotalOverflowSlack) {
+    int rolled_back = 0;
+    for (auto& plan : plans) {
+      if (!plan.applied_candidate) {
+        continue;
+      }
+      if (const auto current_tree = plan.net->getRoutingTree()) {
+        grid_graph_->commitTree(current_tree, /*ripup*/ true);
+      }
+      plan.net->setRoutingTree(plan.original_tree);
+      grid_graph_->commitTree(plan.original_tree);
+      plan.applied_candidate = false;
+      rolled_back++;
+    }
+    accepted = std::max(0, accepted - rolled_back);
+    logger_->report("stage 3.5 rolled back {} reroutes (total overflow {} -> "
+                    "{}).",
+                    rolled_back,
+                    baseline_total_overflow,
+                    surgery_total_overflow);
+  }
+
   logger_->report("stage 3.5 accepted {} reroutes.", accepted);
 }
 
