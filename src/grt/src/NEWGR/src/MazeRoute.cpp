@@ -57,16 +57,16 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   const int pins = std::max(2, net_->getNumPins());
   const int hp = std::max(1, box.hp());
   const bool shortestTopologyMode
-      = hp >= 120 || pins >= 8
+      = hp >= 110 || pins >= 7
         || std::max(grid.interval.x(), grid.interval.y()) <= 3;
   // Keep only nearby old-tree anchors so maze reroute can aggressively compact
   // long detours instead of preserving the previous expanded topology.
   int anchorMargin = shortestTopologyMode
-                         ? std::clamp(hp / (pins >= 12 ? 16 : 14), 1, 10)
-                         : std::clamp(hp / (pins >= 12 ? 10 : 9), 3, 22);
+                         ? std::clamp(hp / (pins >= 12 ? 20 : 18), 0, 8)
+                         : std::clamp(hp / (pins >= 12 ? 11 : 10), 2, 18);
   if (hp >= 220 || pins >= 18) {
-    anchorMargin = shortestTopologyMode ? std::min(anchorMargin + 1, 12)
-                                        : std::min(anchorMargin + 2, 24);
+    anchorMargin = shortestTopologyMode ? std::min(anchorMargin + 1, 9)
+                                        : std::min(anchorMargin + 2, 20);
   }
   const int anchorXLow = std::max(0, box.lx() - anchorMargin);
   const int anchorXHigh = std::min(xSize - 1, box.hx() + anchorMargin);
@@ -94,8 +94,8 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   // CUGR-style coarse-to-fine corridor search: bound sparse-graph expansion to
   // each net neighborhood to suppress long global detours.
   int margin = shortestTopologyMode
-                   ? std::clamp(hp / (pins >= 12 ? 11 : 10), 4, 38)
-                   : std::clamp(hp / (pins >= 12 ? 8 : 7), 5, 52);
+                   ? std::clamp(hp / (pins >= 12 ? 14 : 13), 3, 30)
+                   : std::clamp(hp / (pins >= 12 ? 9 : 8), 5, 44);
   if (pins <= 3) {
     margin = std::max(margin, 8);
   }
@@ -103,11 +103,14 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
     margin += shortestTopologyMode ? std::max(1, hp / 90)
                                    : std::max(2, hp / 65);
   }
+  if (shortestTopologyMode && (hp >= 150 || pins >= 10)) {
+    margin = std::max(3, margin - 2);
+  }
   if (shortestTopologyMode
       && std::max(grid.interval.x(), grid.interval.y()) <= 3) {
-    margin = std::max(4, margin - 2);
+    margin = std::max(3, margin - 3);
   }
-  margin += std::max(1, std::max(grid.interval.x(), grid.interval.y()) / 2);
+  margin += std::max(1, std::max(grid.interval.x(), grid.interval.y()) / 3);
   int xLow = std::max(0, box.lx() - margin);
   int xHigh = std::min(xSize - 1, box.hx() + margin);
   int yLow = std::max(0, box.ly() - margin);
