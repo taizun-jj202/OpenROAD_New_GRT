@@ -1079,6 +1079,12 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
   multi_array<double, 2> d2(boost::extents[y_range_][x_range_]);
 
   std::vector<bool> pop_heap2(y_grid_ * x_range_, false);
+  int edge_bbox_xmin = 0;
+  int edge_bbox_xmax = 0;
+  int edge_bbox_ymin = 0;
+  int edge_bbox_ymax = 0;
+  int edge_bbox_margin = 0;
+  double detour_unit_cost = 0.0;
 
   /**
    * @brief Updates the cost of an adjacent grid if the new cost is lower,
@@ -1158,6 +1164,8 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
     double cost1 = getCost(pos1, is_horizontal, cost_params);
 
     double tmp = d1[cur_y][cur_x] + cost1;
+    const int next_x = cur_x + d_x;
+    const int next_y = cur_y + d_y;
 
     if (add_via && d1[cur_y][cur_x] != 0) {
       tmp += via;
@@ -1175,7 +1183,22 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
       }
     }
 
-    updateAdjacent(cur_x, cur_y, cur_x + d_x, cur_y + d_y, tmp, net_id);
+    int bbox_detour = 0;
+    if (next_x < edge_bbox_xmin - edge_bbox_margin) {
+      bbox_detour += edge_bbox_xmin - edge_bbox_margin - next_x;
+    } else if (next_x > edge_bbox_xmax + edge_bbox_margin) {
+      bbox_detour += next_x - (edge_bbox_xmax + edge_bbox_margin);
+    }
+    if (next_y < edge_bbox_ymin - edge_bbox_margin) {
+      bbox_detour += edge_bbox_ymin - edge_bbox_margin - next_y;
+    } else if (next_y > edge_bbox_ymax + edge_bbox_margin) {
+      bbox_detour += next_y - (edge_bbox_ymax + edge_bbox_margin);
+    }
+    if (bbox_detour > 0) {
+      tmp += detour_unit_cost * bbox_detour;
+    }
+
+    updateAdjacent(cur_x, cur_y, next_x, next_y, tmp, net_id);
   };
 
   std::vector<OrderNetEdge> net_eo;
@@ -1230,11 +1253,20 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
       // ripup the routing for the edge
       const auto [ymin, ymax] = std::minmax(n1y, n2y);
       const auto [xmin, xmax] = std::minmax(n1x, n2x);
+      const bool wirelength_focus_mode
+          = total_overflow_ == 0 || iter > overflow_iterations_ / 2;
+      edge_bbox_xmin = xmin;
+      edge_bbox_xmax = xmax;
+      edge_bbox_ymin = ymin;
+      edge_bbox_ymax = ymax;
+      edge_bbox_margin = wirelength_focus_mode ? 0 : 1;
+      detour_unit_cost = wirelength_focus_mode ? 0.45 : 0.10;
 
       enlarge_ = std::min(origENG, (iter / 6 + 3) * treeedge->route.routelen);
       const int manhattan_len = treeedge->len;
-      const int min_local_expand = 3;
-      const double expand_ratio = 0.35;
+      const bool zero_overflow_refine = total_overflow_ == 0;
+      const int min_local_expand = zero_overflow_refine ? 2 : 3;
+      const double expand_ratio = zero_overflow_refine ? 0.22 : 0.35;
       const int dynamic_cap
           = min_local_expand
             + static_cast<int>(std::round(manhattan_len * expand_ratio));
