@@ -531,6 +531,16 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
     for (const auto& grid : candidateGrids) {
       MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+      MazeBuildOptions buildOptions;
+      if (bestScore.overflow_edges == 0) {
+        buildOptions.preserve_existing_topology = false;
+        buildOptions.force_shortest_topology = true;
+        buildOptions.corridor_shrink = (pins >= 8 || hp >= 120) ? 3 : 2;
+      } else if (pins >= 10 || hp >= 140) {
+        buildOptions.force_shortest_topology = true;
+        buildOptions.corridor_shrink = 1;
+      }
+      mazeRoute.setBuildOptions(buildOptions);
       mazeRoute.constructSparsifiedGraph(wireCostView, grid);
       mazeRoute.run();
       std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();
@@ -674,7 +684,20 @@ void CUGR::wirelengthRecovery()
       auto runSparseMazeCandidate = [&](int interval, int xOffset, int yOffset) {
         SparseGrid recoveryGrid(interval, interval, xOffset, yOffset);
 
+        const int hp = std::max(1, net->getBoundingBox().hp());
+        const double detourRatio = static_cast<double>(oldScore.wire_length)
+                                   / static_cast<double>(hp);
         MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+        MazeBuildOptions buildOptions;
+        if (oldScore.overflow_edges == 0) {
+          buildOptions.preserve_existing_topology = false;
+          buildOptions.force_shortest_topology = true;
+          buildOptions.corridor_shrink = detourRatio >= 1.55 ? 5 : 3;
+        } else {
+          buildOptions.force_shortest_topology = true;
+          buildOptions.corridor_shrink = rank < denseMazeBudget ? 1 : 0;
+        }
+        mazeRoute.setBuildOptions(buildOptions);
         mazeRoute.constructSparsifiedGraph(wireCostView, recoveryGrid);
         mazeRoute.run();
         std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();
@@ -788,6 +811,16 @@ void CUGR::finalPatternTighten()
       const int yOffset = (rank * 7) % interval;
       SparseGrid tightenGrid(interval, interval, xOffset, yOffset);
       MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+      MazeBuildOptions buildOptions;
+      if (oldScore.overflow_edges == 0) {
+        buildOptions.preserve_existing_topology = false;
+        buildOptions.force_shortest_topology = true;
+        buildOptions.corridor_shrink = rank < mazeTightenBudget / 3 ? 4 : 3;
+      } else {
+        buildOptions.force_shortest_topology = true;
+        buildOptions.corridor_shrink = 1;
+      }
+      mazeRoute.setBuildOptions(buildOptions);
       mazeRoute.constructSparsifiedGraph(wireCostView, tightenGrid);
       mazeRoute.run();
       std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();
@@ -1003,6 +1036,21 @@ void CUGR::globalCompaction()
                 interval, seed, hp, net->getNumPins(), maxMazeCandidates);
         for (const auto& compactionGrid : candidateGrids) {
           MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+          MazeBuildOptions buildOptions;
+          const bool detourResetMode
+              = oldScore.overflow_edges == 0
+                && (oldDetourRatio >= detourRatioThreshold
+                    || oldScore.wire_length >= longWireThreshold);
+          if (detourResetMode) {
+            buildOptions.preserve_existing_topology = false;
+            buildOptions.force_shortest_topology = true;
+            buildOptions.corridor_shrink
+                = (roundIdx == 0 && rank < denseMazeBudget / 2) ? 4 : 3;
+          } else {
+            buildOptions.force_shortest_topology = true;
+            buildOptions.corridor_shrink = oldScore.overflow_edges > 0 ? 1 : 0;
+          }
+          mazeRoute.setBuildOptions(buildOptions);
           mazeRoute.constructSparsifiedGraph(wireCostView, compactionGrid);
           mazeRoute.run();
           std::shared_ptr<SteinerTreeNode> steinerTree
@@ -1188,6 +1236,17 @@ void CUGR::strictWirelengthCompaction()
                                     maxMazeCandidates);
       for (const auto& compactionGrid : candidateGrids) {
         MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+        MazeBuildOptions buildOptions;
+        if (oldScore.overflow_edges == 0) {
+          buildOptions.preserve_existing_topology = false;
+          buildOptions.force_shortest_topology = true;
+          buildOptions.corridor_shrink
+              = rank < denseMazeBudget / 2 ? 5 : 4;
+        } else {
+          buildOptions.force_shortest_topology = true;
+          buildOptions.corridor_shrink = 1;
+        }
+        mazeRoute.setBuildOptions(buildOptions);
         mazeRoute.constructSparsifiedGraph(wireCostView, compactionGrid);
         mazeRoute.run();
         std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();

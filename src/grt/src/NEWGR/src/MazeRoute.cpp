@@ -22,7 +22,8 @@
 namespace grt::newgr {
 
 void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
-                       const SparseGrid& grid)
+                       const SparseGrid& grid,
+                       const MazeBuildOptions& options)
 {
   pseudo_pins_.clear();
   xs_.clear();
@@ -56,8 +57,9 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   const auto& box = net_->getBoundingBox();
   const int pins = std::max(2, net_->getNumPins());
   const int hp = std::max(1, box.hp());
+  const int corridorShrink = std::max(0, options.corridor_shrink);
   const bool shortestTopologyMode
-      = hp >= 110 || pins >= 7
+      = options.force_shortest_topology || hp >= 110 || pins >= 7
         || std::max(grid.interval.x(), grid.interval.y()) <= 3;
   // Keep only nearby old-tree anchors so maze reroute can aggressively compact
   // long detours instead of preserving the previous expanded topology.
@@ -67,6 +69,11 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   if (hp >= 220 || pins >= 18) {
     anchorMargin = shortestTopologyMode ? std::min(anchorMargin + 1, 9)
                                         : std::min(anchorMargin + 2, 20);
+  }
+  if (!options.preserve_existing_topology) {
+    anchorMargin = 0;
+  } else if (corridorShrink > 0) {
+    anchorMargin = std::max(0, anchorMargin - (corridorShrink + 1) / 2);
   }
   const int anchorXLow = std::max(0, box.lx() - anchorMargin);
   const int anchorXHigh = std::min(xSize - 1, box.hx() + anchorMargin);
@@ -109,6 +116,14 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   if (shortestTopologyMode
       && std::max(grid.interval.x(), grid.interval.y()) <= 3) {
     margin = std::max(3, margin - 3);
+  }
+  if (corridorShrink > 0) {
+    margin = std::max(2, margin - corridorShrink);
+  }
+  if (!options.preserve_existing_topology) {
+    // SPRoute-style reset move for compaction: avoid topology lock-in by
+    // tightening the local search corridor once overflow is already clean.
+    margin = std::max(2, margin - (shortestTopologyMode ? 4 : 3));
   }
   margin += std::max(1, std::max(grid.interval.x(), grid.interval.y()) / 3);
   int xLow = std::max(0, box.lx() - margin);
