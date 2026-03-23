@@ -60,7 +60,7 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 		if (rudy < 1.5f) {
 			adj = (adj + 0.08f > 1.0f) ? 1.0f : (adj + 0.08f);
 		} else if (rudy > 7.0f) {
-			adj *= 0.92f;
+			adj *= 0.90f;
 		}
 
 		const int adjusted = static_cast<int>((float) x * adj);
