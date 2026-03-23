@@ -75,28 +75,29 @@ struct Constants
   int stage3_max_maze_configs = 16;
   bool stage3_use_wirelength_maze = true;
   int stage3_wl_only_hpwl_threshold = 140;
-  int stage3_wl_config_limit = 7;
+  int stage3_wl_config_limit = 8;
   double stage3_wl_via_cost_scale = 0.35;
   bool stage3_use_full_grid_wl_maze = true;
-  int stage3_full_grid_hpwl_threshold = 180;
-  int stage3_full_grid_pin_limit = 40;
-  double stage3_full_grid_via_cost_scale = 0.05;
-  double stage3_full_grid_min_stretch = 1.10;
+  int stage3_full_grid_hpwl_threshold = 220;
+  int stage3_full_grid_pin_limit = 24;
+  int stage3_full_grid_overflow_threshold = 3;
+  double stage3_full_grid_via_cost_scale = 0.02;
+  double stage3_full_grid_min_stretch = 1.35;
 
   // FastRoute-style post-processing pass: reroute a subset of long,
   // overflow-free nets and keep only wirelength-improving solutions.
   bool enable_wirelength_recovery = true;
   bool recovery_use_maze = true;
   bool recovery_use_wirelength_maze = true;
-  double recovery_wl_maze_via_cost_scale = 0.22;
+  double recovery_wl_maze_via_cost_scale = 0.30;
   int recovery_wl_only_hpwl_threshold = 120;
   int recovery_hpwl_threshold = 64;
-  double recovery_refine_ratio = 0.74;
+  double recovery_refine_ratio = 0.82;
   int recovery_max_passes = 4;
   double recovery_pass_decay = 0.80;
   int recovery_maze_sparse_x = 3;
   int recovery_maze_sparse_y = 3;
-  double recovery_deep_ratio = 0.60;
+  double recovery_deep_ratio = 0.65;
   int recovery_deep_hpwl_threshold = 140;
   int recovery_aniso_sparse_long = 7;
   int recovery_aniso_sparse_short = 3;
@@ -105,12 +106,12 @@ struct Constants
   int recovery_full_offset_hpwl_threshold = 220;
   int recovery_dense_sparse_x = 2;
   int recovery_dense_sparse_y = 2;
-  int recovery_max_maze_configs = 16;
+  int recovery_max_maze_configs = 18;
   int recovery_max_via_increase = 6;
   bool recovery_use_full_grid_maze = true;
-  int recovery_full_grid_top_n = 20;
+  int recovery_full_grid_top_n = 18;
   int recovery_full_grid_hpwl_threshold = 160;
-  double recovery_full_grid_via_cost_scale = 0.00;
+  double recovery_full_grid_via_cost_scale = 0.03;
 
   double pin_patch_threshold = 1000000.0;
   int pin_patch_padding = 3;
