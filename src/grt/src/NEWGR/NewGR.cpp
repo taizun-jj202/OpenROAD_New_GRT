@@ -5,12 +5,14 @@
 #include <functional>
 #include <limits>
 #include <numeric>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "FastRoute.h"
 #include "Grid.h"
+#include "Net.h"
 #include "grt/Rudy.h"
 #include "utl/Logger.h"
 
@@ -49,6 +51,7 @@ struct ScenarioDefinition
   std::string name;
   std::function<void()> pre_init;
   std::function<void()> post_init;
+  std::function<void(std::vector<Net*>&)> order_nets;
 };
 
 struct Hotspot
@@ -59,6 +62,94 @@ struct Hotspot
   bool affect_horizontal = false;
   bool affect_vertical = false;
 };
+
+struct NetOrderFeatures
+{
+  long hpwl = 0;
+  int pin_count = 0;
+  int layer_span = 1;
+  int port_count = 0;
+  float slack = 0.0f;
+  double score = 0.0;
+};
+
+NetOrderFeatures getNetOrderFeatures(Net* net)
+{
+  NetOrderFeatures features;
+  if (net == nullptr) {
+    return features;
+  }
+
+  const auto& pins = net->getPins();
+  features.pin_count = std::max(1, static_cast<int>(pins.size()));
+  features.slack = net->getSlack();
+
+  int xmin = std::numeric_limits<int>::max();
+  int xmax = std::numeric_limits<int>::min();
+  int ymin = std::numeric_limits<int>::max();
+  int ymax = std::numeric_limits<int>::min();
+  int min_layer = std::numeric_limits<int>::max();
+  int max_layer = std::numeric_limits<int>::min();
+
+  for (const Pin& pin : pins) {
+    const odb::Point& pos = pin.getPosition();
+    xmin = std::min(xmin, pos.x());
+    xmax = std::max(xmax, pos.x());
+    ymin = std::min(ymin, pos.y());
+    ymax = std::max(ymax, pos.y());
+
+    if (pin.isPort()) {
+      features.port_count++;
+    }
+
+    const auto& pin_layers = pin.getLayers();
+    for (const int layer : pin_layers) {
+      min_layer = std::min(min_layer, layer);
+      max_layer = std::max(max_layer, layer);
+    }
+  }
+
+  if (xmin <= xmax && ymin <= ymax) {
+    features.hpwl = static_cast<long>(xmax - xmin + ymax - ymin);
+  }
+  if (min_layer <= max_layer) {
+    features.layer_span = std::max(1, max_layer - min_layer + 1);
+  }
+
+  const double hpwl_term = static_cast<double>(std::max<long>(features.hpwl, 1));
+  const double pin_term
+      = 1.0 + 0.28 * std::log1p(static_cast<double>(features.pin_count));
+  const double layer_term = 1.0 + 0.16 * std::max(features.layer_span - 1, 0);
+  const double port_term = 1.0 + 0.08 * features.port_count;
+  const double slack_term = features.slack < 0.0f
+                                ? 1.0 + std::min(1.2, std::abs(static_cast<double>(features.slack)))
+                                : 1.0;
+  features.score = hpwl_term * pin_term * layer_term * port_term * slack_term;
+
+  return features;
+}
+
+void reorderNetsByWirelengthPriority(std::vector<Net*>& nets)
+{
+  if (nets.size() < 2) {
+    return;
+  }
+
+  std::stable_sort(nets.begin(), nets.end(), [](Net* lhs, Net* rhs) {
+    const NetOrderFeatures lhs_features = getNetOrderFeatures(lhs);
+    const NetOrderFeatures rhs_features = getNetOrderFeatures(rhs);
+    if (lhs_features.score != rhs_features.score) {
+      return lhs_features.score > rhs_features.score;
+    }
+    if (lhs_features.hpwl != rhs_features.hpwl) {
+      return lhs_features.hpwl > rhs_features.hpwl;
+    }
+    if (lhs_features.pin_count != rhs_features.pin_count) {
+      return lhs_features.pin_count > rhs_features.pin_count;
+    }
+    return lhs < rhs;
+  });
+}
 
 using RudyGrid = std::vector<std::vector<float>>;
 
@@ -502,6 +593,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     std::vector<Net*> scenario_nets
         = grouter_->initFastRoute(min_routing_layer, max_routing_layer);
+    if (scenario.order_nets) {
+      scenario.order_nets(scenario_nets);
+    }
     if (scenario.post_init) {
       scenario.post_init();
     }
@@ -536,7 +630,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   std::vector<ScenarioResult> scenario_results;
   scenario_results.push_back(baseline);
 
-  ScenarioDefinition baseline_def{"baseline", nullptr, nullptr};
+  ScenarioDefinition baseline_def{"baseline", nullptr, nullptr, nullptr};
   std::vector<ScenarioDefinition> scenario_defs;
 
   auto make_soft_config
@@ -550,7 +644,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             float severity_weight,
             float perturb_pct,
             int seed,
-            float critical_pct) {
+            float critical_pct,
+            std::function<void(std::vector<Net*>&)> order_nets = nullptr) {
           ScenarioDefinition def;
           def.name = name;
           def.pre_init = [this, perturb_pct, seed, critical_pct]() {
@@ -588,10 +683,65 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                         hotspot_ratio,
                                         severity_weight);
                 };
+          def.order_nets = std::move(order_nets);
           return def;
         };
 
+  ScenarioDefinition sporder_shortest_def;
+  sporder_shortest_def.name = "sporder-shortest";
+  sporder_shortest_def.pre_init = [this, seed = 31]() {
+    grouter_->setCapacitiesPerturbationPercentage(0.0f);
+    grouter_->setPerturbationAmount(0);
+    grouter_->setAllowCongestion(true);
+    grouter_->setSeed(seed);
+    grouter_->fastroute_->setCriticalNetsPercentage(18.0f);
+  };
+  sporder_shortest_def.order_nets
+      = [](std::vector<Net*>& scenario_nets) {
+          reorderNetsByWirelengthPriority(scenario_nets);
+        };
+  scenario_defs.push_back(std::move(sporder_shortest_def));
+
   if (!normalized_rudy.empty()) {
+    ScenarioDefinition sporder_corridor_lift;
+    sporder_corridor_lift.name = "sporder-corridor-lift";
+    sporder_corridor_lift.pre_init = [this, seed = 37]() {
+      grouter_->setCapacitiesPerturbationPercentage(0.0f);
+      grouter_->setPerturbationAmount(0);
+      grouter_->setAllowCongestion(true);
+      grouter_->setSeed(seed);
+      grouter_->fastroute_->setCriticalNetsPercentage(20.0f);
+    };
+    sporder_corridor_lift.order_nets
+        = [](std::vector<Net*>& scenario_nets) {
+            reorderNetsByWirelengthPriority(scenario_nets);
+          };
+    sporder_corridor_lift.post_init = [this,
+                                       &normalized_rudy,
+                                       &hotspots,
+                                       min_routing_layer,
+                                       max_routing_layer]() {
+      applyHybridCapacityRemap(grouter_,
+                               normalized_rudy,
+                               hotspots,
+                               min_routing_layer,
+                               max_routing_layer,
+                               0.76f,
+                               1.10f,
+                               5.2f,
+                               0.54f,
+                               0.95f,
+                               1);
+      applyHotspotPenalties(grouter_,
+                            hotspots,
+                            min_routing_layer,
+                            max_routing_layer,
+                            1,
+                            0.82f,
+                            0.25f);
+    };
+    scenario_defs.push_back(std::move(sporder_corridor_lift));
+
     ScenarioDefinition hybrid_def;
     hybrid_def.name = "corridor-hybrid";
     hybrid_def.pre_init = [this, seed = 17]() {
@@ -641,7 +791,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                              0.55f,
                                              3.5f,
                                              13,
-                                             12.0f));
+                                             12.0f,
+                                             [](std::vector<Net*>& scenario_nets) {
+                                               reorderNetsByWirelengthPriority(
+                                                   scenario_nets);
+                                             }));
 
     scenario_defs.push_back(make_soft_config("mild-softcap",
                                              0.58f,
