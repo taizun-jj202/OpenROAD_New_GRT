@@ -8038,6 +8038,260 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     selected.metrics = compute_metrics(selected.routes);
   }
 
+  // Iteration 50 radical mode:
+  // Theory:
+  // 1) The current pipeline can settle into a donor equilibrium with limited
+  //    net-level topology movement.
+  // 2) Build two intentionally orthogonal donors:
+  //    - orbital_fracture: ring/portal + long wavefront + weave/layer hopping.
+  //    - spine_fusion: rmst/spine + bipolar portals + deep trunk corridors.
+  // 3) Force deterministic buckets of medium/large nets to one donor family,
+  //    then run a broad admissibility gate. This should materially change
+  //    wirelength while still avoiding catastrophic blowups.
+  ScenarioResult radical50_orbital_fracture = selected;
+  radical50_orbital_fracture.name = "radical50_orbital_fracture";
+  applyPerimeterRingCollapse(grouter_,
+                             radical50_orbital_fracture.routes,
+                             baseline_rudy,
+                             3,
+                             220,
+                             46,
+                             min_routing_layer,
+                             max_routing_layer);
+  applyGlobalPortalRebuild(grouter_,
+                           radical50_orbital_fracture.routes,
+                           baseline_rudy,
+                           3,
+                           220,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical50_orbital_fracture.routes,
+                        baseline_rudy,
+                        std::max(3 * tile_size, 1),
+                        std::max(48 * tile_size, 1),
+                        300);
+  applyBraidedDetourWeave(
+      grouter_, radical50_orbital_fracture.routes, baseline_rudy);
+  applyLayerHoppingDetours(grouter_,
+                           radical50_orbital_fracture.routes,
+                           baseline_rudy,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyAggressiveDoglegShortcuts(radical50_orbital_fracture.routes,
+                                 std::max(46 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical50_orbital_fracture.routes,
+                        std::max(14 * tile_size, 1));
+  applyViaExcursionCollapse(radical50_orbital_fracture.routes,
+                            std::max(7 * tile_size, 1));
+  radical50_orbital_fracture.metrics
+      = compute_metrics(radical50_orbital_fracture.routes);
+
+  ScenarioResult radical50_spine_fusion = selected;
+  radical50_spine_fusion.name = "radical50_spine_fusion";
+  applyMedianSpineRebuild(radical50_spine_fusion.routes,
+                          3,
+                          220,
+                          min_routing_layer,
+                          max_routing_layer);
+  applyRmstTrunkRebuild(grouter_,
+                        radical50_spine_fusion.routes,
+                        baseline_rudy,
+                        3,
+                        262144,
+                        220,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyRudyCorridorBackboneRebuild(grouter_,
+                                   radical50_spine_fusion.routes,
+                                   baseline_rudy,
+                                   3,
+                                   220,
+                                   min_routing_layer,
+                                   max_routing_layer);
+  applyBipolarPortalBackboneRebuild(grouter_,
+                                    radical50_spine_fusion.routes,
+                                    baseline_rudy,
+                                    3,
+                                    262144,
+                                    220,
+                                    min_routing_layer,
+                                    max_routing_layer);
+  applyQuadrantPortalHypergraphRebuild(grouter_,
+                                       radical50_spine_fusion.routes,
+                                       baseline_rudy,
+                                       3,
+                                       262144,
+                                       220,
+                                       min_routing_layer,
+                                       max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical50_spine_fusion.routes,
+                        baseline_rudy,
+                        std::max(2 * tile_size, 1),
+                        std::max(44 * tile_size, 1),
+                        290);
+  applyAggressiveDoglegShortcuts(radical50_spine_fusion.routes,
+                                 std::max(48 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical50_spine_fusion.routes,
+                        std::max(13 * tile_size, 1));
+  applyViaExcursionCollapse(radical50_spine_fusion.routes,
+                            std::max(6 * tile_size, 1));
+  radical50_spine_fusion.metrics = compute_metrics(radical50_spine_fusion.routes);
+
+  ScenarioResult radical50_selected = selected;
+  radical50_selected.name = "radical50_dual_shatter";
+  long radical50_orbital_picks = 0;
+  long radical50_spine_picks = 0;
+  long radical50_forced_orbital = 0;
+  long radical50_forced_spine = 0;
+  long radical50_compact_rescue = 0;
+
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+
+    const auto [current_wl, current_vias] = route_stats(current_route);
+    const GRoute* chosen_route = nullptr;
+    int chosen_donor = -1;
+
+    auto choose_if_valid = [&](const NetRouteMap& donor_routes,
+                               int donor_id,
+                               bool forced_pick) {
+      const auto donor_it = donor_routes.find(db_net);
+      if (donor_it == donor_routes.end()) {
+        return false;
+      }
+      const GRoute& donor_route = donor_it->second;
+      if (!has_planar_guide(donor_route)) {
+        return false;
+      }
+      const auto [donor_wl, donor_vias] = route_stats(donor_route);
+      const bool broad_cap
+          = donor_wl <= static_cast<long>(current_wl * (forced_pick ? 5.40 : 4.40)
+                                          + 420)
+            && donor_vias
+                   <= static_cast<long>(current_vias * (forced_pick ? 15.0 : 11.0)
+                                        + 260);
+      if (!route_admissible_radical(donor_route, current_route) && !broad_cap) {
+        return false;
+      }
+      chosen_route = &donor_route;
+      chosen_donor = donor_id;
+      return true;
+    };
+
+    bool forced_pick = false;
+    if (node_count >= 8 && ((key % 3ULL) == 0ULL || (key % 7ULL) == 2ULL)) {
+      forced_pick = choose_if_valid(radical50_orbital_fracture.routes, 0, true);
+      if (forced_pick) {
+        radical50_forced_orbital++;
+      }
+    }
+    if (!forced_pick && node_count >= 7
+        && ((key % 4ULL) == 1ULL || (key % 9ULL) == 4ULL)) {
+      forced_pick = choose_if_valid(radical50_spine_fusion.routes, 1, true);
+      if (forced_pick) {
+        radical50_forced_spine++;
+      }
+    }
+
+    if (!forced_pick) {
+      double best_score = route_objective(current_route, selected.overflow);
+      auto consider_candidate = [&](const NetRouteMap& donor_routes,
+                                    int donor_id,
+                                    int donor_overflow) {
+        const auto donor_it = donor_routes.find(db_net);
+        if (donor_it == donor_routes.end()) {
+          return;
+        }
+        const GRoute& donor_route = donor_it->second;
+        if (!has_planar_guide(donor_route)) {
+          return;
+        }
+
+        const auto [donor_wl, donor_vias] = route_stats(donor_route);
+        const bool broad_cap
+            = donor_wl <= static_cast<long>(current_wl * 3.80 + 260)
+              && donor_vias <= static_cast<long>(current_vias * 8.50 + 160);
+        if (!route_admissible_radical(donor_route, current_route) && !broad_cap) {
+          return;
+        }
+
+        double donor_score = route_objective(donor_route, donor_overflow);
+        if (donor_id == 0 && node_count >= 10 && (key % 5ULL) == 3ULL) {
+          donor_score *= 0.88;
+        }
+        if (donor_id == 1 && node_count >= 9 && (key % 6ULL) == 2ULL) {
+          donor_score *= 0.86;
+        }
+        if (donor_score + 1e-3 < best_score) {
+          best_score = donor_score;
+          chosen_route = &donor_route;
+          chosen_donor = donor_id;
+        }
+      };
+
+      consider_candidate(
+          radical50_orbital_fracture.routes, 0, radical50_orbital_fracture.overflow);
+      consider_candidate(
+          radical50_spine_fusion.routes, 1, radical50_spine_fusion.overflow);
+    }
+
+    if (chosen_route != nullptr) {
+      radical50_selected.routes[db_net] = *chosen_route;
+      if (chosen_donor == 0) {
+        radical50_orbital_picks++;
+      } else if (chosen_donor == 1) {
+        radical50_spine_picks++;
+      }
+      continue;
+    }
+
+    if (node_count <= 3 && (key % 5ULL) == 0ULL) {
+      const auto compact_it = compact.routes.find(db_net);
+      if (compact_it != compact.routes.end()) {
+        const GRoute& compact_route = compact_it->second;
+        if (has_planar_guide(compact_route)
+            && route_admissible(compact_route, current_route)) {
+          radical50_selected.routes[db_net] = compact_route;
+          radical50_compact_rescue++;
+        }
+      }
+    }
+  }
+
+  if (radical50_orbital_picks > 0 || radical50_spine_picks > 0
+      || radical50_compact_rescue > 0) {
+    applyWavefrontDetours(grouter_,
+                          radical50_selected.routes,
+                          baseline_rudy,
+                          std::max(2 * tile_size, 1),
+                          std::max(38 * tile_size, 1),
+                          240);
+    applyAggressiveDoglegShortcuts(radical50_selected.routes,
+                                   std::max(42 * tile_size, 1),
+                                   std::max(tile_size, 1));
+    applyGuideCompression(radical50_selected.routes, std::max(12 * tile_size, 1));
+    applyViaExcursionCollapse(radical50_selected.routes,
+                              std::max(5 * tile_size, 1));
+    radical50_selected.name += "+rad50";
+    radical50_selected.metrics = compute_metrics(radical50_selected.routes);
+
+    const bool radical50_catastrophic
+        = static_cast<double>(radical50_selected.metrics.wirelength_dbu)
+              > static_cast<double>(baseline.metrics.wirelength_dbu) * 4.20
+          || static_cast<double>(radical50_selected.metrics.via_count)
+                 > static_cast<double>(baseline.metrics.via_count) * 7.00;
+    if (!radical50_catastrophic) {
+      selected = radical50_selected;
+    }
+  }
+
   // Final safeguard to prevent catastrophic regressions.
   const bool catastrophic
       = static_cast<double>(selected.metrics.wirelength_dbu)
@@ -8161,6 +8415,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 radical49_spine_picks,
                 radical49_fluxfield_picks,
                 radical49_compact_rescue);
+  logger_->warn(GNR,
+                6092,
+                "NEWGR rad50 picks: orbital {} spine {} forced_orbital {} "
+                "forced_spine {} compact_rescue {}.",
+                radical50_orbital_picks,
+                radical50_spine_picks,
+                radical50_forced_orbital,
+                radical50_forced_spine,
+                radical50_compact_rescue);
 
   restore_snapshot(snapshot);
   return selected.routes;
