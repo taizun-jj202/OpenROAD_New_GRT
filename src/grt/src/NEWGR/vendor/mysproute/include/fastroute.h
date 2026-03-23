@@ -651,7 +651,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	// - DR_FOCUSED: wider expansion, more routability reserve.
 	// - BALANCED : compromise between the two.
 	if (algo == Astar) {
-		noADJ = (newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL);
+		noADJ = (newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL
+		         || newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_WL);
 		if (newgr_capacity_profile == NEWGR_CAP_PROFILE_WL_FOCUSED) {
 			ENLARGE = 36;
 			ESTEP1 = 8;
@@ -698,6 +699,20 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			LVIter = 1;
 			VIA = 0;
 			astar_weight = 0.56f;
+		} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_WL) {
+			// Radical shortest-path profile:
+			// minimize detours aggressively and rely on selective deterministic
+			// bursts to break early hotspots.
+			ENLARGE = 18;
+			ESTEP1 = 3;
+			ESTEP2 = 2;
+			ESTEP3 = 1;
+			CSTEP1 = 1;
+			CSTEP2 = 1;
+			CSTEP3 = 1;
+			LVIter = 1;
+			VIA = 0;
+			astar_weight = 0.50f;
 		} else {
 			ENLARGE = 40;
 			ESTEP1 = 9;
@@ -769,6 +784,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		} else if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_3D_SHORT) {
 			VIA = 0;
 		} else if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL) {
+			VIA = 0;
+		} else if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_WL) {
 			VIA = 0;
 		}
 		//viacost = VIA;
@@ -929,6 +946,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 					enlarge_limit = max(6, max(xGrid, yGrid) / 12);
 				} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL) {
 					enlarge_limit = max(5, max(xGrid, yGrid) / 14);
+				} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_WL) {
+					enlarge_limit = max(4, max(xGrid, yGrid) / 16);
 				} else {
 					enlarge_limit = max(7, max(xGrid, yGrid) / 9);
 				}
@@ -995,6 +1014,11 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 				           && i == 1
 				           && totalOverflow > 4500) {
 					active_algo = DetPart_Astar_Local;
+				} else if (algo == Astar
+				           && newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_WL
+				           && i <= 2
+				           && totalOverflow > 1500) {
+					active_algo = DetPart_Astar_Local;
 				}
 				// CUGR/FastRoute-style annealing:
 				// high-overflow rounds prioritize escape; late rounds prioritize
@@ -1016,6 +1040,15 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 						round_astar_weight = 0.56f;
 					} else {
 						round_astar_weight = 0.42f;
+					}
+				} else if (algo == Astar
+				           && newgr_capacity_profile == NEWGR_CAP_PROFILE_RADICAL_WL) {
+					if (totalOverflow > 2800) {
+						round_astar_weight = 0.66f;
+					} else if (totalOverflow > 500) {
+						round_astar_weight = 0.50f;
+					} else {
+						round_astar_weight = 0.35f;
 					}
 				}
 

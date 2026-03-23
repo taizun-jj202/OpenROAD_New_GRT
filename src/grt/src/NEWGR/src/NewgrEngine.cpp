@@ -72,6 +72,8 @@ struct RouteMetrics
 {
   uint64_t wirelength{0};
   uint64_t vias{0};
+  uint64_t congestion_risk{0};
+  uint64_t proxy_cost{0};
 };
 
 struct CandidateResult
@@ -85,7 +87,51 @@ struct CandidateResult
   NetRouteMap routes;
 };
 
-RouteMetrics computeRouteMetrics(const NetRouteMap& routes)
+uint64_t computeCongestionRisk(const SprouteGridData& grid)
+{
+  uint64_t risk = 0;
+  for (int layer = 0; layer < grid.num_layers; ++layer) {
+    const uint64_t layer_weight = (layer <= 2) ? 9 : ((layer <= 4) ? 6 : 4);
+    if (grid.x_grids > 1) {
+      for (int y = 0; y < grid.y_grids; ++y) {
+        for (int x = 0; x + 1 < grid.x_grids; ++x) {
+          const Edge3D& edge = horizontalEdge(grid, layer, y, x);
+          const int cap = std::max(1, static_cast<int>(edge.cap));
+          const int usage = static_cast<int>(edge.usage);
+          const int util_permil = (usage * 1000) / cap;
+          if (util_permil > 700) {
+            const uint64_t pressure = static_cast<uint64_t>(util_permil - 700);
+            risk += pressure * pressure * layer_weight;
+          }
+          if (usage > cap) {
+            risk += static_cast<uint64_t>(usage - cap) * 3000 * layer_weight;
+          }
+        }
+      }
+    }
+    if (grid.y_grids > 1) {
+      for (int y = 0; y + 1 < grid.y_grids; ++y) {
+        for (int x = 0; x < grid.x_grids; ++x) {
+          const Edge3D& edge = verticalEdge(grid, layer, y, x);
+          const int cap = std::max(1, static_cast<int>(edge.cap));
+          const int usage = static_cast<int>(edge.usage);
+          const int util_permil = (usage * 1000) / cap;
+          if (util_permil > 700) {
+            const uint64_t pressure = static_cast<uint64_t>(util_permil - 700);
+            risk += pressure * pressure * layer_weight;
+          }
+          if (usage > cap) {
+            risk += static_cast<uint64_t>(usage - cap) * 3000 * layer_weight;
+          }
+        }
+      }
+    }
+  }
+  return risk;
+}
+
+RouteMetrics computeRouteMetrics(const SprouteGridData& grid,
+                                 const NetRouteMap& routes)
 {
   RouteMetrics metrics;
   for (const auto& [net, route] : routes) {
@@ -98,6 +144,9 @@ RouteMetrics computeRouteMetrics(const NetRouteMap& routes)
       }
     }
   }
+  metrics.congestion_risk = computeCongestionRisk(grid);
+  metrics.proxy_cost = metrics.wirelength + metrics.vias * 8
+                       + metrics.congestion_risk / 32;
   return metrics;
 }
 
@@ -112,6 +161,12 @@ bool isBetterCandidate(const CandidateResult& lhs, const CandidateResult& rhs)
   }
   if (lhs.metrics.vias != rhs.metrics.vias) {
     return lhs.metrics.vias < rhs.metrics.vias;
+  }
+  if (lhs.metrics.congestion_risk != rhs.metrics.congestion_risk) {
+    return lhs.metrics.congestion_risk < rhs.metrics.congestion_risk;
+  }
+  if (lhs.metrics.proxy_cost != rhs.metrics.proxy_cost) {
+    return lhs.metrics.proxy_cost < rhs.metrics.proxy_cost;
   }
   return false;
 }
@@ -137,6 +192,8 @@ const char* capacityProfileName(int profile)
       return "3D_SHORT";
     case NEWGR_CAP_PROFILE_ULTRA_WL:
       return "ULTRA_WL";
+    case NEWGR_CAP_PROFILE_RADICAL_WL:
+      return "RADICAL_WL";
     case NEWGR_CAP_PROFILE_WL_FOCUSED:
       return "WL_FOCUSED";
     case NEWGR_CAP_PROFILE_DR_FOCUSED:
@@ -292,63 +349,38 @@ NetRouteMap NewgrEngine::run()
 
     candidate.overflow = totalOverflow;
     candidate.routes = extractRoutes();
-    candidate.metrics = computeRouteMetrics(candidate.routes);
+    candidate.metrics = computeRouteMetrics(grid_, candidate.routes);
 
     logger_->info(utl::GRT,
                   402,
                   "NEWGR candidate {} [{}]: overflow={}, route_wl={}, "
-                  "route_vias={}",
+                  "route_vias={}, cong_risk={}, proxy_cost={}",
                   candidateName(candidate),
                   capacityProfileName(candidate.capacity_profile),
                   candidate.overflow,
                   candidate.metrics.wirelength,
-                  candidate.metrics.vias);
+                  candidate.metrics.vias,
+                  candidate.metrics.congestion_risk,
+                  candidate.metrics.proxy_cost);
     return candidate;
   };
 
-  // Drastic multi-router hybrid strategy:
-  // 1) ULTRA_WL: FastRoute-like shortest path bias + CUGR-like selective 3D
-  //    escape in hotspots + reduced topology warping (SPRoute noADJ).
-  // 2) WL_Hybrid: previous robust wirelength profile.
-  // 3) 3D_SHORT: upper-layer friendly profile for stubborn congestion pockets.
-  // 4) DR fallback only if overflow remains after the WL-focused set.
+  // Drastic single-profile experiment:
+  // keep one aggressive RADICAL_WL candidate to avoid cross-candidate
+  // overfitting on global-route metrics.
   CandidateResult best = run_candidate(Algo::Astar,
-                                       560,
-                                       NEWGR_CAP_PROFILE_ULTRA_WL,
-                                       "Astar_UltraWL_Short");
-  CandidateResult ultra_deep = run_candidate(Algo::Astar,
-                                             860,
-                                             NEWGR_CAP_PROFILE_ULTRA_WL,
-                                             "Astar_UltraWL_Deep");
-  const bool deep_overflow_better = ultra_deep.overflow < best.overflow;
-  const bool deep_wl_better = ultra_deep.metrics.wirelength < best.metrics.wirelength;
-  const uint64_t deep_wl_delta
-      = deep_wl_better ? (best.metrics.wirelength - ultra_deep.metrics.wirelength) : 0;
-  // Require a meaningful WL gain to prefer very deep rerouting.
-  // Tiny gains often overfit global-route metrics and can regress final DR WL.
-  const uint64_t meaningful_wl_gain = best.metrics.wirelength / 5000;  // ~0.02%
-  if (deep_overflow_better
-      || (ultra_deep.overflow == best.overflow && deep_wl_delta > meaningful_wl_gain
-          && isBetterCandidate(ultra_deep, best))) {
-    best = std::move(ultra_deep);
-  }
-  CandidateResult wl_hybrid = run_candidate(Algo::Astar,
-                                            760,
-                                            NEWGR_CAP_PROFILE_WL_FOCUSED,
-                                            "Astar_WLHybrid");
-  if (isBetterCandidate(wl_hybrid, best)) {
-    best = std::move(wl_hybrid);
-  }
-
-  CandidateResult short3d = run_candidate(Algo::Astar,
-                                          620,
-                                          NEWGR_CAP_PROFILE_3D_SHORT,
-                                          "Astar_3DShort");
-  if (isBetterCandidate(short3d, best)) {
-    best = std::move(short3d);
-  }
+                                       520,
+                                       NEWGR_CAP_PROFILE_RADICAL_WL,
+                                       "Astar_RadicalWL_Short");
 
   if (best.overflow > 0) {
+    CandidateResult short3d = run_candidate(Algo::Astar,
+                                            620,
+                                            NEWGR_CAP_PROFILE_3D_SHORT,
+                                            "Astar_3DShort_Overflow");
+    if (isBetterCandidate(short3d, best)) {
+      best = std::move(short3d);
+    }
     CandidateResult fallback = run_candidate(Algo::DetPart_Astar_Local,
                                              560,
                                              NEWGR_CAP_PROFILE_DR_FOCUSED,
@@ -363,12 +395,14 @@ NetRouteMap NewgrEngine::run()
   logger_->info(utl::GRT,
                 404,
                 "NEWGR selected candidate {} [{}]: overflow={}, route_wl={}, "
-                "route_vias={}",
+                "route_vias={}, cong_risk={}, proxy_cost={}",
                 candidateName(best),
                 capacityProfileName(best.capacity_profile),
                 best.overflow,
                 best.metrics.wirelength,
-                best.metrics.vias);
+                best.metrics.vias,
+                best.metrics.congestion_risk,
+                best.metrics.proxy_cost);
   return best.routes;
 }
 
