@@ -77,6 +77,7 @@ struct RouteMetrics
 struct CandidateResult
 {
   Algo algo{Algo::Astar};
+  std::string mode_name;
   int maze_rounds{0};
   int overflow{std::numeric_limits<int>::max()};
   RouteMetrics metrics{};
@@ -122,6 +123,14 @@ const char* algoName(Algo algo)
     default:
       return "Other";
   }
+}
+
+std::string candidateName(const CandidateResult& candidate)
+{
+  if (!candidate.mode_name.empty()) {
+    return candidate.mode_name;
+  }
+  return std::string(algoName(candidate.algo));
 }
 
 uint64_t packPoint(const GridPoint& point)
@@ -235,9 +244,10 @@ NetRouteMap NewgrEngine::run()
                   "continuing without adjustments.");
   }
 
-  auto run_candidate = [&](Algo algo, int maze_rounds) {
+  auto run_candidate = [&](Algo algo, int maze_rounds, const char* mode_name) {
     CandidateResult candidate;
     candidate.algo = algo;
+    candidate.mode_name = mode_name;
     candidate.maze_rounds = maze_rounds;
 
     parser::CongestionMap congestion_map(
@@ -259,8 +269,8 @@ NetRouteMap NewgrEngine::run()
 
     logger_->info(utl::GRT,
                   402,
-                  "NEWGR candidate {0}: overflow={1}, route_wl={2}, route_vias={3}",
-                  algoName(algo),
+                  "NEWGR candidate {}: overflow={}, route_wl={}, route_vias={}",
+                  candidateName(candidate),
                   candidate.overflow,
                   candidate.metrics.wirelength,
                   candidate.metrics.vias);
@@ -268,30 +278,42 @@ NetRouteMap NewgrEngine::run()
   };
 
   // Hybrid strategy:
-  // 1) SPRoute-style deterministic partitioned reroute (DetPart_Astar_Local)
-  // 2) FastRoute-style global A* reroute
-  // Select the lower-wirelength candidate while prioritizing lower overflow.
-  CandidateResult detpart = run_candidate(Algo::DetPart_Astar_Local, 520);
-  CandidateResult astar = run_candidate(Algo::Astar, 700);
+  // 1) SPRoute deterministic partition reroute
+  // 2) FastRoute A* with aggressive short-path window (wirelength first)
+  // 3) FastRoute A* with standard window (fallback for hard congestion)
+  // Select by overflow first, then wirelength and via count.
+  CandidateResult detpart
+      = run_candidate(Algo::DetPart_Astar_Local, 520, "DetPart_Astar_Local");
+  CandidateResult astar_aggressive
+      = run_candidate(Algo::Astar, 180, "Astar_Aggressive");
+  CandidateResult astar_standard
+      = run_candidate(Algo::Astar, 700, "Astar_Standard");
 
-  CandidateResult best = isBetterCandidate(astar, detpart) ? std::move(astar)
-                                                            : std::move(detpart);
-  const Algo last_executed_algo = Algo::Astar;
-  if (best.algo != last_executed_algo) {
+  CandidateResult best = std::move(detpart);
+  if (isBetterCandidate(astar_aggressive, best)) {
+    best = std::move(astar_aggressive);
+  }
+  if (isBetterCandidate(astar_standard, best)) {
+    best = std::move(astar_standard);
+  }
+
+  const char* last_executed_mode = "Astar_Standard";
+  if (best.mode_name != last_executed_mode) {
     logger_->info(utl::GRT,
                   403,
-                  "Re-running selected NEWGR candidate {0} to keep congestion "
+                  "Re-running selected NEWGR candidate {} to keep congestion "
                   "state aligned with output guides.",
-                  algoName(best.algo));
-    best = run_candidate(best.algo, best.maze_rounds);
+                  candidateName(best));
+    best = run_candidate(
+        best.algo, best.maze_rounds, best.mode_name.c_str());
   }
 
   last_total_overflow_ = best.overflow;
   logger_->info(utl::GRT,
                 404,
-                "NEWGR selected candidate {0}: overflow={1}, route_wl={2}, "
-                "route_vias={3}",
-                algoName(best.algo),
+                "NEWGR selected candidate {}: overflow={}, route_wl={}, "
+                "route_vias={}",
+                candidateName(best),
                 best.overflow,
                 best.metrics.wirelength,
                 best.metrics.vias);
