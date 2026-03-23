@@ -186,10 +186,15 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
   int keep = static_cast<int>(
       std::ceil(candidates.size() * constants_.recovery_refine_ratio));
   keep = std::max(1, std::min(keep, static_cast<int>(candidates.size())));
+  int deep_keep = static_cast<int>(
+      std::ceil(keep * std::clamp(constants_.recovery_deep_ratio, 0.0, 1.0)));
+  deep_keep = std::max(1, std::min(deep_keep, keep));
 
-  logger_->report("stage 4: wirelength recovery on {} / {} nets",
+  logger_->report("stage 4: wirelength recovery on {} / {} nets (deep search "
+                  "on {} nets)",
                   keep,
-                  candidates.size());
+                  candidates.size(),
+                  deep_keep);
 
   auto measureRoute = [&](const std::shared_ptr<GRTreeNode>& tree) {
     std::pair<uint64_t, int> stats{0, 0};
@@ -219,7 +224,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
                           const std::pair<uint64_t, int>& baseline_stats) {
     return candidate_stats.first < baseline_stats.first
            || (candidate_stats.first == baseline_stats.first
-               && candidate_stats.second <= baseline_stats.second);
+               && candidate_stats.second < baseline_stats.second);
   };
 
   int accepted = 0;
@@ -230,7 +235,11 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     if (!original_tree) {
       continue;
     }
+    const bool deep_search = candidateIndex < deep_keep
+                             || candidates[candidateIndex].hpwl
+                                    >= constants_.recovery_deep_hpwl_threshold;
     const auto original_stats = measureRoute(original_tree);
+    const int original_tree_overflow = grid_graph_->checkOverflow(original_tree);
 
     grid_graph_->commitTree(original_tree, /*ripup*/ true);
 
@@ -238,7 +247,16 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     std::pair<uint64_t, int> best_stats = original_stats;
 
     auto considerCandidate = [&](const std::shared_ptr<GRTreeNode>& tree) {
-      if (!tree || grid_graph_->checkOverflow(tree) != 0) {
+      if (!tree) {
+        return;
+      }
+      // Evaluate overflow after adding the candidate tree back to the live
+      // graph. This avoids selecting routes that appear legal in rip-up mode
+      // but create new overflows once committed.
+      grid_graph_->commitTree(tree);
+      const int overflow_after_commit = grid_graph_->checkOverflow(tree);
+      grid_graph_->commitTree(tree, /*ripup*/ true);
+      if (overflow_after_commit > original_tree_overflow) {
         return;
       }
       const auto stats = measureRoute(tree);
@@ -261,21 +279,82 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
       GridGraphView<CostT> recoveryWireCostView;
       grid_graph_->extractWireCostView(recoveryWireCostView);
 
-      MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
-      SparseGrid recoveryGrid(constants_.recovery_maze_sparse_x,
-                              constants_.recovery_maze_sparse_y,
-                              0,
-                              0);
-      mazeRoute.constructSparsifiedGraph(recoveryWireCostView, recoveryGrid);
-      mazeRoute.run();
-      if (const std::shared_ptr<SteinerTreeNode> maze_tree
-          = mazeRoute.getSteinerTree()) {
-        PatternRoute mazePatternRoute(
-            net, grid_graph_.get(), stt_builder_, constants_, logger_);
-        mazePatternRoute.setSteinerTree(maze_tree);
-        mazePatternRoute.constructRoutingDAG();
-        mazePatternRoute.run();
-        considerCandidate(net->getRoutingTree());
+      struct MazeConfig
+      {
+        int sparse_x;
+        int sparse_y;
+        int offset_x;
+        int offset_y;
+      };
+
+      std::vector<MazeConfig> maze_configs;
+      maze_configs.reserve(8);
+      auto addMazeConfig = [&](int sparse_x, int sparse_y, int offset_x, int offset_y) {
+        sparse_x = std::max(2, sparse_x);
+        sparse_y = std::max(2, sparse_y);
+        offset_x = std::clamp(offset_x, 0, sparse_x - 1);
+        offset_y = std::clamp(offset_y, 0, sparse_y - 1);
+        for (const auto& cfg : maze_configs) {
+          if (cfg.sparse_x == sparse_x && cfg.sparse_y == sparse_y
+              && cfg.offset_x == offset_x && cfg.offset_y == offset_y) {
+            return;
+          }
+        }
+        maze_configs.push_back({sparse_x, sparse_y, offset_x, offset_y});
+      };
+
+      addMazeConfig(constants_.recovery_maze_sparse_x,
+                    constants_.recovery_maze_sparse_y,
+                    0,
+                    0);
+
+      if (deep_search) {
+        const auto& bbox = net->getBoundingBox();
+        const bool is_wide = bbox.width() >= bbox.height();
+        const int long_sparse = std::max(2, constants_.recovery_aniso_sparse_long);
+        const int short_sparse
+            = std::max(2, std::min(long_sparse, constants_.recovery_aniso_sparse_short));
+
+        if (is_wide) {
+          addMazeConfig(long_sparse, short_sparse, 0, 0);
+        } else {
+          addMazeConfig(short_sparse, long_sparse, 0, 0);
+        }
+
+        addMazeConfig(std::max(2, constants_.recovery_maze_sparse_x - 1),
+                      std::max(2, constants_.recovery_maze_sparse_y - 1),
+                      0,
+                      0);
+        addMazeConfig(constants_.recovery_maze_sparse_x + 1,
+                      constants_.recovery_maze_sparse_y + 1,
+                      0,
+                      0);
+
+        if (constants_.recovery_try_offset) {
+          const int n_base_configs = std::min(3, static_cast<int>(maze_configs.size()));
+          for (int cfg_idx = 0; cfg_idx < n_base_configs; cfg_idx++) {
+            const auto& cfg = maze_configs[cfg_idx];
+            addMazeConfig(
+                cfg.sparse_x, cfg.sparse_y, cfg.sparse_x / 2, cfg.sparse_y / 2);
+          }
+        }
+      }
+
+      for (const auto& cfg : maze_configs) {
+        MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+        SparseGrid recoveryGrid(
+            cfg.sparse_x, cfg.sparse_y, cfg.offset_x, cfg.offset_y);
+        mazeRoute.constructSparsifiedGraph(recoveryWireCostView, recoveryGrid);
+        mazeRoute.run();
+        if (const std::shared_ptr<SteinerTreeNode> maze_tree
+            = mazeRoute.getSteinerTree()) {
+          PatternRoute mazePatternRoute(
+              net, grid_graph_.get(), stt_builder_, constants_, logger_);
+          mazePatternRoute.setSteinerTree(maze_tree);
+          mazePatternRoute.constructRoutingDAG();
+          mazePatternRoute.run();
+          considerCandidate(net->getRoutingTree());
+        }
       }
     }
 

@@ -71,9 +71,14 @@ struct Constants
   bool enable_wirelength_recovery = true;
   bool recovery_use_maze = true;
   int recovery_hpwl_threshold = 72;
-  double recovery_refine_ratio = 0.70;
-  int recovery_maze_sparse_x = 5;
-  int recovery_maze_sparse_y = 5;
+  double recovery_refine_ratio = 0.74;
+  int recovery_maze_sparse_x = 4;
+  int recovery_maze_sparse_y = 4;
+  double recovery_deep_ratio = 0.45;
+  int recovery_deep_hpwl_threshold = 140;
+  int recovery_aniso_sparse_long = 7;
+  int recovery_aniso_sparse_short = 3;
+  bool recovery_try_offset = true;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
