@@ -35,18 +35,18 @@ struct Constants
 
   int min_routing_layer = 1;
 
-  double cost_logistic_slope = 0.7;
+  double cost_logistic_slope = 0.9;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.12;
-  int target_detour_count = 8;
+  double max_detour_ratio = 0.18;
+  int target_detour_count = 12;
 
   double via_multiplier = 1.4;
 
-  double maze_logistic_slope = 0.35;
+  double maze_logistic_slope = 0.45;
 
   // SPRoute-style soft capacity model (utilization driven)
-  bool use_soft_capacity = true;
+  bool use_soft_capacity = false;
   double soft_cap_min_ratio = 0.78;
   double soft_cap_max_ratio = 0.96;
   double soft_cap_mid_util = 0.72;
@@ -54,10 +54,10 @@ struct Constants
 
   // FastRoute-style critical-net refinement schedule
   bool wirelength_first_refinement = true;
-  int refinement_overflow_threshold = 2;
-  int refinement_hpwl_threshold = 120;
-  double detour_refine_ratio = 0.70;
-  double maze_refine_ratio = 0.38;
+  int refinement_overflow_threshold = 1;
+  int refinement_hpwl_threshold = 80;
+  double detour_refine_ratio = 0.90;
+  double maze_refine_ratio = 0.72;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
