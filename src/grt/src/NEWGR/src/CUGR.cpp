@@ -282,6 +282,14 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
     const BoxT& bbox = net->getBoundingBox();
     const int hpwl = bbox.hp();
+    const uint64_t approx_hpwl_dbu
+        = static_cast<uint64_t>(std::max(1, hpwl))
+          * static_cast<uint64_t>(std::max(1, grid_graph_->getM2Pitch()));
+    const double baseline_stretch
+        = approx_hpwl_dbu > 0
+              ? static_cast<double>(original_stats.wirelength)
+                    / static_cast<double>(approx_hpwl_dbu)
+              : 1.0;
     const bool wide_bbox = bbox.width() >= bbox.height();
     const int base_sparse = std::clamp(hpwl >= 240 ? 8 : (hpwl >= 120 ? 7 : 6),
                                        4,
@@ -343,6 +351,20 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       }
     }
 
+    int stage3_config_budget = static_cast<int>(maze_configs.size());
+    constexpr double kStage3TightStretchThreshold = 1.20;
+    constexpr double kStage3MediumStretchThreshold = 1.36;
+    constexpr int kStage3TightOverflowThreshold = 1;
+    constexpr int kStage3MediumOverflowThreshold = 3;
+    if (baseline_overflow <= kStage3TightOverflowThreshold
+        && baseline_stretch <= kStage3TightStretchThreshold) {
+      stage3_config_budget = std::min(stage3_config_budget, 4);
+    } else if (baseline_overflow <= kStage3MediumOverflowThreshold
+               && baseline_stretch <= kStage3MediumStretchThreshold) {
+      stage3_config_budget = std::min(stage3_config_budget, 7);
+    }
+    stage3_config_budget = std::max(2, stage3_config_budget);
+
     auto considerCandidate = [&](const std::shared_ptr<GRTreeNode>& tree,
                                  const bool is_baseline_candidate) {
       RouteStats candidate_stats;
@@ -358,7 +380,8 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       }
     };
 
-    for (const auto& cfg : maze_configs) {
+    for (int cfg_index = 0; cfg_index < stage3_config_budget; cfg_index++) {
+      const auto& cfg = maze_configs[cfg_index];
       MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
       SparseGrid sparse_grid(cfg.sparse_x, cfg.sparse_y, cfg.offset_x, cfg.offset_y);
       mazeRoute.constructSparsifiedGraph(wireCostView, sparse_grid);
@@ -384,8 +407,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         && hpwl >= constants_.stage3_wl_only_hpwl_threshold
         && net->getNumPins() > 2) {
       const int wl_config_limit = std::max(1, constants_.stage3_wl_config_limit);
-      const int wl_runs = std::min(static_cast<int>(maze_configs.size()),
-                                   wl_config_limit);
+      const int wl_runs = std::min(stage3_config_budget, wl_config_limit);
       const double wl_via_cost_scale
           = std::clamp(constants_.stage3_wl_via_cost_scale, 0.0, 1.0);
       for (int cfg_index = 0; cfg_index < wl_runs; cfg_index++) {
@@ -450,6 +472,10 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
   {
     int index;
     int hpwl;
+    uint64_t route_wirelength;
+    int via_count;
+    double stretch_ratio;
+    double priority;
   };
 
   auto measureRoute = [&](const std::shared_ptr<GRTreeNode>& tree) {
@@ -492,6 +518,10 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     const double pass_scale = std::pow(pass_decay, pass);
     const int hpwl_threshold = std::max(
         24, static_cast<int>(std::ceil(constants_.recovery_hpwl_threshold * pass_scale)));
+    constexpr double kRecoveryStretchFloor = 1.03;
+    constexpr double kStretchPriorityWeight = 900.0;
+    constexpr double kViaDensityPriorityWeight = 140.0;
+    constexpr double kHpwlPriorityWeight = 0.12;
     for (const int netIndex : netIndices) {
       const auto& net = gr_nets_[netIndex];
       const auto& tree = net->getRoutingTree();
@@ -505,7 +535,26 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
       if (grid_graph_->checkOverflow(tree) > 0) {
         continue;
       }
-      candidates.push_back({netIndex, hpwl});
+      const auto route_stats = measureRoute(tree);
+      const uint64_t approx_hpwl_dbu
+          = static_cast<uint64_t>(std::max(1, hpwl))
+            * static_cast<uint64_t>(std::max(1, grid_graph_->getM2Pitch()));
+      const double stretch_ratio
+          = approx_hpwl_dbu > 0
+                ? static_cast<double>(route_stats.first)
+                      / static_cast<double>(approx_hpwl_dbu)
+                : 1.0;
+      if (stretch_ratio < kRecoveryStretchFloor
+          && hpwl < constants_.recovery_deep_hpwl_threshold) {
+        continue;
+      }
+      const double via_density
+          = static_cast<double>(route_stats.second) / std::max(1, hpwl);
+      const double priority = kStretchPriorityWeight * stretch_ratio
+                              + kViaDensityPriorityWeight * via_density
+                              + kHpwlPriorityWeight * static_cast<double>(hpwl);
+      candidates.push_back(
+          {netIndex, hpwl, route_stats.first, route_stats.second, stretch_ratio, priority});
     }
 
     if (candidates.empty()) {
@@ -515,7 +564,16 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     std::sort(candidates.begin(),
               candidates.end(),
               [](const Candidate& lhs, const Candidate& rhs) {
-                return lhs.hpwl > rhs.hpwl;
+                if (lhs.priority != rhs.priority) {
+                  return lhs.priority > rhs.priority;
+                }
+                if (lhs.stretch_ratio != rhs.stretch_ratio) {
+                  return lhs.stretch_ratio > rhs.stretch_ratio;
+                }
+                if (lhs.hpwl != rhs.hpwl) {
+                  return lhs.hpwl > rhs.hpwl;
+                }
+                return lhs.index < rhs.index;
               });
 
     const double pass_ratio = std::clamp(
@@ -526,16 +584,25 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     int keep
         = static_cast<int>(std::ceil(candidates.size() * pass_ratio));
     keep = std::max(1, std::min(keep, static_cast<int>(candidates.size())));
+    constexpr int kFirstPassKeepCap = 170;
+    constexpr int kLaterPassKeepCap = 220;
+    keep = std::min(keep, pass == 0 ? kFirstPassKeepCap : kLaterPassKeepCap);
     int deep_keep = static_cast<int>(std::ceil(
         keep * std::clamp(constants_.recovery_deep_ratio, 0.0, 1.0)));
     deep_keep = std::max(1, std::min(deep_keep, keep));
+    double avg_selected_stretch = 0.0;
+    for (int i = 0; i < keep; i++) {
+      avg_selected_stretch += candidates[i].stretch_ratio;
+    }
+    avg_selected_stretch /= keep;
 
     logger_->report("stage 4.{}: wirelength recovery on {} / {} nets (deep "
-                    "search on {} nets)",
+                    "search on {} nets, avg stretch {:.3f})",
                     pass + 1,
                     keep,
                     candidates.size(),
-                    deep_keep);
+                    deep_keep,
+                    avg_selected_stretch);
 
     int accepted_in_pass = 0;
     for (int candidateIndex = 0; candidateIndex < keep; candidateIndex++) {
@@ -545,10 +612,12 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
       if (!original_tree) {
         continue;
       }
+      constexpr double kDeepSearchStretchThreshold = 1.30;
       const bool deep_search = candidateIndex < deep_keep
                                || candidates[candidateIndex].hpwl
                                       >= constants_.recovery_deep_hpwl_threshold
-                               || pass > 0;
+                               || candidates[candidateIndex].stretch_ratio
+                                      >= kDeepSearchStretchThreshold;
       const auto original_stats = measureRoute(original_tree);
       const int original_tree_overflow = grid_graph_->checkOverflow(original_tree);
       const int max_via_allowed
@@ -759,7 +828,8 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
               && deep_search
               && candidateIndex < std::max(1, constants_.recovery_full_grid_top_n)
               && candidates[candidateIndex].hpwl
-                     >= constants_.recovery_full_grid_hpwl_threshold;
+                     >= constants_.recovery_full_grid_hpwl_threshold
+              && candidates[candidateIndex].stretch_ratio >= 1.10;
         if (enable_full_grid_maze) {
           GridGraphView<CostT> fullGridWlOnlyView;
           grid_graph_->extractWireLengthCostView(fullGridWlOnlyView);
