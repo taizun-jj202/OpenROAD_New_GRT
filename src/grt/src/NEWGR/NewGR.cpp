@@ -31,6 +31,8 @@ struct RouteMetrics
   long wirelength_dbu = 0;
   long via_count = 0;
   long detour_dbu = 0;
+  long high_layer_dbu = 0;
+  int layer_span_sum = 0;
   double wirelength_um = 0.0;
   double score = 0.0;
   int overflow_edges = 0;
@@ -87,6 +89,8 @@ struct RouteEdgeStats
 {
   long wirelength_dbu = 0;
   int via_count = 0;
+  long high_layer_dbu = 0;
+  int layer_span = 0;
   EdgeCountMap edge_counts;
 };
 
@@ -140,6 +144,8 @@ RouteEdgeStats collectRouteEdgeStats(const GRoute& route, Grid* grid)
   const int y_grids = grid != nullptr ? grid->getYGrids() : 0;
   const int max_x_idx = std::max(0, x_grids - 1);
   const int max_y_idx = std::max(0, y_grids - 1);
+  int min_wire_layer = std::numeric_limits<int>::max();
+  int max_wire_layer = std::numeric_limits<int>::min();
 
   auto coord_to_grid = [&](int coord, int min_coord, int max_index) {
     if (max_index <= 0) {
@@ -154,8 +160,16 @@ RouteEdgeStats collectRouteEdgeStats(const GRoute& route, Grid* grid)
       continue;
     }
 
-    stats.wirelength_dbu += std::abs(segment.final_x - segment.init_x)
-                            + std::abs(segment.final_y - segment.init_y);
+    const long seg_wl = std::abs(segment.final_x - segment.init_x)
+                        + std::abs(segment.final_y - segment.init_y);
+    stats.wirelength_dbu += seg_wl;
+    if (segment.init_layer > 0) {
+      min_wire_layer = std::min(min_wire_layer, segment.init_layer);
+      max_wire_layer = std::max(max_wire_layer, segment.init_layer);
+      // Favor compact lower-layer guides to reduce detailed-router detours.
+      const int high_layer_offset = std::max(0, segment.init_layer - 3);
+      stats.high_layer_dbu += seg_wl * high_layer_offset;
+    }
 
     if (grid == nullptr || segment.init_layer <= 0) {
       continue;
@@ -186,6 +200,10 @@ RouteEdgeStats collectRouteEdgeStats(const GRoute& route, Grid* grid)
         stats.edge_counts[packEdgeKey(gx, gy, segment.init_layer, false)]++;
       }
     }
+  }
+
+  if (min_wire_layer <= max_wire_layer) {
+    stats.layer_span = max_wire_layer - min_wire_layer;
   }
 
   return stats;
@@ -526,6 +544,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     for (const auto& [db_net, segments] : routes) {
       static_cast<void>(db_net);
       long route_wl = 0;
+      long route_high_layer = 0;
+      int min_wire_layer = std::numeric_limits<int>::max();
+      int max_wire_layer = std::numeric_limits<int>::min();
       for (const GSegment& segment : segments) {
         if (segment.isVia()) {
           metrics.via_count++;
@@ -534,10 +555,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               + std::abs(segment.final_y - segment.init_y);
           metrics.wirelength_dbu += seg_wl;
           route_wl += seg_wl;
+          if (segment.init_layer > 0) {
+            min_wire_layer = std::min(min_wire_layer, segment.init_layer);
+            max_wire_layer = std::max(max_wire_layer, segment.init_layer);
+            const int high_layer_offset
+                = std::max(0, segment.init_layer - (min_routing_layer + 1));
+            route_high_layer += seg_wl * high_layer_offset;
+          }
         }
       }
       const long bbox_hpwl = getRouteBBoxHpwl(segments);
       metrics.detour_dbu += std::max(0L, route_wl - bbox_hpwl);
+      metrics.high_layer_dbu += route_high_layer;
+      if (min_wire_layer <= max_wire_layer) {
+        metrics.layer_span_sum += (max_wire_layer - min_wire_layer);
+      }
     }
 
     if (metrics.wirelength_dbu > 0 && grouter_->db_ != nullptr
@@ -552,9 +584,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = static_cast<double>(std::max(grouter_->grid_->getTileSize(), 1))
           * 3.0;
     const double detour_weight = 0.22;
+    const double high_layer_weight = 0.008;
+    const double layer_span_weight
+        = static_cast<double>(std::max(grouter_->grid_->getTileSize(), 1)) * 0.15;
     metrics.score = static_cast<double>(metrics.wirelength_dbu)
                     + via_weight * static_cast<double>(metrics.via_count)
-                    + detour_weight * static_cast<double>(metrics.detour_dbu);
+                    + detour_weight * static_cast<double>(metrics.detour_dbu)
+                    + high_layer_weight * static_cast<double>(metrics.high_layer_dbu)
+                    + layer_span_weight * static_cast<double>(metrics.layer_span_sum);
     return metrics;
   };
 
@@ -609,14 +646,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     logger_->info(GNR,
                   6005,
                   "NEWGR {}: wirelength {:.0f} um, vias {}, overflow edges {}, "
-                  "hot edges {}, max ratio {:.2f}, detour {}",
+                  "hot edges {}, max ratio {:.2f}, detour {}, high-layer {}",
                   name,
                   metrics.wirelength_um,
                   metrics.via_count,
                   metrics.overflow_edges,
                   metrics.near_capacity_edges,
                   metrics.max_usage_ratio,
-                  metrics.detour_dbu);
+                  metrics.detour_dbu,
+                  metrics.high_layer_dbu);
     return ScenarioResult{name, metrics, std::move(routes)};
   };
 
@@ -690,14 +728,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     logger_->info(GNR,
                   6006,
                   "NEWGR scenario {}: wirelength {:.0f} um, vias {}, overflow "
-                  "edges {}, hot edges {}, max ratio {:.2f}, detour {}",
+                  "edges {}, hot edges {}, max ratio {:.2f}, detour {}, "
+                  "high-layer {}",
                   scenario.name,
                   metrics.wirelength_um,
                   metrics.via_count,
                   metrics.overflow_edges,
                   metrics.near_capacity_edges,
                   metrics.max_usage_ratio,
-                  metrics.detour_dbu);
+                  metrics.detour_dbu,
+                  metrics.high_layer_dbu);
     return ScenarioResult{scenario.name, metrics, std::move(routes)};
   };
 
@@ -1069,7 +1109,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                              long via_weight,
                              double detour_weight,
                              double consensus_weight,
-                             int logger_code) {
+                             int logger_code,
+                             double high_layer_weight = 0.0,
+                             double layer_span_weight = 0.0,
+                             double crowding_weight = 0.0) {
       source_count = std::max(1, std::min(source_count, static_cast<int>(ranked.size())));
       ScenarioResult hybrid_result;
       hybrid_result.name = hybrid_name;
@@ -1111,6 +1154,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         double best_cost = std::numeric_limits<double>::max();
         long best_wl = std::numeric_limits<long>::max();
         int best_via = std::numeric_limits<int>::max();
+        long best_high_layer = std::numeric_limits<long>::max();
+        int best_layer_span = std::numeric_limits<int>::max();
+        const bool use_structural_tie_break
+            = high_layer_weight > 0.0 || layer_span_weight > 0.0
+              || crowding_weight > 0.0;
 
         for (const auto& [route, stats] : candidates) {
           const long bbox_hpwl = getRouteBBoxHpwl(*route);
@@ -1129,18 +1177,37 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               = static_cast<double>(vote_sum) / static_cast<double>(edge_count);
           const double consensus_penalty
               = std::max(0.0, static_cast<double>(source_count) - avg_vote);
+          const double crowd_target
+              = std::max(1.0, static_cast<double>(source_count) * 0.55);
+          const double crowding_penalty
+              = std::max(0.0, avg_vote - crowd_target);
           const double cost
               = static_cast<double>(stats.wirelength_dbu)
                 + static_cast<double>(via_weight) * static_cast<double>(stats.via_count)
                 + detour_weight * static_cast<double>(detour)
-                + consensus_weight * static_cast<double>(tile_size) * consensus_penalty;
+                + consensus_weight * static_cast<double>(tile_size) * consensus_penalty
+                + high_layer_weight * static_cast<double>(stats.high_layer_dbu)
+                + layer_span_weight * static_cast<double>(tile_size)
+                      * static_cast<double>(stats.layer_span)
+                + crowding_weight * static_cast<double>(tile_size)
+                      * crowding_penalty;
           const long wl = stats.wirelength_dbu;
           const int vias = stats.via_count;
+          const long high_layer = stats.high_layer_dbu;
+          const int span = stats.layer_span;
           if (cost < best_cost || (cost == best_cost && wl < best_wl)
-              || (cost == best_cost && wl == best_wl && vias < best_via)) {
+              || (cost == best_cost && wl == best_wl && vias < best_via)
+              || (use_structural_tie_break && cost == best_cost
+                  && wl == best_wl && vias == best_via
+                  && high_layer < best_high_layer)
+              || (use_structural_tie_break && cost == best_cost
+                  && wl == best_wl && vias == best_via
+                  && high_layer == best_high_layer && span < best_layer_span)) {
             best_cost = cost;
             best_wl = wl;
             best_via = vias;
+            best_high_layer = high_layer;
+            best_layer_span = span;
             best_route = route;
           }
         }
@@ -1157,14 +1224,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         logger_->info(GNR,
                       logger_code,
                       "NEWGR {} from top {} scenarios: wirelength {:.0f} um, "
-                      "vias {}, routed nets {}/{}, detour {}",
+                      "vias {}, routed nets {}/{}, detour {}, high-layer {}",
                       hybrid_name,
                       source_count,
                       hybrid_result.metrics.wirelength_um,
                       hybrid_result.metrics.via_count,
                       hybrid_result.routes.size(),
                       expected_net_count,
-                      hybrid_result.metrics.detour_dbu);
+                      hybrid_result.metrics.detour_dbu,
+                      hybrid_result.metrics.high_layer_dbu);
         scenario_results.push_back(std::move(hybrid_result));
       } else {
         logger_->info(
@@ -1492,18 +1560,42 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     // 2) a balanced hybrid that softly penalizes vias (SPRoute/CUGR flavor).
     const int wl_source_count = std::min<int>(14, ranked.size());
     const int ultra_wl_source_count = std::min<int>(26, ranked.size());
+    const int wl_safe_source_count = std::min<int>(12, ranked.size());
     const int balanced_source_count = std::min<int>(8, ranked.size());
     const int softcap_source_count = std::min<int>(16, ranked.size());
     const int consensus_source_count = std::min<int>(22, ranked.size());
+    const int detour_source_count = std::min<int>(24, ranked.size());
     const long balanced_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 3L);
     const long softcap_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 4L);
     const long consensus_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 6L);
+    const long detour_via_weight
+        = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 8L);
+    const long wl_safe_via_weight
+        = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 10L);
     append_hybrid("hybrid-netmix-wl", wl_source_count, 0, 0.24, 0.50, 6010);
     append_hybrid(
         "hybrid-netmix-ultra-wl", ultra_wl_source_count, 0, 0.40, 0.95, 6013);
+    append_hybrid("hybrid-netmix-wl-safe",
+                  wl_safe_source_count,
+                  wl_safe_via_weight,
+                  0.32,
+                  0.58,
+                  6019,
+                  0.018,
+                  0.30,
+                  0.95);
+    append_hybrid("hybrid-netmix-detour-ladder",
+                  detour_source_count,
+                  detour_via_weight,
+                  0.95,
+                  0.52,
+                  6018,
+                  0.030,
+                  0.45,
+                  1.15);
     append_hybrid("hybrid-netmix-balanced",
                   balanced_source_count,
                   balanced_via_weight,
@@ -1536,6 +1628,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
     if (lhs.metrics.via_count != rhs.metrics.via_count) {
       return lhs.metrics.via_count < rhs.metrics.via_count;
+    }
+    if (lhs.metrics.high_layer_dbu != rhs.metrics.high_layer_dbu) {
+      return lhs.metrics.high_layer_dbu < rhs.metrics.high_layer_dbu;
+    }
+    if (lhs.metrics.layer_span_sum != rhs.metrics.layer_span_sum) {
+      return lhs.metrics.layer_span_sum < rhs.metrics.layer_span_sum;
     }
     if (lhs.metrics.near_capacity_edges != rhs.metrics.near_capacity_edges) {
       return lhs.metrics.near_capacity_edges < rhs.metrics.near_capacity_edges;
@@ -1593,6 +1691,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (wl_gap <= tie_quality_wl_band && lhs.metrics.detour_dbu != rhs.metrics.detour_dbu) {
       return lhs.metrics.detour_dbu < rhs.metrics.detour_dbu;
     }
+    if (wl_gap <= tie_quality_wl_band
+        && lhs.metrics.high_layer_dbu != rhs.metrics.high_layer_dbu) {
+      return lhs.metrics.high_layer_dbu < rhs.metrics.high_layer_dbu;
+    }
     if (wl_gap <= tie_via_wl_band && lhs.metrics.via_count != rhs.metrics.via_count) {
       return lhs.metrics.via_count < rhs.metrics.via_count;
     }
@@ -1633,14 +1735,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   logger_->info(GNR,
                 6007,
                 "NEWGR best scenario '{}': wirelength {:.0f} um, vias {}, "
-                "overflow edges {}, hot edges {}, max ratio {:.2f}, detour {}",
+                "overflow edges {}, hot edges {}, max ratio {:.2f}, detour {}, "
+                "high-layer {}",
                 final_result.name,
                 final_result.metrics.wirelength_um,
                 final_result.metrics.via_count,
                 final_result.metrics.overflow_edges,
                 final_result.metrics.near_capacity_edges,
                 final_result.metrics.max_usage_ratio,
-                final_result.metrics.detour_dbu);
+                final_result.metrics.detour_dbu,
+                final_result.metrics.high_layer_dbu);
 
   return std::move(final_result.routes);
 }
