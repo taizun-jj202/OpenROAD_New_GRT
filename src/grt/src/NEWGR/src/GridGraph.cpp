@@ -317,13 +317,38 @@ CapacityT GridGraph::getSoftCapacity(const GraphEdge& edge) const
   return edge.capacity * ratio;
 }
 
+CostT GridGraph::getCongestionPenalty(const CapacityT reference_capacity,
+                                      const CapacityT demand,
+                                      const double slope) const
+{
+  if (reference_capacity < 1.0) {
+    return 1.0;
+  }
+
+  const double util = demand / std::max(reference_capacity, 1.0);
+  const double threshold = std::clamp(
+      constants_.wl_relaxation_util_threshold, 0.0, 0.99);
+  const double floor
+      = std::clamp(constants_.wl_relaxation_penalty_floor, 0.0, 1.0);
+
+  if (demand <= reference_capacity) {
+    if (util <= threshold) {
+      return floor * logistic(reference_capacity - demand, slope);
+    }
+    const double span = std::max(1e-6, 1.0 - threshold);
+    const double ramp = std::clamp((util - threshold) / span, 0.0, 1.0);
+    return floor + (1.0 - floor) * ramp * ramp;
+  }
+
+  const double overflow = demand - reference_capacity;
+  return 1.0 + constants_.overflow_linear_penalty * overflow;
+}
+
 CostT GridGraph::getCongestionPenalty(const GraphEdge& edge,
                                       const double slope) const
 {
   const CapacityT reference_capacity = getSoftCapacity(edge);
-  return reference_capacity < 1.0 ? 1.0
-                                  : logistic(reference_capacity - edge.demand,
-                                             slope);
+  return getCongestionPenalty(reference_capacity, edge.demand, slope);
 }
 
 CostT GridGraph::getWireCost(const int layer_index,
@@ -703,10 +728,9 @@ void GridGraph::extractWireCostView(GridGraphView<CostT>& view) const
             = length
               * (unit_length_wire_cost_
                  + unitLengthShortCost
-                       * (capacity < 1.0
-                              ? 1.0
-                              : logistic(capacity - demand,
-                                         constants_.maze_logistic_slope)));
+                       * getCongestionPenalty(capacity,
+                                              demand,
+                                              constants_.maze_logistic_slope));
       }
     }
   }
@@ -746,10 +770,9 @@ void GridGraph::updateWireCostView(
         = length
           * (unit_length_wire_cost_
              + unitLengthShortCost[direction]
-                   * (capacity < 1.0
-                          ? 1.0
-                          : logistic(capacity - demand,
-                                     constants_.maze_logistic_slope)));
+                   * getCongestionPenalty(capacity,
+                                          demand,
+                                          constants_.maze_logistic_slope));
   };
   GRTreeNode::preorder(
       routing_tree, [&](const std::shared_ptr<GRTreeNode>& node) {

@@ -29,13 +29,13 @@ class BoxT;
 
 struct Constants
 {
-  double weight_wire_length = 0.8;
+  double weight_wire_length = 0.9;
   double weight_via_number = 2.0;
-  double weight_short_area = 350.0;
+  double weight_short_area = 320.0;
 
   int min_routing_layer = 1;
 
-  double cost_logistic_slope = 0.9;
+  double cost_logistic_slope = 0.75;
 
   // allowed stem length increase to trunk length ratio
   double max_detour_ratio = 0.18;
@@ -43,7 +43,14 @@ struct Constants
 
   double via_multiplier = 1.4;
 
-  double maze_logistic_slope = 0.45;
+  double maze_logistic_slope = 0.38;
+
+  // Hybrid FastRoute/CUGR cost shaping:
+  // keep under-utilized edges close to pure wirelength, ramp near saturation,
+  // then switch to strong linear overflow cost.
+  double wl_relaxation_util_threshold = 0.82;
+  double wl_relaxation_penalty_floor = 0.08;
+  double overflow_linear_penalty = 6.0;
 
   // SPRoute-style soft capacity model (utilization driven)
   bool use_soft_capacity = false;
@@ -62,8 +69,11 @@ struct Constants
   // FastRoute-style post-processing pass: reroute a subset of long,
   // overflow-free nets and keep only wirelength-improving solutions.
   bool enable_wirelength_recovery = true;
-  int recovery_hpwl_threshold = 96;
-  double recovery_refine_ratio = 0.35;
+  bool recovery_use_maze = true;
+  int recovery_hpwl_threshold = 72;
+  double recovery_refine_ratio = 0.70;
+  int recovery_maze_sparse_x = 5;
+  int recovery_maze_sparse_y = 5;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;

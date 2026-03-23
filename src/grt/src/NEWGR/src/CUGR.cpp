@@ -234,21 +234,56 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
 
     grid_graph_->commitTree(original_tree, /*ripup*/ true);
 
+    std::shared_ptr<GRTreeNode> best_tree = nullptr;
+    std::pair<uint64_t, int> best_stats = original_stats;
+
+    auto considerCandidate = [&](const std::shared_ptr<GRTreeNode>& tree) {
+      if (!tree || grid_graph_->checkOverflow(tree) != 0) {
+        return;
+      }
+      const auto stats = measureRoute(tree);
+      if (!best_tree || isImprovement(stats, best_stats)) {
+        best_tree = tree;
+        best_stats = stats;
+      }
+    };
+
+    // Candidate A: Fast pattern reroute.
     PatternRoute patternRoute(
         net, grid_graph_.get(), stt_builder_, constants_, logger_);
     patternRoute.constructSteinerTree();
     patternRoute.constructRoutingDAG();
     patternRoute.run();
+    considerCandidate(net->getRoutingTree());
 
-    const std::shared_ptr<GRTreeNode> recovered_tree = net->getRoutingTree();
-    const bool overflow_free
-        = recovered_tree && grid_graph_->checkOverflow(recovered_tree) == 0;
-    const auto recovered_stats = measureRoute(recovered_tree);
-    const bool accept
-        = overflow_free && isImprovement(recovered_stats, original_stats);
+    // Candidate B: Sparsified maze reroute (FastRoute-style compaction).
+    if (constants_.recovery_use_maze) {
+      GridGraphView<CostT> recoveryWireCostView;
+      grid_graph_->extractWireCostView(recoveryWireCostView);
+
+      MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+      SparseGrid recoveryGrid(constants_.recovery_maze_sparse_x,
+                              constants_.recovery_maze_sparse_y,
+                              0,
+                              0);
+      mazeRoute.constructSparsifiedGraph(recoveryWireCostView, recoveryGrid);
+      mazeRoute.run();
+      if (const std::shared_ptr<SteinerTreeNode> maze_tree
+          = mazeRoute.getSteinerTree()) {
+        PatternRoute mazePatternRoute(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        mazePatternRoute.setSteinerTree(maze_tree);
+        mazePatternRoute.constructRoutingDAG();
+        mazePatternRoute.run();
+        considerCandidate(net->getRoutingTree());
+      }
+    }
+
+    const bool accept = best_tree && isImprovement(best_stats, original_stats);
 
     if (accept) {
-      grid_graph_->commitTree(recovered_tree);
+      net->setRoutingTree(best_tree);
+      grid_graph_->commitTree(best_tree);
       accepted++;
     } else {
       net->setRoutingTree(original_tree);
