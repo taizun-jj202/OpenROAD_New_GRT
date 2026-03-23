@@ -197,29 +197,29 @@ uint64_t minMicroGraftWirelengthGain(int pin_count)
 uint64_t minInterleavedWirelengthGain(int pin_count)
 {
   if (pin_count <= 4) {
-    return 24;
+    return 12;
   }
   if (pin_count <= 12) {
-    return 84;
+    return 48;
   }
   if (pin_count <= 24) {
-    return 210;
+    return 140;
   }
-  return 420;
+  return 280;
 }
 
 int64_t maxInterleavedViaIncrease(int pin_count)
 {
   if (pin_count <= 4) {
-    return 1;
-  }
-  if (pin_count <= 12) {
     return 2;
   }
-  if (pin_count <= 24) {
+  if (pin_count <= 12) {
     return 3;
   }
-  return 4;
+  if (pin_count <= 24) {
+    return 5;
+  }
+  return 7;
 }
 
 bool shouldSwapToFastRoute(const RouteScore& newgr_score,
@@ -810,6 +810,7 @@ NetRouteMap buildInterleavedBackboneHybrid(
     int64_t via_increase{0};
     int64_t low_layer_delta{0};
     int center_x{0};
+    int center_y{0};
     int64_t priority{0};
   };
 
@@ -848,7 +849,10 @@ NetRouteMap buildInterleavedBackboneHybrid(
                                  - static_cast<int64_t>(base_score.vias);
     const int64_t via_drop = static_cast<int64_t>(base_score.vias)
                              - static_cast<int64_t>(donor_score.vias);
-    if (via_increase > maxInterleavedViaIncrease(pin_count)) {
+    const int64_t via_increase_limit
+        = maxInterleavedViaIncrease(pin_count)
+          + ((pin_count <= 20) ? 1 : ((pin_count <= 40) ? 2 : 3));
+    if (via_increase > via_increase_limit) {
       ++stats.skipped_by_via_guard;
       continue;
     }
@@ -859,7 +863,7 @@ NetRouteMap buildInterleavedBackboneHybrid(
         = static_cast<int64_t>(donor_usage.low_layer_wl)
           - static_cast<int64_t>(base_usage.low_layer_wl);
     if (low_layer_delta
-        > std::max<int64_t>(220, wl_gain / 2 + static_cast<int64_t>(pin_count * 16))) {
+        > std::max<int64_t>(320, wl_gain + static_cast<int64_t>(pin_count * 10))) {
       ++stats.skipped_by_layer_guard;
       continue;
     }
@@ -869,10 +873,10 @@ NetRouteMap buildInterleavedBackboneHybrid(
       continue;
     }
 
-    const int64_t via_bonus = std::max<int64_t>(0, via_drop) * 24;
-    const int64_t via_penalty = std::max<int64_t>(0, via_increase) * 480;
-    const int64_t low_layer_penalty = std::max<int64_t>(0, low_layer_delta);
-    const int64_t low_layer_bonus = std::max<int64_t>(0, -low_layer_delta) / 8;
+    const int64_t via_bonus = std::max<int64_t>(0, via_drop) * 18;
+    const int64_t via_penalty = std::max<int64_t>(0, via_increase) * 320;
+    const int64_t low_layer_penalty = std::max<int64_t>(0, low_layer_delta) / 3;
+    const int64_t low_layer_bonus = std::max<int64_t>(0, -low_layer_delta) / 6;
     const int64_t priority
         = wl_gain + via_bonus - via_penalty - low_layer_penalty + low_layer_bonus;
     candidates.push_back({db_net,
@@ -883,6 +887,7 @@ NetRouteMap buildInterleavedBackboneHybrid(
                           via_increase,
                           low_layer_delta,
                           (donor_usage.min_x + donor_usage.max_x) / 2,
+                          (donor_usage.min_y + donor_usage.max_y) / 2,
                           priority});
   }
 
@@ -903,13 +908,15 @@ NetRouteMap buildInterleavedBackboneHybrid(
 
   stats.candidate_pool_size = candidates.size();
   const size_t swap_limit = std::min<size_t>(
-      240, std::max<size_t>(40, base_routes.size() / 80));
+      840, std::max<size_t>(120, base_routes.size() / 24));
   const int64_t total_via_increase_budget = std::max<int64_t>(
-      120, static_cast<int64_t>(base_total_vias / 950));
+      280, static_cast<int64_t>(base_total_vias / 400));
   const int64_t low_layer_growth_budget = std::max<int64_t>(
-      720000, static_cast<int64_t>(base_low_layer_wl / 42));
+      2100000, static_cast<int64_t>(base_low_layer_wl / 16));
+  const uint64_t base_wirelength = computeRouteScore(base_routes).wirelength;
   const uint64_t wl_gain_target = std::max<uint64_t>(
-      1000000, computeRouteScore(base_routes).wirelength / 620);
+      2200000, base_wirelength / 250);
+  const size_t min_swaps_before_stop = std::max<size_t>(42, swap_limit / 4);
 
   int64_t consumed_via_increase = 0;
   int64_t consumed_low_layer_growth = 0;
@@ -917,78 +924,131 @@ NetRouteMap buildInterleavedBackboneHybrid(
 
   int min_center_x = 0;
   int max_center_x = 0;
+  int min_center_y = 0;
+  int max_center_y = 0;
   if (!candidates.empty()) {
     min_center_x = candidates.front().center_x;
     max_center_x = candidates.front().center_x;
+    min_center_y = candidates.front().center_y;
+    max_center_y = candidates.front().center_y;
     for (const Candidate& candidate : candidates) {
       min_center_x = std::min(min_center_x, candidate.center_x);
       max_center_x = std::max(max_center_x, candidate.center_x);
+      min_center_y = std::min(min_center_y, candidate.center_y);
+      max_center_y = std::max(max_center_y, candidate.center_y);
     }
   }
-  const int bucket_count = std::min<int>(
-      12, std::max<int>(4, static_cast<int>(candidates.size() / 70) + 4));
-  std::vector<std::vector<size_t>> buckets(bucket_count);
+  const int x_bucket_count = std::min<int>(
+      18, std::max<int>(6, static_cast<int>(candidates.size() / 90) + 6));
+  const int y_bucket_count = std::min<int>(
+      16, std::max<int>(5, static_cast<int>(candidates.size() / 120) + 5));
+  std::vector<std::vector<size_t>> buckets(x_bucket_count * y_bucket_count);
   for (size_t idx = 0; idx < candidates.size(); ++idx) {
-    int bucket = 0;
+    int bucket_x = 0;
     if (max_center_x > min_center_x) {
       const int64_t numer = static_cast<int64_t>(candidates[idx].center_x - min_center_x)
-                            * bucket_count;
-      bucket = static_cast<int>(numer / (max_center_x - min_center_x + 1));
-      if (bucket >= bucket_count) {
-        bucket = bucket_count - 1;
+                            * x_bucket_count;
+      bucket_x = static_cast<int>(numer / (max_center_x - min_center_x + 1));
+      if (bucket_x >= x_bucket_count) {
+        bucket_x = x_bucket_count - 1;
       }
     }
-    buckets[bucket].push_back(idx);
+    int bucket_y = 0;
+    if (max_center_y > min_center_y) {
+      const int64_t numer = static_cast<int64_t>(candidates[idx].center_y - min_center_y)
+                            * y_bucket_count;
+      bucket_y = static_cast<int>(numer / (max_center_y - min_center_y + 1));
+      if (bucket_y >= y_bucket_count) {
+        bucket_y = y_bucket_count - 1;
+      }
+    }
+    const int bucket_id = bucket_y * x_bucket_count + bucket_x;
+    buckets[bucket_id].push_back(idx);
   }
 
-  std::vector<size_t> cursor(bucket_count, 0);
-  int start_bucket = 0;
+  std::vector<size_t> cursor(buckets.size(), 0);
+  int parity_seed = 0;
   while (stats.replaced_with_donor < swap_limit) {
     bool consumed_any = false;
-    for (int shift = 0; shift < bucket_count; ++shift) {
-      const int bucket = (start_bucket + shift) % bucket_count;
-      if (cursor[bucket] >= buckets[bucket].size()) {
-        continue;
-      }
-      consumed_any = true;
-      const Candidate& candidate = candidates[buckets[bucket][cursor[bucket]++]];
-      const int64_t via_increase = std::max<int64_t>(0, candidate.via_increase);
-      const int64_t low_layer_delta = std::max<int64_t>(0, candidate.low_layer_delta);
-      if (consumed_via_increase + via_increase > total_via_increase_budget
-          || consumed_low_layer_growth + low_layer_delta > low_layer_growth_budget) {
-        ++stats.skipped_by_budget_guard;
-        continue;
-      }
-      if (via_increase > 0
-          && candidate.wl_gain < via_increase * 520 + low_layer_delta / 2 + 260) {
-        ++stats.skipped_by_via_guard;
-        continue;
-      }
-      if (low_layer_delta > 0
-          && candidate.wl_gain < low_layer_delta * 2 + static_cast<int64_t>(220)) {
-        ++stats.skipped_by_layer_guard;
-        continue;
-      }
+    for (int phase = 0; phase < 2; ++phase) {
+      const int parity = (parity_seed + phase) & 1;
+      bool phase_consumed = false;
+      for (int y = 0; y < y_bucket_count; ++y) {
+        for (int x = 0; x < x_bucket_count; ++x) {
+          if (((x + y) & 1) != parity) {
+            continue;
+          }
+          const int bucket_id = y * x_bucket_count + x;
+          auto& bucket = buckets[bucket_id];
+          while (cursor[bucket_id] < bucket.size()) {
+            const Candidate& candidate = candidates[bucket[cursor[bucket_id]++]];
+            const int64_t via_increase = std::max<int64_t>(0, candidate.via_increase);
+            const int64_t low_layer_delta = std::max<int64_t>(0, candidate.low_layer_delta);
+            if (consumed_via_increase + via_increase > total_via_increase_budget
+                || consumed_low_layer_growth + low_layer_delta > low_layer_growth_budget) {
+              ++stats.skipped_by_budget_guard;
+              continue;
+            }
+            if (via_increase > 0
+                && candidate.wl_gain
+                       < via_increase * 340 + low_layer_delta / 3
+                             + static_cast<int64_t>(180)) {
+              ++stats.skipped_by_via_guard;
+              continue;
+            }
+            if (low_layer_delta > 0
+                && candidate.wl_gain
+                       < low_layer_delta + static_cast<int64_t>(140)) {
+              ++stats.skipped_by_layer_guard;
+              continue;
+            }
+            if (candidate.pin_count > 48 && low_layer_delta > 0
+                && candidate.wl_gain
+                       < low_layer_delta * 2 + static_cast<int64_t>(360)) {
+              ++stats.skipped_by_layer_guard;
+              continue;
+            }
 
-      hybrid_routes[candidate.db_net] = *candidate.donor_route;
-      consumed_via_increase += via_increase;
-      consumed_low_layer_growth += low_layer_delta;
-      consumed_wl_gain += static_cast<uint64_t>(
-          std::max<int64_t>(0, candidate.wl_gain));
-      ++stats.replaced_with_donor;
-      if (consumed_wl_gain >= wl_gain_target
-          && stats.replaced_with_donor >= std::max<size_t>(24, swap_limit / 2)) {
+            hybrid_routes[candidate.db_net] = *candidate.donor_route;
+            consumed_via_increase += via_increase;
+            consumed_low_layer_growth += low_layer_delta;
+            consumed_wl_gain += static_cast<uint64_t>(
+                std::max<int64_t>(0, candidate.wl_gain));
+            ++stats.replaced_with_donor;
+            consumed_any = true;
+            phase_consumed = true;
+            break;
+          }
+          if (stats.replaced_with_donor >= swap_limit
+              || (consumed_wl_gain >= wl_gain_target
+                  && stats.replaced_with_donor >= min_swaps_before_stop)) {
+            break;
+          }
+        }
+        if (stats.replaced_with_donor >= swap_limit
+            || (consumed_wl_gain >= wl_gain_target
+                && stats.replaced_with_donor >= min_swaps_before_stop)) {
+          break;
+        }
+      }
+      if (!phase_consumed) {
+        continue;
+      }
+      if (stats.replaced_with_donor >= swap_limit
+          || (consumed_wl_gain >= wl_gain_target
+              && stats.replaced_with_donor >= min_swaps_before_stop)) {
         break;
       }
     }
-    if (consumed_wl_gain >= wl_gain_target
-        && stats.replaced_with_donor >= std::max<size_t>(24, swap_limit / 2)) {
+    if (stats.replaced_with_donor >= swap_limit
+        || (consumed_wl_gain >= wl_gain_target
+            && stats.replaced_with_donor >= min_swaps_before_stop)) {
       break;
     }
     if (!consumed_any) {
       break;
     }
-    start_bucket = (start_bucket + 1) % bucket_count;
+    parity_seed = (parity_seed + 1) & 1;
   }
 
   stats.consumed_wl_gain = consumed_wl_gain;
