@@ -765,10 +765,10 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
         return lhs.severity > rhs.severity;
       });
 
-  const int edge_budget = 220;
-  const int sources_per_edge = 3;
-  const int patches_per_net = 10;
-  const int total_patch_budget = 2200;
+  const int edge_budget = 90;
+  const int sources_per_edge = 2;
+  const int patches_per_net = 6;
+  const int total_patch_budget = 1800;
 
   int patched_edges = 0;
   int added_segments = 0;
@@ -859,9 +859,9 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
 
   // CUGR-inspired long segment patching: add nearby adjacent-layer guide
   // alternatives for long wires to reduce detailed-route detours.
-  const int long_seg_threshold = 3 * tile_size;
-  const int long_seg_patches_per_net = 5;
-  const int long_seg_segment_budget = 1400;
+  const int long_seg_threshold = 2 * tile_size;
+  const int long_seg_patches_per_net = 8;
+  const int long_seg_segment_budget = 2200;
   int long_seg_added_segments = 0;
   std::map<odb::dbNet*, int> long_seg_patch_count;
 
