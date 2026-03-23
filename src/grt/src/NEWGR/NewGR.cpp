@@ -9,6 +9,7 @@
 #include <numeric>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1349,6 +1350,113 @@ int applyLongNetPriorityFusion(
   return replaced_nets;
 }
 
+int applyViaAwareStabilizationFusion(
+    NetRouteMap& base_routes,
+    const std::vector<const NetRouteMap*>& donor_route_sets,
+    int tile_size,
+    int x_min,
+    int y_min,
+    int x_grids,
+    int y_grids,
+    const std::map<std::int64_t, float>& hotspot_map)
+{
+  int replaced_nets = 0;
+  tile_size = std::max(tile_size, 1);
+
+  for (auto& [db_net, base_route] : base_routes) {
+    const NetRouteCost base_cost = computeNetRouteCost(base_route,
+                                                       tile_size,
+                                                       x_min,
+                                                       y_min,
+                                                       x_grids,
+                                                       y_grids,
+                                                       hotspot_map);
+    const GRoute* chosen_route = &base_route;
+    double best_utility = 0.0;
+
+    for (const NetRouteMap* donor_routes : donor_route_sets) {
+      if (donor_routes == nullptr) {
+        continue;
+      }
+      const auto donor_it = donor_routes->find(db_net);
+      if (donor_it == donor_routes->end()) {
+        continue;
+      }
+
+      const NetRouteCost donor_cost = computeNetRouteCost(donor_it->second,
+                                                          tile_size,
+                                                          x_min,
+                                                          y_min,
+                                                          x_grids,
+                                                          y_grids,
+                                                          hotspot_map);
+      const long wl_delta
+          = donor_cost.wirelength_dbu - base_cost.wirelength_dbu;
+      const long wl_loss = std::max(0L, wl_delta);
+
+      const long allowed_wl_loss = std::max<long>(
+          tile_size,
+          std::min<long>(base_cost.wirelength_dbu / 55, 3L * tile_size));
+      if (wl_loss > allowed_wl_loss) {
+        continue;
+      }
+
+      const long via_gain = base_cost.via_count - donor_cost.via_count;
+      const double hotspot_gain
+          = base_cost.hotspot_exposure - donor_cost.hotspot_exposure;
+      const long extra_vias
+          = std::max(0L, donor_cost.via_count - base_cost.via_count);
+
+      // Prefer route simplification for detailed routing while keeping WL
+      // almost unchanged. This pass trims donor swaps that are too "spiky".
+      const double utility
+          = static_cast<double>(via_gain) * (0.90 * static_cast<double>(tile_size))
+            + hotspot_gain * (1.80 * static_cast<double>(tile_size))
+            - static_cast<double>(wl_loss) * 1.90
+            - static_cast<double>(extra_vias)
+                  * (0.65 * static_cast<double>(tile_size));
+
+      const bool improves_geometry = via_gain >= 3 || hotspot_gain >= 0.35;
+      const bool has_wl_benefit = wl_delta < 0;
+      if (!has_wl_benefit && !improves_geometry) {
+        continue;
+      }
+
+      if (utility > best_utility) {
+        best_utility = utility;
+        chosen_route = &donor_it->second;
+      }
+    }
+
+    if (chosen_route != &base_route) {
+      base_route = *chosen_route;
+      replaced_nets++;
+    }
+  }
+
+  return replaced_nets;
+}
+
+void deduplicateRouteSegments(GRoute& route)
+{
+  if (route.size() < 2) {
+    return;
+  }
+
+  std::unordered_set<GSegment, GSegmentHash> seen;
+  seen.reserve(route.size() * 2);
+
+  GRoute deduplicated;
+  deduplicated.reserve(route.size());
+  for (const GSegment& segment : route) {
+    if (seen.insert(segment).second) {
+      deduplicated.push_back(segment);
+    }
+  }
+
+  route = std::move(deduplicated);
+}
+
 void applyCugrStyleGuidePatching(GlobalRouter* grouter,
                                  NetRouteMap& routes,
                                  int min_routing_layer,
@@ -2436,6 +2544,60 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(extreme));
   }
 
+  if (has_best_wirelength) {
+    ScenarioResult stabilized;
+    stabilized.name = "stabilized-dr-fusion";
+    if (ScenarioResult* extreme = find_scenario_result("extreme-wirelength-stitch")) {
+      stabilized.routes = extreme->routes;
+    } else if (ScenarioResult* radical = find_scenario_result("radical-shortpath-fusion")) {
+      stabilized.routes = radical->routes;
+    } else {
+      stabilized.routes = best_wirelength_routes;
+    }
+
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+
+    std::vector<const NetRouteMap*> stabilization_donors;
+    stabilization_donors.reserve(8);
+    for (const char* donor_name : {"radical-shortpath-fusion",
+                                   "cross-router-wirelength-fusion",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting",
+                                   "ultra-compact-bsp",
+                                   "sporder-shortest",
+                                   "bsp-scheduler",
+                                   "baseline"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        stabilization_donors.push_back(&donor->routes);
+      }
+    }
+
+    const int stabilized_swaps = applyViaAwareStabilizationFusion(
+        stabilized.routes,
+        stabilization_donors,
+        tile_size,
+        x_min,
+        y_min,
+        x_grids,
+        y_grids,
+        hotspot_map);
+
+    stabilized.metrics = compute_metrics(stabilized.routes);
+    logger_->info(
+        GNR,
+        6020,
+        "NEWGR scenario {} [stabilized]: wirelength {:.0f} um, vias {}, stabilized nets {}",
+        stabilized.name,
+        stabilized.metrics.wirelength_um,
+        stabilized.metrics.via_count,
+        stabilized_swaps);
+    scenario_results.push_back(std::move(stabilized));
+  }
+
   if (false && has_best_wirelength) {
     ScenarioResult longnet_fusion;
     longnet_fusion.name = "longnet-priority-fusion";
@@ -2589,6 +2751,29 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                 min_routing_layer,
                                 max_routing_layer,
                                 logger_);
+  }
+
+  // Normalize mixed-source guides (FastRoute/CUGR/SPRoute donors) before
+  // handing them to detailed routing.
+  std::vector<Net*> final_nets;
+  final_nets.reserve(final_result.routes.size());
+  for (const auto& [db_net, route] : final_result.routes) {
+    static_cast<void>(route);
+    Net* net = grouter_->getNet(db_net);
+    if (net != nullptr) {
+      final_nets.push_back(net);
+    }
+  }
+  grouter_->addRemainingGuides(
+      final_result.routes, final_nets, min_routing_layer, max_routing_layer);
+  grouter_->connectPadPins(final_result.routes);
+  for (auto& [db_net, route] : final_result.routes) {
+    Net* net = grouter_->getNet(db_net);
+    if (net == nullptr) {
+      continue;
+    }
+    grouter_->mergeSegments(net->getPins(), route);
+    deduplicateRouteSegments(route);
   }
 
   return std::move(final_result.routes);
