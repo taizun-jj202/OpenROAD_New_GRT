@@ -2611,6 +2611,266 @@ void applyMedianSpineRebuild(NetRouteMap& routes,
   }
 }
 
+void applyDualBackboneWarp(GlobalRouter* grouter,
+                           NetRouteMap& routes,
+                           const RudyGrid& normalized_rudy,
+                           int min_unique_nodes,
+                           int coverage_percent,
+                           int min_layer,
+                           int max_layer)
+{
+  if (grouter == nullptr || grouter->grid() == nullptr || routes.empty()) {
+    return;
+  }
+
+  Grid* grid = grouter->grid();
+  const int tile = std::max(grid->getTileSize(), 1);
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+  const int x_max = grid->getXMax();
+  const int y_max = grid->getYMax();
+  const int x_grids = std::max(grid->getXGrids(), 1);
+  const int y_grids = std::max(grid->getYGrids(), 1);
+  const int x_tiles = normalized_rudy.empty()
+                          ? x_grids
+                          : static_cast<int>(normalized_rudy.size());
+  const int y_tiles = normalized_rudy.empty()
+                          ? y_grids
+                          : static_cast<int>(normalized_rudy.front().size());
+
+  min_unique_nodes = std::max(min_unique_nodes, 3);
+  coverage_percent = std::clamp(coverage_percent, 1, 100);
+  min_layer = std::max(min_layer, 0);
+  max_layer = std::max(max_layer, min_layer);
+
+  auto to_grid_x = [&](int x) {
+    if (x_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((x - x_min) / tile, 0, x_tiles - 1);
+  };
+  auto to_grid_y = [&](int y) {
+    if (y_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((y - y_min) / tile, 0, y_tiles - 1);
+  };
+
+  std::vector<float> col_cost(std::max(x_tiles, 1), 0.0f);
+  std::vector<float> row_cost(std::max(y_tiles, 1), 0.0f);
+  if (!normalized_rudy.empty() && !normalized_rudy.front().empty()) {
+    for (int x = 0; x < x_tiles; ++x) {
+      for (int y = 0; y < y_tiles; ++y) {
+        const float rudy = normalized_rudy[x][y];
+        col_cost[x] += rudy;
+        row_cost[y] += rudy;
+      }
+    }
+    for (float& val : col_cost) {
+      val /= static_cast<float>(std::max(y_tiles, 1));
+    }
+    for (float& val : row_cost) {
+      val /= static_cast<float>(std::max(x_tiles, 1));
+    }
+  }
+
+  auto pick_anchor = [](const std::vector<float>& cost,
+                        int target,
+                        int window) -> int {
+    if (cost.empty()) {
+      return 0;
+    }
+    const int size = static_cast<int>(cost.size());
+    const int clamped_target = std::clamp(target, 0, size - 1);
+    const int search = std::max(window, 1);
+    const int lo = std::max(0, clamped_target - search);
+    const int hi = std::min(size - 1, clamped_target + search);
+
+    int best_idx = clamped_target;
+    float best_score = std::numeric_limits<float>::max();
+    for (int i = lo; i <= hi; ++i) {
+      const float proximity_penalty
+          = 0.10f
+            * static_cast<float>(std::abs(i - clamped_target))
+            / static_cast<float>(search + 1);
+      const float score = cost[i] + proximity_penalty;
+      if (score < best_score) {
+        best_score = score;
+        best_idx = i;
+      }
+    }
+    return best_idx;
+  };
+
+  const int west_anchor_tile
+      = pick_anchor(col_cost, x_tiles / 4, std::max(2, x_tiles / 5));
+  const int east_anchor_tile = pick_anchor(
+      col_cost, std::max((3 * x_tiles) / 4, 0), std::max(2, x_tiles / 5));
+  const int south_anchor_tile
+      = pick_anchor(row_cost, y_tiles / 4, std::max(2, y_tiles / 5));
+  const int north_anchor_tile = pick_anchor(
+      row_cost, std::max((3 * y_tiles) / 4, 0), std::max(2, y_tiles / 5));
+
+  const int west_anchor_x
+      = std::clamp(x_min + west_anchor_tile * tile, x_min, x_max);
+  const int east_anchor_x
+      = std::clamp(x_min + east_anchor_tile * tile, x_min, x_max);
+  const int south_anchor_y
+      = std::clamp(y_min + south_anchor_tile * tile, y_min, y_max);
+  const int north_anchor_y
+      = std::clamp(y_min + north_anchor_tile * tile, y_min, y_max);
+
+  for (auto& [db_net, route] : routes) {
+    if (route.empty()) {
+      continue;
+    }
+
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    if (static_cast<int>(key % 100ULL) >= coverage_percent) {
+      continue;
+    }
+
+    const std::vector<RouteNode> nodes = collectUniqueRouteNodes(route);
+    if (static_cast<int>(nodes.size()) < min_unique_nodes) {
+      continue;
+    }
+
+    int min_x = nodes.front().x;
+    int max_x = nodes.front().x;
+    int min_y = nodes.front().y;
+    int max_y = nodes.front().y;
+    long centroid_x_acc = 0;
+    long centroid_y_acc = 0;
+    for (const RouteNode& node : nodes) {
+      min_x = std::min(min_x, node.x);
+      max_x = std::max(max_x, node.x);
+      min_y = std::min(min_y, node.y);
+      max_y = std::max(max_y, node.y);
+      centroid_x_acc += node.x;
+      centroid_y_acc += node.y;
+    }
+    const int node_count = std::max(static_cast<int>(nodes.size()), 1);
+    const int centroid_x = static_cast<int>(centroid_x_acc / node_count);
+    const int centroid_y = static_cast<int>(centroid_y_acc / node_count);
+
+    const int backbone_x = (std::abs(centroid_x - west_anchor_x)
+                            <= std::abs(centroid_x - east_anchor_x))
+                               ? west_anchor_x
+                               : east_anchor_x;
+    const int backbone_y = (std::abs(centroid_y - south_anchor_y)
+                            <= std::abs(centroid_y - north_anchor_y))
+                               ? south_anchor_y
+                               : north_anchor_y;
+    const int trunk_layer = chooseDominantLayer(nodes, min_layer, max_layer);
+
+    std::vector<GSegment> rebuilt;
+    rebuilt.reserve(nodes.size() * 5 + 8);
+    for (size_t idx = 0; idx < nodes.size(); ++idx) {
+      int cur_x = std::clamp(nodes[idx].x, x_min, x_max);
+      int cur_y = std::clamp(nodes[idx].y, y_min, y_max);
+      int cur_layer = nodes[idx].layer;
+
+      if (cur_layer != trunk_layer) {
+        const int step = (trunk_layer > cur_layer) ? 1 : -1;
+        while (cur_layer != trunk_layer) {
+          const int next_layer = cur_layer + step;
+          appendSegment(
+              rebuilt, cur_x, cur_y, cur_layer, cur_x, cur_y, next_layer);
+          cur_layer = next_layer;
+        }
+      }
+
+      const float h_rudy = estimatePathRudy(normalized_rudy,
+                                            to_grid_x(cur_x),
+                                            to_grid_y(cur_y),
+                                            to_grid_x(backbone_x),
+                                            to_grid_y(backbone_y),
+                                            true);
+      const float v_rudy = estimatePathRudy(normalized_rudy,
+                                            to_grid_x(cur_x),
+                                            to_grid_y(cur_y),
+                                            to_grid_x(backbone_x),
+                                            to_grid_y(backbone_y),
+                                            false);
+      bool horizontal_first = h_rudy <= v_rudy;
+      if (std::fabs(h_rudy - v_rudy) < 0.02f) {
+        horizontal_first
+            = ((key + static_cast<std::uint64_t>(idx) * 13ULL) & 1ULL) == 0ULL;
+      }
+      if (horizontal_first) {
+        appendSegment(rebuilt,
+                      cur_x,
+                      cur_y,
+                      trunk_layer,
+                      backbone_x,
+                      cur_y,
+                      trunk_layer);
+        appendSegment(rebuilt,
+                      backbone_x,
+                      cur_y,
+                      trunk_layer,
+                      backbone_x,
+                      backbone_y,
+                      trunk_layer);
+      } else {
+        appendSegment(rebuilt,
+                      cur_x,
+                      cur_y,
+                      trunk_layer,
+                      cur_x,
+                      backbone_y,
+                      trunk_layer);
+        appendSegment(rebuilt,
+                      cur_x,
+                      backbone_y,
+                      trunk_layer,
+                      backbone_x,
+                      backbone_y,
+                      trunk_layer);
+      }
+    }
+
+    appendSegment(rebuilt,
+                  std::clamp(min_x, x_min, x_max),
+                  backbone_y,
+                  trunk_layer,
+                  std::clamp(max_x, x_min, x_max),
+                  backbone_y,
+                  trunk_layer);
+    appendSegment(rebuilt,
+                  backbone_x,
+                  std::clamp(min_y, y_min, y_max),
+                  trunk_layer,
+                  backbone_x,
+                  std::clamp(max_y, y_min, y_max),
+                  trunk_layer);
+    appendSegment(rebuilt,
+                  west_anchor_x,
+                  backbone_y,
+                  trunk_layer,
+                  east_anchor_x,
+                  backbone_y,
+                  trunk_layer);
+    appendSegment(rebuilt,
+                  backbone_x,
+                  south_anchor_y,
+                  trunk_layer,
+                  backbone_x,
+                  north_anchor_y,
+                  trunk_layer);
+
+    std::vector<GSegment> compressed;
+    compressed.reserve(rebuilt.size());
+    for (const GSegment& segment : rebuilt) {
+      appendCompressedSegment(compressed, segment);
+    }
+    if (!compressed.empty()) {
+      route.swap(compressed);
+    }
+  }
+}
+
 void applyWavefrontDetours(GlobalRouter* grouter,
                            NetRouteMap& routes,
                            const RudyGrid& normalized_rudy,
@@ -3394,6 +3654,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   applyViaExcursionCollapse(monorail.routes, std::max(3 * tile_size, 1));
   monorail.metrics = compute_metrics(monorail.routes);
 
+  // Mesh-warp scenario: force eligible nets through low-RUDY dual backbones.
+  ScenarioResult meshwarp = compact;
+  meshwarp.name = "dual_backbone_warp";
+  applyDualBackboneWarp(grouter_,
+                        meshwarp.routes,
+                        baseline_rudy,
+                        3,
+                        100,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyAggressiveDoglegShortcuts(meshwarp.routes,
+                                 std::max(20 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(meshwarp.routes, std::max(9 * tile_size, 1));
+  applyViaExcursionCollapse(meshwarp.routes, std::max(5 * tile_size, 1));
+  meshwarp.metrics = compute_metrics(meshwarp.routes);
+
   struct CandidateEntry
   {
     const char* name;
@@ -3408,7 +3685,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       {"radical_hyper", &radical_hyper},
       {"axial_force", &axial_force},
       {"shockwave", &shockwave},
-      {"monorail", &monorail}};
+      {"monorail", &monorail},
+      {"meshwarp", &meshwarp}};
   if (sculpted_available) {
     candidates.push_back({"sculpted", &sculpted});
   }
@@ -3505,6 +3783,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   long axial_forced_nets = 0;
   long shock_forced_nets = 0;
   long monorail_forced_nets = 0;
+  long meshwarp_forced_nets = 0;
 
   for (const auto& [db_net, base_route] : compact.routes) {
     const GRoute* best_route = &base_route;
@@ -3715,6 +3994,61 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     selected.metrics = compute_metrics(selected.routes);
   }
 
+  // Mesh-warp injection: force a dual-backbone topology shift on a subset
+  // of medium/large nets to break repeated compact-route fixed points.
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto mesh_it = meshwarp.routes.find(db_net);
+    if (mesh_it == meshwarp.routes.end()) {
+      continue;
+    }
+    const GRoute& mesh_route = mesh_it->second;
+    if (!has_planar_guide(mesh_route)) {
+      continue;
+    }
+
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+    if (node_count < 6) {
+      continue;
+    }
+    if (!route_admissible_loose(mesh_route, current_route)) {
+      continue;
+    }
+
+    const auto [base_wl, base_vias] = route_stats(current_route);
+    const auto [mesh_wl, mesh_vias] = route_stats(mesh_route);
+    const double base_score = route_objective(current_route, selected.overflow);
+    const double mesh_score = route_objective(mesh_route, meshwarp.overflow);
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+
+    bool use_mesh = false;
+    if (mesh_wl < static_cast<long>(base_wl * 0.99)) {
+      use_mesh = mesh_vias <= static_cast<long>(base_vias * 2.80 + 10);
+    }
+    if (!use_mesh && node_count >= 12
+        && mesh_wl <= static_cast<long>(base_wl * 1.30)
+        && mesh_vias <= static_cast<long>(base_vias * 4.40 + 16)) {
+      use_mesh = (key % 2ULL) == 0ULL;
+    }
+    if (!use_mesh && mesh_score <= base_score * 1.20) {
+      use_mesh = (key % 4ULL) == 1ULL;
+    }
+    if (!use_mesh && node_count >= 8
+        && mesh_wl <= static_cast<long>(base_wl * 1.60)
+        && mesh_vias <= static_cast<long>(base_vias * 5.20 + 20)) {
+      use_mesh = (key % 7ULL) == 3ULL;
+    }
+    if (use_mesh) {
+      selected.routes[db_net] = mesh_route;
+      meshwarp_forced_nets++;
+    }
+  }
+  if (meshwarp_forced_nets > 0) {
+    selected.name += "+meshwarp";
+    selected.metrics = compute_metrics(selected.routes);
+  }
+
   ScenarioResult stabilized = selected;
   stabilized.name = "stabilized_radical_hyper";
   applyQuadrantPortalHypergraphRebuild(grouter_,
@@ -3737,6 +4071,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
              < objective(selected.metrics, selected.overflow)) {
     selected = stabilized;
   }
+
+  // Final radical move for this iteration: force a global wave detour pass on
+  // the selected routes so wirelength escapes compact-route fixed points.
+  applyWavefrontDetours(grouter_,
+                        selected.routes,
+                        baseline_rudy,
+                        std::max(2 * tile_size, 1),
+                        std::max(6 * tile_size, 1),
+                        100);
+  applyViaExcursionCollapse(selected.routes, std::max(2 * tile_size, 1));
+  selected.name += "+final_waveforce";
+  selected.metrics = compute_metrics(selected.routes);
 
   // Final safeguard to prevent catastrophic regressions.
   const bool catastrophic
@@ -3770,7 +4116,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 6033,
                 "NEWGR tournament picks: compact {} shortcut {} anisotropic {} "
                 "wirehunter {} radical_hyper {} axial_force {} shockwave {} "
-                "monorail {} sculpted {}.",
+                "monorail {} meshwarp {} sculpted {}.",
                 tournament_picks.size() > 0 ? tournament_picks[0] : 0,
                 tournament_picks.size() > 1 ? tournament_picks[1] : 0,
                 tournament_picks.size() > 2 ? tournament_picks[2] : 0,
@@ -3779,18 +4125,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 tournament_picks.size() > 5 ? tournament_picks[5] : 0,
                 tournament_picks.size() > 6 ? tournament_picks[6] : 0,
                 tournament_picks.size() > 7 ? tournament_picks[7] : 0,
-                tournament_picks.size() > 8 ? tournament_picks[8] : 0);
+                tournament_picks.size() > 8 ? tournament_picks[8] : 0,
+                tournament_picks.size() > 9 ? tournament_picks[9] : 0);
   logger_->warn(GNR,
                 6034,
                 "NEWGR blend counters: sculpted {} shortcuts {} anisotropic {} "
-                "wirehunter {} axial_force {} shockwave {} monorail {}.",
+                "wirehunter {} axial_force {} shockwave {} monorail {} "
+                "meshwarp {}.",
                 nets_taken_from_sculpted,
                 nets_taken_from_shortcuts,
                 nets_taken_from_anisotropic,
                 nets_taken_from_wirelength_hunter,
                 axial_forced_nets,
                 shock_forced_nets,
-                monorail_forced_nets);
+                monorail_forced_nets,
+                meshwarp_forced_nets);
 
   restore_snapshot(snapshot);
   return selected.routes;
