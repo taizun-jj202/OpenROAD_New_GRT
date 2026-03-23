@@ -1261,13 +1261,13 @@ NetRouteMap buildWirelengthSweepHybrid(
           - static_cast<int64_t>(base_usage.low_layer_wl);
     const int64_t via_increase_limit
         = maxInterleavedViaIncrease(pin_count)
-          + ((pin_count <= 16) ? 2 : ((pin_count <= 40) ? 3 : 4));
+          + ((pin_count <= 16) ? 3 : ((pin_count <= 40) ? 5 : 6));
     if (via_increase > via_increase_limit) {
       ++stats.skipped_by_via_guard;
       continue;
     }
     if (low_layer_delta
-        > std::max<int64_t>(240, wl_gain + static_cast<int64_t>(pin_count * 8))) {
+        > std::max<int64_t>(360, wl_gain + static_cast<int64_t>(pin_count * 11))) {
       ++stats.skipped_by_layer_guard;
       continue;
     }
@@ -1277,18 +1277,19 @@ NetRouteMap buildWirelengthSweepHybrid(
     }
     if (via_increase > 0
         && wl_gain
-               < via_increase * 120 + low_layer_delta / 6
-                     + static_cast<int64_t>(60)) {
+               < via_increase * 90 + low_layer_delta / 9
+                     + static_cast<int64_t>(40)) {
       ++stats.skipped_by_via_guard;
       continue;
     }
 
-    const int64_t via_bonus = std::max<int64_t>(0, via_drop) * 14;
-    const int64_t via_penalty = std::max<int64_t>(0, via_increase) * 220;
-    const int64_t low_layer_penalty = std::max<int64_t>(0, low_layer_delta) / 4;
-    const int64_t low_layer_bonus = std::max<int64_t>(0, -low_layer_delta) / 8;
+    const int64_t via_bonus = std::max<int64_t>(0, via_drop) * 12;
+    const int64_t via_penalty = std::max<int64_t>(0, via_increase) * 160;
+    const int64_t low_layer_penalty = std::max<int64_t>(0, low_layer_delta) / 6;
+    const int64_t low_layer_bonus = std::max<int64_t>(0, -low_layer_delta) / 10;
     const int64_t priority
-        = wl_gain + via_bonus - via_penalty - low_layer_penalty + low_layer_bonus;
+        = wl_gain * 2 + via_bonus - via_penalty - low_layer_penalty
+          + low_layer_bonus;
     candidates.push_back({db_net,
                           donor,
                           pin_count,
@@ -1317,15 +1318,15 @@ NetRouteMap buildWirelengthSweepHybrid(
 
   stats.candidate_pool_size = candidates.size();
   const size_t swap_limit = std::min<size_t>(
-      980, std::max<size_t>(140, base_routes.size() / 18));
+      1320, std::max<size_t>(220, base_routes.size() / 14));
   const int64_t via_increase_budget = std::max<int64_t>(
-      380, static_cast<int64_t>(base_total_vias / 260));
+      620, static_cast<int64_t>(base_total_vias / 170));
   const int64_t low_layer_growth_budget = std::max<int64_t>(
-      1500000, static_cast<int64_t>(base_low_layer_wl / 22));
+      2400000, static_cast<int64_t>(base_low_layer_wl / 16));
   const uint64_t base_wirelength = computeRouteScore(base_routes).wirelength;
   const uint64_t wl_gain_target = std::max<uint64_t>(
-      1700000, base_wirelength / 360);
-  const size_t min_swaps_before_stop = std::max<size_t>(56, swap_limit / 5);
+      3400000, base_wirelength / 180);
+  const size_t min_swaps_before_stop = std::max<size_t>(80, swap_limit / 4);
 
   int min_center_x = 0;
   int max_center_x = 0;
@@ -1369,6 +1370,13 @@ NetRouteMap buildWirelengthSweepHybrid(
       const Candidate& candidate = candidates[buckets[bucket][cursor[bucket]++]];
       const int64_t via_increase = std::max<int64_t>(0, candidate.via_increase);
       const int64_t low_layer_delta = std::max<int64_t>(0, candidate.low_layer_delta);
+      if (via_increase > 0
+          && candidate.wl_gain
+                 < via_increase * 70 + low_layer_delta / 8
+                       + static_cast<int64_t>(40)) {
+        ++stats.skipped_by_via_guard;
+        continue;
+      }
       if (consumed_via_increase + via_increase > via_increase_budget
           || consumed_low_layer_growth + low_layer_delta > low_layer_growth_budget) {
         ++stats.skipped_by_budget_guard;
