@@ -64,6 +64,8 @@ struct RouteLayerUsage
   uint64_t low_layer_wl{0};
   int min_x{std::numeric_limits<int>::max()};
   int max_x{std::numeric_limits<int>::min()};
+  int min_y{std::numeric_limits<int>::max()};
+  int max_y{std::numeric_limits<int>::min()};
   bool has_segment{false};
 };
 
@@ -74,6 +76,8 @@ RouteLayerUsage analyzeRouteLayerUsage(const GRoute& route)
     usage.has_segment = true;
     usage.min_x = std::min(usage.min_x, std::min(segment.init_x, segment.final_x));
     usage.max_x = std::max(usage.max_x, std::max(segment.init_x, segment.final_x));
+    usage.min_y = std::min(usage.min_y, std::min(segment.init_y, segment.final_y));
+    usage.max_y = std::max(usage.max_y, std::max(segment.init_y, segment.final_y));
     if (segment.isVia()) {
       continue;
     }
@@ -85,6 +89,8 @@ RouteLayerUsage analyzeRouteLayerUsage(const GRoute& route)
   if (!usage.has_segment) {
     usage.min_x = 0;
     usage.max_x = 0;
+    usage.min_y = 0;
+    usage.max_y = 0;
   }
   return usage;
 }
@@ -172,6 +178,20 @@ uint64_t minHighFanoutNewgrWirelengthGain(int pin_count)
     return 5200;
   }
   return 8600;
+}
+
+uint64_t minMicroGraftWirelengthGain(int pin_count)
+{
+  if (pin_count <= 4) {
+    return 20;
+  }
+  if (pin_count <= 12) {
+    return 36;
+  }
+  if (pin_count <= 24) {
+    return 72;
+  }
+  return 140;
 }
 
 bool shouldSwapToFastRoute(const RouteScore& newgr_score,
@@ -338,6 +358,8 @@ struct FastRouteBackboneStats
   uint64_t consumed_wl_gain{0};
   uint64_t polish_swaps{0};
   uint64_t polish_wl_gain{0};
+  uint64_t micro_swaps{0};
+  uint64_t micro_wl_gain{0};
 };
 
 NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
@@ -359,6 +381,7 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
     int64_t via_increase{0};
     int64_t low_layer_delta{0};
     int center_x{0};
+    int center_y{0};
     int64_t priority{0};
   };
 
@@ -400,6 +423,7 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
         = static_cast<int64_t>(newgr_usage.low_layer_wl)
           - static_cast<int64_t>(fastroute_usage.low_layer_wl);
     const int center_x = (newgr_usage.min_x + newgr_usage.max_x) / 2;
+    const int center_y = (newgr_usage.min_y + newgr_usage.max_y) / 2;
     const int64_t via_bonus = std::max<int64_t>(0, via_drop) * 20;
     const int64_t via_penalty = std::max<int64_t>(0, via_increase) * 280;
     const int64_t hotspot_penalty = std::max<int64_t>(0, low_layer_delta) / 4;
@@ -416,6 +440,7 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
                           via_increase,
                           low_layer_delta,
                           center_x,
+                          center_y,
                           priority});
   }
 
@@ -446,12 +471,12 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
   const int64_t total_via_drop_budget
       = std::max<int64_t>(7600, static_cast<int64_t>(total_fastroute_vias / 14));
   const int64_t total_via_increase_budget
-      = std::max<int64_t>(780, static_cast<int64_t>(total_fastroute_vias / 130));
+      = std::max<int64_t>(560, static_cast<int64_t>(total_fastroute_vias / 180));
   const uint64_t wl_gain_target = std::max<uint64_t>(
-      9000000, static_cast<uint64_t>(total_fastroute_wirelength / 55));
+      11200000, static_cast<uint64_t>(total_fastroute_wirelength / 48));
   const uint64_t polish_wl_gain_target = std::max<uint64_t>(
       2600000, static_cast<uint64_t>(total_fastroute_wirelength / 180));
-  const size_t min_swaps_before_stop = std::max<size_t>(96, (swap_limit * 2) / 3);
+  const size_t min_swaps_before_stop = std::max<size_t>(120, (swap_limit * 3) / 4);
   int64_t consumed_via_drop = 0;
   int64_t consumed_via_increase = 0;
   uint64_t consumed_wl_gain = 0;
@@ -459,12 +484,18 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
 
   int min_center_x = 0;
   int max_center_x = 0;
+  int min_center_y = 0;
+  int max_center_y = 0;
   if (!candidates.empty()) {
     min_center_x = candidates.front().center_x;
     max_center_x = candidates.front().center_x;
+    min_center_y = candidates.front().center_y;
+    max_center_y = candidates.front().center_y;
     for (const Candidate& candidate : candidates) {
       min_center_x = std::min(min_center_x, candidate.center_x);
       max_center_x = std::max(max_center_x, candidate.center_x);
+      min_center_y = std::min(min_center_y, candidate.center_y);
+      max_center_y = std::max(max_center_y, candidate.center_y);
     }
   }
   const int bucket_count = std::min<int>(
@@ -511,8 +542,8 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
       // low-layer demand does not increase significantly.
       if (via_increase > 0
           && candidate.wl_gain
-                 < via_increase * 300 + low_layer_delta / 3
-                       + static_cast<int64_t>(120)) {
+                 < via_increase * 420 + low_layer_delta / 2
+                       + static_cast<int64_t>(220)) {
         ++stats.skipped_by_via_guard;
         continue;
       }
@@ -577,6 +608,133 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
     }
   }
 
+  // Deterministic micro-graft pass:
+  // consume smaller WL wins while keeping via non-increasing and bounding
+  // low-layer growth. A 2D checkerboard schedule spreads updates spatially.
+  const size_t micro_swap_budget = std::min<size_t>(
+      520, std::max<size_t>(56, candidates.size() / 3));
+  const uint64_t micro_wl_gain_target = std::max<uint64_t>(
+      1300000, static_cast<uint64_t>(total_fastroute_wirelength / 420));
+  const int micro_x_bucket_count = std::min<int>(
+      12, std::max<int>(4, static_cast<int>(bucket_count / 2) + 1));
+  const int micro_y_bucket_count = std::min<int>(
+      12, std::max<int>(4, static_cast<int>(candidates.size() / 140) + 4));
+  std::vector<std::vector<size_t>> micro_buckets(
+      micro_x_bucket_count * micro_y_bucket_count);
+  for (size_t idx = 0; idx < candidates.size(); ++idx) {
+    if (selected_candidate[idx]) {
+      continue;
+    }
+    int bucket_x = 0;
+    if (max_center_x > min_center_x) {
+      const int64_t numer
+          = static_cast<int64_t>(candidates[idx].center_x - min_center_x)
+            * micro_x_bucket_count;
+      bucket_x = static_cast<int>(numer / (max_center_x - min_center_x + 1));
+      if (bucket_x >= micro_x_bucket_count) {
+        bucket_x = micro_x_bucket_count - 1;
+      }
+    }
+    int bucket_y = 0;
+    if (max_center_y > min_center_y) {
+      const int64_t numer
+          = static_cast<int64_t>(candidates[idx].center_y - min_center_y)
+            * micro_y_bucket_count;
+      bucket_y = static_cast<int>(numer / (max_center_y - min_center_y + 1));
+      if (bucket_y >= micro_y_bucket_count) {
+        bucket_y = micro_y_bucket_count - 1;
+      }
+    }
+    const int bucket_id = bucket_y * micro_x_bucket_count + bucket_x;
+    micro_buckets[bucket_id].push_back(idx);
+  }
+
+  std::vector<size_t> micro_cursor(micro_buckets.size(), 0);
+  uint64_t micro_wl_gain = 0;
+  int parity_seed = 0;
+  while (stats.micro_swaps < micro_swap_budget
+         && stats.replaced_with_newgr < swap_limit + polish_swap_budget + micro_swap_budget) {
+    bool consumed_any = false;
+    for (int phase = 0; phase < 2; ++phase) {
+      const int parity = (parity_seed + phase) & 1;
+      bool phase_consumed = false;
+      for (int y = 0; y < micro_y_bucket_count; ++y) {
+        for (int x = 0; x < micro_x_bucket_count; ++x) {
+          if (((x + y) & 1) != parity) {
+            continue;
+          }
+          const int bucket_id = y * micro_x_bucket_count + x;
+          auto& bucket = micro_buckets[bucket_id];
+          while (micro_cursor[bucket_id] < bucket.size()
+                 && selected_candidate[bucket[micro_cursor[bucket_id]]]) {
+            ++micro_cursor[bucket_id];
+          }
+          if (micro_cursor[bucket_id] >= bucket.size()) {
+            continue;
+          }
+          const size_t candidate_idx = bucket[micro_cursor[bucket_id]++];
+          const Candidate& candidate = candidates[candidate_idx];
+          const int64_t via_increase = std::max<int64_t>(0, candidate.via_increase);
+          if (via_increase > 0) {
+            continue;
+          }
+          const int64_t via_drop = std::max<int64_t>(0, candidate.via_drop);
+          const int64_t low_layer_delta = std::max<int64_t>(0, candidate.low_layer_delta);
+          if (low_layer_delta > 160) {
+            continue;
+          }
+          if (candidate.wl_gain
+              < static_cast<int64_t>(minMicroGraftWirelengthGain(candidate.pin_count))) {
+            continue;
+          }
+          if (low_layer_delta > 0
+              && candidate.wl_gain
+                     < low_layer_delta * 2 + static_cast<int64_t>(100)) {
+            continue;
+          }
+          if (consumed_via_drop + via_drop > total_via_drop_budget) {
+            continue;
+          }
+
+          hybrid_routes[candidate.db_net] = *candidate.newgr_route;
+          selected_candidate[candidate_idx] = true;
+          consumed_via_drop += via_drop;
+          const uint64_t wl_gain
+              = static_cast<uint64_t>(std::max<int64_t>(0, candidate.wl_gain));
+          consumed_wl_gain += wl_gain;
+          micro_wl_gain += wl_gain;
+          ++stats.replaced_with_newgr;
+          ++stats.micro_swaps;
+          consumed_any = true;
+          phase_consumed = true;
+          if (stats.micro_swaps >= micro_swap_budget
+              || (micro_wl_gain >= micro_wl_gain_target && stats.micro_swaps >= 28)) {
+            break;
+          }
+        }
+        if (stats.micro_swaps >= micro_swap_budget
+            || (micro_wl_gain >= micro_wl_gain_target && stats.micro_swaps >= 28)) {
+          break;
+        }
+      }
+      if (!phase_consumed) {
+        continue;
+      }
+      if (stats.micro_swaps >= micro_swap_budget
+          || (micro_wl_gain >= micro_wl_gain_target && stats.micro_swaps >= 28)) {
+        break;
+      }
+    }
+    if (stats.micro_swaps >= micro_swap_budget
+        || (micro_wl_gain >= micro_wl_gain_target && stats.micro_swaps >= 28)) {
+      break;
+    }
+    if (!consumed_any) {
+      break;
+    }
+    parity_seed = (parity_seed + 1) & 1;
+  }
+
   if (stats.replaced_with_newgr >= swap_limit
       && stats.candidate_pool_size > stats.replaced_with_newgr
                                        + stats.skipped_by_via_guard
@@ -587,6 +745,7 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
   }
   stats.consumed_wl_gain = consumed_wl_gain;
   stats.polish_wl_gain = polish_wl_gain;
+  stats.micro_wl_gain = micro_wl_gain;
 
   return hybrid_routes;
 }
@@ -684,12 +843,15 @@ bool shouldPreferNewgrBackboneHybrid(int incumbent_overflow,
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
   const int64_t via_increase_budget
-      = std::max<int64_t>(520, static_cast<int64_t>(incumbent_score.vias / 140));
+      = std::max<int64_t>(420, static_cast<int64_t>(incumbent_score.vias / 170));
   const int64_t low_layer_budget = std::max<int64_t>(
-      3000000, static_cast<int64_t>(incumbent_low_layer_wl / 10));
+      1800000, static_cast<int64_t>(incumbent_low_layer_wl / 24));
   const uint64_t min_wl_gain = std::max<uint64_t>(
-      420000, incumbent_score.wirelength / 1200);
+      520000, incumbent_score.wirelength / 900);
   if (wl_gain < min_wl_gain) {
+    return false;
+  }
+  if (low_layer_delta > low_layer_budget) {
     return false;
   }
   if (via_increase > via_increase_budget
@@ -697,9 +859,9 @@ bool shouldPreferNewgrBackboneHybrid(int incumbent_overflow,
              < static_cast<uint64_t>(via_increase * 1200 + static_cast<int64_t>(300000))) {
     return false;
   }
-  if (low_layer_delta > low_layer_budget
+  if (low_layer_delta > 0
       && wl_gain
-             < static_cast<uint64_t>(low_layer_delta * 2 + static_cast<int64_t>(360000))) {
+             < static_cast<uint64_t>(low_layer_delta / 2 + static_cast<int64_t>(520000))) {
     return false;
   }
   return true;
@@ -772,7 +934,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   "NEWGR_BB_HYBRID(wl={}, vias={}, low_wl={}, nets={}, fr_swap={}, add={}), "
                   "FR_BB_HYBRID(wl={}, vias={}, low_wl={}, nets={}, ng_swap={}, add={}, "
                   "cand={}, via_guard_skip={}, layer_guard_skip={}, "
-                  "swap_limit_skip={}, wl_gain={}, polish_swap={}, polish_wl_gain={}), "
+                  "swap_limit_skip={}, wl_gain={}, polish_swap={}, polish_wl_gain={}, "
+                  "micro_swap={}, micro_wl_gain={}), "
                   "FastRoute(ofl={}, wl={}, vias={}, low_wl={}, nets={})",
                   last_total_overflow_,
                   newgr_score.wirelength,
@@ -798,6 +961,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   fastroute_backbone_stats.consumed_wl_gain,
                   fastroute_backbone_stats.polish_swaps,
                   fastroute_backbone_stats.polish_wl_gain,
+                  fastroute_backbone_stats.micro_swaps,
+                  fastroute_backbone_stats.micro_wl_gain,
                   fastroute_overflow,
                   fastroute_score.wirelength,
                   fastroute_score.vias,
