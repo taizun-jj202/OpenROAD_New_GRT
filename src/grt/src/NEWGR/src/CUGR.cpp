@@ -174,16 +174,16 @@ bool isCompactionScoreBetter(const RouteScore& candidate,
   }
   if (candidate.overflow_edges < baseline.overflow_edges) {
     const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
-    // Allow only tiny wire expansion for strict overflow reduction.
+    // Keep overflow relief but enforce near wirelength neutrality.
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 6ULL;
+        = static_cast<uint64_t>(overflowGain) * 2ULL;
     if (candidate.wire_length > baseline.wire_length + allowedIncrease) {
       return false;
     }
-    return candidate.via_count <= baseline.via_count + 1;
+    return candidate.via_count <= baseline.via_count;
   }
   if (candidate.wire_length < baseline.wire_length) {
-    if (candidate.via_count <= baseline.via_count + 1) {
+    if (candidate.via_count <= baseline.via_count + 2) {
       return true;
     }
     const uint64_t wireGain = baseline.wire_length - candidate.wire_length;
@@ -764,8 +764,12 @@ void CUGR::globalCompaction()
                  std::max(0, static_cast<int>(netIndices.size() / 6)));
   const uint64_t longWireThreshold
       = routedScores[netIndices[longNetRank]].wire_length;
+  const int compactionBudget
+      = std::min(static_cast<int>(netIndices.size()),
+                 std::max(4096, static_cast<int>(netIndices.size() / 3)));
   const int denseMazeBudget
-      = std::max(1024, static_cast<int>(netIndices.size() * 3 / 4));
+      = std::min(compactionBudget,
+                 std::max(1024, static_cast<int>(compactionBudget / 2)));
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
 
@@ -779,7 +783,7 @@ void CUGR::globalCompaction()
   int accepted = 0;
   int acceptedPattern = 0;
   int acceptedMaze = 0;
-  for (int rank = 0; rank < netIndices.size(); rank++) {
+  for (int rank = 0; rank < compactionBudget; rank++) {
     const int netIndex = netIndices[rank];
     GRNet* net = gr_nets_[netIndex].get();
     const auto oldTree = net->getRoutingTree();
@@ -823,7 +827,7 @@ void CUGR::globalCompaction()
     const bool runMazeCandidate
         = rank < denseMazeBudget || oldScore.overflow_edges > 0
           || oldScore.wire_length >= longWireThreshold
-          || oldScore.via_count >= 6;
+          || oldScore.via_count >= 8;
     if (runMazeCandidate) {
       int interval = 4;
       if (rank < denseMazeBudget / 3 || oldScore.overflow_edges > 0) {
@@ -901,7 +905,7 @@ void CUGR::route()
   wirelengthRecovery();
   grid_graph_->setStageCostScales(0.42, 0.44, 1.55);
   finalPatternTighten();
-  grid_graph_->setStageCostScales(0.24, 0.26, 2.20);
+  grid_graph_->setStageCostScales(0.28, 0.30, 1.55);
   globalCompaction();
 
   printStatistics();
