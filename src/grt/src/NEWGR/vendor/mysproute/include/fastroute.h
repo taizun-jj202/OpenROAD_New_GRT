@@ -660,10 +660,10 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
    int thread_livelock_limit[6] = {1,1,1,1,1};
    bool extrarun = false;
    int thread_livelock = 0;
-   const int kViaCostCongested = 2;
-   const int kViaCostRelaxed = 4;
-   const int kViaCostModerate = 8;
-   const int kViaCostTight = 12;
+   const int kViaCostCongested = 0;
+   const int kViaCostRelaxed = 1;
+   const int kViaCostModerate = 2;
+   const int kViaCostTight = 8;
 
     if(1)
 	{
@@ -696,7 +696,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	    
 		// call FLUTE to generate RSMT and break the nets into segments (2-pin nets)
 
-		VIA = kViaCostModerate;
+		VIA = kViaCostRelaxed;
 		viacost = VIA;
 		gen_brk_RSMT(FALSE, FALSE, FALSE, FALSE, noADJ);
 		printf("first L\n");
@@ -797,7 +797,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 				VIA = kViaCostTight;
 			}
 			if (i > 20 && totalOverflow < 80) {
-				VIA = kViaCostTight + 2;
+				VIA = kViaCostTight + 6;
 			}
 			viacost = VIA;
 

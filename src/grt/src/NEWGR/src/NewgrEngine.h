@@ -56,6 +56,7 @@ class NewgrEngine
   std::string routingLayerName(int layer_index) const;
   std::string cutLayerName(int layer_index) const;
   NetRouteMap extractRoutes() const;
+  NetRouteMap extractPinFallbackRoutes() const;
   void appendRouteSegments(int net_id, grt::GRoute& route) const;
   void addSegment(grt::GRoute& route,
                   int grid_x0,

@@ -1,6 +1,7 @@
 #include "NewgrEngine.h"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -58,6 +59,218 @@ const Edge3D& verticalEdge(const SprouteGridData& grid,
   return v_edges3D[idx];
 }
 
+galois::InsertBag<parser::CapReduction>& newgrCapReductions()
+{
+  static galois::InsertBag<parser::CapReduction> cap_reductions;
+  return cap_reductions;
+}
+
+int cellIndex(int x, int y, int x_grids)
+{
+  return y * x_grids + x;
+}
+
+float reductionRatio(int base_cap,
+                     float local_pressure,
+                     float mean_pressure,
+                     float stdev_pressure,
+                     float px,
+                     float py,
+                     float center_x,
+                     float center_y,
+                     float center_radius,
+                     float diagonal_band,
+                     int layer,
+                     bool& should_shape)
+{
+  constexpr float kEpsilon = 1e-3f;
+  const float pressure_z
+      = (local_pressure - mean_pressure) / std::max(stdev_pressure, kEpsilon);
+  const float hotspot_term = std::clamp(pressure_z / 3.0f, 0.0f, 1.0f);
+
+  const float center_distance = std::abs(px - center_x) + std::abs(py - center_y);
+  const float center_term
+      = std::max(0.0f, 1.0f - center_distance / std::max(center_radius, 1.0f));
+
+  const float diag0 = std::abs(px - py);
+  const float diag1 = std::abs((px + py) - (center_x + center_y));
+  const float diagonal_term = std::max(
+      0.0f, 1.0f - std::min(diag0, diag1) / std::max(diagonal_band, 1.0f));
+
+  const bool stripe_hit
+      = ((static_cast<int>(px * 3.0f + py * 5.0f) + layer * 7) % 19) == 0;
+  should_shape = hotspot_term > 0.20f || center_term > 0.50f
+                 || diagonal_term > 0.40f || stripe_hit;
+  if (!should_shape || base_cap <= 1) {
+    return 1.0f;
+  }
+
+  const float layer_bias = (layer < 2) ? 0.72f : ((layer < 4) ? 0.80f : 0.88f);
+  const float stripe_term = stripe_hit ? 0.10f : 0.0f;
+  const float penalty = 0.14f + 0.18f * hotspot_term + 0.20f * center_term
+                        + 0.12f * diagonal_term + stripe_term;
+  return std::clamp(layer_bias - penalty, 0.25f, 0.92f);
+}
+
+int buildLocalizedCapacityReductions(const NewgrInput& input,
+                                     const SprouteGridData& grid,
+                                     const parser::grGenerator& generator,
+                                     galois::InsertBag<parser::CapReduction>&
+                                         cap_reductions)
+{
+  const int x_grids = grid.x_grids;
+  const int y_grids = grid.y_grids;
+  const int num_layers = grid.num_layers;
+  if (x_grids <= 1 || y_grids <= 1 || num_layers <= 0) {
+    return 0;
+  }
+
+  std::vector<float> pin_pressure(x_grids * y_grids, 0.0f);
+  for (const auto& net : input.nets) {
+    const float net_weight
+        = 1.0f + std::min(6.0f, std::sqrt(static_cast<float>(net.pins.size())));
+    for (const auto& pin : net.pins) {
+      const int x = std::clamp(pin.x(), 0, x_grids - 1);
+      const int y = std::clamp(pin.y(), 0, y_grids - 1);
+      pin_pressure[cellIndex(x, y, x_grids)] += net_weight;
+    }
+  }
+
+  std::vector<float> smooth_pressure(x_grids * y_grids, 0.0f);
+  float mean_pressure = 0.0f;
+  for (int y = 0; y < y_grids; ++y) {
+    for (int x = 0; x < x_grids; ++x) {
+      float sum = 0.0f;
+      int count = 0;
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+          const int nx = x + dx;
+          const int ny = y + dy;
+          if (nx < 0 || nx >= x_grids || ny < 0 || ny >= y_grids) {
+            continue;
+          }
+          sum += pin_pressure[cellIndex(nx, ny, x_grids)];
+          ++count;
+        }
+      }
+      const float pressure = (count > 0) ? (sum / count) : 0.0f;
+      smooth_pressure[cellIndex(x, y, x_grids)] = pressure;
+      mean_pressure += pressure;
+    }
+  }
+  mean_pressure /= static_cast<float>(x_grids * y_grids);
+
+  float variance = 0.0f;
+  for (float pressure : smooth_pressure) {
+    const float delta = pressure - mean_pressure;
+    variance += delta * delta;
+  }
+  variance /= static_cast<float>(x_grids * y_grids);
+  const float stdev_pressure = std::sqrt(std::max(variance, 0.0f));
+
+  const float center_x = (x_grids - 1) * 0.5f;
+  const float center_y = (y_grids - 1) * 0.5f;
+  const float max_distance = center_x + center_y;
+  const float center_radius = std::max(2.0f, 0.40f * max_distance);
+  const float diagonal_band = std::max(2.0f, 0.18f * (x_grids + y_grids));
+
+  int reduction_count = 0;
+  for (int layer = 0; layer < num_layers; ++layer) {
+    const bool horizontal
+        = layer < static_cast<int>(grid.layer_directions.size())
+          && grid.layer_directions[layer]
+                 == odb::dbTechLayerDir::Value::HORIZONTAL;
+    const int base_hcap
+        = layer < static_cast<int>(generator.hCap.size()) ? generator.hCap[layer]
+                                                           : 0;
+    const int base_vcap
+        = layer < static_cast<int>(generator.vCap.size()) ? generator.vCap[layer]
+                                                           : 0;
+
+    if (horizontal) {
+      if (base_hcap <= 1) {
+        continue;
+      }
+      for (int y = 0; y < y_grids; ++y) {
+        for (int x = 0; x < x_grids - 1; ++x) {
+          const float p0 = smooth_pressure[cellIndex(x, y, x_grids)];
+          const float p1 = smooth_pressure[cellIndex(x + 1, y, x_grids)];
+          const float local_pressure = 0.5f * (p0 + p1);
+          bool should_shape = false;
+          const float ratio = reductionRatio(base_hcap,
+                                             local_pressure,
+                                             mean_pressure,
+                                             stdev_pressure,
+                                             x + 0.5f,
+                                             static_cast<float>(y),
+                                             center_x,
+                                             center_y,
+                                             center_radius,
+                                             diagonal_band,
+                                             layer,
+                                             should_shape);
+          if (!should_shape) {
+            continue;
+          }
+          const int new_cap
+              = std::max(1, static_cast<int>(std::lround(base_hcap * ratio)));
+          if (new_cap >= base_hcap) {
+            continue;
+          }
+          parser::CapReduction reduction;
+          reduction.x = x;
+          reduction.y = y;
+          reduction.z = layer;
+          reduction.newCap = new_cap;
+          cap_reductions.push(reduction);
+          ++reduction_count;
+        }
+      }
+    } else {
+      if (base_vcap <= 1) {
+        continue;
+      }
+      for (int y = 0; y < y_grids - 1; ++y) {
+        for (int x = 0; x < x_grids; ++x) {
+          const float p0 = smooth_pressure[cellIndex(x, y, x_grids)];
+          const float p1 = smooth_pressure[cellIndex(x, y + 1, x_grids)];
+          const float local_pressure = 0.5f * (p0 + p1);
+          bool should_shape = false;
+          const float ratio = reductionRatio(base_vcap,
+                                             local_pressure,
+                                             mean_pressure,
+                                             stdev_pressure,
+                                             static_cast<float>(x),
+                                             y + 0.5f,
+                                             center_x,
+                                             center_y,
+                                             center_radius,
+                                             diagonal_band,
+                                             layer,
+                                             should_shape);
+          if (!should_shape) {
+            continue;
+          }
+          const int new_cap
+              = std::max(1, static_cast<int>(std::lround(base_vcap * ratio)));
+          if (new_cap >= base_vcap) {
+            continue;
+          }
+          parser::CapReduction reduction;
+          reduction.x = x;
+          reduction.y = y;
+          reduction.z = layer;
+          reduction.newCap = new_cap;
+          cap_reductions.push(reduction);
+          ++reduction_count;
+        }
+      }
+    }
+  }
+
+  return reduction_count;
+}
+
 }  // namespace
 
 NewgrEngine::NewgrEngine(utl::Logger* logger) : logger_(logger)
@@ -79,14 +292,13 @@ NetRouteMap NewgrEngine::run()
   }
 
   prepareLefDefMetadata();
-  parser::grGenerator generator = buildGenerator();
-
   ensureGaloisRuntime();
   if (numThreads <= 0) {
     numThreads = 1;
   }
   galois::preAlloc(numThreads * 2);
   numThreads = galois::setActiveThreads(numThreads);
+  parser::grGenerator generator = buildGenerator();
 
   parser::CongestionMap congestion_map(
       generator.grid.z, generator.grid.x, generator.grid.y);
@@ -251,6 +463,9 @@ parser::grGenerator NewgrEngine::buildGenerator() const
     ++net_idx;
   }
 
+  auto& cap_reductions = newgrCapReductions();
+  cap_reductions.clear();
+
   return generator;
 }
 
@@ -298,6 +513,48 @@ NetRouteMap NewgrEngine::extractRoutes() const
     }
   }
 
+  return routes;
+}
+
+NetRouteMap NewgrEngine::extractPinFallbackRoutes() const
+{
+  NetRouteMap routes;
+  for (const auto& net : input_.nets) {
+    if (net.db_net == nullptr || net.pins.size() < 2) {
+      continue;
+    }
+
+    GRoute route;
+    const RoutePt& root = net.pins.front();
+    for (size_t pin_idx = 1; pin_idx < net.pins.size(); ++pin_idx) {
+      const RoutePt& sink = net.pins[pin_idx];
+      int x0 = root.x();
+      int y0 = root.y();
+      int l0 = root.layer();
+      const int x1 = sink.x();
+      const int y1 = sink.y();
+      const int l1 = sink.layer();
+
+      while (l0 < l1) {
+        addSegment(route, x0, y0, l0, x0, y0, l0 + 1);
+        ++l0;
+      }
+      while (l0 > l1) {
+        addSegment(route, x0, y0, l0, x0, y0, l0 - 1);
+        --l0;
+      }
+      if (x0 != x1) {
+        addSegment(route, x0, y0, l0, x1, y0, l0);
+      }
+      if (y0 != y1) {
+        addSegment(route, x1, y0, l0, x1, y1, l0);
+      }
+    }
+
+    if (!route.empty()) {
+      routes[net.db_net] = std::move(route);
+    }
+  }
   return routes;
 }
 
