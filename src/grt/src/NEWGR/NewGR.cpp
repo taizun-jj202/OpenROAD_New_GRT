@@ -3366,6 +3366,34 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   applyViaExcursionCollapse(shockwave.routes, std::max(3 * tile_size, 1));
   shockwave.metrics = compute_metrics(shockwave.routes);
 
+  // Monorail scenario: force most large nets onto a shared median spine and
+  // dual portal hubs so we intentionally break residual compact-route geometry.
+  ScenarioResult monorail = compact;
+  monorail.name = "monorail_spine";
+  applyMedianSpineRebuild(
+      monorail.routes, 2, 100, min_routing_layer, max_routing_layer);
+  applyGlobalPortalRebuild(grouter_,
+                           monorail.routes,
+                           baseline_rudy,
+                           2,
+                           100,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyQuadrantPortalHypergraphRebuild(grouter_,
+                                       monorail.routes,
+                                       baseline_rudy,
+                                       2,
+                                       4096,
+                                       100,
+                                       min_routing_layer,
+                                       max_routing_layer);
+  applyAggressiveDoglegShortcuts(monorail.routes,
+                                 std::max(56 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(monorail.routes, std::max(6 * tile_size, 1));
+  applyViaExcursionCollapse(monorail.routes, std::max(3 * tile_size, 1));
+  monorail.metrics = compute_metrics(monorail.routes);
+
   struct CandidateEntry
   {
     const char* name;
@@ -3379,16 +3407,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       {"wirehunter", &wirelength_hunter},
       {"radical_hyper", &radical_hyper},
       {"axial_force", &axial_force},
-      {"shockwave", &shockwave}};
+      {"shockwave", &shockwave},
+      {"monorail", &monorail}};
   if (sculpted_available) {
     candidates.push_back({"sculpted", &sculpted});
   }
 
   auto objective = [&](const RouteMetrics& metrics, int overflow) {
-    const double via_weight = static_cast<double>(tile_size) * 1.00;
+    const double via_weight = static_cast<double>(tile_size) * 0.72;
     const double overflow_penalty
         = static_cast<double>(std::max(overflow, 0))
-          * static_cast<double>(tile_size) * 24.0;
+          * static_cast<double>(tile_size) * 18.0;
     return static_cast<double>(metrics.wirelength_dbu)
            + via_weight * static_cast<double>(metrics.via_count)
            + overflow_penalty;
@@ -3462,10 +3491,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   auto route_objective = [&](const GRoute& route, int overflow) {
     const auto [route_wl, route_vias] = route_stats(route);
-    const double via_weight = static_cast<double>(tile_size) * 1.00;
+    const double via_weight = static_cast<double>(tile_size) * 0.72;
     const double overflow_penalty
         = static_cast<double>(std::max(overflow, 0))
-          * static_cast<double>(tile_size) * 24.0;
+          * static_cast<double>(tile_size) * 18.0;
     return static_cast<double>(route_wl)
            + via_weight * static_cast<double>(route_vias) + overflow_penalty;
   };
@@ -3475,6 +3504,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   std::vector<long> tournament_picks(candidates.size(), 0);
   long axial_forced_nets = 0;
   long shock_forced_nets = 0;
+  long monorail_forced_nets = 0;
 
   for (const auto& [db_net, base_route] : compact.routes) {
     const GRoute* best_route = &base_route;
@@ -3636,6 +3666,55 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     selected.metrics = compute_metrics(selected.routes);
   }
 
+  // Monorail injection: apply a whole-net spine rewrite on complex nets.
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto monorail_it = monorail.routes.find(db_net);
+    if (monorail_it == monorail.routes.end()) {
+      continue;
+    }
+    const GRoute& monorail_route = monorail_it->second;
+    if (!has_planar_guide(monorail_route)) {
+      continue;
+    }
+
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+    if (node_count < 8) {
+      continue;
+    }
+    if (!route_admissible_loose(monorail_route, current_route)) {
+      continue;
+    }
+
+    const auto [base_wl, base_vias] = route_stats(current_route);
+    const auto [mono_wl, mono_vias] = route_stats(monorail_route);
+    const double base_score = route_objective(current_route, selected.overflow);
+    const double mono_score = route_objective(monorail_route, monorail.overflow);
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+
+    bool use_monorail = false;
+    if (mono_wl < static_cast<long>(base_wl * 0.98)) {
+      use_monorail = mono_vias <= static_cast<long>(base_vias * 2.40 + 8);
+    }
+    if (!use_monorail && node_count >= 14
+        && mono_wl <= static_cast<long>(base_wl * 1.25)
+        && mono_vias <= static_cast<long>(base_vias * 4.20 + 16)) {
+      use_monorail = (key % 2ULL) == 0ULL;
+    }
+    if (!use_monorail && mono_score <= base_score * 1.16) {
+      use_monorail = (key % 3ULL) == 1ULL;
+    }
+    if (use_monorail) {
+      selected.routes[db_net] = monorail_route;
+      monorail_forced_nets++;
+    }
+  }
+  if (monorail_forced_nets > 0) {
+    selected.name += "+monorail";
+    selected.metrics = compute_metrics(selected.routes);
+  }
+
   ScenarioResult stabilized = selected;
   stabilized.name = "stabilized_radical_hyper";
   applyQuadrantPortalHypergraphRebuild(grouter_,
@@ -3691,7 +3770,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 6033,
                 "NEWGR tournament picks: compact {} shortcut {} anisotropic {} "
                 "wirehunter {} radical_hyper {} axial_force {} shockwave {} "
-                "sculpted {}.",
+                "monorail {} sculpted {}.",
                 tournament_picks.size() > 0 ? tournament_picks[0] : 0,
                 tournament_picks.size() > 1 ? tournament_picks[1] : 0,
                 tournament_picks.size() > 2 ? tournament_picks[2] : 0,
@@ -3699,17 +3778,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 tournament_picks.size() > 4 ? tournament_picks[4] : 0,
                 tournament_picks.size() > 5 ? tournament_picks[5] : 0,
                 tournament_picks.size() > 6 ? tournament_picks[6] : 0,
-                tournament_picks.size() > 7 ? tournament_picks[7] : 0);
+                tournament_picks.size() > 7 ? tournament_picks[7] : 0,
+                tournament_picks.size() > 8 ? tournament_picks[8] : 0);
   logger_->warn(GNR,
                 6034,
                 "NEWGR blend counters: sculpted {} shortcuts {} anisotropic {} "
-                "wirehunter {} axial_force {} shockwave {}.",
+                "wirehunter {} axial_force {} shockwave {} monorail {}.",
                 nets_taken_from_sculpted,
                 nets_taken_from_shortcuts,
                 nets_taken_from_anisotropic,
                 nets_taken_from_wirelength_hunter,
                 axial_forced_nets,
-                shock_forced_nets);
+                shock_forced_nets,
+                monorail_forced_nets);
 
   restore_snapshot(snapshot);
   return selected.routes;
