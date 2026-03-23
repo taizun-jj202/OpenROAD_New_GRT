@@ -94,6 +94,27 @@ struct RouteEdgeStats
   EdgeCountMap edge_counts;
 };
 
+double estimateDetailedRouteProxyCost(const RouteMetrics& metrics)
+{
+  // DR-proxy objective mixed from FastRoute/CUGR/SPRoute ideas:
+  // 1) keep guide wirelength first-order;
+  // 2) penalize guide detour and upper-layer drift (detail-route stability);
+  // 3) softly penalize via-heavy choices;
+  // 4) keep overflow terms dominant whenever present.
+  const double via_term = static_cast<double>(metrics.via_count) * 0.65;
+  const double detour_term = static_cast<double>(metrics.detour_dbu) * 0.0020;
+  const double high_layer_term
+      = static_cast<double>(metrics.high_layer_dbu) * 0.00003;
+  const double span_term = static_cast<double>(metrics.layer_span_sum) * 3.0;
+  const double hotspot_term
+      = static_cast<double>(metrics.near_capacity_edges) * 12.0;
+  const double overflow_term = static_cast<double>(metrics.overflow_edges) * 2000.0
+                               + static_cast<double>(metrics.overflow_ratio_sum)
+                                     * 6000.0;
+  return static_cast<double>(metrics.wirelength_dbu) + via_term + detour_term
+         + high_layer_term + span_term + hotspot_term + overflow_term;
+}
+
 long getRouteBBoxHpwl(const GRoute& route)
 {
   int min_x = std::numeric_limits<int>::max();
@@ -475,11 +496,6 @@ bool parsePerturbScenarioName(const std::string& name,
   }
   perturb_pct = static_cast<float>(perturb_x10) / 10.0f;
   return true;
-}
-
-bool isWirelengthPriorityScenario(const std::string& name)
-{
-  return name == "hybrid-netmix-wl" || name == "hybrid-netmix-ultra-wl";
 }
 
 int getSoftCapacityForEdge(uint64_t key,
@@ -1566,6 +1582,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const int wl_source_count = std::min<int>(14, ranked.size());
     const int ultra_wl_source_count = std::min<int>(26, ranked.size());
     const int hpwl_lock_source_count = std::min<int>(32, ranked.size());
+    const int dr_shield_source_count = std::min<int>(30, ranked.size());
     const int wl_safe_source_count = std::min<int>(12, ranked.size());
     const int layer_compact_source_count = std::min<int>(20, ranked.size());
     const int balanced_source_count = std::min<int>(8, ranked.size());
@@ -1584,6 +1601,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 10L);
     const long layer_compact_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 16L);
+    const long dr_shield_via_weight
+        = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 12L);
     append_hybrid("hybrid-netmix-wl", wl_source_count, 0, 0.24, 0.50, 6010);
     append_hybrid(
         "hybrid-netmix-ultra-wl", ultra_wl_source_count, 0, 0.40, 0.95, 6013);
@@ -1596,6 +1615,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   0.010,
                   0.12,
                   0.45);
+    append_hybrid("hybrid-netmix-dr-shield",
+                  dr_shield_source_count,
+                  dr_shield_via_weight,
+                  0.62,
+                  0.76,
+                  6022,
+                  0.060,
+                  0.95,
+                  1.30);
     append_hybrid("hybrid-netmix-wl-safe",
                   wl_safe_source_count,
                   wl_safe_via_weight,
@@ -1710,23 +1738,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const long tie_via_wl_band
       = std::max<long>(24, static_cast<long>(std::ceil(shortest_wl * 0.00008)));
   const long tie_quality_wl_band
-      = std::max<long>(80, static_cast<long>(std::ceil(shortest_wl * 0.0018)));
+      = std::max<long>(80, static_cast<long>(std::ceil(shortest_wl * 0.0012)));
   auto wirelength_with_quality_tie_better = [&](const ScenarioResult& lhs,
                                                 const ScenarioResult& rhs) {
     const long wl_gap = std::llabs(lhs.metrics.wirelength_dbu
                                    - rhs.metrics.wirelength_dbu);
-    const bool lhs_wl_priority = isWirelengthPriorityScenario(lhs.name);
-    const bool rhs_wl_priority = isWirelengthPriorityScenario(rhs.name);
-    // Keep an aggressive wirelength preference for explicit WL-priority hybrids.
-    if (lhs_wl_priority != rhs_wl_priority && wl_gap <= tie_quality_wl_band) {
-      return lhs_wl_priority;
-    }
-    if (wl_gap <= tie_quality_wl_band && lhs.metrics.detour_dbu != rhs.metrics.detour_dbu) {
-      return lhs.metrics.detour_dbu < rhs.metrics.detour_dbu;
-    }
-    if (wl_gap <= tie_quality_wl_band
-        && lhs.metrics.high_layer_dbu != rhs.metrics.high_layer_dbu) {
-      return lhs.metrics.high_layer_dbu < rhs.metrics.high_layer_dbu;
+    if (wl_gap <= tie_quality_wl_band) {
+      const double lhs_proxy = estimateDetailedRouteProxyCost(lhs.metrics);
+      const double rhs_proxy = estimateDetailedRouteProxyCost(rhs.metrics);
+      if (std::abs(lhs_proxy - rhs_proxy) > 1e-3) {
+        return lhs_proxy < rhs_proxy;
+      }
     }
     if (wl_gap <= tie_via_wl_band && lhs.metrics.via_count != rhs.metrics.via_count) {
       return lhs.metrics.via_count < rhs.metrics.via_count;
