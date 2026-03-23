@@ -28,6 +28,58 @@
 
 namespace grt::newgr {
 
+namespace {
+
+struct RouteScore
+{
+  double wire_length = 0.0;
+  int via_count = 0;
+  int overflow_edges = 0;
+  double objective = std::numeric_limits<double>::max();
+};
+
+RouteScore scoreRouteTree(const std::shared_ptr<GRTreeNode>& tree,
+                          const GridGraph& graph,
+                          const Constants& constants)
+{
+  RouteScore score;
+  if (!tree) {
+    return score;
+  }
+
+  uint64_t wire_length_dbu = 0;
+  GRTreeNode::preorder(tree, [&](const std::shared_ptr<GRTreeNode>& node) {
+    for (const auto& child : node->getChildren()) {
+      if (node->getLayerIdx() == child->getLayerIdx()) {
+        const int direction = graph.getLayerDirection(node->getLayerIdx());
+        if (direction == MetalLayer::H) {
+          const auto [l, h] = std::minmax({node->x(), child->x()});
+          for (int x = l; x < h; x++) {
+            wire_length_dbu += graph.getEdgeLength(direction, x);
+          }
+        } else {
+          const auto [l, h] = std::minmax({node->y(), child->y()});
+          for (int y = l; y < h; y++) {
+            wire_length_dbu += graph.getEdgeLength(direction, y);
+          }
+        }
+      } else {
+        score.via_count += std::abs(node->getLayerIdx() - child->getLayerIdx());
+      }
+    }
+  });
+
+  score.wire_length
+      = static_cast<double>(wire_length_dbu) / std::max(graph.getM2Pitch(), 1);
+  score.overflow_edges = graph.checkOverflow(tree);
+  score.objective = constants.weight_wire_length * score.wire_length
+                    + constants.weight_via_number * score.via_count
+                    + constants.weight_short_area * score.overflow_edges;
+  return score;
+}
+
+}  // namespace
+
 CUGR::CUGR(odb::dbDatabase* db,
            utl::Logger* log,
            stt::SteinerTreeBuilder* stt_builder)
@@ -130,24 +182,71 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     const int adaptiveInterval = std::max(
         constants_.maze_min_interval,
         constants_.maze_base_interval - std::min(maxShrink, hp / 30));
-    const int xOffset = (netIndex + hp) % adaptiveInterval;
-    const int yOffset = (netIndex / 2 + hp) % adaptiveInterval;
-    SparseGrid grid(
-        adaptiveInterval, adaptiveInterval, std::max(xOffset, 0), yOffset);
-    MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
-    mazeRoute.constructSparsifiedGraph(wireCostView, grid);
-    mazeRoute.run();
-    std::shared_ptr<SteinerTreeNode> tree = mazeRoute.getSteinerTree();
-    assert(tree != nullptr);
+    const int denseInterval
+        = std::max(constants_.maze_min_interval, adaptiveInterval - 2);
+    const int coarseInterval = adaptiveInterval + 2;
 
-    PatternRoute patternRoute(
-        net, grid_graph_.get(), stt_builder_, constants_, logger_);
-    patternRoute.setSteinerTree(tree);
-    patternRoute.constructRoutingDAG();
-    patternRoute.run();
+    struct CandidateGrid
+    {
+      int interval;
+      int x_offset;
+      int y_offset;
+    };
+    std::vector<CandidateGrid> candidateGrids;
+    auto pushCandidate = [&](int interval, int xOffset, int yOffset) {
+      if (interval <= 0) {
+        return;
+      }
+      xOffset = ((xOffset % interval) + interval) % interval;
+      yOffset = ((yOffset % interval) + interval) % interval;
+      for (const auto& candidate : candidateGrids) {
+        if (candidate.interval == interval && candidate.x_offset == xOffset
+            && candidate.y_offset == yOffset) {
+          return;
+        }
+      }
+      candidateGrids.push_back({interval, xOffset, yOffset});
+    };
 
-    grid_graph_->commitTree(net->getRoutingTree());
-    grid_graph_->updateWireCostView(wireCostView, net->getRoutingTree());
+    pushCandidate(adaptiveInterval, netIndex + hp, netIndex / 2 + hp);
+    pushCandidate(denseInterval, netIndex * 3 + hp, netIndex * 7 + hp * 2);
+    pushCandidate(constants_.maze_min_interval,
+                  netIndex * 11 + hp * 5,
+                  netIndex * 13 + hp);
+    pushCandidate(coarseInterval, netIndex * 5 + hp * 3, netIndex + hp * 4);
+
+    RouteScore bestScore;
+    std::shared_ptr<GRTreeNode> bestTree = nullptr;
+    for (const auto& candidate : candidateGrids) {
+      SparseGrid grid(candidate.interval,
+                      candidate.interval,
+                      candidate.x_offset,
+                      candidate.y_offset);
+      MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+      mazeRoute.constructSparsifiedGraph(wireCostView, grid);
+      mazeRoute.run();
+      std::shared_ptr<SteinerTreeNode> tree = mazeRoute.getSteinerTree();
+      assert(tree != nullptr);
+
+      PatternRoute patternRoute(
+          net, grid_graph_.get(), stt_builder_, constants_, logger_);
+      patternRoute.setSteinerTree(tree);
+      patternRoute.constructRoutingDAG();
+      patternRoute.run();
+
+      const auto& candidateTree = net->getRoutingTree();
+      const RouteScore candidateScore
+          = scoreRouteTree(candidateTree, *grid_graph_, constants_);
+      if (candidateScore.objective < bestScore.objective) {
+        bestScore = candidateScore;
+        bestTree = candidateTree;
+      }
+    }
+
+    assert(bestTree != nullptr);
+    net->setRoutingTree(bestTree);
+    grid_graph_->commitTree(bestTree);
+    grid_graph_->updateWireCostView(wireCostView, bestTree);
   }
 
   updateOverflowNets(netIndices);
@@ -241,7 +340,8 @@ void CUGR::route()
 
   updateOverflowNets(netIndices);
   if (!netIndices.empty()) {
-    patternRouteWithDetours(netIndices);
+    logger_->report(
+        "skip final detour stage to preserve hub-topology connectivity");
   }
 
   printStatistics();

@@ -29,9 +29,9 @@ class BoxT;
 
 struct Constants
 {
-  double weight_wire_length = 0.5;
-  double weight_via_number = 2.0;
-  double weight_short_area = 500.0;
+  double weight_wire_length = 1.0;
+  double weight_via_number = 0.4;
+  double weight_short_area = 800.0;
 
   int min_routing_layer = 1;
 
@@ -41,7 +41,7 @@ struct Constants
   double max_detour_ratio = 0.25;
   int target_detour_count = 20;
 
-  double via_multiplier = 1.0;
+  double via_multiplier = 0.85;
 
   int mst_topology_pin_threshold = 7;
   double mst_bend_penalty = 3.0;
@@ -50,19 +50,19 @@ struct Constants
   bool enable_early_detour_stage = false;
 
   double maze_logistic_slope = 0.5;
-  int maze_base_interval = 8;
-  int maze_min_interval = 3;
-  int global_rebalance_rounds = 2;
+  int maze_base_interval = 6;
+  int maze_min_interval = 2;
+  int global_rebalance_rounds = 1;
 
   // SPRoute-inspired soft-capacity shaping.
   bool enable_soft_capacity = true;
-  double soft_capacity_ratio_min = 0.70;
-  double soft_capacity_ratio_max = 0.98;
-  double soft_capacity_slope = 6.0;
-  double soft_capacity_congestion_mid = 0.55;
-  double soft_capacity_rudy_weight = 1.2;
-  double soft_capacity_lower_layer_boost = 0.25;
-  double soft_capacity_min_absolute = 0.50;
+  double soft_capacity_ratio_min = 0.82;
+  double soft_capacity_ratio_max = 1.00;
+  double soft_capacity_slope = 4.0;
+  double soft_capacity_congestion_mid = 0.75;
+  double soft_capacity_rudy_weight = 1.0;
+  double soft_capacity_lower_layer_boost = 0.10;
+  double soft_capacity_min_absolute = 0.75;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
