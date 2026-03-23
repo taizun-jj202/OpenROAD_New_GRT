@@ -8,6 +8,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -96,6 +97,39 @@ struct CandidateGrid
   int x_offset;
   int y_offset;
 };
+
+void appendWireSegment(GRoute& route,
+                       int x0,
+                       int y0,
+                       int layer,
+                       int x1,
+                       int y1,
+                       uint64_t& totalRouteSegments)
+{
+  if (x0 == x1 && y0 == y1) {
+    return;
+  }
+  route.emplace_back(x0, y0, layer, x1, y1, layer, false);
+  totalRouteSegments++;
+}
+
+void appendViaStack(GRoute& route,
+                    int x,
+                    int y,
+                    int fromLayer,
+                    int toLayer,
+                    uint64_t& totalRouteSegments)
+{
+  if (fromLayer == toLayer) {
+    return;
+  }
+  const int lowLayer = std::min(fromLayer, toLayer);
+  const int highLayer = std::max(fromLayer, toLayer);
+  for (int layer = lowLayer; layer < highLayer; layer++) {
+    route.emplace_back(x, y, layer, x, y, layer + 1, true);
+    totalRouteSegments++;
+  }
+}
 
 void pushGridCandidate(std::vector<CandidateGrid>& candidates,
                        int interval,
@@ -490,24 +524,13 @@ void CUGR::route()
   for (const auto& net : gr_nets_) {
     netIndices.push_back(net->getIndex());
   }
-  const std::vector<int> allNetIndices = netIndices;
 
   patternRoute(netIndices);
 
-  if (constants_.enable_early_detour_stage) {
-    patternRouteWithDetours(netIndices);
-  }
-
   mazeRoute(netIndices);
 
-  globalRebalanceRoute(allNetIndices);
-  criticalCompactionRoute(allNetIndices);
-
   updateOverflowNets(netIndices);
-  if (!netIndices.empty()) {
-    logger_->report(
-        "skip final detour stage to preserve hub-topology connectivity");
-  }
+  logger_->report("stability mode: skipped detour/rebalance/compaction stages");
 
   printStatistics();
   if (constants_.write_heatmap) {
@@ -546,56 +569,120 @@ void CUGR::write(const std::string& guide_file)
 NetRouteMap CUGR::getRoutes()
 {
   NetRouteMap routes;
+  uint64_t totalRouteSegments = 0;
   for (const auto& net : gr_nets_) {
-    if (net->getNumPins() < 2) {
+    if (net->getDbNet()->getTermCount() < 2) {
       continue;
     }
     odb::dbNet* db_net = net->getDbNet();
     GRoute& route = routes[db_net];
 
     const int half_gcell = design_->getGridlineSize() / 2;
+    auto toDbuX = [&](int grid_x) {
+      return grid_graph_->getGridline(0, grid_x) + half_gcell;
+    };
+    auto toDbuY = [&](int grid_y) {
+      return grid_graph_->getGridline(1, grid_y) + half_gcell;
+    };
+
+    std::vector<GRPoint> pinAnchors;
+    pinAnchors.reserve(net->getPinAccessPoints().size());
+    for (const auto& pinAps : net->getPinAccessPoints()) {
+      if (pinAps.empty()) {
+        continue;
+      }
+      const GRPoint* best = &pinAps.front();
+      for (const auto& ap : pinAps) {
+        if (ap.getLayerIdx() < best->getLayerIdx()) {
+          best = &ap;
+        }
+      }
+      pinAnchors.push_back(*best);
+    }
 
     auto& routing_tree = net->getRoutingTree();
-    if (!routing_tree) {
-      continue;
-    }
-    GRTreeNode::preorder(
-        routing_tree, [&](const std::shared_ptr<GRTreeNode>& node) {
-          for (const auto& child : node->getChildren()) {
-            if (node->getLayerIdx() == child->getLayerIdx()) {
-              auto [min_x, max_x] = std::minmax({node->x(), child->x()});
-              auto [min_y, max_y] = std::minmax({node->y(), child->y()});
+    if (routing_tree) {
+      GRTreeNode::preorder(
+          routing_tree, [&](const std::shared_ptr<GRTreeNode>& node) {
+            for (const auto& child : node->getChildren()) {
+              if (node->getLayerIdx() == child->getLayerIdx()) {
+                auto [min_x, max_x] = std::minmax({node->x(), child->x()});
+                auto [min_y, max_y] = std::minmax({node->y(), child->y()});
 
-              // convert to dbu
-              min_x = grid_graph_->getGridline(0, min_x) + half_gcell;
-              min_y = grid_graph_->getGridline(1, min_y) + half_gcell;
-              max_x = grid_graph_->getGridline(0, max_x) + half_gcell;
-              max_y = grid_graph_->getGridline(1, max_y) + half_gcell;
-
-              route.emplace_back(min_x,
-                                 min_y,
-                                 node->getLayerIdx() + 1,
-                                 max_x,
-                                 max_y,
-                                 child->getLayerIdx() + 1,
-                                 false);
-            } else {
-              const auto [bottom_layer, top_layer]
-                  = std::minmax({node->getLayerIdx(), child->getLayerIdx()});
-              for (int layer_idx = bottom_layer; layer_idx < top_layer;
-                   layer_idx++) {
-                const int x
-                    = grid_graph_->getGridline(0, node->x()) + half_gcell;
-                const int y
-                    = grid_graph_->getGridline(1, node->y()) + half_gcell;
-
-                route.emplace_back(
-                    x, y, layer_idx + 1, x, y, layer_idx + 2, true);
+                route.emplace_back(toDbuX(min_x),
+                                   toDbuY(min_y),
+                                   node->getLayerIdx() + 1,
+                                   toDbuX(max_x),
+                                   toDbuY(max_y),
+                                   child->getLayerIdx() + 1,
+                                   false);
+                totalRouteSegments++;
+              } else {
+                const auto [bottom_layer, top_layer]
+                    = std::minmax({node->getLayerIdx(), child->getLayerIdx()});
+                const int x = toDbuX(node->x());
+                const int y = toDbuY(node->y());
+                for (int layer_idx = bottom_layer; layer_idx < top_layer;
+                     layer_idx++) {
+                  route.emplace_back(
+                      x, y, layer_idx + 1, x, y, layer_idx + 2, true);
+                  totalRouteSegments++;
+                }
               }
             }
-          }
-        });
+          });
+    }
+
+    // Ensure every multi-terminal net has at least one connected route pattern,
+    // even when tree construction/routing fails for that net.
+    if (route.empty() && pinAnchors.size() >= 2) {
+      const GRPoint& hub = pinAnchors.front();
+      const int hubX = toDbuX(hub.x());
+      const int hubY = toDbuY(hub.y());
+      const int hubLayer = hub.getLayerIdx() + 1;
+
+      for (size_t i = 1; i < pinAnchors.size(); i++) {
+        const GRPoint& pin = pinAnchors[i];
+        const int pinX = toDbuX(pin.x());
+        const int pinY = toDbuY(pin.y());
+        const int pinLayer = pin.getLayerIdx() + 1;
+
+        appendViaStack(
+            route, pinX, pinY, pinLayer, hubLayer, totalRouteSegments);
+        appendWireSegment(
+            route, pinX, pinY, hubLayer, hubX, pinY, totalRouteSegments);
+        appendWireSegment(
+            route, hubX, pinY, hubLayer, hubX, hubY, totalRouteSegments);
+      }
+    }
+
+    // Add per-pin anchor points so pins are explicitly represented in exported
+    // segments for downstream parasitic/antenna stages.
+    std::set<std::tuple<int, int, int>> emittedAnchors;
+    for (const auto& pin : pinAnchors) {
+      const int x = toDbuX(pin.x());
+      const int y = toDbuY(pin.y());
+      const int layer = pin.getLayerIdx() + 1;
+      if (emittedAnchors.insert({x, y, layer}).second) {
+        route.emplace_back(x, y, layer, x, y, layer, false);
+        totalRouteSegments++;
+      }
+    }
+
+    if (route.empty() && !pinAnchors.empty()) {
+      const auto& pin = pinAnchors.front();
+      route.emplace_back(toDbuX(pin.x()),
+                         toDbuY(pin.y()),
+                         pin.getLayerIdx() + 1,
+                         toDbuX(pin.x()),
+                         toDbuY(pin.y()),
+                         pin.getLayerIdx() + 1,
+                         false);
+      totalRouteSegments++;
+    }
   }
+
+  logger_->report("exported {} global route segments", totalRouteSegments);
 
   return routes;
 }
