@@ -43,6 +43,7 @@ class NewgrEngine
 
   void init(const SprouteGridData& grid, const std::vector<SprouteNetData>& nets);
   NetRouteMap run();
+  NetRouteMap runWirelengthFirst();
 
   const NewgrInput& getInput() const { return input_; }
   int getTotalOverflow() const { return last_total_overflow_; }
@@ -64,6 +65,7 @@ class NewgrEngine
                   int grid_x1,
                   int grid_y1,
                   int grid_l1) const;
+  NetRouteMap runWithConfig(int max_maze_round, int algo_id, int warn_id);
   int toDbLayer(int sproute_layer) const;
   std::string sanitizeNetName(const std::string& name) const;
 

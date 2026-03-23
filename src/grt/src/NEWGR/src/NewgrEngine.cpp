@@ -74,6 +74,20 @@ void NewgrEngine::init(const SprouteGridData& grid,
 
 NetRouteMap NewgrEngine::run()
 {
+  return runWithConfig(/*max_maze_round=*/350,
+                       static_cast<int>(Algo::DetPart_Astar_Local),
+                       /*warn_id=*/401);
+}
+
+NetRouteMap NewgrEngine::runWirelengthFirst()
+{
+  return runWithConfig(/*max_maze_round=*/260,
+                       static_cast<int>(Algo::DetPart_Astar),
+                       /*warn_id=*/402);
+}
+
+NetRouteMap NewgrEngine::runWithConfig(int max_maze_round, int algo_id, int warn_id)
+{
   if (!input_ready_) {
     buildInput();
   }
@@ -94,7 +108,7 @@ NetRouteMap NewgrEngine::run()
   timer.start();
   if (generator.capReductions_p == nullptr) {
     logger_->warn(utl::GRT,
-                  401,
+                  warn_id,
                   "NEWGR generator has no localized capacity reductions; "
                   "continuing without adjustments.");
   }
@@ -103,8 +117,8 @@ NetRouteMap NewgrEngine::run()
                /*OutFileName=*/"",
                congestion_map,
                timer,
-               /*maxMazeRound=*/350,
-               Algo::DetPart_Astar_Local);
+               max_maze_round,
+               static_cast<Algo>(algo_id));
   timer.stop();
   last_total_overflow_ = totalOverflow;
 
