@@ -5211,6 +5211,128 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   selected.name += "+ringstorm";
   selected.metrics = compute_metrics(selected.routes);
 
+  // Iteration 35 radical mode:
+  // Build a fluxfield backbone variant (median spine + RMST trunk + bipolar
+  // portals) and force deterministic donor swaps on a broad net subset.
+  // This intentionally perturbs topology harder than prior ringstorm passes
+  // to move wirelength away from repeated fixed points.
+  ScenarioResult fluxfield = selected;
+  fluxfield.name = "fluxfield_backbone";
+  applyMedianSpineRebuild(
+      fluxfield.routes, 5, 4096, min_routing_layer, max_routing_layer);
+  applyRmstTrunkRebuild(grouter_,
+                        fluxfield.routes,
+                        baseline_rudy,
+                        5,
+                        4096,
+                        100,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyBipolarPortalBackboneRebuild(grouter_,
+                                    fluxfield.routes,
+                                    baseline_rudy,
+                                    5,
+                                    4096,
+                                    100,
+                                    min_routing_layer,
+                                    max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        fluxfield.routes,
+                        baseline_rudy,
+                        std::max(tile_size, 1),
+                        std::max(16 * tile_size, 1),
+                        132);
+  applyAggressiveDoglegShortcuts(fluxfield.routes,
+                                 std::max(26 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(fluxfield.routes, std::max(8 * tile_size, 1));
+  applyViaExcursionCollapse(fluxfield.routes, std::max(3 * tile_size, 1));
+  fluxfield.metrics = compute_metrics(fluxfield.routes);
+
+  long fluxfield_forced_nets = 0;
+  long fluxfield_shock_nets = 0;
+  long fluxfield_compact_rescue_nets = 0;
+
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+
+    const auto flux_it = fluxfield.routes.find(db_net);
+    if (flux_it == fluxfield.routes.end()) {
+      continue;
+    }
+    const GRoute& flux_route = flux_it->second;
+    if (!has_planar_guide(flux_route)) {
+      continue;
+    }
+
+    const auto [cur_wl, cur_vias] = route_stats(current_route);
+    const auto [flux_wl, flux_vias] = route_stats(flux_route);
+    const double current_score
+        = route_objective(current_route, selected.overflow);
+    const double flux_score = route_objective(flux_route, fluxfield.overflow);
+
+    bool use_flux = false;
+    if (node_count >= 9 && ((key % 4ULL) == 0ULL || (key % 9ULL) == 5ULL)) {
+      use_flux = route_admissible_radical(flux_route, current_route);
+    }
+    if (!use_flux && flux_wl <= static_cast<long>(cur_wl * 0.97)
+        && flux_vias <= static_cast<long>(cur_vias * 2.80 + 10)) {
+      use_flux = true;
+    }
+    if (!use_flux && flux_score <= current_score * 1.32
+        && (key % 5ULL) == 2ULL) {
+      use_flux = route_admissible_radical(flux_route, current_route);
+    }
+    if (!use_flux && node_count >= 13
+        && flux_wl <= static_cast<long>(cur_wl * 1.95)
+        && flux_vias <= static_cast<long>(cur_vias * 6.40 + 24)
+        && (key % 11ULL) == 4ULL) {
+      use_flux = true;
+    }
+
+    if (use_flux) {
+      selected.routes[db_net] = flux_route;
+      fluxfield_forced_nets++;
+      continue;
+    }
+
+    if (node_count >= 11 && (key % 10ULL) == 3ULL) {
+      const auto shock_it = shockwave.routes.find(db_net);
+      if (shock_it != shockwave.routes.end()) {
+        const GRoute& shock_route = shock_it->second;
+        if (has_planar_guide(shock_route)
+            && route_admissible_radical(shock_route, current_route)) {
+          selected.routes[db_net] = shock_route;
+          fluxfield_shock_nets++;
+          continue;
+        }
+      }
+    }
+
+    if (node_count <= 3 && (key % 6ULL) == 1ULL) {
+      const auto compact_it = compact.routes.find(db_net);
+      if (compact_it != compact.routes.end()) {
+        const GRoute& compact_route = compact_it->second;
+        if (has_planar_guide(compact_route)
+            && route_admissible(compact_route, current_route)) {
+          selected.routes[db_net] = compact_route;
+          fluxfield_compact_rescue_nets++;
+        }
+      }
+    }
+  }
+
+  if (fluxfield_forced_nets > 0 || fluxfield_shock_nets > 0
+      || fluxfield_compact_rescue_nets > 0) {
+    applyGuideCompression(selected.routes, std::max(7 * tile_size, 1));
+    applyViaExcursionCollapse(selected.routes, std::max(3 * tile_size, 1));
+    selected.name += "+fluxfield";
+    selected.metrics = compute_metrics(selected.routes);
+  }
+
   // Final safeguard to prevent catastrophic regressions.
   const bool catastrophic
       = static_cast<double>(selected.metrics.wirelength_dbu)
@@ -5279,6 +5401,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 phase_mesh_nets,
                 phase_axial_nets,
                 phase_hyper_nets);
+  logger_->warn(GNR,
+                6036,
+                "NEWGR fluxfield picks: forced {} shock_blend {} "
+                "compact_rescue {}.",
+                fluxfield_forced_nets,
+                fluxfield_shock_nets,
+                fluxfield_compact_rescue_nets);
 
   restore_snapshot(snapshot);
   return selected.routes;
