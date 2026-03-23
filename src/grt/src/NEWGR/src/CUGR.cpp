@@ -68,24 +68,32 @@ RouteStats measureRouteStats(const GridGraph* grid_graph,
 
 bool isBetterStage3Candidate(const RouteStats& candidate,
                              const RouteStats& current_best,
-                             const int baseline_overflow)
+                             const int baseline_overflow,
+                             const double allowed_overflow_increase_for_wl_gain)
 {
   constexpr double kOverflowEpsilon = 1e-6;
-  constexpr double kAllowedOverflowIncreaseForWlGain = 6.0;
   constexpr double kStrongOverflowDropThreshold = 20.0;
+  constexpr int64_t kStrongWireGain = 12;
+  constexpr int64_t kMaxWirelengthTradeoff = 24;
 
   // Wirelength-first objective:
   // keep shorter candidates as long as they don't cause a large overflow jump.
-  if (candidate.wirelength < current_best.wirelength) {
+  if (candidate.wirelength + kStrongWireGain < current_best.wirelength) {
     return candidate.total_overflow
-           <= current_best.total_overflow + kAllowedOverflowIncreaseForWlGain;
+           <= current_best.total_overflow + allowed_overflow_increase_for_wl_gain;
+  }
+  if (candidate.wirelength < current_best.wirelength
+      && candidate.total_overflow
+             <= current_best.total_overflow
+                    + allowed_overflow_increase_for_wl_gain * 0.6
+      && candidate.vias <= current_best.vias + 2) {
+    return true;
   }
 
   const double overflow_drop
       = current_best.total_overflow - candidate.total_overflow;
   if (overflow_drop > kStrongOverflowDropThreshold) {
     // Accept a large overflow reduction even without immediate WL gain.
-    constexpr int64_t kMaxWirelengthTradeoff = 24;
     if (candidate.wirelength
         > current_best.wirelength + kMaxWirelengthTradeoff) {
       return false;
@@ -292,6 +300,15 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
               ? static_cast<double>(original_stats.wirelength)
                     / static_cast<double>(approx_hpwl_dbu)
               : 1.0;
+    const bool aggressive_wirelength_mode
+        = hpwl >= constants_.stage3_wl_only_hpwl_threshold
+          && net->getNumPins() >= 3
+          && net->getNumPins() <= constants_.stage3_full_grid_pin_limit + 4
+          && baseline_overflow
+                 <= constants_.stage3_full_grid_overflow_threshold + 2
+          && baseline_stretch >= 1.08;
+    const double stage3_wl_overflow_slack
+        = aggressive_wirelength_mode ? 11.5 : 7.0;
     const bool wide_bbox = bbox.width() >= bbox.height();
     const int base_sparse = std::clamp(hpwl >= 240 ? 8 : (hpwl >= 120 ? 7 : 6),
                                        4,
@@ -361,7 +378,10 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       }
       if (!best_tree
           || isBetterStage3Candidate(
-              candidate_stats, best_stats, baseline_overflow)) {
+              candidate_stats,
+              best_stats,
+              baseline_overflow,
+              stage3_wl_overflow_slack)) {
         best_tree = tree;
         best_stats = candidate_stats;
         best_is_baseline = is_baseline_candidate;
@@ -394,10 +414,14 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         && hpwl >= constants_.stage3_wl_only_hpwl_threshold
         && net->getNumPins() > 2) {
       const int wl_config_limit = std::max(1, constants_.stage3_wl_config_limit);
+      const int wl_bonus_runs = aggressive_wirelength_mode ? 2 : 0;
       const int wl_runs = std::min(static_cast<int>(maze_configs.size()),
-                                   wl_config_limit);
+                                   wl_config_limit + wl_bonus_runs);
       const double wl_via_cost_scale
-          = std::clamp(constants_.stage3_wl_via_cost_scale, 0.0, 1.0);
+          = std::clamp(constants_.stage3_wl_via_cost_scale
+                           * (aggressive_wirelength_mode ? 0.8 : 1.0),
+                       0.0,
+                       1.0);
       for (int cfg_index = 0; cfg_index < wl_runs; cfg_index++) {
         const auto& cfg = maze_configs[cfg_index];
         MazeRoute wlMazeRoute(net, grid_graph_.get(), logger_);
@@ -430,7 +454,11 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         && net->getNumPins() >= 3
         && net->getNumPins() <= constants_.stage3_full_grid_pin_limit
         && baseline_overflow <= constants_.stage3_full_grid_overflow_threshold
-        && baseline_stretch >= constants_.stage3_full_grid_min_stretch) {
+        && baseline_stretch
+               >= (aggressive_wirelength_mode
+                       ? std::max(1.05,
+                                  constants_.stage3_full_grid_min_stretch - 0.08)
+                       : constants_.stage3_full_grid_min_stretch)) {
       const double full_grid_via_scale = std::clamp(
           constants_.stage3_full_grid_via_cost_scale, 0.0, 1.0);
       MazeRoute fullGridWlMaze(net, grid_graph_.get(), logger_);
