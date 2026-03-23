@@ -2262,8 +2262,14 @@ NetRouteMap buildWirelengthClosureHybrid(
         ++stats.skipped_by_via_guard;
         continue;
       }
+      const bool via_safe_swap = via_increase <= 0;
       if (low_layer_delta
-          > std::max<int64_t>(180, static_cast<int64_t>(pin_count * 8 + wl_gain / 3))) {
+          > std::max<int64_t>(180, static_cast<int64_t>(pin_count * 8 + wl_gain / 3))
+          && !(via_safe_swap
+               && wl_gain
+                      > std::max<int64_t>(
+                          static_cast<int64_t>(120),
+                          low_layer_delta / 2 + static_cast<int64_t>(32)))) {
         ++stats.skipped_by_layer_guard;
         continue;
       }
@@ -2426,11 +2432,15 @@ NetRouteMap buildWirelengthClosureHybrid(
             ++stats.skipped_by_via_guard;
             continue;
           }
-          if (low_layer_growth > 0
-              && candidate.wl_gain
-                     < low_layer_growth + static_cast<int64_t>(40)) {
-            ++stats.skipped_by_layer_guard;
-            continue;
+          if (low_layer_growth > 0) {
+            const int64_t low_layer_threshold
+                = (via_increase > 0)
+                      ? (low_layer_growth + static_cast<int64_t>(40))
+                      : (low_layer_growth * 3 / 4 + static_cast<int64_t>(24));
+            if (candidate.wl_gain < low_layer_threshold) {
+              ++stats.skipped_by_layer_guard;
+              continue;
+            }
           }
           if (consumed_via_increase + via_increase > via_increase_budget
               || consumed_low_layer_growth + low_layer_growth
