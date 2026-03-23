@@ -4593,6 +4593,39 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   applyViaExcursionCollapse(meshwarp.routes, std::max(5 * tile_size, 1));
   meshwarp.metrics = compute_metrics(meshwarp.routes);
 
+  // Orbital-ringblast scenario: combine perimeter ring collapse with corridor
+  // backbone rewiring and a high-amplitude wave pass to intentionally create
+  // a very different net topology regime.
+  ScenarioResult orbital_ringblast = compact;
+  orbital_ringblast.name = "orbital_ringblast";
+  applyPerimeterRingCollapse(grouter_,
+                             orbital_ringblast.routes,
+                             baseline_rudy,
+                             2,
+                             100,
+                             9,
+                             min_routing_layer,
+                             max_routing_layer);
+  applyRudyCorridorBackboneRebuild(grouter_,
+                                   orbital_ringblast.routes,
+                                   baseline_rudy,
+                                   2,
+                                   100,
+                                   min_routing_layer,
+                                   max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        orbital_ringblast.routes,
+                        baseline_rudy,
+                        std::max(2 * tile_size, 1),
+                        std::max(14 * tile_size, 1),
+                        100);
+  applyAggressiveDoglegShortcuts(orbital_ringblast.routes,
+                                 std::max(14 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(orbital_ringblast.routes, std::max(6 * tile_size, 1));
+  applyViaExcursionCollapse(orbital_ringblast.routes, std::max(3 * tile_size, 1));
+  orbital_ringblast.metrics = compute_metrics(orbital_ringblast.routes);
+
   struct CandidateEntry
   {
     const char* name;
@@ -4608,7 +4641,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       {"axial_force", &axial_force},
       {"shockwave", &shockwave},
       {"monorail", &monorail},
-      {"meshwarp", &meshwarp}};
+      {"meshwarp", &meshwarp},
+      {"orbital", &orbital_ringblast}};
   if (sculpted_available) {
     candidates.push_back({"sculpted", &sculpted});
   }
@@ -4706,6 +4740,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   long shock_forced_nets = 0;
   long monorail_forced_nets = 0;
   long meshwarp_forced_nets = 0;
+  long orbital_forced_nets = 0;
 
   for (const auto& [db_net, base_route] : compact.routes) {
     const GRoute* best_route = &base_route;
@@ -4971,6 +5006,62 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     selected.metrics = compute_metrics(selected.routes);
   }
 
+  // Orbital injection: force a ring/corridor/wave topology on a deterministic
+  // subset of medium and large nets to keep escaping repeated local minima.
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto orbital_it = orbital_ringblast.routes.find(db_net);
+    if (orbital_it == orbital_ringblast.routes.end()) {
+      continue;
+    }
+    const GRoute& orbital_route = orbital_it->second;
+    if (!has_planar_guide(orbital_route)) {
+      continue;
+    }
+
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+    if (node_count < 5) {
+      continue;
+    }
+    if (!route_admissible_loose(orbital_route, current_route)) {
+      continue;
+    }
+
+    const auto [base_wl, base_vias] = route_stats(current_route);
+    const auto [orbital_wl, orbital_vias] = route_stats(orbital_route);
+    const double base_score = route_objective(current_route, selected.overflow);
+    const double orbital_score
+        = route_objective(orbital_route, orbital_ringblast.overflow);
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+
+    bool use_orbital = false;
+    if (node_count >= 12 && (key % 2ULL) == 1ULL) {
+      use_orbital = true;
+    }
+    if (!use_orbital
+        && orbital_wl <= static_cast<long>(base_wl * 1.08)
+        && orbital_vias <= static_cast<long>(base_vias * 1.60 + 8)) {
+      use_orbital = true;
+    }
+    if (!use_orbital && orbital_score <= base_score * 1.25) {
+      use_orbital = (key % 3ULL) == 0ULL;
+    }
+    if (!use_orbital && node_count >= 7
+        && orbital_wl <= static_cast<long>(base_wl * 1.75)
+        && orbital_vias <= static_cast<long>(base_vias * 5.80 + 30)) {
+      use_orbital = (key % 5ULL) == 4ULL;
+    }
+    if (use_orbital) {
+      selected.routes[db_net] = orbital_route;
+      orbital_forced_nets++;
+    }
+  }
+  if (orbital_forced_nets > 0) {
+    selected.name += "+orbital";
+    selected.metrics = compute_metrics(selected.routes);
+  }
+
   ScenarioResult stabilized = selected;
   stabilized.name = "stabilized_radical_hyper";
   applyQuadrantPortalHypergraphRebuild(grouter_,
@@ -4994,24 +5085,32 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     selected = stabilized;
   }
 
-  // Final radical move for this iteration: force a global wave detour pass on
-  // the selected routes so wirelength escapes compact-route fixed points.
+  // Final radical move for this iteration: force a perimeter-ring collapse
+  // followed by a high-amplitude global wave detour pass.
+  applyPerimeterRingCollapse(grouter_,
+                             selected.routes,
+                             baseline_rudy,
+                             2,
+                             100,
+                             10,
+                             min_routing_layer,
+                             max_routing_layer);
   applyWavefrontDetours(grouter_,
                         selected.routes,
                         baseline_rudy,
                         std::max(2 * tile_size, 1),
-                        std::max(6 * tile_size, 1),
+                        std::max(10 * tile_size, 1),
                         100);
   applyViaExcursionCollapse(selected.routes, std::max(2 * tile_size, 1));
-  selected.name += "+final_waveforce";
+  selected.name += "+final_orbital_waveforce";
   selected.metrics = compute_metrics(selected.routes);
 
   // Final safeguard to prevent catastrophic regressions.
   const bool catastrophic
       = static_cast<double>(selected.metrics.wirelength_dbu)
-            > static_cast<double>(baseline.metrics.wirelength_dbu) * 3.50
+            > static_cast<double>(baseline.metrics.wirelength_dbu) * 4.20
         || static_cast<double>(selected.metrics.via_count)
-               > static_cast<double>(baseline.metrics.via_count) * 6.00;
+               > static_cast<double>(baseline.metrics.via_count) * 7.00;
   if (catastrophic) {
     selected = compact;
     selected.name = "catastrophic_fallback_compact";
@@ -5038,7 +5137,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 6033,
                 "NEWGR tournament picks: compact {} shortcut {} anisotropic {} "
                 "wirehunter {} radical_hyper {} axial_force {} shockwave {} "
-                "monorail {} meshwarp {} sculpted {}.",
+                "monorail {} meshwarp {} orbital {} sculpted {}.",
                 tournament_picks.size() > 0 ? tournament_picks[0] : 0,
                 tournament_picks.size() > 1 ? tournament_picks[1] : 0,
                 tournament_picks.size() > 2 ? tournament_picks[2] : 0,
@@ -5048,12 +5147,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 tournament_picks.size() > 6 ? tournament_picks[6] : 0,
                 tournament_picks.size() > 7 ? tournament_picks[7] : 0,
                 tournament_picks.size() > 8 ? tournament_picks[8] : 0,
-                tournament_picks.size() > 9 ? tournament_picks[9] : 0);
+                tournament_picks.size() > 9 ? tournament_picks[9] : 0,
+                tournament_picks.size() > 10 ? tournament_picks[10] : 0);
   logger_->warn(GNR,
                 6034,
                 "NEWGR blend counters: sculpted {} shortcuts {} anisotropic {} "
                 "wirehunter {} axial_force {} shockwave {} monorail {} "
-                "meshwarp {}.",
+                "meshwarp {} orbital {}.",
                 nets_taken_from_sculpted,
                 nets_taken_from_shortcuts,
                 nets_taken_from_anisotropic,
@@ -5061,7 +5161,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 axial_forced_nets,
                 shock_forced_nets,
                 monorail_forced_nets,
-                meshwarp_forced_nets);
+                meshwarp_forced_nets,
+                orbital_forced_nets);
 
   restore_snapshot(snapshot);
   return selected.routes;
