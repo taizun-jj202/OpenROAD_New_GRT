@@ -50,16 +50,16 @@ struct Constants
   double mst_bend_penalty = 2.0;
   int hub_topology_pin_threshold = 18;
   int pin_access_layer_extension = 0;
-  bool enable_early_detour_stage = true;
+  bool enable_early_detour_stage = false;
 
   double maze_logistic_slope = 1.0;
   int maze_base_interval = 3;
   int maze_min_interval = 1;
   bool enable_wirelength_pulse_stage = true;
-  int wirelength_pulse_rounds = 2;
-  double wirelength_pulse_net_ratio = 0.35;
+  int wirelength_pulse_rounds = 3;
+  double wirelength_pulse_net_ratio = 0.08;
   int wirelength_pulse_dense_interval = 1;
-  int wirelength_pulse_relaxed_interval = 2;
+  int wirelength_pulse_relaxed_interval = 3;
   int global_rebalance_rounds = 2;
   bool enable_critical_compaction_stage = true;
   int critical_compaction_rounds = 3;

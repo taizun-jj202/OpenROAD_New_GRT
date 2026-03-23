@@ -352,8 +352,8 @@ void CUGR::wirelengthPulseRoute(const std::vector<int>& allNetIndices)
       const int hp = std::max(net->getBoundingBox().hp(), 1);
       const auto& tree = net->getRoutingTree();
       const RouteScore score = scoreRouteTree(tree, *grid_graph_, constants_);
-      const double impact = score.wire_length + 2.5 * score.via_count
-                            + 12.0 * hp + 80.0 * score.overflow_edges;
+      const double impact = score.wire_length + 1.8 * score.via_count
+                            + 9.0 * hp + 180.0 * score.overflow_edges;
       rankedNets.emplace_back(impact, netIndex);
     }
     std::sort(rankedNets.begin(),
@@ -414,12 +414,12 @@ void CUGR::wirelengthPulseRoute(const std::vector<int>& allNetIndices)
       RouteScore bestScore;
       std::shared_ptr<GRTreeNode> bestTree = nullptr;
       auto scoreCandidate = [&](const std::shared_ptr<GRTreeNode>& candidateTree) {
-        double wireWeight = constants_.weight_wire_length * 3.2;
-        double viaWeight = constants_.weight_via_number * 0.45;
-        const double overflowWeight = constants_.weight_short_area * 1.55;
+        double wireWeight = constants_.weight_wire_length * 2.6;
+        double viaWeight = constants_.weight_via_number * 0.85;
+        const double overflowWeight = constants_.weight_short_area * 2.3;
         if (hp >= 120 || net->getNumPins() >= 10) {
-          wireWeight *= 1.30;
-          viaWeight *= 0.80;
+          wireWeight *= 1.20;
+          viaWeight *= 1.10;
         }
         return scoreRouteTree(candidateTree,
                               *grid_graph_,
@@ -744,11 +744,11 @@ void CUGR::route()
   wirelengthPulseRoute(allNetIndices);
 
   updateOverflowNets(netIndices);
-  if (!netIndices.empty()) {
+  if (constants_.enable_early_detour_stage && !netIndices.empty()) {
     patternRouteWithDetours(netIndices);
     updateOverflowNets(netIndices);
   }
-  logger_->report("pulse mode: completed wirelength-focused reroute stage");
+  logger_->report("pulse mode: completed focused reroute stage");
 
   printStatistics();
   if (constants_.write_heatmap) {
