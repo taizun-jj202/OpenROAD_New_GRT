@@ -217,6 +217,8 @@ void MazeRoute::run()
   };
 
   constexpr CostT kCostEpsilon = static_cast<CostT>(1e-6);
+  const uint64_t net_hpwl
+      = static_cast<uint64_t>(std::max(1, net_->getBoundingBox().hp()));
   auto computeRouteGeometry
       = [&](const std::vector<std::shared_ptr<Solution>>& solutions) {
           uint64_t wirelength = 0;
@@ -273,6 +275,11 @@ void MazeRoute::run()
     constexpr uint64_t kModerateWireGain = 4;
     constexpr double kCostSlackForWireGain = 1.18;
     constexpr double kCostSlackForModerateWireGain = 1.26;
+    const uint64_t kCostDrivenWireSlack = std::max<uint64_t>(2, net_hpwl / 28);
+    const double candidate_stretch = static_cast<double>(candidate.unique_wirelength)
+                                     / static_cast<double>(net_hpwl);
+    const double best_stretch = static_cast<double>(current_best.unique_wirelength)
+                                / static_cast<double>(net_hpwl);
     if (candidate.unique_wirelength + kStrongWireGain
             < current_best.unique_wirelength
         && candidate.total_cost <= current_best.total_cost * kCostSlackForWireGain) {
@@ -285,7 +292,17 @@ void MazeRoute::run()
         && candidate.unique_vias <= current_best.unique_vias + 4) {
       return true;
     }
-    if (candidate.total_cost + kCostEpsilon < current_best.total_cost) {
+    // Allow congestion-cost wins only when they do not materially regress
+    // geometric route compactness.
+    if (candidate.total_cost + kCostEpsilon < current_best.total_cost
+        && candidate.unique_wirelength
+               <= current_best.unique_wirelength + kCostDrivenWireSlack
+        && candidate.unique_vias <= current_best.unique_vias + 5) {
+      return true;
+    }
+    if (candidate_stretch + 0.015 < best_stretch
+        && candidate.total_cost <= current_best.total_cost * 1.30
+        && candidate.unique_vias <= current_best.unique_vias + 6) {
       return true;
     }
     if (std::abs(candidate.total_cost - current_best.total_cost) <= kCostEpsilon
@@ -1071,22 +1088,34 @@ void MazeRoute::run()
   if (num_pins <= 16) {
     max_seeds = num_pins;
   } else if (num_pins <= 32) {
-    max_seeds = 10;
+    max_seeds = 9;
   } else if (num_pins <= 64) {
-    max_seeds = 10;
+    max_seeds = 8;
   } else if (num_pins <= 96) {
-    max_seeds = 6;
+    max_seeds = 5;
   } else {
-    max_seeds = 4;
+    max_seeds = 3;
   }
   if (max_seeds < static_cast<int>(seeds.size())) {
     seeds.resize(max_seeds);
   }
 
   RunResult best_result = runMetricClosureMst();
-  RunResult geometric_mst_result = runGeometricMstEmbedding(center_seed);
-  if (isBetterResult(geometric_mst_result, best_result)) {
-    best_result = std::move(geometric_mst_result);
+  auto runGeometricCandidate = [&](const int root_pin) {
+    RunResult geometric_mst_result = runGeometricMstEmbedding(root_pin);
+    if (isBetterResult(geometric_mst_result, best_result)) {
+      best_result = std::move(geometric_mst_result);
+    }
+  };
+  runGeometricCandidate(center_seed);
+  if (num_pins <= 128) {
+    runGeometricCandidate(far_seed);
+  }
+  if (num_pins <= 64) {
+    runGeometricCandidate(min_x_seed);
+    runGeometricCandidate(max_x_seed);
+    runGeometricCandidate(min_y_seed);
+    runGeometricCandidate(max_y_seed);
   }
 
   auto runPairCandidate = [&](const int lhs, const int rhs) {
@@ -1109,8 +1138,6 @@ void MazeRoute::run()
     runPairCandidate(max_x_seed, min_y_seed);
     runPairCandidate(center_seed, min_x_seed);
     runPairCandidate(center_seed, max_x_seed);
-    runPairCandidate(center_seed, min_y_seed);
-    runPairCandidate(center_seed, max_y_seed);
   }
 
   for (const int seed : seeds) {
