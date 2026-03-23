@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <numeric>
@@ -626,6 +627,217 @@ void applyLayerPolarityField(GlobalRouter* grouter,
   }
 }
 
+float sampleRudyAt(const RudyGrid& normalized_rudy, int gx, int gy)
+{
+  if (normalized_rudy.empty()) {
+    return 0.0f;
+  }
+  if (gx < 0 || gy < 0 || gx >= static_cast<int>(normalized_rudy.size())
+      || gy >= static_cast<int>(normalized_rudy.front().size())) {
+    return 0.0f;
+  }
+  return normalized_rudy[gx][gy];
+}
+
+void appendSegment(std::vector<GSegment>& route,
+                   int x0,
+                   int y0,
+                   int l0,
+                   int x1,
+                   int y1,
+                   int l1)
+{
+  if (x0 == x1 && y0 == y1 && l0 == l1) {
+    return;
+  }
+  route.emplace_back(x0, y0, l0, x1, y1, l1);
+}
+
+void applyBraidedDetourWeave(GlobalRouter* grouter,
+                             NetRouteMap& routes,
+                             const RudyGrid& normalized_rudy)
+{
+  if (grouter == nullptr || grouter->grid() == nullptr || routes.empty()) {
+    return;
+  }
+
+  Grid* grid = grouter->grid();
+  const int tile = std::max(grid->getTileSize(), 1);
+  const int x_min = grid->getXMin();
+  const int y_min = grid->getYMin();
+  const int x_max = grid->getXMax();
+  const int y_max = grid->getYMax();
+  const int min_segment_len = tile * 6;
+  const int detour_step = tile * 2;
+  const int x_tiles = normalized_rudy.empty() ? 0 : normalized_rudy.size();
+  const int y_tiles
+      = normalized_rudy.empty() ? 0 : normalized_rudy.front().size();
+
+  auto to_grid_x = [&](int x) {
+    if (x_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((x - x_min) / tile, 0, x_tiles - 1);
+  };
+  auto to_grid_y = [&](int y) {
+    if (y_tiles <= 0) {
+      return 0;
+    }
+    return std::clamp((y - y_min) / tile, 0, y_tiles - 1);
+  };
+  auto choose_detour_coord = [&](int base_coord,
+                                 int fixed_coord,
+                                 bool horizontal,
+                                 std::uint64_t key) {
+    const int lower = horizontal ? y_min + tile : x_min + tile;
+    const int upper = horizontal ? y_max - tile : x_max - tile;
+    if (lower >= upper) {
+      return base_coord;
+    }
+
+    const int pos = std::clamp(base_coord + detour_step, lower, upper);
+    const int neg = std::clamp(base_coord - detour_step, lower, upper);
+    if (pos == base_coord && neg == base_coord) {
+      return base_coord;
+    }
+
+    const int gx_pos = horizontal ? to_grid_x(fixed_coord) : to_grid_x(pos);
+    const int gy_pos = horizontal ? to_grid_y(pos) : to_grid_y(fixed_coord);
+    const int gx_neg = horizontal ? to_grid_x(fixed_coord) : to_grid_x(neg);
+    const int gy_neg = horizontal ? to_grid_y(neg) : to_grid_y(fixed_coord);
+
+    const float pos_rudy = sampleRudyAt(normalized_rudy, gx_pos, gy_pos);
+    const float neg_rudy = sampleRudyAt(normalized_rudy, gx_neg, gy_neg);
+
+    if (std::fabs(pos_rudy - neg_rudy) < 0.04f) {
+      const bool prefer_pos = (key & 1ULL) == 0ULL;
+      return prefer_pos ? pos : neg;
+    }
+    return (pos_rudy < neg_rudy) ? pos : neg;
+  };
+
+  for (auto& [db_net, route] : routes) {
+    if (route.empty()) {
+      continue;
+    }
+
+    std::uint64_t net_key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    if ((net_key % 100ULL) >= 60ULL) {
+      continue;
+    }
+
+    std::vector<GSegment> detoured;
+    detoured.reserve(route.size() * 3);
+    for (size_t seg_idx = 0; seg_idx < route.size(); ++seg_idx) {
+      const GSegment& segment = route[seg_idx];
+      const bool is_via = segment.isVia();
+      const bool horizontal
+          = segment.init_layer == segment.final_layer
+            && segment.init_y == segment.final_y
+            && segment.init_x != segment.final_x;
+      const bool vertical = segment.init_layer == segment.final_layer
+                            && segment.init_x == segment.final_x
+                            && segment.init_y != segment.final_y;
+      const long length = segment.length();
+      const std::uint64_t key = net_key + static_cast<std::uint64_t>(seg_idx) * 131ULL;
+
+      const bool detour_candidate
+          = !is_via && (horizontal || vertical) && length >= min_segment_len
+            && ((key % 4ULL) == 0ULL);
+      if (!detour_candidate) {
+        detoured.push_back(segment);
+        continue;
+      }
+
+      if (horizontal) {
+        int mid_x = segment.init_x + (segment.final_x - segment.init_x) / 2;
+        if (mid_x == segment.init_x || mid_x == segment.final_x) {
+          mid_x = segment.init_x + (segment.final_x - segment.init_x) / 3;
+        }
+        const int detour_y
+            = choose_detour_coord(segment.init_y, mid_x, true, key);
+        if (detour_y == segment.init_y) {
+          detoured.push_back(segment);
+          continue;
+        }
+
+        appendSegment(detoured,
+                      segment.init_x,
+                      segment.init_y,
+                      segment.init_layer,
+                      mid_x,
+                      segment.init_y,
+                      segment.init_layer);
+        appendSegment(detoured,
+                      mid_x,
+                      segment.init_y,
+                      segment.init_layer,
+                      mid_x,
+                      detour_y,
+                      segment.init_layer);
+        appendSegment(detoured,
+                      mid_x,
+                      detour_y,
+                      segment.init_layer,
+                      segment.final_x,
+                      detour_y,
+                      segment.init_layer);
+        appendSegment(detoured,
+                      segment.final_x,
+                      detour_y,
+                      segment.init_layer,
+                      segment.final_x,
+                      segment.final_y,
+                      segment.final_layer);
+        continue;
+      }
+
+      int mid_y = segment.init_y + (segment.final_y - segment.init_y) / 2;
+      if (mid_y == segment.init_y || mid_y == segment.final_y) {
+        mid_y = segment.init_y + (segment.final_y - segment.init_y) / 3;
+      }
+      const int detour_x = choose_detour_coord(segment.init_x, mid_y, false, key);
+      if (detour_x == segment.init_x) {
+        detoured.push_back(segment);
+        continue;
+      }
+
+      appendSegment(detoured,
+                    segment.init_x,
+                    segment.init_y,
+                    segment.init_layer,
+                    segment.init_x,
+                    mid_y,
+                    segment.init_layer);
+      appendSegment(detoured,
+                    segment.init_x,
+                    mid_y,
+                    segment.init_layer,
+                    detour_x,
+                    mid_y,
+                    segment.init_layer);
+      appendSegment(detoured,
+                    detour_x,
+                    mid_y,
+                    segment.init_layer,
+                    detour_x,
+                    segment.final_y,
+                    segment.init_layer);
+      appendSegment(detoured,
+                    detour_x,
+                    segment.final_y,
+                    segment.init_layer,
+                    segment.final_x,
+                    segment.final_y,
+                    segment.final_layer);
+    }
+    if (!detoured.empty()) {
+      route.swap(detoured);
+    }
+  }
+}
+
 }  // namespace
 
 NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
@@ -1009,15 +1221,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   if (selected != nullptr) {
+    applyBraidedDetourWeave(grouter_, selected->routes, normalized_rudy);
+    RouteMetrics detoured_metrics = compute_metrics(selected->routes);
     logger_->warn(
         GNR,
         6010,
         "NEWGR selected scenario '{}' (objective {:.0f}, displacement {}, "
-        "overflow {}).",
+        "overflow {}, post-weave wl {:.0f} um vias {}).",
         selected->name,
         objective(*selected),
         displacement(*selected),
-        selected->overflow);
+        selected->overflow,
+        detoured_metrics.wirelength_um,
+        detoured_metrics.via_count);
     restore_snapshot(snapshot);
     return std::move(selected->routes);
   }
