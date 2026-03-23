@@ -217,8 +217,6 @@ void MazeRoute::run()
   };
 
   constexpr CostT kCostEpsilon = static_cast<CostT>(1e-6);
-  const uint64_t net_hpwl
-      = static_cast<uint64_t>(std::max(1, net_->getBoundingBox().hp()));
   auto computeRouteGeometry
       = [&](const std::vector<std::shared_ptr<Solution>>& solutions) {
           uint64_t wirelength = 0;
@@ -270,16 +268,12 @@ void MazeRoute::run()
     if (!current_best.valid) {
       return true;
     }
-    // Wirelength-first tie breaking with bounded congestion-cost regression.
-    constexpr uint64_t kStrongWireGain = 7;
-    constexpr uint64_t kModerateWireGain = 2;
-    constexpr double kCostSlackForWireGain = 1.22;
-    constexpr double kCostSlackForModerateWireGain = 1.34;
-    const uint64_t kCostDrivenWireSlack = std::max<uint64_t>(2, net_hpwl / 28);
-    const double candidate_stretch = static_cast<double>(candidate.unique_wirelength)
-                                     / static_cast<double>(net_hpwl);
-    const double best_stretch = static_cast<double>(current_best.unique_wirelength)
-                                / static_cast<double>(net_hpwl);
+    // Strong wirelength-first tie breaking:
+    // this is intentionally more aggressive than congestion-cost wins.
+    constexpr uint64_t kStrongWireGain = 5;
+    constexpr uint64_t kModerateWireGain = 1;
+    constexpr double kCostSlackForWireGain = 1.30;
+    constexpr double kCostSlackForModerateWireGain = 1.45;
     if (candidate.unique_wirelength + kStrongWireGain
             < current_best.unique_wirelength
         && candidate.total_cost <= current_best.total_cost * kCostSlackForWireGain) {
@@ -289,20 +283,18 @@ void MazeRoute::run()
             < current_best.unique_wirelength
         && candidate.total_cost
                <= current_best.total_cost * kCostSlackForModerateWireGain
-        && candidate.unique_vias <= current_best.unique_vias + 4) {
-      return true;
-    }
-    // Allow congestion-cost wins only when they do not materially regress
-    // geometric route compactness.
-    if (candidate.total_cost + kCostEpsilon < current_best.total_cost
-        && candidate.unique_wirelength
-               <= current_best.unique_wirelength + kCostDrivenWireSlack
-        && candidate.unique_vias <= current_best.unique_vias + 5) {
-      return true;
-    }
-    if (candidate_stretch + 0.010 < best_stretch
-        && candidate.total_cost <= current_best.total_cost * 1.30
         && candidate.unique_vias <= current_best.unique_vias + 6) {
+      return true;
+    }
+    if (candidate.unique_wirelength < current_best.unique_wirelength
+        && candidate.unique_vias <= current_best.unique_vias + 8
+        && candidate.total_cost <= current_best.total_cost * 1.55) {
+      return true;
+    }
+    // Allow pure congestion-cost wins only when geometric quality is preserved.
+    if (candidate.total_cost + kCostEpsilon < current_best.total_cost
+        && candidate.unique_wirelength <= current_best.unique_wirelength
+        && candidate.unique_vias <= current_best.unique_vias + 4) {
       return true;
     }
     if (std::abs(candidate.total_cost - current_best.total_cost) <= kCostEpsilon
@@ -318,11 +310,6 @@ void MazeRoute::run()
         && candidate.unique_wirelength == current_best.unique_wirelength
         && candidate.unique_vias == current_best.unique_vias
         && candidate.via_steps < current_best.via_steps) {
-      return true;
-    }
-    if (candidate.unique_wirelength < current_best.unique_wirelength
-        && candidate.total_cost <= current_best.total_cost * 1.18
-        && candidate.unique_vias <= current_best.unique_vias + 4) {
       return true;
     }
     return false;
@@ -1164,13 +1151,13 @@ void MazeRoute::run()
   if (num_pins <= 16) {
     max_seeds = num_pins;
   } else if (num_pins <= 32) {
-    max_seeds = 12;
+    max_seeds = 16;
   } else if (num_pins <= 64) {
-    max_seeds = 10;
+    max_seeds = 14;
   } else if (num_pins <= 96) {
-    max_seeds = 7;
+    max_seeds = 10;
   } else {
-    max_seeds = 4;
+    max_seeds = 6;
   }
   if (max_seeds < static_cast<int>(seeds.size())) {
     seeds.resize(max_seeds);
