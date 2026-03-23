@@ -2801,10 +2801,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(stabilized));
   }
 
-  if (false && has_best_wirelength) {
+  if (has_best_wirelength) {
     ScenarioResult longnet_fusion;
     longnet_fusion.name = "longnet-priority-fusion";
-    if (ScenarioResult* extreme = find_scenario_result("extreme-wirelength-stitch")) {
+    if (ScenarioResult* collapse = find_scenario_result("consensus-collapse-fusion")) {
+      longnet_fusion.routes = collapse->routes;
+    } else if (ScenarioResult* extreme = find_scenario_result("extreme-wirelength-stitch")) {
       longnet_fusion.routes = extreme->routes;
     } else if (ScenarioResult* radical = find_scenario_result("radical-shortpath-fusion")) {
       longnet_fusion.routes = radical->routes;
@@ -2836,16 +2838,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         x_grids,
         y_grids,
         hotspot_map,
-        std::max(tile_size / 3, 1),
-        6,
-        1.20);
+        std::max(tile_size / 5, 1),
+        16,
+        2.40);
 
     std::vector<const NetRouteMap*> specialist_donors;
-    specialist_donors.reserve(7);
-    for (const char* donor_name : {"radical-shortpath-fusion",
+    specialist_donors.reserve(9);
+    for (const char* donor_name : {"consensus-collapse-fusion",
+                                   "extreme-wirelength-stitch",
+                                   "radical-shortpath-fusion",
                                    "cross-router-wirelength-fusion",
                                    "multi-router-wirelength-fusion",
                                    "spatial-wirelength-grafting",
+                                   "cugr-router-donor",
+                                   "sproute-router-donor",
                                    "wl-direct-focused",
                                    "sporder-shortest"}) {
       if (ScenarioResult* donor = find_scenario_result(donor_name)) {
@@ -2862,8 +2868,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                               y_grids,
                                               hotspot_map,
                                               1,
-                                              12,
-                                              2.00);
+                                              24,
+                                              3.50);
 
     longnet_fusion.metrics = compute_metrics(longnet_fusion.routes);
     logger_->info(
@@ -2883,7 +2889,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const long lhs_wl = lhs.metrics.wirelength_dbu;
     const long rhs_wl = rhs.metrics.wirelength_dbu;
     const long wl_tie_window
-        = std::max<long>(4500, std::max(lhs_wl, rhs_wl) / 70000);
+        = std::max<long>(1200, std::max(lhs_wl, rhs_wl) / 180000);
     const long wl_delta = lhs_wl > rhs_wl ? lhs_wl - rhs_wl : rhs_wl - lhs_wl;
     if (wl_delta > wl_tie_window) {
       return lhs_wl < rhs_wl;
