@@ -23,6 +23,16 @@ struct RouteScore
   int64_t bends{0};
 };
 
+struct SelectionPolicy
+{
+  int via_tradeoff{1};
+  int bend_tradeoff{1};
+  int64_t via_guard{0};
+  int64_t hard_via_guard{0};
+  int64_t min_wl_improve{1};
+  bool long_net{false};
+};
+
 enum class RouteSource
 {
   kFastRoute,
@@ -85,34 +95,79 @@ int64_t viaGuardForNet(const RouteScore& baseline_score, int tile_size)
   return std::max<int64_t>(1, baseline_score.vias / 6);
 }
 
+SelectionPolicy buildSelectionPolicy(const RouteScore& baseline_score, int tile_size)
+{
+  SelectionPolicy policy;
+  policy.via_tradeoff = std::max(1, tile_size / 30);
+  policy.bend_tradeoff = std::max(1, tile_size / 48);
+  policy.via_guard = viaGuardForNet(baseline_score, tile_size);
+  policy.hard_via_guard = policy.via_guard * 3 + 2;
+  policy.min_wl_improve = std::max<int64_t>(1, tile_size / 3);
+
+  const int64_t medium_net_threshold = static_cast<int64_t>(tile_size) * 8;
+  const int64_t long_net_threshold = static_cast<int64_t>(tile_size) * 16;
+  if (baseline_score.wirelength >= long_net_threshold) {
+    policy.long_net = true;
+    policy.via_tradeoff = std::max(1, tile_size / 56);
+    policy.bend_tradeoff = std::max(1, tile_size / 84);
+    policy.via_guard = policy.via_guard * 2 + 4;
+    policy.hard_via_guard = policy.via_guard * 2 + 8;
+    policy.min_wl_improve = std::max<int64_t>(2, tile_size / 2);
+  } else if (baseline_score.wirelength >= medium_net_threshold) {
+    policy.via_tradeoff = std::max(1, tile_size / 40);
+    policy.bend_tradeoff = std::max(1, tile_size / 60);
+    policy.via_guard += 2;
+    policy.hard_via_guard = policy.via_guard * 3 + 6;
+    policy.min_wl_improve = std::max<int64_t>(1, tile_size / 2);
+  }
+
+  return policy;
+}
+
 int64_t effectiveWirelengthCost(const RouteScore& baseline_score,
                                 const RouteScore& candidate_score,
-                                int via_tradeoff,
-                                int bend_tradeoff,
-                                int64_t via_guard)
+                                const SelectionPolicy& policy)
 {
   const int64_t extra_vias
       = std::max<int64_t>(0, candidate_score.vias - baseline_score.vias);
-  const int64_t penalized_vias = std::max<int64_t>(0, extra_vias - via_guard);
+  const int64_t penalized_vias
+      = std::max<int64_t>(0, extra_vias - policy.via_guard);
   const int64_t extra_bends
       = std::max<int64_t>(0, candidate_score.bends - baseline_score.bends);
-  return candidate_score.wirelength + penalized_vias * via_tradeoff
-         + extra_bends * bend_tradeoff;
+  return candidate_score.wirelength + penalized_vias * policy.via_tradeoff
+         + extra_bends * policy.bend_tradeoff;
 }
 
 bool betterCandidate(const RouteScore& baseline_score,
                      const RouteScore& current_best_score,
                      const RouteScore& candidate_score,
-                     int via_tradeoff,
-                     int bend_tradeoff,
-                     int64_t via_guard)
+                     const SelectionPolicy& policy)
 {
+  const int64_t current_extra_vias
+      = std::max<int64_t>(0, current_best_score.vias - baseline_score.vias);
+  const int64_t candidate_extra_vias
+      = std::max<int64_t>(0, candidate_score.vias - baseline_score.vias);
+
+  if (candidate_extra_vias > policy.hard_via_guard
+      && candidate_extra_vias > current_extra_vias) {
+    return false;
+  }
+
+  const int64_t wl_gain = current_best_score.wirelength - candidate_score.wirelength;
+  if (wl_gain >= policy.min_wl_improve
+      && candidate_extra_vias <= policy.via_guard + (policy.long_net ? 4 : 1)) {
+    return true;
+  }
+  if (policy.long_net && candidate_score.wirelength < current_best_score.wirelength
+      && candidate_extra_vias <= policy.via_guard * 2
+      && candidate_score.bends <= current_best_score.bends + 4) {
+    return true;
+  }
+
   const int64_t current_effective_cost
-      = effectiveWirelengthCost(
-          baseline_score, current_best_score, via_tradeoff, bend_tradeoff, via_guard);
+      = effectiveWirelengthCost(baseline_score, current_best_score, policy);
   const int64_t candidate_effective_cost
-      = effectiveWirelengthCost(
-          baseline_score, candidate_score, via_tradeoff, bend_tradeoff, via_guard);
+      = effectiveWirelengthCost(baseline_score, candidate_score, policy);
   if (candidate_effective_cost != current_effective_cost) {
     return candidate_effective_cost < current_effective_cost;
   }
@@ -158,10 +213,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   NetRouteMap balanced_routes = engine_->run();
   NetRouteMap wirelength_routes = engine_->runWirelengthFirst();
 
-  const int tile_size = std::max(1, grouter_->getTileSize());
-  const int via_tradeoff = std::max(1, tile_size / 30);
-  const int bend_tradeoff = std::max(1, tile_size / 48);
-
   int selected_from_balanced = 0;
   int selected_from_wl = 0;
   int kept_fastroute = 0;
@@ -169,8 +220,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int inserted_from_wl = 0;
 
   for (auto& [db_net, route] : routes) {
+    const int tile_size = std::max(1, grouter_->getTileSize());
     const RouteScore baseline_score = scoreRoute(route);
-    const int64_t via_guard = viaGuardForNet(baseline_score, tile_size);
+    const SelectionPolicy policy = buildSelectionPolicy(baseline_score, tile_size);
     RouteScore best_score = baseline_score;
     const GRoute* selected_route = &route;
     RouteSource selected_source = RouteSource::kFastRoute;
@@ -185,9 +237,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               baseline_score,
               best_score,
               candidate_score,
-              via_tradeoff,
-              bend_tradeoff,
-              via_guard)) {
+              policy)) {
         best_score = candidate_score;
         selected_route = &candidate_it->second;
         selected_source = source;
