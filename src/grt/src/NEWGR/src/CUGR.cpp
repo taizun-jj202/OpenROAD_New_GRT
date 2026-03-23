@@ -377,11 +377,14 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         }
       }
     }
-    int stage3_cfg_budget = overflow_driven ? 6 : 4;
+    int stage3_cfg_budget = overflow_driven ? 4 : 3;
     if (hpwl >= constants_.stage3_full_grid_hpwl_threshold) {
-      stage3_cfg_budget++;
+      stage3_cfg_budget += overflow_driven ? 1 : 0;
     }
     if (very_high_stretch) {
+      stage3_cfg_budget++;
+    }
+    if (aggressive_wirelength_mode && !overflow_driven) {
       stage3_cfg_budget++;
     }
     stage3_cfg_budget

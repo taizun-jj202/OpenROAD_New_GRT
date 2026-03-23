@@ -64,9 +64,9 @@ struct Constants
   int refinement_overflow_threshold = 2;
   int refinement_hpwl_threshold = 120;
   double refinement_stretch_threshold = 1.08;
-  int refinement_max_selected_nets = 384;
-  double detour_refine_ratio = 0.78;
-  double maze_refine_ratio = 0.52;
+  int refinement_max_selected_nets = 256;
+  double detour_refine_ratio = 0.60;
+  double maze_refine_ratio = 0.35;
 
   // Stage-3 (maze) exploration controls.
   int stage3_dense_sparse_x = 2;
@@ -74,10 +74,10 @@ struct Constants
   bool stage3_try_offset = true;
   bool stage3_full_offset_sweep = false;
   int stage3_full_offset_hpwl_threshold = 180;
-  int stage3_max_maze_configs = 8;
+  int stage3_max_maze_configs = 6;
   bool stage3_use_wirelength_maze = true;
   int stage3_wl_only_hpwl_threshold = 140;
-  int stage3_wl_config_limit = 5;
+  int stage3_wl_config_limit = 3;
   double stage3_wl_via_cost_scale = 0.20;
   bool stage3_use_full_grid_wl_maze = true;
   int stage3_full_grid_hpwl_threshold = 220;
@@ -95,13 +95,13 @@ struct Constants
   int recovery_wl_only_hpwl_threshold = 112;
   int recovery_hpwl_threshold = 88;
   double recovery_min_stretch = 1.05;
-  int recovery_candidate_cap = 112;
-  int recovery_deep_search_cap = 40;
+  int recovery_candidate_cap = 96;
+  int recovery_deep_search_cap = 28;
   int recovery_shallow_maze_config_limit = 3;
   int recovery_deep_maze_config_limit = 5;
   int recovery_shallow_wl_config_limit = 2;
   int recovery_deep_wl_config_limit = 3;
-  double recovery_refine_ratio = 0.62;
+  double recovery_refine_ratio = 0.52;
   int recovery_max_passes = 2;
   double recovery_pass_decay = 0.80;
   double recovery_late_pass_refine_scale = 0.40;
@@ -120,13 +120,13 @@ struct Constants
   int recovery_full_offset_hpwl_threshold = 220;
   int recovery_dense_sparse_x = 2;
   int recovery_dense_sparse_y = 2;
-  int recovery_max_maze_configs = 6;
+  int recovery_max_maze_configs = 5;
   int recovery_max_via_increase = 6;
   bool recovery_spatial_round_robin = true;
   int recovery_spatial_batches = 6;
   int recovery_spatial_pool_multiplier = 2;
   bool recovery_use_full_grid_maze = true;
-  int recovery_full_grid_top_n = 10;
+  int recovery_full_grid_top_n = 6;
   int recovery_full_grid_hpwl_threshold = 180;
   double recovery_full_grid_via_cost_scale = 0.02;
 
