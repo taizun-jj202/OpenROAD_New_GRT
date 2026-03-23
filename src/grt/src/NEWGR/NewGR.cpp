@@ -8492,6 +8492,262 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
 
+  // Iteration 52 radical mode:
+  // Theory:
+  // 1) Recent runs can still settle into one dominant backbone family.
+  // 2) Build two intentionally incompatible donors:
+  //    - polarized_ring: heavy ring/portal/wave + weave/layer hopping.
+  //    - axis_crucible: crossbar-axis + trunk/corridor reinforcement.
+  // 3) Force broad deterministic buckets of nets to one donor family and
+  //    keep wide admissibility caps to ensure measurable wirelength movement.
+  ScenarioResult radical52_polarized_ring = selected;
+  radical52_polarized_ring.name = "radical52_polarized_ring";
+  applyPerimeterRingCollapse(grouter_,
+                             radical52_polarized_ring.routes,
+                             baseline_rudy,
+                             4,
+                             260,
+                             52,
+                             min_routing_layer,
+                             max_routing_layer);
+  applyGlobalPortalRebuild(grouter_,
+                           radical52_polarized_ring.routes,
+                           baseline_rudy,
+                           4,
+                           260,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical52_polarized_ring.routes,
+                        baseline_rudy,
+                        std::max(3 * tile_size, 1),
+                        std::max(54 * tile_size, 1),
+                        320);
+  applyBraidedDetourWeave(
+      grouter_, radical52_polarized_ring.routes, baseline_rudy);
+  applyLayerHoppingDetours(grouter_,
+                           radical52_polarized_ring.routes,
+                           baseline_rudy,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyAggressiveDoglegShortcuts(radical52_polarized_ring.routes,
+                                 std::max(52 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical52_polarized_ring.routes,
+                        std::max(15 * tile_size, 1));
+  applyViaExcursionCollapse(radical52_polarized_ring.routes,
+                            std::max(7 * tile_size, 1));
+  radical52_polarized_ring.metrics
+      = compute_metrics(radical52_polarized_ring.routes);
+
+  ScenarioResult radical52_axis_crucible = selected;
+  radical52_axis_crucible.name = "radical52_axis_crucible";
+  long radical52_axis_rewired = applyCrossbarAxisCollapse(grouter_,
+                                                          radical52_axis_crucible.routes,
+                                                          baseline_rudy,
+                                                          5,
+                                                          260,
+                                                          56,
+                                                          min_routing_layer,
+                                                          max_routing_layer,
+                                                          5);
+  applyRmstTrunkRebuild(grouter_,
+                        radical52_axis_crucible.routes,
+                        baseline_rudy,
+                        4,
+                        131072,
+                        240,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyRudyCorridorBackboneRebuild(grouter_,
+                                   radical52_axis_crucible.routes,
+                                   baseline_rudy,
+                                   4,
+                                   240,
+                                   min_routing_layer,
+                                   max_routing_layer);
+  applyDualBackboneWarp(grouter_,
+                        radical52_axis_crucible.routes,
+                        baseline_rudy,
+                        4,
+                        220,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyBipolarPortalBackboneRebuild(grouter_,
+                                    radical52_axis_crucible.routes,
+                                    baseline_rudy,
+                                    4,
+                                    131072,
+                                    220,
+                                    min_routing_layer,
+                                    max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical52_axis_crucible.routes,
+                        baseline_rudy,
+                        std::max(2 * tile_size, 1),
+                        std::max(48 * tile_size, 1),
+                        300);
+  applyAggressiveDoglegShortcuts(radical52_axis_crucible.routes,
+                                 std::max(50 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical52_axis_crucible.routes,
+                        std::max(14 * tile_size, 1));
+  applyViaExcursionCollapse(radical52_axis_crucible.routes,
+                            std::max(6 * tile_size, 1));
+  radical52_axis_crucible.metrics
+      = compute_metrics(radical52_axis_crucible.routes);
+
+  ScenarioResult radical52_selected = selected;
+  radical52_selected.name = "radical52_polar_axis";
+  long radical52_ring_picks = 0;
+  long radical52_axis_picks = 0;
+  long radical52_forced_ring = 0;
+  long radical52_forced_axis = 0;
+  long radical52_compact_rescue = 0;
+
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+    const auto [current_wl, current_vias] = route_stats(current_route);
+
+    const GRoute* chosen_route = nullptr;
+    int chosen_donor = -1;
+
+    auto choose_if_valid = [&](const NetRouteMap& donor_routes,
+                               int donor_id,
+                               bool forced_pick) {
+      const auto donor_it = donor_routes.find(db_net);
+      if (donor_it == donor_routes.end()) {
+        return false;
+      }
+      const GRoute& donor_route = donor_it->second;
+      if (!has_planar_guide(donor_route)) {
+        return false;
+      }
+      const auto [donor_wl, donor_vias] = route_stats(donor_route);
+      const bool broad_cap
+          = donor_wl <= static_cast<long>(current_wl * (forced_pick ? 6.80 : 4.80)
+                                          + 600)
+            && donor_vias
+                   <= static_cast<long>(current_vias * (forced_pick ? 18.0 : 10.0)
+                                        + 320);
+      if (!route_admissible_radical(donor_route, current_route) && !broad_cap) {
+        return false;
+      }
+      chosen_route = &donor_route;
+      chosen_donor = donor_id;
+      return true;
+    };
+
+    bool forced_pick = false;
+    if (node_count >= 7 && ((key % 2ULL) == 0ULL || (key % 11ULL) == 3ULL)) {
+      forced_pick = choose_if_valid(radical52_polarized_ring.routes, 0, true);
+      if (forced_pick) {
+        radical52_forced_ring++;
+      }
+    }
+    if (!forced_pick && node_count >= 8
+        && ((key % 3ULL) == 1ULL || (key % 7ULL) == 4ULL)) {
+      forced_pick = choose_if_valid(radical52_axis_crucible.routes, 1, true);
+      if (forced_pick) {
+        radical52_forced_axis++;
+      }
+    }
+
+    if (!forced_pick) {
+      double best_score = route_objective(current_route, selected.overflow);
+      auto consider_candidate = [&](const NetRouteMap& donor_routes,
+                                    int donor_id,
+                                    int donor_overflow) {
+        const auto donor_it = donor_routes.find(db_net);
+        if (donor_it == donor_routes.end()) {
+          return;
+        }
+        const GRoute& donor_route = donor_it->second;
+        if (!has_planar_guide(donor_route)) {
+          return;
+        }
+
+        const auto [donor_wl, donor_vias] = route_stats(donor_route);
+        const bool broad_cap
+            = donor_wl <= static_cast<long>(current_wl * 4.10 + 340)
+              && donor_vias <= static_cast<long>(current_vias * 8.80 + 180);
+        if (!route_admissible_radical(donor_route, current_route) && !broad_cap) {
+          return;
+        }
+
+        double donor_score = route_objective(donor_route, donor_overflow);
+        if (donor_id == 0 && node_count >= 10 && (key % 5ULL) == 1ULL) {
+          donor_score *= 0.84;
+        }
+        if (donor_id == 1 && node_count >= 9 && (key % 5ULL) == 2ULL) {
+          donor_score *= 0.82;
+        }
+        if (donor_score + 1e-3 < best_score) {
+          best_score = donor_score;
+          chosen_route = &donor_route;
+          chosen_donor = donor_id;
+        }
+      };
+
+      consider_candidate(
+          radical52_polarized_ring.routes, 0, radical52_polarized_ring.overflow);
+      consider_candidate(
+          radical52_axis_crucible.routes, 1, radical52_axis_crucible.overflow);
+    }
+
+    if (chosen_route != nullptr) {
+      radical52_selected.routes[db_net] = *chosen_route;
+      if (chosen_donor == 0) {
+        radical52_ring_picks++;
+      } else if (chosen_donor == 1) {
+        radical52_axis_picks++;
+      }
+      continue;
+    }
+
+    if (node_count <= 3 && (key % 6ULL) == 0ULL) {
+      const auto compact_it = compact.routes.find(db_net);
+      if (compact_it != compact.routes.end()) {
+        const GRoute& compact_route = compact_it->second;
+        if (has_planar_guide(compact_route)
+            && route_admissible(compact_route, current_route)) {
+          radical52_selected.routes[db_net] = compact_route;
+          radical52_compact_rescue++;
+        }
+      }
+    }
+  }
+
+  if (radical52_ring_picks > 0 || radical52_axis_picks > 0
+      || radical52_compact_rescue > 0) {
+    applyWavefrontDetours(grouter_,
+                          radical52_selected.routes,
+                          baseline_rudy,
+                          std::max(2 * tile_size, 1),
+                          std::max(42 * tile_size, 1),
+                          260);
+    applyAggressiveDoglegShortcuts(radical52_selected.routes,
+                                   std::max(46 * tile_size, 1),
+                                   std::max(tile_size, 1));
+    applyGuideCompression(radical52_selected.routes, std::max(13 * tile_size, 1));
+    applyViaExcursionCollapse(radical52_selected.routes,
+                              std::max(6 * tile_size, 1));
+    radical52_selected.name += "+rad52";
+    radical52_selected.metrics = compute_metrics(radical52_selected.routes);
+
+    const bool radical52_catastrophic
+        = static_cast<double>(radical52_selected.metrics.wirelength_dbu)
+              > static_cast<double>(baseline.metrics.wirelength_dbu) * 4.20
+          || static_cast<double>(radical52_selected.metrics.via_count)
+                 > static_cast<double>(baseline.metrics.via_count) * 7.00;
+    if (!radical52_catastrophic) {
+      selected = radical52_selected;
+    }
+  }
+
   // Final safeguard to prevent catastrophic regressions.
   const bool catastrophic
       = static_cast<double>(selected.metrics.wirelength_dbu)
@@ -8628,6 +8884,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 6093,
                 "NEWGR rad51 rewired nets: {}.",
                 radical51_crossbar_rewired);
+  logger_->warn(GNR,
+                6094,
+                "NEWGR rad52 picks: ring {} axis {} forced_ring {} "
+                "forced_axis {} compact_rescue {} axis_rewired {}.",
+                radical52_ring_picks,
+                radical52_axis_picks,
+                radical52_forced_ring,
+                radical52_forced_axis,
+                radical52_compact_rescue,
+                radical52_axis_rewired);
 
   restore_snapshot(snapshot);
   return selected.routes;
