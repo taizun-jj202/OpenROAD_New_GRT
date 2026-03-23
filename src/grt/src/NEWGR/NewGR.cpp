@@ -4755,8 +4755,260 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       radical41_forced_spine,
       radical41_changed_nets);
 
+  // Iteration 43 radical mode:
+  // Theory:
+  // 1) Iteration 41 can still remain in a donor-fixed local basin.
+  // 2) Create a strong phase inversion using two incompatible donor families:
+  //    - braidfield: braid weave + layer hopping + heavy wavefront shifts.
+  //    - portal_spiral: perimeter ring + portal backbone with coarse doglegs.
+  // 3) Apply deterministic forcing buckets with broad admissibility to move
+  //    a large net population out of the radical41 equilibrium.
+  ScenarioResult radical43_braidfield = radical41_selected;
+  radical43_braidfield.name = "radical43_braidfield";
+  applyBraidedDetourWeave(grouter_,
+                          radical43_braidfield.routes,
+                          baseline_rudy);
+  applyLayerHoppingDetours(grouter_,
+                           radical43_braidfield.routes,
+                           baseline_rudy,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyDualBackboneWarp(grouter_,
+                        radical43_braidfield.routes,
+                        baseline_rudy,
+                        3,
+                        140,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical43_braidfield.routes,
+                        baseline_rudy,
+                        std::max(tile_size, 1),
+                        std::max(34 * tile_size, 1),
+                        220);
+  applyAggressiveDoglegShortcuts(radical43_braidfield.routes,
+                                 std::max(44 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical43_braidfield.routes, std::max(5 * tile_size, 1));
+  applyViaExcursionCollapse(radical43_braidfield.routes,
+                            std::max(3 * tile_size, 1));
+  radical43_braidfield.metrics = compute_metrics(radical43_braidfield.routes);
+
+  ScenarioResult radical43_portal_spiral = radical41_selected;
+  radical43_portal_spiral.name = "radical43_portal_spiral";
+  applyPerimeterRingCollapse(grouter_,
+                             radical43_portal_spiral.routes,
+                             baseline_rudy,
+                             4,
+                             100,
+                             36,
+                             min_routing_layer,
+                             max_routing_layer);
+  applyGlobalPortalRebuild(grouter_,
+                           radical43_portal_spiral.routes,
+                           baseline_rudy,
+                           4,
+                           100,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyRudyCorridorBackboneRebuild(grouter_,
+                                   radical43_portal_spiral.routes,
+                                   baseline_rudy,
+                                   3,
+                                   100,
+                                   min_routing_layer,
+                                   max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical43_portal_spiral.routes,
+                        baseline_rudy,
+                        std::max(2 * tile_size, 1),
+                        std::max(36 * tile_size, 1),
+                        230);
+  applyAggressiveDoglegShortcuts(radical43_portal_spiral.routes,
+                                 std::max(46 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical43_portal_spiral.routes,
+                        std::max(5 * tile_size, 1));
+  applyViaExcursionCollapse(radical43_portal_spiral.routes,
+                            std::max(3 * tile_size, 1));
+  radical43_portal_spiral.metrics = compute_metrics(radical43_portal_spiral.routes);
+
+  ScenarioResult radical43_selected = radical41_selected;
+  radical43_selected.name = "radical43_phase_inversion";
+  long radical43_pick_braid = 0;
+  long radical43_pick_portal = 0;
+  long radical43_forced_braid = 0;
+  long radical43_forced_portal = 0;
+
+  auto radical43_objective = [&](const GRoute& route) {
+    const auto [route_wl, route_vias] = radical38_stats(route);
+    const double via_weight = static_cast<double>(tile_size) * 0.12;
+    const double seg_penalty
+        = static_cast<double>(route.size()) * static_cast<double>(tile_size) * 0.06;
+    return static_cast<double>(route_wl)
+           + via_weight * static_cast<double>(route_vias) + seg_penalty;
+  };
+  auto radical43_admissible = [&](const GRoute& candidate,
+                                  const GRoute& reference,
+                                  int node_count,
+                                  bool forced) {
+    const auto [cand_wl, cand_vias] = radical38_stats(candidate);
+    const auto [ref_wl, ref_vias] = radical38_stats(reference);
+    if (ref_wl <= 0) {
+      return true;
+    }
+    const bool huge = node_count >= 12;
+    const double wl_mult
+        = forced ? (huge ? 7.00 : 5.80) : (huge ? 5.80 : 4.60);
+    const double via_mult
+        = forced ? (huge ? 17.0 : 13.0) : (huge ? 12.5 : 10.0);
+    const long wl_cap
+        = std::max(ref_wl + static_cast<long>((forced ? 74 : 52) * tile_size),
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_wl) * wl_mult)));
+    const long via_cap
+        = std::max(ref_vias + static_cast<long>(forced ? 86 : 60),
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_vias) * via_mult + 72.0)));
+    return cand_wl <= wl_cap && cand_vias <= via_cap;
+  };
+
+  for (const auto& [db_net, base_route] : radical41_selected.routes) {
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(base_route).size());
+
+    const GRoute* chosen_route = &base_route;
+    double best_score = radical43_objective(base_route);
+    int chosen_donor = 0;
+
+    auto force_candidate = [&](const NetRouteMap& donor_routes,
+                               int donor_id,
+                               long& forced_counter) {
+      const auto donor_it = donor_routes.find(db_net);
+      if (donor_it == donor_routes.end()) {
+        return false;
+      }
+      const GRoute& donor_route = donor_it->second;
+      if (!radical38_has_planar(donor_route)) {
+        return false;
+      }
+      if (!radical43_admissible(donor_route, base_route, node_count, true)) {
+        return false;
+      }
+      chosen_route = &donor_route;
+      chosen_donor = donor_id;
+      forced_counter++;
+      return true;
+    };
+
+    bool forced_pick = false;
+    if (node_count >= 6 && ((key % 2ULL) == 0ULL || (key % 7ULL) == 5ULL)) {
+      forced_pick
+          = force_candidate(radical43_braidfield.routes, 1, radical43_forced_braid);
+    }
+    if (!forced_pick
+        && node_count >= 8
+        && ((key % 3ULL) == 1ULL || (key % 11ULL) == 4ULL)) {
+      forced_pick = force_candidate(
+          radical43_portal_spiral.routes, 2, radical43_forced_portal);
+    }
+
+    if (!forced_pick) {
+      auto consider_candidate = [&](const NetRouteMap& donor_routes, int donor_id) {
+        const auto donor_it = donor_routes.find(db_net);
+        if (donor_it == donor_routes.end()) {
+          return;
+        }
+        const GRoute& donor_route = donor_it->second;
+        if (!radical38_has_planar(donor_route)) {
+          return;
+        }
+        if (!radical43_admissible(donor_route, base_route, node_count, false)) {
+          return;
+        }
+
+        double score = radical43_objective(donor_route);
+        if (donor_id == 1 && node_count >= 9 && (key % 5ULL) <= 1ULL) {
+          score *= 0.68;
+        }
+        if (donor_id == 2 && node_count >= 7 && (key % 4ULL) == 0ULL) {
+          score *= 0.70;
+        }
+        if (score + 1e-3 < best_score) {
+          best_score = score;
+          chosen_route = &donor_route;
+          chosen_donor = donor_id;
+        }
+      };
+
+      consider_candidate(radical43_braidfield.routes, 1);
+      consider_candidate(radical43_portal_spiral.routes, 2);
+    }
+
+    radical43_selected.routes[db_net] = *chosen_route;
+    if (chosen_donor == 1) {
+      radical43_pick_braid++;
+    } else if (chosen_donor == 2) {
+      radical43_pick_portal++;
+    }
+  }
+
+  applyGuideCompression(radical43_selected.routes, std::max(5 * tile_size, 1));
+  applyViaExcursionCollapse(radical43_selected.routes,
+                            std::max(3 * tile_size, 1));
+  radical43_selected.metrics = compute_metrics(radical43_selected.routes);
+
+  long radical43_changed_nets = 0;
+  for (const auto& [db_net, route41] : radical41_selected.routes) {
+    const auto it43 = radical43_selected.routes.find(db_net);
+    if (it43 == radical43_selected.routes.end()) {
+      continue;
+    }
+    const auto [wl41, vias41] = radical38_stats(route41);
+    const auto [wl43, vias43] = radical38_stats(it43->second);
+    if (wl41 != wl43 || vias41 != vias43) {
+      radical43_changed_nets++;
+    }
+  }
+
+  const double radical43_delta_wl
+      = radical43_selected.metrics.wirelength_um - baseline.metrics.wirelength_um;
+  const long radical43_delta_vias
+      = radical43_selected.metrics.via_count - baseline.metrics.via_count;
+  const double radical43_stage_delta_wl
+      = radical43_selected.metrics.wirelength_um
+        - radical41_selected.metrics.wirelength_um;
+  const long radical43_stage_delta_vias
+      = radical43_selected.metrics.via_count - radical41_selected.metrics.via_count;
+  logger_->warn(GNR,
+                6058,
+                "NEWGR radical43 selected {}: baseline {:.0f} um/{} vias -> "
+                "{:.0f} um/{} vias (delta wl {:+.0f} um, delta vias {:+d}); "
+                "vs radical41 (delta wl {:+.0f} um, delta vias {:+d}).",
+                radical43_selected.name,
+                baseline.metrics.wirelength_um,
+                baseline.metrics.via_count,
+                radical43_selected.metrics.wirelength_um,
+                radical43_selected.metrics.via_count,
+                radical43_delta_wl,
+                radical43_delta_vias,
+                radical43_stage_delta_wl,
+                radical43_stage_delta_vias);
+  logger_->warn(
+      GNR,
+      6059,
+      "NEWGR radical43 picks: braid {} portal {} forced_braid {} "
+      "forced_portal {} changed_nets {}.",
+      radical43_pick_braid,
+      radical43_pick_portal,
+      radical43_forced_braid,
+      radical43_forced_portal,
+      radical43_changed_nets);
+
   restore_snapshot(snapshot);
-  return radical41_selected.routes;
+  return radical43_selected.routes;
 
   // Candidate B: reroute with strong but wirelength-oriented capacity sculpting.
   ScenarioResult sculpted = compact;
