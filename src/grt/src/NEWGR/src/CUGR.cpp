@@ -399,6 +399,77 @@ void CUGR::wirelengthRecovery()
                   acceptedFromMaze);
 }
 
+void CUGR::finalPatternTighten()
+{
+  logger_->report("stage 5: final pattern tightening on long nets");
+  std::vector<int> netIndices;
+  netIndices.reserve(gr_nets_.size());
+  for (const auto& net : gr_nets_) {
+    netIndices.push_back(net->getIndex());
+  }
+
+  std::vector<uint64_t> routedWireLength(gr_nets_.size(), 0);
+  for (const int netIndex : netIndices) {
+    routedWireLength[netIndex]
+        = evaluateRouteScore(gr_nets_[netIndex]->getRoutingTree(),
+                             grid_graph_.get())
+              .wire_length;
+  }
+  std::sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
+    if (routedWireLength[lhs] != routedWireLength[rhs]) {
+      return routedWireLength[lhs] > routedWireLength[rhs];
+    }
+    return lhs < rhs;
+  });
+
+  const int tightenBudget
+      = std::min(static_cast<int>(netIndices.size()),
+                 std::max(4096, static_cast<int>(netIndices.size() / 2)));
+  GridGraphView<CostT> wireCostView;
+  grid_graph_->extractWireCostView(wireCostView);
+  int accepted = 0;
+  for (int rank = 0; rank < tightenBudget; rank++) {
+    const int netIndex = netIndices[rank];
+    GRNet* net = gr_nets_[netIndex].get();
+    const auto oldTree = net->getRoutingTree();
+    if (!oldTree) {
+      continue;
+    }
+
+    const RouteScore oldScore = evaluateRouteScore(oldTree, grid_graph_.get());
+    grid_graph_->commitTree(oldTree, /*ripup*/ true);
+    grid_graph_->updateWireCostView(wireCostView, oldTree);
+
+    PatternRoute patternRoute(
+        net, grid_graph_.get(), stt_builder_, constants_, logger_);
+    patternRoute.constructSteinerTree();
+    patternRoute.constructRoutingDAG();
+    patternRoute.run();
+    const auto candidateTree = net->getRoutingTree();
+
+    std::shared_ptr<GRTreeNode> bestTree = oldTree;
+    if (candidateTree) {
+      grid_graph_->commitTree(candidateTree);
+      const RouteScore candidateScore
+          = evaluateRouteScore(candidateTree, grid_graph_.get());
+      grid_graph_->commitTree(candidateTree, /*ripup*/ true);
+      if (isRecoveryScoreBetter(candidateScore, oldScore)) {
+        bestTree = candidateTree;
+      }
+    }
+
+    if (bestTree != oldTree) {
+      accepted++;
+    }
+    net->setRoutingTree(bestTree);
+    grid_graph_->commitTree(bestTree);
+    grid_graph_->updateWireCostView(wireCostView, bestTree);
+  }
+
+  logger_->report("final pattern tightening accepted {} net updates.",
+                  accepted);
+}
+
 void CUGR::route()
 {
   std::vector<int> netIndices;
@@ -407,23 +478,32 @@ void CUGR::route()
     netIndices.push_back(net->getIndex());
   }
 
+  // FastRoute-style adaptive emphasis: start wirelength-first and raise
+  // congestion pressure in the middle RRR passes.
+  grid_graph_->setStageCostScales(0.75, 0.75, 1.20);
   patternRoute(netIndices);
 
   // Run maze reroute before detours so most overflow repairs come from a
   // shortest-path engine instead of detour inflation.
+  grid_graph_->setStageCostScales(1.10, 1.15, 1.10);
   mazeRoute(netIndices);
 
   // Keep detours as a final cleanup pass for residual difficult hotspots.
+  grid_graph_->setStageCostScales(1.35, 1.35, 1.00);
   patternRouteWithDetours(netIndices);
 
   // FastRoute-style final RRR cleanup: re-run maze search to pull inflated
   // detours back to shorter legal paths after hotspot repair.
+  grid_graph_->setStageCostScales(1.40, 1.45, 1.05);
   mazeRoute(netIndices);
 
   // FastRoute-inspired post-congestion tightening: re-run pure pattern
   // routing and accept only net-level improvements in
   // overflow/wirelength/via score.
+  grid_graph_->setStageCostScales(0.55, 0.60, 1.35);
   wirelengthRecovery();
+  grid_graph_->setStageCostScales(0.50, 0.50, 1.40);
+  finalPatternTighten();
 
   printStatistics();
   if (constants_.write_heatmap) {

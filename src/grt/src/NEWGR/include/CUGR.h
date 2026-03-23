@@ -49,6 +49,15 @@ struct Constants
 
   double maze_logistic_slope = 0.5;
 
+  // SPRoute-inspired soft-capacity model. In low-utilization regions routing
+  // can use close to hard capacity; in hot regions we reserve capacity to avoid
+  // late detailed-route detours.
+  bool enable_soft_capacity = false;
+  double soft_cap_min_ratio = 0.55;
+  double soft_cap_max_ratio = 0.95;
+  double soft_cap_mid_util = 0.70;
+  double soft_cap_slope = 8.0;
+
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
   double wire_patch_threshold = 2.0;
@@ -76,6 +85,7 @@ class CUGR
   void patternRouteWithDetours(std::vector<int>& netIndices);
   void mazeRoute(std::vector<int>& netIndices);
   void wirelengthRecovery();
+  void finalPatternTighten();
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);

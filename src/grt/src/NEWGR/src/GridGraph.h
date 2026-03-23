@@ -104,6 +104,9 @@ class GridGraph
   CostT getWireCost(int layer_index, PointT u, PointT v) const;
   CostT getViaCost(int layer_index, PointT loc) const;
   CostT getUnitViaCost() const { return unit_via_cost_; }
+  void setStageCostScales(double pattern_congestion_scale,
+                          double maze_congestion_scale,
+                          double via_cost_scale);
 
   // Misc
   AccessPointSet selectAccessPoints(const GRNet* net) const;
@@ -152,6 +155,7 @@ class GridGraph
   }
 
   double logistic(const CapacityT& input, double slope) const;
+  CapacityT getSoftCapacity(const GraphEdge& edge) const;
   CostT getWireCost(int layer_index,
                     PointT lower,
                     CapacityT demand = 1.0) const;
@@ -186,6 +190,9 @@ class GridGraph
   // (l, x, y+1)} depending on the routing direction of the layer
   std::vector<std::vector<std::vector<GraphEdge>>> graph_edges_;
   const Constants constants_;
+  double pattern_congestion_scale_ = 1.0;
+  double maze_congestion_scale_ = 1.0;
+  double via_cost_scale_ = 1.0;
 };
 
 template <typename Type>

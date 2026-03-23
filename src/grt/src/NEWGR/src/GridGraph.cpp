@@ -300,6 +300,33 @@ double GridGraph::logistic(const CapacityT& input, const double slope) const
   return 1.0 / (1.0 + exp(input * slope));
 }
 
+void GridGraph::setStageCostScales(const double pattern_congestion_scale,
+                                   const double maze_congestion_scale,
+                                   const double via_cost_scale)
+{
+  pattern_congestion_scale_ = std::max(0.0, pattern_congestion_scale);
+  maze_congestion_scale_ = std::max(0.0, maze_congestion_scale);
+  via_cost_scale_ = std::max(0.1, via_cost_scale);
+}
+
+CapacityT GridGraph::getSoftCapacity(const GraphEdge& edge) const
+{
+  if (!constants_.enable_soft_capacity || edge.capacity <= 0.0) {
+    return edge.capacity;
+  }
+
+  const double utilization = edge.demand / std::max(edge.capacity, 1e-3);
+  const double ratio = constants_.soft_cap_min_ratio
+                       + (constants_.soft_cap_max_ratio
+                          - constants_.soft_cap_min_ratio)
+                             / (1.0 + std::exp((utilization
+                                                - constants_.soft_cap_mid_util)
+                                               * constants_.soft_cap_slope));
+  return edge.capacity * std::clamp(ratio,
+                                    constants_.soft_cap_min_ratio,
+                                    constants_.soft_cap_max_ratio);
+}
+
 CostT GridGraph::getWireCost(const int layer_index,
                              const PointT lower,
                              const CapacityT demand) const
@@ -308,11 +335,14 @@ CostT GridGraph::getWireCost(const int layer_index,
   const int edgeLength = getEdgeLength(direction, lower[direction]);
   const int demandLength = demand * edgeLength;
   const auto& edge = graph_edges_[layer_index][lower.x()][lower.y()];
+  const CapacityT effectiveCapacity = getSoftCapacity(edge);
   CostT cost = demandLength * unit_length_wire_cost_;
-  cost += demandLength * unit_length_short_costs_[layer_index]
-          * (edge.capacity < 1.0 ? 1.0
-                                 : logistic(edge.capacity - edge.demand,
-                                            constants_.cost_logistic_slope));
+  cost += pattern_congestion_scale_ * demandLength
+          * unit_length_short_costs_[layer_index]
+          * (effectiveCapacity < 1.0
+                 ? 1.0
+                 : logistic(effectiveCapacity - edge.demand,
+                            constants_.cost_logistic_slope));
   return cost;
 }
 
@@ -340,7 +370,7 @@ CostT GridGraph::getWireCost(const int layer_index,
 CostT GridGraph::getViaCost(const int layer_index, const PointT loc) const
 {
   assert(layer_index + 1 < num_layers_);
-  CostT cost = unit_via_cost_;
+  CostT cost = unit_via_cost_ * via_cost_scale_;
   // Estimated wire cost to satisfy min-area
   for (int l = layer_index; l <= layer_index + 1; l++) {
     const int direction = layer_directions_[l];
@@ -671,14 +701,14 @@ void GridGraph::extractWireCostView(GridGraphView<CostT>& view) const
         CapacityT demand = 0;
         for (int layer_index : layerIndices) {
           const auto& edge = getEdge(layer_index, x, y);
-          capacity += edge.capacity;
+          capacity += getSoftCapacity(edge);
           demand += edge.demand;
         }
         const int length = getEdgeLength(direction, edge_index);
         view[direction][x][y]
             = length
               * (unit_length_wire_cost_
-                 + unitLengthShortCost
+                 + maze_congestion_scale_ * unitLengthShortCost
                        * (capacity < 1.0
                               ? 1.0
                               : logistic(capacity - demand,
@@ -714,14 +744,14 @@ void GridGraph::updateWireCostView(
         continue;
       }
       const auto& edge = getEdge(layer_index, x, y);
-      capacity += edge.capacity;
+      capacity += getSoftCapacity(edge);
       demand += edge.demand;
     }
     const int length = getEdgeLength(direction, edge_index);
     view[direction][x][y]
         = length
           * (unit_length_wire_cost_
-             + unitLengthShortCost[direction]
+             + maze_congestion_scale_ * unitLengthShortCost[direction]
                    * (capacity < 1.0
                           ? 1.0
                           : logistic(capacity - demand,
