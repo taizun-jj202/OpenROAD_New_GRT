@@ -42,10 +42,13 @@ struct Constants
   int target_detour_count = 20;
 
   double via_multiplier = 0.85;
+  double layer_depth_wire_penalty = 0.20;
+  double layer_depth_via_penalty = 0.35;
+  double layer_change_penalty = 0.75;
 
   int mst_topology_pin_threshold = 7;
   double mst_bend_penalty = 3.0;
-  int hub_topology_pin_threshold = 20;
+  int hub_topology_pin_threshold = 10;
   int pin_access_layer_extension = 1;
   bool enable_early_detour_stage = false;
 

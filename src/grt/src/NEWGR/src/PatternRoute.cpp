@@ -107,8 +107,8 @@ void PatternRoute::constructSteinerTree()
     return;
   }
 
-  // Radical topology switch for very large nets:
-  // build a bi-hub backbone with shared bend junctions around each hub.
+  // Radical topology switch for large nets:
+  // build a tri-hub backbone and attach pins to the nearest hub.
   if (degree >= constants_.hub_topology_pin_threshold) {
     std::vector<int> xs;
     std::vector<int> ys;
@@ -127,21 +127,40 @@ void PatternRoute::constructSteinerTree()
     std::vector<int> sortedYs(ys.begin(), ys.end());
     std::sort(sortedXs.begin(), sortedXs.end());
     std::sort(sortedYs.begin(), sortedYs.end());
-    const int q1 = sortedXs[degree / 4];
-    const int q3 = sortedXs[(3 * degree) / 4];
+    const int q1 = sortedXs[degree / 6];
+    const int q2 = sortedXs[degree / 2];
+    const int q3 = sortedXs[(5 * degree) / 6];
     const int yMedian = sortedYs[degree / 2];
-    PointT hubA(q1, yMedian);
-    PointT hubB(q3, yMedian);
-    if (hubA == hubB) {
-      const int spread = std::max(1, (sortedYs.back() - sortedYs.front()) / 4);
-      const int up = std::min(sortedYs.back(), yMedian + spread);
-      const int down = std::max(sortedYs.front(), yMedian - spread);
-      hubB = PointT(q3, up == yMedian ? down : up);
+    const int xMax = std::max(0, grid_graph_->getSize(0) - 1);
+    const int yMax = std::max(0, grid_graph_->getSize(1) - 1);
+    const int spread = std::max(1, (sortedYs.back() - sortedYs.front()) / 5);
+    std::vector<PointT> hubs = {
+        PointT(std::clamp(q1, 0, xMax), std::clamp(yMedian - spread, 0, yMax)),
+        PointT(std::clamp(q2, 0, xMax), std::clamp(yMedian, 0, yMax)),
+        PointT(std::clamp(q3, 0, xMax), std::clamp(yMedian + spread, 0, yMax)),
+    };
+    auto nudgeHub = [&](PointT& hub, const int xStep, const int yStep) {
+      hub = PointT(std::clamp(hub.x() + xStep, 0, xMax),
+                   std::clamp(hub.y() + yStep, 0, yMax));
+    };
+    if (hubs[0] == hubs[1]) {
+      nudgeHub(hubs[0], -1, -1);
+    }
+    if (hubs[2] == hubs[1]) {
+      nudgeHub(hubs[2], 1, 1);
+    }
+    if (hubs[0] == hubs[2]) {
+      nudgeHub(hubs[2], 1, -1);
     }
 
-    auto root = std::make_shared<SteinerTreeNode>(hubA);
-    auto secondHub = std::make_shared<SteinerTreeNode>(hubB);
-    root->addChild(secondHub);
+    auto root = std::make_shared<SteinerTreeNode>(hubs[1]);
+    auto leftHub = std::make_shared<SteinerTreeNode>(hubs[0]);
+    auto rightHub = std::make_shared<SteinerTreeNode>(hubs[2]);
+    root->addChild(leftHub);
+    root->addChild(rightHub);
+    std::vector<std::shared_ptr<SteinerTreeNode>> hubNodes = {leftHub,
+                                                               root,
+                                                               rightHub};
 
     auto mergeLayers = [](IntervalT& dst, const IntervalT& src) {
       if (!src.IsValid()) {
@@ -165,33 +184,42 @@ void PatternRoute::constructSteinerTree()
       }
       auto node = std::make_shared<SteinerTreeNode>(point);
       junctions.emplace(key, node);
-      if (hubId == 0) {
-        root->addChild(node);
-      } else {
-        secondHub->addChild(node);
-      }
+      hubNodes[hubId]->addChild(node);
       return node;
     };
 
     for (const auto& accessPoint : orderedAccessPoints) {
       const PointT pin = accessPoint.point;
-      const int distToA = std::abs(pin.x() - hubA.x()) + std::abs(pin.y() - hubA.y());
-      const int distToB = std::abs(pin.x() - hubB.x()) + std::abs(pin.y() - hubB.y());
-      const bool useHubA = distToA <= distToB;
-      const int hubId = useHubA ? 0 : 1;
-      const PointT hub = useHubA ? hubA : hubB;
-      std::shared_ptr<SteinerTreeNode> hubNode = useHubA ? root : secondHub;
+      int hubId = 0;
+      int bestDist = std::numeric_limits<int>::max();
+      for (size_t idx = 0; idx < hubs.size(); idx++) {
+        const int dist
+            = std::abs(pin.x() - hubs[idx].x()) + std::abs(pin.y() - hubs[idx].y());
+        // Prefer the middle hub for tie cases to keep backbone centralized.
+        if (dist < bestDist || (dist == bestDist && idx == 1)) {
+          hubId = static_cast<int>(idx);
+          bestDist = dist;
+        }
+      }
+      const PointT hub = hubs[hubId];
+      std::shared_ptr<SteinerTreeNode> hubNode = hubNodes[hubId];
 
-      if (pin == hubA) {
+      if (pin == hubs[1]) {
         IntervalT merged = root->getFixedLayers();
         mergeLayers(merged, accessPoint.layers);
         root->setFixedLayers(merged);
         continue;
       }
-      if (pin == hubB) {
-        IntervalT merged = secondHub->getFixedLayers();
+      if (pin == hubs[0]) {
+        IntervalT merged = leftHub->getFixedLayers();
         mergeLayers(merged, accessPoint.layers);
-        secondHub->setFixedLayers(merged);
+        leftHub->setFixedLayers(merged);
+        continue;
+      }
+      if (pin == hubs[2]) {
+        IntervalT merged = rightHub->getFixedLayers();
+        mergeLayers(merged, accessPoint.layers);
+        rightHub->setFixedLayers(merged);
         continue;
       }
 
@@ -778,8 +806,11 @@ void PatternRoute::calculateRoutingCosts(
   viaCosts[0] = 0;
   for (int layerIndex = 1; layerIndex < grid_graph_->getNumLayers();
        layerIndex++) {
+    const int layerDepth
+        = std::max(layerIndex - constants_.min_routing_layer + 1, 0);
     viaCosts[layerIndex] = viaCosts[layerIndex - 1]
                            + grid_graph_->getViaCost(layerIndex - 1, *node);
+    viaCosts[layerIndex] += constants_.layer_change_penalty * layerDepth;
   }
   IntervalT fixedLayers(node->getFixedLayers());
   fixedLayers.Set(std::min(fixedLayers.low(),

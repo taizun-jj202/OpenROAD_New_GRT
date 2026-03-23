@@ -308,7 +308,11 @@ CostT GridGraph::getWireCost(const int layer_index,
   const int edgeLength = getEdgeLength(direction, lower[direction]);
   const int demandLength = demand * edgeLength;
   const auto& edge = graph_edges_[layer_index][lower.x()][lower.y()];
-  CostT cost = demandLength * unit_length_wire_cost_;
+  const int layerDepth
+      = std::max(layer_index - constants_.min_routing_layer, 0);
+  const CostT depthScale
+      = 1.0 + constants_.layer_depth_wire_penalty * layerDepth;
+  CostT cost = demandLength * unit_length_wire_cost_ * depthScale;
   cost += demandLength * unit_length_short_costs_[layer_index]
           * (edge.capacity < 1.0 ? 1.0
                                  : logistic(edge.capacity - edge.demand,
@@ -341,6 +345,9 @@ CostT GridGraph::getViaCost(const int layer_index, const PointT loc) const
 {
   assert(layer_index + 1 < num_layers_);
   CostT cost = unit_via_cost_;
+  const int layerDepth
+      = std::max(layer_index - constants_.min_routing_layer + 1, 0);
+  cost += unit_via_cost_ * constants_.layer_depth_via_penalty * layerDepth;
   // Estimated wire cost to satisfy min-area
   for (int l = layer_index; l <= layer_index + 1; l++) {
     const int direction = layer_directions_[l];
