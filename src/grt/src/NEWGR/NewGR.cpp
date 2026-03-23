@@ -4208,6 +4208,68 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     applyViaExcursionCollapse(selected.routes, std::max(3 * tile_size, 1));
     selected.metrics = compute_metrics(selected.routes);
 
+    // Iteration 37 radical move:
+    // Force a second full-coverage topology rewrite so medium/large nets leave
+    // corridor-local minima and adopt a very different trunk/ring structure.
+    ScenarioResult cataclysm = selected;
+    cataclysm.name = selected.name + "+cataclysm37";
+    applyGlobalPortalRebuild(grouter_,
+                             cataclysm.routes,
+                             baseline_rudy,
+                             3,
+                             100,
+                             min_routing_layer,
+                             max_routing_layer);
+    applyRmstTrunkRebuild(grouter_,
+                          cataclysm.routes,
+                          baseline_rudy,
+                          3,
+                          4096,
+                          100,
+                          min_routing_layer,
+                          max_routing_layer);
+    applyDualBackboneWarp(grouter_,
+                          cataclysm.routes,
+                          baseline_rudy,
+                          3,
+                          100,
+                          min_routing_layer,
+                          max_routing_layer);
+    applyPerimeterRingCollapse(grouter_,
+                               cataclysm.routes,
+                               baseline_rudy,
+                               3,
+                               100,
+                               10,
+                               min_routing_layer,
+                               max_routing_layer);
+    applyWavefrontDetours(grouter_,
+                          cataclysm.routes,
+                          baseline_rudy,
+                          std::max(2 * tile_size, 1),
+                          std::max(18 * tile_size, 1),
+                          100);
+    applyAggressiveDoglegShortcuts(cataclysm.routes,
+                                   std::max(8 * tile_size, 1),
+                                   std::max(tile_size, 1));
+    applyGuideCompression(cataclysm.routes, std::max(4 * tile_size, 1));
+    applyViaExcursionCollapse(cataclysm.routes, std::max(2 * tile_size, 1));
+    cataclysm.metrics = compute_metrics(cataclysm.routes);
+
+    long cataclysm_changed_nets = 0;
+    for (const auto& [db_net, prior_route] : selected.routes) {
+      auto cataclysm_it = cataclysm.routes.find(db_net);
+      if (cataclysm_it == cataclysm.routes.end()) {
+        continue;
+      }
+      const auto [prior_wl, prior_vias] = route_stats(prior_route);
+      const auto [cat_wl, cat_vias] = route_stats(cataclysm_it->second);
+      if (prior_wl != cat_wl || prior_vias != cat_vias) {
+        cataclysm_changed_nets++;
+      }
+    }
+    selected = std::move(cataclysm);
+
     const double selected_delta_wl
         = selected.metrics.wirelength_um - baseline.metrics.wirelength_um;
     const long selected_delta_vias
@@ -4245,6 +4307,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   phaseflip_shock_nets,
                   phaseflip_vortex_nets,
                   phaseflip_ring_nets);
+    logger_->warn(GNR,
+                  6044,
+                  "NEWGR corridor cataclysm37 changed {} net routes.",
+                  cataclysm_changed_nets);
 
     restore_snapshot(snapshot);
     return selected.routes;
