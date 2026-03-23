@@ -659,7 +659,7 @@ void CUGR::route()
   mazeRoute(netIndices);
 
   // Keep detours as a final cleanup pass for residual difficult hotspots.
-  grid_graph_->setStageCostScales(1.35, 1.35, 1.00);
+  grid_graph_->setStageCostScales(1.28, 1.28, 1.00);
   patternRouteWithDetours(netIndices);
 
   // FastRoute-style final RRR cleanup: re-run maze search to pull inflated

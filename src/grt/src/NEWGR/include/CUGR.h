@@ -42,7 +42,7 @@ struct Constants
   // allowed stem length increase to trunk length ratio
   // Keep detours as a final overflow repair tool instead of a broad
   // topology-changing mechanism.
-  double max_detour_ratio = 0.06;
+  double max_detour_ratio = 0.055;
   int target_detour_count = 4;
 
   double via_multiplier = 1.4;

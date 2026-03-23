@@ -184,6 +184,12 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
 
 void MazeRoute::run()
 {
+  solutions_.clear();
+  const int numPseudoPins = graph_.getNumPseudoPins();
+  if (numPseudoPins <= 0) {
+    return;
+  }
+
   std::vector<CostT> minCosts(graph_.getNumVertices(),
                               std::numeric_limits<CostT>::max());
 
@@ -206,12 +212,12 @@ void MazeRoute::run()
     }
   };
 
-  solutions_.reserve(net_->getNumPins());
+  solutions_.reserve(numPseudoPins);
 
-  std::vector<bool> visited(net_->getNumPins(), false);
+  std::vector<bool> visited(numPseudoPins, false);
   const int startPinIndex = 0;
   visited[startPinIndex] = true;
-  int numDetached = graph_.getNumPseudoPins() - 1;
+  int numDetached = numPseudoPins - 1;
   updateSolution(std::make_shared<Solution>(
       0, graph_.getPinVertex(startPinIndex), nullptr));
 
