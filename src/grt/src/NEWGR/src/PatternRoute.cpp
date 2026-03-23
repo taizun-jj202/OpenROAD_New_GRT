@@ -107,34 +107,12 @@ void PatternRoute::constructSteinerTree()
     return;
   }
 
-  // Radical topology switch for large nets:
-  // build a median cross (X/Y spine) and attach each pin through the most
-  // shareable axis to aggressively compact tree geometry.
-  if (degree >= constants_.hub_topology_pin_threshold) {
-    std::vector<int> xs;
-    std::vector<int> ys;
-    xs.reserve(degree);
-    ys.reserve(degree);
-    robin_hood::unordered_map<int, int> xFreq;
-    robin_hood::unordered_map<int, int> yFreq;
-    for (const auto& accessPoint : orderedAccessPoints) {
-      xs.push_back(accessPoint.point.x());
-      ys.push_back(accessPoint.point.y());
-      xFreq[accessPoint.point.x()] += 1;
-      yFreq[accessPoint.point.y()] += 1;
-    }
-
-    std::vector<int> sortedXs(xs.begin(), xs.end());
-    std::vector<int> sortedYs(ys.begin(), ys.end());
-    std::sort(sortedXs.begin(), sortedXs.end());
-    std::sort(sortedYs.begin(), sortedYs.end());
-    const int q2 = sortedXs[degree / 2];
-    const int yMedian = sortedYs[degree / 2];
-    const int xMax = std::max(0, grid_graph_->getSize(0) - 1);
-    const int yMax = std::max(0, grid_graph_->getSize(1) - 1);
-    const PointT rootPoint(std::clamp(q2, 0, xMax), std::clamp(yMedian, 0, yMax));
-    auto root = std::make_shared<SteinerTreeNode>(rootPoint);
-
+  // Radical topology mode:
+  // for most multi-pin nets, replace FLUTE/MST with a clustered two-hub tree.
+  // The hub pair is chosen as the farthest two access points to maximize
+  // shared long-distance trunking, while pin attachments are axis-biased to
+  // encourage bend reuse.
+  if (degree >= 4) {
     auto mergeLayers = [](IntervalT& dst, const IntervalT& src) {
       if (!src.IsValid()) {
         return;
@@ -147,50 +125,112 @@ void PatternRoute::constructSteinerTree()
       dst.Update(src.high());
     };
 
-    std::map<std::pair<int, int>, std::shared_ptr<SteinerTreeNode>> spineNodes;
-    auto getOrCreateSpineNode = [&](const PointT& point) {
-      if (point == rootPoint) {
-        return root;
+    robin_hood::unordered_map<int, int> xFreq;
+    robin_hood::unordered_map<int, int> yFreq;
+    for (const auto& accessPoint : orderedAccessPoints) {
+      xFreq[accessPoint.point.x()] += 1;
+      yFreq[accessPoint.point.y()] += 1;
+    }
+
+    int hubA = 0;
+    int hubB = 1;
+    int maxDist = -1;
+    for (int i = 0; i < degree; i++) {
+      for (int j = i + 1; j < degree; j++) {
+        const PointT& u = orderedAccessPoints[i].point;
+        const PointT& v = orderedAccessPoints[j].point;
+        const int dist = std::abs(u.x() - v.x()) + std::abs(u.y() - v.y());
+        if (dist > maxDist) {
+          maxDist = dist;
+          hubA = i;
+          hubB = j;
+        }
       }
-      const std::pair<int, int> key(point.x(), point.y());
-      auto it = spineNodes.find(key);
-      if (it != spineNodes.end()) {
-        return it->second;
-      }
-      auto node = std::make_shared<SteinerTreeNode>(point);
-      spineNodes.emplace(key, node);
-      root->addChild(node);
-      return node;
+    }
+
+    const PointT hubPointA = orderedAccessPoints[hubA].point;
+    const PointT hubPointB = orderedAccessPoints[hubB].point;
+    auto root = std::make_shared<SteinerTreeNode>(hubPointA,
+                                                  orderedAccessPoints[hubA].layers);
+    std::shared_ptr<SteinerTreeNode> secondHub = root;
+    const bool distinctHubs = hubPointA != hubPointB;
+    if (distinctHubs) {
+      secondHub = std::make_shared<SteinerTreeNode>(hubPointB,
+                                                    orderedAccessPoints[hubB].layers);
+      root->addChild(secondHub);
+    } else {
+      IntervalT merged = root->getFixedLayers();
+      mergeLayers(merged, orderedAccessPoints[hubB].layers);
+      root->setFixedLayers(merged);
+    }
+
+    struct HubAttachContext
+    {
+      std::shared_ptr<SteinerTreeNode> hubNode;
+      PointT hubPoint;
+      std::map<std::pair<int, int>, std::shared_ptr<SteinerTreeNode>> bends;
     };
 
-    for (const auto& accessPoint : orderedAccessPoints) {
+    HubAttachContext ctxA{root, hubPointA, {}};
+    HubAttachContext ctxB{secondHub, hubPointB, {}};
+
+    auto attachPin = [&](HubAttachContext& context, const AccessPoint& accessPoint) {
       const PointT pin = accessPoint.point;
-      if (pin == rootPoint) {
-        IntervalT merged = root->getFixedLayers();
+      if (pin == context.hubPoint) {
+        IntervalT merged = context.hubNode->getFixedLayers();
         mergeLayers(merged, accessPoint.layers);
-        root->setFixedLayers(merged);
-        continue;
+        context.hubNode->setFixedLayers(merged);
+        return;
       }
 
-      const int dx = std::abs(pin.x() - rootPoint.x());
-      const int dy = std::abs(pin.y() - rootPoint.y());
+      const int dx = std::abs(pin.x() - context.hubPoint.x());
+      const int dy = std::abs(pin.y() - context.hubPoint.y());
       const int xPopularity = xFreq[pin.x()];
       const int yPopularity = yFreq[pin.y()];
-      const bool useHorizontalSpine
-          = (xPopularity > yPopularity)
-            || (xPopularity == yPopularity && dy <= dx);
-      const PointT bend = useHorizontalSpine ? PointT(pin.x(), rootPoint.y())
-                                             : PointT(rootPoint.x(), pin.y());
+      const bool horizontalFirst = (xPopularity > yPopularity)
+                                   || (xPopularity == yPopularity && dx >= dy);
+      const PointT bend = horizontalFirst ? PointT(pin.x(), context.hubPoint.y())
+                                          : PointT(context.hubPoint.x(), pin.y());
 
-      std::shared_ptr<SteinerTreeNode> spineNode = getOrCreateSpineNode(bend);
-      if (bend == pin) {
-        IntervalT merged = spineNode->getFixedLayers();
-        mergeLayers(merged, accessPoint.layers);
-        spineNode->setFixedLayers(merged);
-      } else {
-        auto pinNode = std::make_shared<SteinerTreeNode>(pin, accessPoint.layers);
-        spineNode->addChild(pinNode);
+      std::shared_ptr<SteinerTreeNode> parent = context.hubNode;
+      if (bend != context.hubPoint && bend != pin) {
+        const std::pair<int, int> key(bend.x(), bend.y());
+        auto it = context.bends.find(key);
+        if (it == context.bends.end()) {
+          auto bendNode = std::make_shared<SteinerTreeNode>(bend);
+          context.hubNode->addChild(bendNode);
+          context.bends.emplace(key, bendNode);
+          parent = bendNode;
+        } else {
+          parent = it->second;
+        }
       }
+
+      if (pin == PointT(parent->x(), parent->y())) {
+        IntervalT merged = parent->getFixedLayers();
+        mergeLayers(merged, accessPoint.layers);
+        parent->setFixedLayers(merged);
+      } else {
+        parent->addChild(
+            std::make_shared<SteinerTreeNode>(pin, accessPoint.layers));
+      }
+    };
+
+    std::vector<int> hubLoad(2, 0);
+    for (int index = 0; index < degree; index++) {
+      if (index == hubA || index == hubB) {
+        continue;
+      }
+      const AccessPoint& accessPoint = orderedAccessPoints[index];
+      const PointT pin = accessPoint.point;
+      const int distA = std::abs(pin.x() - hubPointA.x())
+                        + std::abs(pin.y() - hubPointA.y());
+      const int distB = std::abs(pin.x() - hubPointB.x())
+                        + std::abs(pin.y() - hubPointB.y());
+      const bool useA = !distinctHubs || distA < distB
+                        || (distA == distB && hubLoad[0] <= hubLoad[1]);
+      attachPin(useA ? ctxA : ctxB, accessPoint);
+      hubLoad[useA ? 0 : 1] += 1;
     }
 
     steiner_tree_ = root;

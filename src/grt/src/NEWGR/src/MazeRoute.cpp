@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstdlib>
 #include <cstdint>
 #include <cstdio>
@@ -119,10 +120,12 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
     const int corridorDistance = std::abs(midX - projectedX)
                                  + std::abs(midY - projectedY);
     const int centerDistance = std::abs(midX - centerX) + std::abs(midY - centerY);
-    const double centerPenalty = 0.08 * static_cast<double>(centerDistance)
+    const double centerPenalty = 0.02 * static_cast<double>(centerDistance)
                                  / hpNorm;
     const double corridorPenalty
-        = corridorDistance > 0 ? (0.55 + 0.10 * corridorDistance) : 0.0;
+        = corridorDistance > 0
+              ? (0.12 * std::log1p(static_cast<double>(corridorDistance)))
+              : -0.06;
     const bool nonPreferredDirection
         = (preferHorizontal && direction == MetalLayer::V)
           || (!preferHorizontal && direction == MetalLayer::H);
@@ -130,10 +133,11 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
     if (cost <= 0.0) {
       cost = 1.0;
     }
-    cost += cost * (centerPenalty + corridorPenalty);
-    if (nonPreferredDirection) {
-      cost += cost * directionalPenaltyScale;
-    }
+    const double directionalPenalty
+        = nonPreferredDirection ? 0.55 * directionalPenaltyScale : 0.0;
+    const double scale = std::max(
+        0.70, 1.0 + centerPenalty + corridorPenalty + directionalPenalty);
+    cost *= scale;
 
     edges_[u][0] = v;
     edges_[v][1] = u;
@@ -160,9 +164,9 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   auto addDiffLayerEdge = [&](const int xi, const int yi) {
     const int u = getVertexIndex(0, xi, yi);
     const int v = u + xs_.size() * ys_.size();
-    const double viaScale = 1.0 + 0.06 * std::max(net_->getNumPins() - 2, 0)
-                            + 0.015 * std::min(hp, 250)
-                            + (aspectRatio > 1.8 ? 0.45 : 0.0);
+    const double viaScale = 1.0 + 0.10 * std::max(net_->getNumPins() - 2, 0)
+                            + 0.025 * std::min(hp, 250)
+                            + (aspectRatio > 1.8 ? 0.75 : 0.0);
 
     edges_[u][2] = v;
     edges_[v][2] = u;
