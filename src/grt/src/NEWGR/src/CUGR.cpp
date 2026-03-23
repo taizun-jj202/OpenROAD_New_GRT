@@ -330,6 +330,10 @@ void CUGR::wirelengthRecovery()
       = std::max(128, static_cast<int>(netIndices.size() / 4));
   const int denseMazeBudget
       = std::max(64, static_cast<int>(netIndices.size() / 20));
+  const int longSweepBudget
+      = std::max(48, static_cast<int>(netIndices.size() / 40));
+  const int denseLongSweepBudget
+      = std::max(16, static_cast<int>(netIndices.size() / 96));
   const int longNetRank
       = std::min(static_cast<int>(netIndices.size()) - 1,
                  std::max(0, static_cast<int>(netIndices.size() / 8)));
@@ -386,25 +390,51 @@ void CUGR::wirelengthRecovery()
         = (rank < mazeCandidateBudget || oldScore.overflow_edges > 0
            || oldScore.wire_length >= longWireThreshold);
     if (runMazeCandidate) {
-      int interval = oldScore.overflow_edges > 0 ? 4 : 5;
-      if (rank < denseMazeBudget || oldScore.wire_length >= longWireThreshold) {
-        interval = 3;
-      }
-      const int xOffset = rank % interval;
-      const int yOffset = (rank * 3) % interval;
-      SparseGrid recoveryGrid(interval, interval, xOffset, yOffset);
+      const int hp = net->getBoundingBox().hp();
+      const int pins = net->getNumPins();
+      auto runSparseMazeCandidate = [&](int interval, int xOffset, int yOffset) {
+        SparseGrid recoveryGrid(interval, interval, xOffset, yOffset);
 
-      MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
-      mazeRoute.constructSparsifiedGraph(wireCostView, recoveryGrid);
-      mazeRoute.run();
-      std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();
-      if (steinerTree) {
+        MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+        mazeRoute.constructSparsifiedGraph(wireCostView, recoveryGrid);
+        mazeRoute.run();
+        std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();
+        if (!steinerTree) {
+          return;
+        }
         PatternRoute mazeRefineRoute(
             net, grid_graph_.get(), stt_builder_, constants_, logger_);
         mazeRefineRoute.setSteinerTree(steinerTree);
         mazeRefineRoute.constructRoutingDAG();
         mazeRefineRoute.run();
         tryCandidate(net->getRoutingTree(), /*fromMaze*/ true);
+      };
+
+      int interval = oldScore.overflow_edges > 0 ? 4 : 5;
+      if (rank < denseMazeBudget || oldScore.wire_length >= longWireThreshold) {
+        interval = 3;
+      }
+      runSparseMazeCandidate(interval, rank % interval, (rank * 3) % interval);
+
+      // FastRoute-style multiple reconnection attempts: for the longest or
+      // still-overflowing nets, sweep a couple of denser sparse-grid offsets
+      // and keep only strict improvements.
+      const bool runExtraSweep
+          = rank < longSweepBudget
+            || (oldScore.overflow_edges > 0 && rank < denseMazeBudget);
+      if (runExtraSweep) {
+        const int extraTrials
+            = (rank < denseLongSweepBudget || oldScore.overflow_edges > 0) ? 2
+                                                                            : 1;
+        for (int trial = 0; trial < extraTrials; trial++) {
+          const int denseInterval = trial == 0 ? 3 : 4;
+          const int xOffset
+              = (rank * 11 + hp + trial * 7 + oldScore.overflow_edges)
+                % denseInterval;
+          const int yOffset
+              = (rank * 13 + pins + trial * 5 + hp) % denseInterval;
+          runSparseMazeCandidate(denseInterval, xOffset, yOffset);
+        }
       }
     }
 
