@@ -269,10 +269,10 @@ void MazeRoute::run()
       return true;
     }
     // Wirelength-first tie breaking with bounded congestion-cost regression.
-    constexpr uint64_t kStrongWireGain = 20;
-    constexpr uint64_t kModerateWireGain = 8;
-    constexpr double kCostSlackForWireGain = 1.15;
-    constexpr double kCostSlackForModerateWireGain = 1.22;
+    constexpr uint64_t kStrongWireGain = 10;
+    constexpr uint64_t kModerateWireGain = 4;
+    constexpr double kCostSlackForWireGain = 1.18;
+    constexpr double kCostSlackForModerateWireGain = 1.26;
     if (candidate.unique_wirelength + kStrongWireGain
             < current_best.unique_wirelength
         && candidate.total_cost <= current_best.total_cost * kCostSlackForWireGain) {
@@ -304,8 +304,8 @@ void MazeRoute::run()
       return true;
     }
     if (candidate.unique_wirelength < current_best.unique_wirelength
-        && candidate.total_cost <= current_best.total_cost * 1.10
-        && candidate.unique_vias <= current_best.unique_vias + 2) {
+        && candidate.total_cost <= current_best.total_cost * 1.12
+        && candidate.unique_vias <= current_best.unique_vias + 3) {
       return true;
     }
     return false;

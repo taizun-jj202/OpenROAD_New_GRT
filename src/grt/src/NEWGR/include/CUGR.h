@@ -78,7 +78,7 @@ struct Constants
   bool stage3_use_wirelength_maze = true;
   int stage3_wl_only_hpwl_threshold = 140;
   int stage3_wl_config_limit = 4;
-  double stage3_wl_via_cost_scale = 0.35;
+  double stage3_wl_via_cost_scale = 0.30;
   bool stage3_use_full_grid_wl_maze = true;
   int stage3_full_grid_hpwl_threshold = 220;
   int stage3_full_grid_pin_limit = 20;
@@ -91,7 +91,7 @@ struct Constants
   bool enable_wirelength_recovery = true;
   bool recovery_use_maze = true;
   bool recovery_use_wirelength_maze = true;
-  double recovery_wl_maze_via_cost_scale = 0.30;
+  double recovery_wl_maze_via_cost_scale = 0.26;
   int recovery_wl_only_hpwl_threshold = 120;
   int recovery_hpwl_threshold = 88;
   double recovery_min_stretch = 1.05;
@@ -104,6 +104,11 @@ struct Constants
   double recovery_refine_ratio = 0.62;
   int recovery_max_passes = 2;
   double recovery_pass_decay = 0.80;
+  double recovery_late_pass_refine_scale = 0.40;
+  double recovery_late_pass_cap_scale = 0.30;
+  double recovery_late_pass_deep_ratio_scale = 0.55;
+  int recovery_late_pass_abs_cap = 18;
+  int recovery_late_pass_min_first_pass_accepts = 3;
   int recovery_maze_sparse_x = 3;
   int recovery_maze_sparse_y = 3;
   double recovery_deep_ratio = 0.65;
@@ -121,7 +126,7 @@ struct Constants
   int recovery_spatial_batches = 6;
   int recovery_spatial_pool_multiplier = 2;
   bool recovery_use_full_grid_maze = true;
-  int recovery_full_grid_top_n = 4;
+  int recovery_full_grid_top_n = 5;
   int recovery_full_grid_hpwl_threshold = 220;
   double recovery_full_grid_via_cost_scale = 0.03;
 

@@ -74,8 +74,9 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
 {
   constexpr double kOverflowEpsilon = 1e-6;
   constexpr double kStrongOverflowDropThreshold = 20.0;
-  constexpr int64_t kStrongWireGain = 12;
-  constexpr int64_t kMaxWirelengthTradeoff = 24;
+  constexpr int64_t kStrongWireGain = 6;
+  constexpr int64_t kModerateWireGain = 2;
+  constexpr int64_t kMaxWirelengthTradeoff = 20;
 
   // Wirelength-first objective:
   // keep shorter candidates as long as they don't cause a large overflow jump.
@@ -83,11 +84,11 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
     return candidate.total_overflow
            <= current_best.total_overflow + allowed_overflow_increase_for_wl_gain;
   }
-  if (candidate.wirelength < current_best.wirelength
+  if (candidate.wirelength + kModerateWireGain < current_best.wirelength
       && candidate.total_overflow
              <= current_best.total_overflow
-                    + allowed_overflow_increase_for_wl_gain * 0.6
-      && candidate.vias <= current_best.vias + 2) {
+                    + allowed_overflow_increase_for_wl_gain * 0.75
+      && candidate.vias <= current_best.vias + 4) {
     return true;
   }
 
@@ -114,6 +115,9 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
 
   if (candidate.vias != current_best.vias) {
     return candidate.vias < current_best.vias;
+  }
+  if (candidate.wirelength != current_best.wirelength) {
+    return candidate.wirelength < current_best.wirelength;
   }
   return candidate.overflow < current_best.overflow;
 }
@@ -579,7 +583,20 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
   int total_accepted = 0;
   const int max_passes = std::max(1, constants_.recovery_max_passes);
   const double pass_decay = std::clamp(constants_.recovery_pass_decay, 0.25, 1.0);
+  int previous_pass_accepts = std::numeric_limits<int>::max();
   for (int pass = 0; pass < max_passes; pass++) {
+    if (pass > 0
+        && previous_pass_accepts
+               < constants_.recovery_late_pass_min_first_pass_accepts) {
+      logger_->report("stage 4.{} skipped (pass {} accepted {} nets, minimum "
+                      "required for late pass is {}).",
+                      pass + 1,
+                      pass,
+                      previous_pass_accepts,
+                      constants_.recovery_late_pass_min_first_pass_accepts);
+      break;
+    }
+
     std::vector<Candidate> candidates;
     candidates.reserve(netIndices.size());
     const double pass_scale = std::pow(pass_decay, pass);
@@ -639,18 +656,41 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
                 return lhs.hpwl > rhs.hpwl;
               });
 
-    const double pass_ratio = std::clamp(
-        constants_.recovery_refine_ratio
-            * (pass == 0 ? 1.0 : std::max(0.45, pass_scale)),
-        0.2,
-        1.0);
+    const double late_pass_scale = std::clamp(
+        constants_.recovery_late_pass_refine_scale, 0.10, 1.0);
+    const double pass_factor = pass == 0
+                                   ? 1.0
+                                   : std::max(0.20, pass_scale * late_pass_scale);
+    const double pass_ratio = std::clamp(constants_.recovery_refine_ratio
+                                             * pass_factor,
+                                         pass == 0 ? 0.2 : 0.08,
+                                         pass == 0 ? 1.0 : 0.45);
     int keep
         = static_cast<int>(std::ceil(candidates.size() * pass_ratio));
     keep = std::max(1, std::min(keep, static_cast<int>(candidates.size())));
-    const int candidate_cap = std::max(1, constants_.recovery_candidate_cap);
+    int candidate_cap = std::max(1, constants_.recovery_candidate_cap);
+    if (pass > 0) {
+      const int scaled_cap = static_cast<int>(std::ceil(
+          candidate_cap
+          * std::clamp(constants_.recovery_late_pass_cap_scale, 0.05, 1.0)));
+      candidate_cap = std::max(
+          1,
+          std::min({candidate_cap, scaled_cap, constants_.recovery_late_pass_abs_cap}));
+    }
     keep = std::min(keep, candidate_cap);
+    if (pass > 0) {
+      keep = std::max(1, keep);
+    }
+    double deep_ratio = std::clamp(constants_.recovery_deep_ratio, 0.0, 1.0);
+    if (pass > 0) {
+      deep_ratio = std::clamp(
+          deep_ratio
+              * std::clamp(constants_.recovery_late_pass_deep_ratio_scale, 0.1, 1.0),
+          0.0,
+          1.0);
+    }
     int deep_keep = static_cast<int>(std::ceil(
-        keep * std::clamp(constants_.recovery_deep_ratio, 0.0, 1.0)));
+        keep * deep_ratio));
     deep_keep = std::min(
         deep_keep, std::max(1, constants_.recovery_deep_search_cap));
     deep_keep = std::max(1, std::min(deep_keep, keep));
@@ -994,6 +1034,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     }
 
     total_accepted += accepted_in_pass;
+    previous_pass_accepts = accepted_in_pass;
     logger_->report("stage 4.{} accepted {} reroutes.",
                     pass + 1,
                     accepted_in_pass);
