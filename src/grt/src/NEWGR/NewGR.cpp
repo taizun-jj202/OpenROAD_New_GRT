@@ -814,35 +814,35 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                              5,
                                              8.0f));
   } else if (!normalized_rudy.empty()) {
-    // Even in low-overflow designs, run light RUDY-guided variants to expose
-    // alternative low-detour topologies for detailed route.
-    scenario_defs.push_back(make_soft_config("rudy-light-direct",
-                                             0.70f,
+    // In low-overflow designs, stay close to baseline capacities and run
+    // micro-guided variants to avoid introducing large detours.
+    scenario_defs.push_back(make_soft_config("rudy-precision-direct",
+                                             0.80f,
+                                             1.02f,
+                                             2.8f,
+                                             0.24f,
+                                             1,
+                                             0.92f,
+                                             0.10f,
+                                             0.12f,
+                                             0.0f,
+                                             snapshot.seed,
+                                             4.0f));
+    scenario_defs.push_back(make_soft_config("rudy-precision-critical",
+                                             0.74f,
                                              1.00f,
-                                             3.2f,
+                                             3.5f,
                                              0.30f,
                                              1,
                                              0.88f,
-                                             0.15f,
+                                             0.16f,
                                              0.10f,
                                              0.0f,
                                              snapshot.seed,
-                                             2.0f));
-    scenario_defs.push_back(make_soft_config("rudy-light-balanced",
-                                             0.62f,
-                                             0.98f,
-                                             3.8f,
-                                             0.34f,
-                                             1,
-                                             0.82f,
-                                             0.20f,
-                                             0.09f,
-                                             0.0f,
-                                             snapshot.seed,
-                                             3.0f));
+                                             6.0f));
     logger_->info(GNR,
                   6008,
-                  "NEWGR enabling light soft-capacity scenarios in low "
+                  "NEWGR enabling precision soft-capacity scenarios in low "
                   "congestion mode (overflow {}, hot edges {}, max ratio {:.2f}).",
                   baseline.metrics.overflow_edges,
                   baseline.metrics.near_capacity_edges,
@@ -898,6 +898,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   scenario_defs.push_back(make_critical_sweep_def(19, 4.0f));
   scenario_defs.push_back(make_critical_sweep_def(23, 8.0f));
   scenario_defs.push_back(make_critical_sweep_def(29, 12.0f));
+  // Focused low-perturb exploration around historically strong seeds.
+  scenario_defs.push_back(make_random_def(71, 0.0f, 8.0f));
+  scenario_defs.push_back(make_random_def(73, 0.0f, 8.0f));
+  scenario_defs.push_back(make_random_def(79, 0.0f, 8.0f));
+  scenario_defs.push_back(make_random_def(83, 0.0f, 8.0f));
+  scenario_defs.push_back(make_random_def(71, 0.5f, 6.0f));
+  scenario_defs.push_back(make_random_def(79, 0.5f, 6.0f));
+  scenario_defs.push_back(make_critical_sweep_def(23, 6.0f));
+  scenario_defs.push_back(make_critical_sweep_def(23, 10.0f));
+  scenario_defs.push_back(make_critical_sweep_def(67, 8.0f));
+  scenario_defs.push_back(make_critical_sweep_def(19, 6.0f));
 
   for (const ScenarioDefinition& def : scenario_defs) {
     ScenarioResult result = run_scenario(def, snapshot);
@@ -1272,6 +1283,170 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     };
 
+    auto append_consensus_hybrid = [&](const std::string& hybrid_name,
+                                       int source_count,
+                                       long via_weight,
+                                       double detour_weight,
+                                       double consensus_weight,
+                                       int logger_code) {
+      source_count = std::max(1, std::min(source_count, static_cast<int>(ranked.size())));
+      ScenarioResult hybrid_result;
+      hybrid_result.name = hybrid_name;
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      double total_consensus_penalty = 0.0;
+      double total_detour_penalty = 0.0;
+
+      auto get_bbox_hpwl = [](const GRoute& route) {
+        int min_x = std::numeric_limits<int>::max();
+        int min_y = std::numeric_limits<int>::max();
+        int max_x = std::numeric_limits<int>::min();
+        int max_y = std::numeric_limits<int>::min();
+        bool has_wire = false;
+        for (const GSegment& segment : route) {
+          if (segment.isVia()) {
+            continue;
+          }
+          has_wire = true;
+          min_x = std::min(min_x, std::min(segment.init_x, segment.final_x));
+          min_y = std::min(min_y, std::min(segment.init_y, segment.final_y));
+          max_x = std::max(max_x, std::max(segment.init_x, segment.final_x));
+          max_y = std::max(max_y, std::max(segment.init_y, segment.final_y));
+        }
+        if (!has_wire) {
+          return 0L;
+        }
+        return static_cast<long>(max_x - min_x) + static_cast<long>(max_y - min_y);
+      };
+
+      for (odb::dbNet* db_net : hybrid_nets) {
+        if (db_net == nullptr) {
+          continue;
+        }
+
+        std::vector<std::pair<const GRoute*, RouteEdgeStats>> candidates;
+        candidates.reserve(source_count);
+        std::unordered_map<uint64_t, int> edge_frequency;
+        edge_frequency.reserve(64);
+
+        for (int idx = 0; idx < source_count; ++idx) {
+          const ScenarioResult* source = ranked[idx];
+          if (source == nullptr) {
+            continue;
+          }
+          const auto route_it = source->routes.find(db_net);
+          if (route_it == source->routes.end()) {
+            continue;
+          }
+          RouteEdgeStats stats
+              = collectRouteEdgeStats(route_it->second, grouter_->grid_);
+          for (const auto& [edge_key, usage] : stats.edge_counts) {
+            if (usage > 0) {
+              edge_frequency[edge_key] += 1;
+            }
+          }
+          candidates.emplace_back(&route_it->second, std::move(stats));
+        }
+
+        if (candidates.empty()) {
+          continue;
+        }
+
+        const GRoute* best_route = nullptr;
+        long best_wl = std::numeric_limits<long>::max();
+        int best_vias = std::numeric_limits<int>::max();
+        double best_objective = std::numeric_limits<double>::max();
+
+        for (const auto& [route, stats] : candidates) {
+          const long bbox_hpwl = get_bbox_hpwl(*route);
+          const long detour = std::max(0L, stats.wirelength_dbu - bbox_hpwl);
+
+          long vote_sum = 0;
+          for (const auto& [edge_key, usage] : stats.edge_counts) {
+            if (usage > 0) {
+              const auto vote_it = edge_frequency.find(edge_key);
+              if (vote_it != edge_frequency.end()) {
+                vote_sum += vote_it->second;
+              }
+            }
+          }
+          const int edge_count = std::max(1, static_cast<int>(stats.edge_counts.size()));
+          const double avg_vote
+              = static_cast<double>(vote_sum) / static_cast<double>(edge_count);
+          const double consensus_penalty
+              = std::max(0.0, static_cast<double>(source_count) - avg_vote);
+          const double objective
+              = static_cast<double>(stats.wirelength_dbu)
+                + static_cast<double>(via_weight) * static_cast<double>(stats.via_count)
+                + detour_weight * static_cast<double>(detour)
+                + consensus_weight * static_cast<double>(tile_size) * consensus_penalty;
+
+          if (objective < best_objective
+              || (objective == best_objective
+                  && stats.wirelength_dbu < best_wl)
+              || (objective == best_objective
+                  && stats.wirelength_dbu == best_wl
+                  && stats.via_count < best_vias)) {
+            best_objective = objective;
+            best_wl = stats.wirelength_dbu;
+            best_vias = stats.via_count;
+            best_route = route;
+          }
+        }
+
+        if (best_route != nullptr) {
+          const RouteEdgeStats best_stats
+              = collectRouteEdgeStats(*best_route, grouter_->grid_);
+          const long bbox_hpwl = get_bbox_hpwl(*best_route);
+          const long detour = std::max(0L, best_stats.wirelength_dbu - bbox_hpwl);
+          long vote_sum = 0;
+          for (const auto& [edge_key, usage] : best_stats.edge_counts) {
+            if (usage > 0) {
+              const auto vote_it = edge_frequency.find(edge_key);
+              if (vote_it != edge_frequency.end()) {
+                vote_sum += vote_it->second;
+              }
+            }
+          }
+          const int edge_count
+              = std::max(1, static_cast<int>(best_stats.edge_counts.size()));
+          const double avg_vote
+              = static_cast<double>(vote_sum) / static_cast<double>(edge_count);
+          total_consensus_penalty += std::max(
+              0.0, static_cast<double>(source_count) - avg_vote);
+          total_detour_penalty += static_cast<double>(detour);
+          hybrid_result.routes.emplace(db_net, *best_route);
+        }
+      }
+
+      const std::size_t coverage_threshold
+          = expected_net_count > 0 ? (expected_net_count * 95) / 100 : 0;
+      if (hybrid_result.routes.size() >= coverage_threshold) {
+        hybrid_result.metrics = compute_metrics(hybrid_result.routes);
+        logger_->info(
+            GNR,
+            logger_code,
+            "NEWGR {} from top {} scenarios: wirelength {:.0f} um, vias {}, "
+            "routed nets {}/{}, consensus-penalty {:.0f}, detour-penalty {:.0f}",
+            hybrid_name,
+            source_count,
+            hybrid_result.metrics.wirelength_um,
+            hybrid_result.metrics.via_count,
+            hybrid_result.routes.size(),
+            expected_net_count,
+            total_consensus_penalty,
+            total_detour_penalty);
+        scenario_results.push_back(std::move(hybrid_result));
+      } else {
+        logger_->info(
+            GNR,
+            6016,
+            "NEWGR skipped {} due low net coverage ({}/{}).",
+            hybrid_name,
+            hybrid_result.routes.size(),
+            expected_net_count);
+      }
+    };
+
     // Drastic recombination:
     // 1) a wirelength-first hybrid (FastRoute shortest-path intent),
     // 2) a balanced hybrid that softly penalizes vias (SPRoute/CUGR flavor).
@@ -1279,16 +1454,25 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const int ultra_wl_source_count = static_cast<int>(ranked.size());
     const int balanced_source_count = std::min<int>(8, ranked.size());
     const int softcap_source_count = std::min<int>(16, ranked.size());
+    const int consensus_source_count = std::min<int>(22, ranked.size());
     const long balanced_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 3L);
     const long softcap_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 4L);
+    const long consensus_via_weight
+        = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 6L);
     append_hybrid("hybrid-netmix-wl", wl_source_count, 0, 6010);
     append_hybrid("hybrid-netmix-ultra-wl", ultra_wl_source_count, 0, 6013);
     append_hybrid(
         "hybrid-netmix-balanced", balanced_source_count, balanced_via_weight, 6012);
     append_softcap_hybrid(
         "hybrid-netmix-softcap", softcap_source_count, softcap_via_weight, 6015);
+    append_consensus_hybrid("hybrid-netmix-consensus",
+                            consensus_source_count,
+                            consensus_via_weight,
+                            0.55,
+                            0.85,
+                            6017);
   }
 
   auto robust_better = [](const ScenarioResult& lhs,
