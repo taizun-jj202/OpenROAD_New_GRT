@@ -1572,6 +1572,53 @@ bool shouldPreferInterleavedHybrid(int incumbent_overflow,
   return true;
 }
 
+bool shouldPreferWirelengthSweepHybrid(int incumbent_overflow,
+                                       const RouteScore& incumbent_score,
+                                       uint64_t incumbent_low_layer_wl,
+                                       int candidate_overflow,
+                                       const RouteScore& candidate_score,
+                                       uint64_t candidate_low_layer_wl)
+{
+  if (candidate_overflow > incumbent_overflow) {
+    return false;
+  }
+  if (candidate_score.routed_nets < incumbent_score.routed_nets) {
+    return false;
+  }
+  if (candidate_overflow < incumbent_overflow) {
+    return true;
+  }
+  if (candidate_score.wirelength >= incumbent_score.wirelength) {
+    return false;
+  }
+
+  const uint64_t wl_gain = incumbent_score.wirelength - candidate_score.wirelength;
+  const int64_t via_increase = static_cast<int64_t>(candidate_score.vias)
+                               - static_cast<int64_t>(incumbent_score.vias);
+  const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
+                                  - static_cast<int64_t>(incumbent_low_layer_wl);
+  const uint64_t min_wl_gain
+      = std::max<uint64_t>(70000, incumbent_score.wirelength / 18000);
+  if (wl_gain < min_wl_gain) {
+    return false;
+  }
+  const int64_t via_increase_budget
+      = std::max<int64_t>(280, static_cast<int64_t>(incumbent_score.vias / 390));
+  if (via_increase > via_increase_budget
+      && wl_gain
+             < static_cast<uint64_t>(via_increase * 520 + static_cast<int64_t>(120000))) {
+    return false;
+  }
+  const int64_t low_layer_budget = std::max<int64_t>(
+      1200000, static_cast<int64_t>(incumbent_low_layer_wl / 24));
+  if (low_layer_delta > low_layer_budget
+      && wl_gain
+             < static_cast<uint64_t>(low_layer_delta / 3 + static_cast<int64_t>(180000))) {
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
@@ -1807,12 +1854,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       used_fastroute_last_run_ = false;
     }
 
-    if (shouldPreferInterleavedHybrid(best_overflow,
-                                      best_score,
-                                      best_low_layer_wl,
-                                      last_total_overflow_,
-                                      sweep_score,
-                                      sweep_low_layer_wl)) {
+    if (shouldPreferWirelengthSweepHybrid(best_overflow,
+                                          best_score,
+                                          best_low_layer_wl,
+                                          last_total_overflow_,
+                                          sweep_score,
+                                          sweep_low_layer_wl)) {
       routes = std::move(wirelength_sweep_hybrid);
       best_score = sweep_score;
       best_overflow = last_total_overflow_;
@@ -1824,12 +1871,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       used_fastroute_last_run_ = false;
     }
 
-    if (shouldPreferInterleavedHybrid(best_overflow,
-                                      best_score,
-                                      best_low_layer_wl,
-                                      last_total_overflow_,
-                                      extreme_sweep_score,
-                                      extreme_sweep_low_layer_wl)) {
+    if (shouldPreferWirelengthSweepHybrid(best_overflow,
+                                          best_score,
+                                          best_low_layer_wl,
+                                          last_total_overflow_,
+                                          extreme_sweep_score,
+                                          extreme_sweep_low_layer_wl)) {
       routes = std::move(extreme_sweep_hybrid);
       best_score = extreme_sweep_score;
       best_overflow = last_total_overflow_;
