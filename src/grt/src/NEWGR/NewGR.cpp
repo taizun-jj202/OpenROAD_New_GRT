@@ -519,8 +519,7 @@ bool isPreferredWirelengthScenario(const std::string& name)
 {
   // Prefer smoother wirelength-first hybrids. The ultra-aggressive variants
   // often reduce guide WL but regress detailed-route WL after legalization.
-  return name == "hybrid-netmix-wl" || name == "hybrid-netmix-wl-safe"
-         || name == "hybrid-netmix-smooth-wl";
+  return name == "hybrid-netmix-wl" || name == "hybrid-netmix-wl-safe";
 }
 
 int getSoftCapacityForEdge(uint64_t key,
