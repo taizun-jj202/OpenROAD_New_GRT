@@ -1355,6 +1355,7 @@ NetRouteMap buildWirelengthSweepHybrid(
   }
 
   std::vector<size_t> cursor(bucket_count, 0);
+  std::vector<bool> selected_candidate(candidates.size(), false);
   int64_t consumed_via_increase = 0;
   int64_t consumed_low_layer_growth = 0;
   uint64_t consumed_wl_gain = 0;
@@ -1367,7 +1368,8 @@ NetRouteMap buildWirelengthSweepHybrid(
         continue;
       }
       consumed_any = true;
-      const Candidate& candidate = candidates[buckets[bucket][cursor[bucket]++]];
+      const size_t candidate_idx = buckets[bucket][cursor[bucket]++];
+      const Candidate& candidate = candidates[candidate_idx];
       const int64_t via_increase = std::max<int64_t>(0, candidate.via_increase);
       const int64_t low_layer_delta = std::max<int64_t>(0, candidate.low_layer_delta);
       if (via_increase > 0
@@ -1383,6 +1385,7 @@ NetRouteMap buildWirelengthSweepHybrid(
         continue;
       }
       hybrid_routes[candidate.db_net] = *candidate.donor_route;
+      selected_candidate[candidate_idx] = true;
       consumed_via_increase += via_increase;
       consumed_low_layer_growth += low_layer_delta;
       consumed_wl_gain += static_cast<uint64_t>(std::max<int64_t>(0, candidate.wl_gain));
@@ -1402,6 +1405,43 @@ NetRouteMap buildWirelengthSweepHybrid(
       break;
     }
     start_bucket = (start_bucket + 1) % bucket_count;
+  }
+
+  // Via-aware closure:
+  // after the main WL sweep, consume residual donor routes that still improve
+  // WL while reducing vias and not increasing lower-layer demand.
+  const size_t via_closure_budget = std::min<size_t>(
+      420, std::max<size_t>(48, candidates.size() / 3));
+  size_t via_closure_swaps = 0;
+  for (size_t idx = 0; idx < candidates.size() && via_closure_swaps < via_closure_budget;
+       ++idx) {
+    if (selected_candidate[idx]) {
+      continue;
+    }
+    const Candidate& candidate = candidates[idx];
+    const int64_t via_increase = std::max<int64_t>(0, candidate.via_increase);
+    const int64_t via_drop = std::max<int64_t>(0, candidate.via_drop);
+    const int64_t low_layer_delta = std::max<int64_t>(0, candidate.low_layer_delta);
+    if (via_increase > 0 || via_drop == 0) {
+      continue;
+    }
+    if (low_layer_delta > 0) {
+      continue;
+    }
+    if (candidate.wl_gain < static_cast<int64_t>(minWirelengthSweepGain(candidate.pin_count))) {
+      continue;
+    }
+    if (consumed_via_increase + via_increase > via_increase_budget
+        || consumed_low_layer_growth + low_layer_delta > low_layer_growth_budget) {
+      continue;
+    }
+    hybrid_routes[candidate.db_net] = *candidate.donor_route;
+    selected_candidate[idx] = true;
+    consumed_via_increase += via_increase;
+    consumed_low_layer_growth += low_layer_delta;
+    consumed_wl_gain += static_cast<uint64_t>(std::max<int64_t>(0, candidate.wl_gain));
+    ++stats.replaced_with_donor;
+    ++via_closure_swaps;
   }
 
   stats.consumed_wl_gain = consumed_wl_gain;
