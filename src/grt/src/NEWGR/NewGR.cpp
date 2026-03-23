@@ -1229,6 +1229,37 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   spatial_round_robin_def.aggressive = true;
   scenario_defs.push_back(std::move(spatial_round_robin_def));
 
+  ScenarioDefinition ultra_compact_bsp_def;
+  ultra_compact_bsp_def.name = "ultra-compact-bsp";
+  ultra_compact_bsp_def.pre_init = [this, seed = 71]() {
+    grouter_->setCapacitiesPerturbationPercentage(0.0f);
+    grouter_->setPerturbationAmount(0);
+    grouter_->setAllowCongestion(true);
+    grouter_->setSeed(seed);
+    // Treat most nets as critical so maze routing shrinks detour windows and
+    // strongly prefers straight reconnection paths.
+    grouter_->fastroute_->setCriticalNetsPercentage(88.0f);
+  };
+  ultra_compact_bsp_def.order_nets = [](std::vector<Net*>& scenario_nets) {
+    reorderNetsByBspThenHpwlBurst(scenario_nets);
+  };
+  ultra_compact_bsp_def.post_init
+      = [this, &hotspots, min_routing_layer, max_routing_layer]() {
+          // Keep global resources slightly relaxed to preserve shortest
+          // Manhattan paths unless heavy overflow appears.
+          applyUniformCapacityBoost(
+              grouter_, min_routing_layer, max_routing_layer, 1.12f);
+          applyHotspotPenalties(grouter_,
+                                hotspots,
+                                min_routing_layer,
+                                max_routing_layer,
+                                0,
+                                0.995f,
+                                0.02f);
+        };
+  ultra_compact_bsp_def.aggressive = true;
+  scenario_defs.push_back(std::move(ultra_compact_bsp_def));
+
   if (!normalized_rudy.empty()) {
     ScenarioDefinition cugr_softcap_wl_def;
     cugr_softcap_wl_def.name = "cugr-softcap-wirelength";
