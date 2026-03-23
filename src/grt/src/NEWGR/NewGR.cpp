@@ -1261,7 +1261,7 @@ NetRouteMap buildWirelengthSweepHybrid(
           - static_cast<int64_t>(base_usage.low_layer_wl);
     const int64_t via_increase_limit
         = maxInterleavedViaIncrease(pin_count)
-          + ((pin_count <= 16) ? 2 : ((pin_count <= 40) ? 4 : 5));
+          + ((pin_count <= 16) ? 3 : ((pin_count <= 40) ? 5 : 6));
     if (via_increase > via_increase_limit) {
       ++stats.skipped_by_via_guard;
       continue;
@@ -1277,14 +1277,14 @@ NetRouteMap buildWirelengthSweepHybrid(
     }
     if (via_increase > 0
         && wl_gain
-               < via_increase * 90 + low_layer_delta / 9
-                     + static_cast<int64_t>(40)) {
+               < via_increase * 75 + low_layer_delta / 10
+                     + static_cast<int64_t>(30)) {
       ++stats.skipped_by_via_guard;
       continue;
     }
 
     const int64_t via_bonus = std::max<int64_t>(0, via_drop) * 12;
-    const int64_t via_penalty = std::max<int64_t>(0, via_increase) * 160;
+    const int64_t via_penalty = std::max<int64_t>(0, via_increase) * 140;
     const int64_t low_layer_penalty = std::max<int64_t>(0, low_layer_delta) / 6;
     const int64_t low_layer_bonus = std::max<int64_t>(0, -low_layer_delta) / 10;
     const int64_t priority
@@ -1318,15 +1318,15 @@ NetRouteMap buildWirelengthSweepHybrid(
 
   stats.candidate_pool_size = candidates.size();
   const size_t swap_limit = std::min<size_t>(
-      1180, std::max<size_t>(180, base_routes.size() / 16));
+      1320, std::max<size_t>(170, base_routes.size() / 15));
   const int64_t via_increase_budget = std::max<int64_t>(
-      130, static_cast<int64_t>(base_total_vias / 850));
+      220, static_cast<int64_t>(base_total_vias / 560));
   const int64_t low_layer_growth_budget = std::max<int64_t>(
       2400000, static_cast<int64_t>(base_low_layer_wl / 16));
   const uint64_t base_wirelength = computeRouteScore(base_routes).wirelength;
   const uint64_t wl_gain_target = std::max<uint64_t>(
-      2400000, base_wirelength / 240);
-  const size_t min_swaps_before_stop = std::max<size_t>(64, swap_limit / 5);
+      3000000, base_wirelength / 200);
+  const size_t min_swaps_before_stop = std::max<size_t>(72, swap_limit / 4);
 
   int min_center_x = 0;
   int max_center_x = 0;
@@ -1372,8 +1372,8 @@ NetRouteMap buildWirelengthSweepHybrid(
       const int64_t low_layer_delta = std::max<int64_t>(0, candidate.low_layer_delta);
       if (via_increase > 0
           && candidate.wl_gain
-                 < via_increase * 70 + low_layer_delta / 8
-                       + static_cast<int64_t>(40)) {
+                 < via_increase * 58 + low_layer_delta / 10
+                       + static_cast<int64_t>(30)) {
         ++stats.skipped_by_via_guard;
         continue;
       }
@@ -1655,6 +1655,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const RouteScore sweep_score = computeRouteScore(wirelength_sweep_hybrid);
     const uint64_t sweep_low_layer_wl
         = computeLowLayerWirelength(wirelength_sweep_hybrid);
+    WirelengthSweepStats extreme_sweep_stats;
+    NetRouteMap extreme_sweep_hybrid = buildWirelengthSweepHybrid(
+        wirelength_sweep_hybrid,
+        newgr_backbone_hybrid,
+        routes,
+        grouter_->db_net_map_,
+        sweep_score.vias,
+        sweep_low_layer_wl,
+        extreme_sweep_stats);
+    const RouteScore extreme_sweep_score
+        = computeRouteScore(extreme_sweep_hybrid);
+    const uint64_t extreme_sweep_low_layer_wl
+        = computeLowLayerWirelength(extreme_sweep_hybrid);
 
     logger_->info(utl::GRT,
                   6006,
@@ -1730,6 +1743,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   sweep_stats.skipped_by_layer_guard,
                   sweep_stats.skipped_by_budget_guard,
                   sweep_stats.consumed_wl_gain);
+    logger_->info(utl::GRT,
+                  6012,
+                  "NEWGR extreme sweep summary: "
+                  "EXTREME_SWEEP(wl={}, vias={}, low_wl={}, nets={}, donor_swap={}, "
+                  "add={}, cand={}, via_guard_skip={}, layer_guard_skip={}, "
+                  "budget_skip={}, wl_gain={})",
+                  extreme_sweep_score.wirelength,
+                  extreme_sweep_score.vias,
+                  extreme_sweep_low_layer_wl,
+                  extreme_sweep_score.routed_nets,
+                  extreme_sweep_stats.replaced_with_donor,
+                  extreme_sweep_stats.added_missing_nets,
+                  extreme_sweep_stats.candidate_pool_size,
+                  extreme_sweep_stats.skipped_by_via_guard,
+                  extreme_sweep_stats.skipped_by_layer_guard,
+                  extreme_sweep_stats.skipped_by_budget_guard,
+                  extreme_sweep_stats.consumed_wl_gain);
 
     // Detailed-route QoR has been more stable when FastRoute is used as the
     // default backbone, and NEWGR/hybrid are only used as overflow fallback.
@@ -1791,6 +1821,25 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       selected_hybrid = true;
       selected_swapped_nets = sweep_stats.replaced_with_donor;
       selected_added_nets = sweep_stats.added_missing_nets;
+      used_fastroute_last_run_ = false;
+    }
+
+    if (shouldPreferInterleavedHybrid(best_overflow,
+                                      best_score,
+                                      best_low_layer_wl,
+                                      last_total_overflow_,
+                                      extreme_sweep_score,
+                                      extreme_sweep_low_layer_wl)) {
+      routes = std::move(extreme_sweep_hybrid);
+      best_score = extreme_sweep_score;
+      best_overflow = last_total_overflow_;
+      best_low_layer_wl = extreme_sweep_low_layer_wl;
+      selected_label = "FastRoute+NEWGR extreme-sweep";
+      selected_hybrid = true;
+      selected_swapped_nets = sweep_stats.replaced_with_donor
+                              + extreme_sweep_stats.replaced_with_donor;
+      selected_added_nets = sweep_stats.added_missing_nets
+                            + extreme_sweep_stats.added_missing_nets;
       used_fastroute_last_run_ = false;
     }
 
