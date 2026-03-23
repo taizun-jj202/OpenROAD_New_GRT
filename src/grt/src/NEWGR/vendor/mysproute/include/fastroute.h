@@ -646,14 +646,16 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	// NEWGR policy for wirelength: when using A*, keep expansion tighter and
 	// reduce congestion inflation so shortest paths are favored unless needed.
 	if (algo == Astar) {
-		ENLARGE = 48;
-		ESTEP1 = 10;
-		ESTEP2 = 8;
-		ESTEP3 = 6;
+		ENLARGE = 36;
+		ESTEP1 = 8;
+		ESTEP2 = 6;
+		ESTEP3 = 4;
 		CSTEP1 = 1;
 		CSTEP2 = 1;
-		CSTEP3 = 2;
+		CSTEP3 = 1;
 		LVIter = 1;
+		VIA = 0;
+		astar_weight = 0.70f;
 	}
 
      //galois::substrate::PerThreadStorage<THREAD_LOCAL_STORAGE> thread_local_storage;

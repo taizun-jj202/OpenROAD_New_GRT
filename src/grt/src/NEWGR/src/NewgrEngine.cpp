@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <unordered_map>
@@ -66,6 +67,62 @@ struct GridPoint
   int y{0};
   int l{0};
 };
+
+struct RouteMetrics
+{
+  uint64_t wirelength{0};
+  uint64_t vias{0};
+};
+
+struct CandidateResult
+{
+  Algo algo{Algo::Astar};
+  int maze_rounds{0};
+  int overflow{std::numeric_limits<int>::max()};
+  RouteMetrics metrics{};
+  NetRouteMap routes;
+};
+
+RouteMetrics computeRouteMetrics(const NetRouteMap& routes)
+{
+  RouteMetrics metrics;
+  for (const auto& [net, route] : routes) {
+    (void) net;
+    for (const GSegment& segment : route) {
+      metrics.wirelength += static_cast<uint64_t>(segment.length());
+      if (segment.isVia()) {
+        metrics.vias += static_cast<uint64_t>(
+            std::abs(segment.final_layer - segment.init_layer));
+      }
+    }
+  }
+  return metrics;
+}
+
+bool isBetterCandidate(const CandidateResult& lhs, const CandidateResult& rhs)
+{
+  if (lhs.overflow != rhs.overflow) {
+    return lhs.overflow < rhs.overflow;
+  }
+  if (lhs.metrics.wirelength != rhs.metrics.wirelength) {
+    return lhs.metrics.wirelength < rhs.metrics.wirelength;
+  }
+  return lhs.metrics.vias < rhs.metrics.vias;
+}
+
+const char* algoName(Algo algo)
+{
+  switch (algo) {
+    case Algo::DetPart_Astar_Local:
+      return "DetPart_Astar_Local";
+    case Algo::Astar:
+      return "Astar";
+    case Algo::FineGrain:
+      return "FineGrain";
+    default:
+      return "Other";
+  }
+}
 
 uint64_t packPoint(const GridPoint& point)
 {
@@ -171,27 +228,74 @@ NetRouteMap NewgrEngine::run()
   galois::preAlloc(numThreads * 2);
   numThreads = galois::setActiveThreads(numThreads);
 
-  parser::CongestionMap congestion_map(
-      generator.grid.z, generator.grid.x, generator.grid.y);
-  galois::StatTimer timer("newgr_timer");
-  timer.start();
   if (generator.capReductions_p == nullptr) {
     logger_->warn(utl::GRT,
                   401,
                   "NEWGR generator has no localized capacity reductions; "
                   "continuing without adjustments.");
   }
-  runFastRoute(generator,
-               /*benchFile=*/"",
-               /*OutFileName=*/"",
-               congestion_map,
-               timer,
-               /*maxMazeRound=*/700,
-               Algo::Astar);
-  timer.stop();
-  last_total_overflow_ = totalOverflow;
 
-  return extractRoutes();
+  auto run_candidate = [&](Algo algo, int maze_rounds) {
+    CandidateResult candidate;
+    candidate.algo = algo;
+    candidate.maze_rounds = maze_rounds;
+
+    parser::CongestionMap congestion_map(
+        generator.grid.z, generator.grid.x, generator.grid.y);
+    galois::StatTimer timer("newgr_timer");
+    timer.start();
+    runFastRoute(generator,
+                 /*benchFile=*/"",
+                 /*OutFileName=*/"",
+                 congestion_map,
+                 timer,
+                 maze_rounds,
+                 algo);
+    timer.stop();
+
+    candidate.overflow = totalOverflow;
+    candidate.routes = extractRoutes();
+    candidate.metrics = computeRouteMetrics(candidate.routes);
+
+    logger_->info(utl::GRT,
+                  402,
+                  "NEWGR candidate {0}: overflow={1}, route_wl={2}, route_vias={3}",
+                  algoName(algo),
+                  candidate.overflow,
+                  candidate.metrics.wirelength,
+                  candidate.metrics.vias);
+    return candidate;
+  };
+
+  // Hybrid strategy:
+  // 1) SPRoute-style deterministic partitioned reroute (DetPart_Astar_Local)
+  // 2) FastRoute-style global A* reroute
+  // Select the lower-wirelength candidate while prioritizing lower overflow.
+  CandidateResult detpart = run_candidate(Algo::DetPart_Astar_Local, 520);
+  CandidateResult astar = run_candidate(Algo::Astar, 700);
+
+  CandidateResult best = isBetterCandidate(astar, detpart) ? std::move(astar)
+                                                            : std::move(detpart);
+  const Algo last_executed_algo = Algo::Astar;
+  if (best.algo != last_executed_algo) {
+    logger_->info(utl::GRT,
+                  403,
+                  "Re-running selected NEWGR candidate {0} to keep congestion "
+                  "state aligned with output guides.",
+                  algoName(best.algo));
+    best = run_candidate(best.algo, best.maze_rounds);
+  }
+
+  last_total_overflow_ = best.overflow;
+  logger_->info(utl::GRT,
+                404,
+                "NEWGR selected candidate {0}: overflow={1}, route_wl={2}, "
+                "route_vias={3}",
+                algoName(best.algo),
+                best.overflow,
+                best.metrics.wirelength,
+                best.metrics.vias);
+  return best.routes;
 }
 
 void NewgrEngine::buildInput()
