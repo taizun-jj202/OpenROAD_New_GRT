@@ -675,6 +675,37 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
             considerCandidate(net->getRoutingTree());
           }
         }
+
+        // FastRoute-style wirelength-first recovery: rerun sparse maze using
+        // pure wirelength edge costs and keep only legal improvements.
+        const bool enable_wl_only_maze
+            = constants_.recovery_use_wirelength_maze
+              && candidateIndex < deep_keep
+              && candidates[candidateIndex].hpwl
+                     >= constants_.recovery_wl_only_hpwl_threshold;
+        if (enable_wl_only_maze) {
+          GridGraphView<CostT> recoveryWlOnlyView;
+          grid_graph_->extractWireLengthCostView(recoveryWlOnlyView);
+          const int wl_config_count
+              = std::min(static_cast<int>(maze_configs.size()), 8);
+          for (int cfg_index = 0; cfg_index < wl_config_count; cfg_index++) {
+            const auto& cfg = maze_configs[cfg_index];
+            MazeRoute wlMazeRoute(net, grid_graph_.get(), logger_);
+            SparseGrid wlGrid(
+                cfg.sparse_x, cfg.sparse_y, cfg.offset_x, cfg.offset_y);
+            wlMazeRoute.constructSparsifiedGraph(recoveryWlOnlyView, wlGrid);
+            wlMazeRoute.run();
+            if (const std::shared_ptr<SteinerTreeNode> wl_tree
+                = wlMazeRoute.getSteinerTree()) {
+              PatternRoute wlPatternRoute(
+                  net, grid_graph_.get(), stt_builder_, constants_, logger_);
+              wlPatternRoute.setSteinerTree(wl_tree);
+              wlPatternRoute.constructRoutingDAG();
+              wlPatternRoute.run();
+              considerCandidate(net->getRoutingTree());
+            }
+          }
+        }
       }
 
       const bool accept = best_tree && isImprovement(best_stats, original_stats);

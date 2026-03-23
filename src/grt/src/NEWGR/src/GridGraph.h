@@ -130,6 +130,7 @@ class GridGraph
   void extractCongestionView(
       GridGraphView<bool>& view) const;  // 2D overflow look-up table
   void extractWireCostView(GridGraphView<CostT>& view) const;
+  void extractWireLengthCostView(GridGraphView<CostT>& view) const;
   void updateWireCostView(
       GridGraphView<CostT>& view,
       const std::shared_ptr<GRTreeNode>& routing_tree) const;

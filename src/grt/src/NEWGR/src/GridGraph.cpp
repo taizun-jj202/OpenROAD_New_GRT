@@ -885,6 +885,27 @@ void GridGraph::extractWireCostView(GridGraphView<CostT>& view) const
   }
 }
 
+void GridGraph::extractWireLengthCostView(GridGraphView<CostT>& view) const
+{
+  view.assign(
+      2,
+      std::vector<std::vector<CostT>>(
+          x_size_,
+          std::vector<CostT>(y_size_, std::numeric_limits<CostT>::max())));
+  for (int direction = 0; direction < 2; direction++) {
+    for (int x = 0; x < x_size_; x++) {
+      for (int y = 0; y < y_size_; y++) {
+        const int edge_index = direction == MetalLayer::H ? x : y;
+        if (edge_index >= getSize(direction) - 1) {
+          continue;
+        }
+        const int length = getEdgeLength(direction, edge_index);
+        view[direction][x][y] = length * unit_length_wire_cost_;
+      }
+    }
+  }
+}
+
 void GridGraph::updateWireCostView(
     GridGraphView<CostT>& view,
     const std::shared_ptr<GRTreeNode>& routing_tree) const
