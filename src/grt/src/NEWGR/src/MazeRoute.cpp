@@ -348,7 +348,12 @@ void MazeRoute::run()
     addStartCandidate(startCandidates, farthestFromCenter);
   }
 
-  const int maxStartCandidates = numPseudoPins >= 8 ? 3 : 2;
+  int maxStartCandidates = numPseudoPins >= 8 ? 3 : 2;
+  if (options_.max_start_candidates > 0) {
+    maxStartCandidates
+        = std::min(maxStartCandidates, options_.max_start_candidates);
+  }
+  maxStartCandidates = std::max(1, maxStartCandidates);
   if (startCandidates.size() > static_cast<size_t>(maxStartCandidates)) {
     startCandidates.resize(maxStartCandidates);
   }

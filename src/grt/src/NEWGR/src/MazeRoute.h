@@ -42,6 +42,7 @@ struct MazeBuildOptions
   bool preserve_existing_topology = true;
   bool force_shortest_topology = false;
   int corridor_shrink = 0;
+  int max_start_candidates = -1;
 };
 
 class SparseGraph
