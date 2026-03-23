@@ -309,6 +309,9 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
           && baseline_stretch >= 1.08;
     const double stage3_wl_overflow_slack
         = aggressive_wirelength_mode ? 11.5 : 7.0;
+    const bool overflow_driven = baseline_overflow > 0;
+    const bool very_high_stretch
+        = baseline_stretch >= (aggressive_wirelength_mode ? 1.22 : 1.30);
     const bool wide_bbox = bbox.width() >= bbox.height();
     const int base_sparse = std::clamp(hpwl >= 240 ? 8 : (hpwl >= 120 ? 7 : 6),
                                        4,
@@ -369,6 +372,16 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         }
       }
     }
+    int stage3_cfg_budget = overflow_driven ? 6 : 3;
+    if (hpwl >= constants_.stage3_full_grid_hpwl_threshold) {
+      stage3_cfg_budget++;
+    }
+    if (very_high_stretch) {
+      stage3_cfg_budget++;
+    }
+    stage3_cfg_budget
+        = std::max(2,
+                   std::min(stage3_cfg_budget, static_cast<int>(maze_configs.size())));
 
     auto considerCandidate = [&](const std::shared_ptr<GRTreeNode>& tree,
                                  const bool is_baseline_candidate) {
@@ -388,7 +401,8 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       }
     };
 
-    for (const auto& cfg : maze_configs) {
+    for (int cfg_index = 0; cfg_index < stage3_cfg_budget; cfg_index++) {
+      const auto& cfg = maze_configs[cfg_index];
       MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
       SparseGrid sparse_grid(cfg.sparse_x, cfg.sparse_y, cfg.offset_x, cfg.offset_y);
       mazeRoute.constructSparsifiedGraph(wireCostView, sparse_grid);
@@ -405,6 +419,11 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       patternRoute.run();
       considerCandidate(net->getRoutingTree(), /*is_baseline_candidate*/ false);
       evaluated_candidates++;
+      if (!overflow_driven && best_tree && !best_is_baseline
+          && best_stats.overflow <= baseline_overflow
+          && best_stats.wirelength + 20 < original_stats.wirelength) {
+        break;
+      }
     }
 
     // FastRoute-style wirelength-first intensification:
@@ -415,8 +434,10 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         && net->getNumPins() > 2) {
       const int wl_config_limit = std::max(1, constants_.stage3_wl_config_limit);
       const int wl_bonus_runs = aggressive_wirelength_mode ? 2 : 0;
-      const int wl_runs = std::min(static_cast<int>(maze_configs.size()),
-                                   wl_config_limit + wl_bonus_runs);
+      int wl_runs = std::min(stage3_cfg_budget, wl_config_limit + wl_bonus_runs);
+      if (!overflow_driven) {
+        wl_runs = std::min(wl_runs, 2);
+      }
       const double wl_via_cost_scale
           = std::clamp(constants_.stage3_wl_via_cost_scale
                            * (aggressive_wirelength_mode ? 0.8 : 1.0),
@@ -454,6 +475,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         && net->getNumPins() >= 3
         && net->getNumPins() <= constants_.stage3_full_grid_pin_limit
         && baseline_overflow <= constants_.stage3_full_grid_overflow_threshold
+        && (overflow_driven || very_high_stretch)
         && baseline_stretch
                >= (aggressive_wirelength_mode
                        ? std::max(1.05,
