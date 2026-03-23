@@ -313,9 +313,25 @@ NetRouteMap NewgrEngine::run()
   // 3) 3D_SHORT: upper-layer friendly profile for stubborn congestion pockets.
   // 4) DR fallback only if overflow remains after the WL-focused set.
   CandidateResult best = run_candidate(Algo::Astar,
-                                       700,
+                                       560,
                                        NEWGR_CAP_PROFILE_ULTRA_WL,
-                                       "Astar_UltraWL");
+                                       "Astar_UltraWL_Short");
+  CandidateResult ultra_deep = run_candidate(Algo::Astar,
+                                             860,
+                                             NEWGR_CAP_PROFILE_ULTRA_WL,
+                                             "Astar_UltraWL_Deep");
+  const bool deep_overflow_better = ultra_deep.overflow < best.overflow;
+  const bool deep_wl_better = ultra_deep.metrics.wirelength < best.metrics.wirelength;
+  const uint64_t deep_wl_delta
+      = deep_wl_better ? (best.metrics.wirelength - ultra_deep.metrics.wirelength) : 0;
+  // Require a meaningful WL gain to prefer very deep rerouting.
+  // Tiny gains often overfit global-route metrics and can regress final DR WL.
+  const uint64_t meaningful_wl_gain = best.metrics.wirelength / 5000;  // ~0.02%
+  if (deep_overflow_better
+      || (ultra_deep.overflow == best.overflow && deep_wl_delta > meaningful_wl_gain
+          && isBetterCandidate(ultra_deep, best))) {
+    best = std::move(ultra_deep);
+  }
   CandidateResult wl_hybrid = run_candidate(Algo::Astar,
                                             760,
                                             NEWGR_CAP_PROFILE_WL_FOCUSED,
