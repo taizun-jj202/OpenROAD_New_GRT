@@ -66,13 +66,21 @@ struct Constants
   double detour_refine_ratio = 0.95;
   double maze_refine_ratio = 0.88;
 
+  // Stage-3 (maze) exploration controls.
+  int stage3_dense_sparse_x = 2;
+  int stage3_dense_sparse_y = 2;
+  bool stage3_try_offset = true;
+  bool stage3_full_offset_sweep = true;
+  int stage3_full_offset_hpwl_threshold = 180;
+  int stage3_max_maze_configs = 26;
+
   // FastRoute-style post-processing pass: reroute a subset of long,
   // overflow-free nets and keep only wirelength-improving solutions.
   bool enable_wirelength_recovery = true;
   bool recovery_use_maze = true;
   int recovery_hpwl_threshold = 72;
-  double recovery_refine_ratio = 0.94;
-  int recovery_max_passes = 4;
+  double recovery_refine_ratio = 0.97;
+  int recovery_max_passes = 5;
   double recovery_pass_decay = 0.86;
   int recovery_maze_sparse_x = 3;
   int recovery_maze_sparse_y = 3;
@@ -85,8 +93,8 @@ struct Constants
   int recovery_full_offset_hpwl_threshold = 220;
   int recovery_dense_sparse_x = 2;
   int recovery_dense_sparse_y = 2;
-  int recovery_max_maze_configs = 20;
-  int recovery_max_via_increase = 2;
+  int recovery_max_maze_configs = 28;
+  int recovery_max_via_increase = 3;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;

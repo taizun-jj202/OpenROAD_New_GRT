@@ -71,8 +71,8 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
                              const int baseline_overflow)
 {
   constexpr double kOverflowEpsilon = 1e-6;
-  constexpr double kAllowedOverflowIncreaseForWlGain = 10.0;
-  constexpr double kStrongOverflowDropThreshold = 16.0;
+  constexpr double kAllowedOverflowIncreaseForWlGain = 6.0;
+  constexpr double kStrongOverflowDropThreshold = 20.0;
 
   // Wirelength-first objective:
   // keep shorter candidates as long as they don't cause a large overflow jump.
@@ -85,7 +85,7 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
       = current_best.total_overflow - candidate.total_overflow;
   if (overflow_drop > kStrongOverflowDropThreshold) {
     // Accept a large overflow reduction even without immediate WL gain.
-    constexpr int64_t kMaxWirelengthTradeoff = 80;
+    constexpr int64_t kMaxWirelengthTradeoff = 24;
     if (candidate.wirelength
         > current_best.wirelength + kMaxWirelengthTradeoff) {
       return false;
@@ -254,11 +254,15 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     }
 
     std::vector<MazeConfig> maze_configs;
-    maze_configs.reserve(12);
+    const int max_maze_configs = std::max(6, constants_.stage3_max_maze_configs);
+    maze_configs.reserve(max_maze_configs);
     auto addMazeConfig = [&](int sparse_x,
                              int sparse_y,
                              int offset_x,
                              int offset_y) {
+      if (static_cast<int>(maze_configs.size()) >= max_maze_configs) {
+        return;
+      }
       sparse_x = std::max(2, sparse_x);
       sparse_y = std::max(2, sparse_y);
       offset_x = std::clamp(offset_x, 0, sparse_x - 1);
@@ -278,14 +282,15 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     const int base_sparse = std::clamp(hpwl >= 240 ? 8 : (hpwl >= 120 ? 7 : 6),
                                        4,
                                        9);
-    const int dense_sparse = hpwl >= 80 ? 3 : 4;
+    const int dense_sparse_x = std::max(2, constants_.stage3_dense_sparse_x);
+    const int dense_sparse_y = std::max(2, constants_.stage3_dense_sparse_y);
     const int anis_long = std::min(10, base_sparse + 2);
     const int anis_short = std::max(3, base_sparse - 2);
 
     // Mix FastRoute-style shifted sparse grids with SPRoute-style denser local
     // search and anisotropic grids for elongated nets.
     addMazeConfig(base_sparse, base_sparse, 0, 0);
-    addMazeConfig(dense_sparse, dense_sparse, 0, 0);
+    addMazeConfig(dense_sparse_x, dense_sparse_y, 0, 0);
     if (wide_bbox) {
       addMazeConfig(anis_long, anis_short, 0, 0);
       addMazeConfig(anis_long, anis_short, anis_long / 2, anis_short / 2);
@@ -293,7 +298,11 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       addMazeConfig(anis_short, anis_long, 0, 0);
       addMazeConfig(anis_short, anis_long, anis_short / 2, anis_long / 2);
     }
-    addMazeConfig(base_sparse, base_sparse, base_sparse / 2, base_sparse / 2);
+    if (constants_.stage3_try_offset) {
+      addMazeConfig(base_sparse, base_sparse, base_sparse / 2, base_sparse / 2);
+      addMazeConfig(
+          dense_sparse_x, dense_sparse_y, dense_sparse_x / 2, dense_sparse_y / 2);
+    }
     if (hpwl >= 220) {
       addMazeConfig(base_sparse - 1,
                     base_sparse + 1,
@@ -303,6 +312,31 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
                     base_sparse - 1,
                     (base_sparse + 1) / 2,
                     (base_sparse - 1) / 2);
+    }
+    if (constants_.stage3_full_offset_sweep
+        && hpwl >= constants_.stage3_full_offset_hpwl_threshold) {
+      for (int offset_x = 0;
+           offset_x < base_sparse
+           && static_cast<int>(maze_configs.size()) < max_maze_configs;
+           offset_x++) {
+        for (int offset_y = 0;
+             offset_y < base_sparse
+             && static_cast<int>(maze_configs.size()) < max_maze_configs;
+             offset_y++) {
+          addMazeConfig(base_sparse, base_sparse, offset_x, offset_y);
+        }
+      }
+      for (int offset_x = 0;
+           offset_x < dense_sparse_x
+           && static_cast<int>(maze_configs.size()) < max_maze_configs;
+           offset_x++) {
+        for (int offset_y = 0;
+             offset_y < dense_sparse_y
+             && static_cast<int>(maze_configs.size()) < max_maze_configs;
+             offset_y++) {
+          addMazeConfig(dense_sparse_x, dense_sparse_y, offset_x, offset_y);
+        }
+      }
     }
 
     auto considerCandidate = [&](const std::shared_ptr<GRTreeNode>& tree,

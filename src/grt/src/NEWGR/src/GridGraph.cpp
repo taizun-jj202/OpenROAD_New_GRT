@@ -420,50 +420,180 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   AccessPointSet selected_access_points(0, hasher);
   // cell hash (2d) -> access point, fixed layer interval
   selected_access_points.reserve(net->getNumPins());
-  const auto& boundingBox = net->getBoundingBox();
-  const PointT netCenter(boundingBox.cx(), boundingBox.cy());
-  for (const std::vector<GRPoint>& accessPoints : net->getPinAccessPoints()) {
-    std::pair<int, int> bestAccessDist = {0, std::numeric_limits<int>::max()};
-    int bestIndex = -1;
-    for (int index = 0; index < accessPoints.size(); index++) {
-      const GRPoint& point = accessPoints[index];
-      int accessibility = 0;
-      if (point.getLayerIdx() >= constants_.min_routing_layer) {
-        const int direction = getLayerDirection(point.getLayerIdx());
+  const auto& pin_access_points = net->getPinAccessPoints();
+  if (pin_access_points.empty()) {
+    return selected_access_points;
+  }
+
+  const auto& bounding_box = net->getBoundingBox();
+  const PointT net_center(bounding_box.cx(), bounding_box.cy());
+
+  auto getAccessibility = [&](const GRPoint& point) {
+    int accessibility = 0;
+    if (point.getLayerIdx() >= constants_.min_routing_layer) {
+      const int direction = getLayerDirection(point.getLayerIdx());
+      accessibility
+          += getEdge(point.getLayerIdx(), point.x(), point.y()).capacity >= 1;
+      if (point[direction] > 0) {
+        auto lower = point;
+        lower[direction] -= 1;
         accessibility
-            += getEdge(point.getLayerIdx(), point.x(), point.y()).capacity >= 1;
-        if (point[direction] > 0) {
-          auto lower = point;
-          lower[direction] -= 1;
-          accessibility
-              += getEdge(lower.getLayerIdx(), lower.x(), lower.y()).capacity
-                 >= 1;
-        }
-      } else {
-        accessibility = 1;
+            += getEdge(lower.getLayerIdx(), lower.x(), lower.y()).capacity >= 1;
       }
-      const int distance
-          = abs(netCenter.x() - point.x()) + abs(netCenter.y() - point.y());
-      if (accessibility > bestAccessDist.first
-          || (accessibility == bestAccessDist.first
-              && distance < bestAccessDist.second)) {
-        bestIndex = index;
-        bestAccessDist = {accessibility, distance};
+    } else {
+      accessibility = 1;
+    }
+    return accessibility;
+  };
+
+  std::vector<int> selected_indices(pin_access_points.size(), -1);
+  std::vector<PointT> selected_points(pin_access_points.size(), PointT(0, 0));
+
+  // First pass: accessibility-first selection near net center.
+  for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
+    const auto& access_points = pin_access_points[pin_index];
+    int best_index = -1;
+    int best_accessibility = -1;
+    int best_center_dist = std::numeric_limits<int>::max();
+    for (int index = 0; index < access_points.size(); index++) {
+      const GRPoint& point = access_points[index];
+      const int accessibility = getAccessibility(point);
+      const int center_dist
+          = std::abs(net_center.x() - point.x()) + std::abs(net_center.y() - point.y());
+      if (accessibility > best_accessibility
+          || (accessibility == best_accessibility
+              && center_dist < best_center_dist)) {
+        best_index = index;
+        best_accessibility = accessibility;
+        best_center_dist = center_dist;
       }
     }
-    if (bestAccessDist.first == 0) {
+
+    if (best_accessibility <= 0) {
       logger_->warn(utl::GRT, 7001, "pin is hard to access.");
     }
-    const PointT selectedPoint = accessPoints[bestIndex];
-    const AccessPoint ap{selectedPoint, {}};
+    if (best_index >= 0) {
+      selected_indices[pin_index] = best_index;
+      selected_points[pin_index] = access_points[best_index];
+    }
+  }
+
+  // FastRoute-style topology shaping: iteratively tighten AP choices to reduce
+  // net span while preserving accessibility preference.
+  auto evaluateHpwl = [&](const int pin_to_replace, const GRPoint& replacement) {
+    int min_x = std::numeric_limits<int>::max();
+    int max_x = std::numeric_limits<int>::min();
+    int min_y = std::numeric_limits<int>::max();
+    int max_y = std::numeric_limits<int>::min();
+    bool has_point = false;
+    for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
+      if (pin_index == pin_to_replace) {
+        min_x = std::min(min_x, replacement.x());
+        max_x = std::max(max_x, replacement.x());
+        min_y = std::min(min_y, replacement.y());
+        max_y = std::max(max_y, replacement.y());
+        has_point = true;
+        continue;
+      }
+      const int selected_index = selected_indices[pin_index];
+      if (selected_index < 0) {
+        continue;
+      }
+      const auto& point = pin_access_points[pin_index][selected_index];
+      min_x = std::min(min_x, point.x());
+      max_x = std::max(max_x, point.x());
+      min_y = std::min(min_y, point.y());
+      max_y = std::max(max_y, point.y());
+      has_point = true;
+    }
+    if (!has_point) {
+      return 0;
+    }
+    return (max_x - min_x) + (max_y - min_y);
+  };
+
+  const int max_refine_passes = 3;
+  for (int pass = 0; pass < max_refine_passes; pass++) {
+    std::vector<int> xs;
+    std::vector<int> ys;
+    xs.reserve(selected_points.size());
+    ys.reserve(selected_points.size());
+    for (int pin_index = 0; pin_index < selected_indices.size(); pin_index++) {
+      if (selected_indices[pin_index] < 0) {
+        continue;
+      }
+      xs.push_back(selected_points[pin_index].x());
+      ys.push_back(selected_points[pin_index].y());
+    }
+    if (xs.empty()) {
+      break;
+    }
+    std::sort(xs.begin(), xs.end());
+    std::sort(ys.begin(), ys.end());
+    const int median_x = xs[xs.size() / 2];
+    const int median_y = ys[ys.size() / 2];
+
+    bool changed = false;
+    for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
+      const auto& access_points = pin_access_points[pin_index];
+      if (access_points.empty()) {
+        continue;
+      }
+      int best_index = selected_indices[pin_index];
+      int best_accessibility = -1;
+      int best_hpwl = std::numeric_limits<int>::max();
+      int best_median_dist = std::numeric_limits<int>::max();
+      int best_center_dist = std::numeric_limits<int>::max();
+      for (int index = 0; index < access_points.size(); index++) {
+        const GRPoint& point = access_points[index];
+        const int accessibility = getAccessibility(point);
+        const int hpwl = evaluateHpwl(pin_index, point);
+        const int median_dist
+            = std::abs(median_x - point.x()) + std::abs(median_y - point.y());
+        const int center_dist
+            = std::abs(net_center.x() - point.x()) + std::abs(net_center.y() - point.y());
+        if (accessibility > best_accessibility
+            || (accessibility == best_accessibility && hpwl < best_hpwl)
+            || (accessibility == best_accessibility && hpwl == best_hpwl
+                && median_dist < best_median_dist)
+            || (accessibility == best_accessibility && hpwl == best_hpwl
+                && median_dist == best_median_dist
+                && center_dist < best_center_dist)) {
+          best_index = index;
+          best_accessibility = accessibility;
+          best_hpwl = hpwl;
+          best_median_dist = median_dist;
+          best_center_dist = center_dist;
+        }
+      }
+      if (best_index >= 0 && best_index != selected_indices[pin_index]) {
+        selected_indices[pin_index] = best_index;
+        selected_points[pin_index] = access_points[best_index];
+        changed = true;
+      }
+    }
+    if (!changed) {
+      break;
+    }
+  }
+
+  for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
+    const auto& access_points = pin_access_points[pin_index];
+    const int selected_index = selected_indices[pin_index];
+    if (selected_index < 0 || selected_index >= access_points.size()) {
+      continue;
+    }
+    const PointT selected_point = access_points[selected_index];
+    const AccessPoint ap{selected_point, {}};
     auto it = selected_access_points.emplace(ap).first;
-    IntervalT& fixedLayerInterval = it->layers;
-    for (const auto& point : accessPoints) {
-      if (point.x() == selectedPoint.x() && point.y() == selectedPoint.y()) {
-        fixedLayerInterval.Update(point.getLayerIdx());
+    IntervalT& fixed_layer_interval = it->layers;
+    for (const auto& point : access_points) {
+      if (point.x() == selected_point.x() && point.y() == selected_point.y()) {
+        fixed_layer_interval.Update(point.getLayerIdx());
       }
     }
   }
+
   // Extend the fixed layers to 2 layers higher to facilitate track switching
   for (auto& accessPoint : selected_access_points) {
     IntervalT& fixedLayers = accessPoint.layers;
