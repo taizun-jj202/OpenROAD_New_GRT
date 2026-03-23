@@ -30,8 +30,8 @@ class BoxT;
 struct Constants
 {
   double weight_wire_length = 1.0;
-  double weight_via_number = 0.4;
-  double weight_short_area = 800.0;
+  double weight_via_number = 0.8;
+  double weight_short_area = 240.0;
 
   int min_routing_layer = 1;
 
@@ -50,13 +50,14 @@ struct Constants
   bool enable_early_detour_stage = false;
 
   double maze_logistic_slope = 0.5;
-  int maze_base_interval = 6;
+  int maze_base_interval = 5;
   int maze_min_interval = 2;
   int global_rebalance_rounds = 1;
-  bool enable_dense_repair_stage = true;
-  int dense_repair_rounds = 1;
-  int dense_repair_interval = 1;
-  double dense_repair_overflow_weight = 2000.0;
+  bool enable_critical_compaction_stage = true;
+  int critical_compaction_rounds = 2;
+  int critical_compaction_interval = 1;
+  double critical_compaction_net_ratio = 0.12;
+  double critical_compaction_overflow_weight = 180.0;
 
   // SPRoute-inspired soft-capacity shaping.
   bool enable_soft_capacity = true;
@@ -95,7 +96,7 @@ class CUGR
   void patternRouteWithDetours(std::vector<int>& netIndices);
   void mazeRoute(std::vector<int>& netIndices);
   void globalRebalanceRoute(const std::vector<int>& allNetIndices);
-  void denseRepairRoute(const std::vector<int>& allNetIndices);
+  void criticalCompactionRoute(const std::vector<int>& allNetIndices);
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);

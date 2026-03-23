@@ -340,28 +340,57 @@ void CUGR::globalRebalanceRoute(const std::vector<int>& allNetIndices)
   }
 }
 
-void CUGR::denseRepairRoute(const std::vector<int>& allNetIndices)
+void CUGR::criticalCompactionRoute(const std::vector<int>& allNetIndices)
 {
-  if (!constants_.enable_dense_repair_stage || allNetIndices.empty()
-      || constants_.dense_repair_rounds <= 0) {
+  if (!constants_.enable_critical_compaction_stage || allNetIndices.empty()
+      || constants_.critical_compaction_rounds <= 0) {
     return;
   }
 
+  const int totalNets = static_cast<int>(allNetIndices.size());
+  const int selectedCount = std::clamp(
+      static_cast<int>(std::round(constants_.critical_compaction_net_ratio
+                                  * static_cast<double>(totalNets))),
+      1,
+      totalNets);
+
   logger_->report(
-      "stage 5: dense full-net repair for wirelength/via ({}) rounds",
-      constants_.dense_repair_rounds);
-  std::vector<int> rerouteIndices = allNetIndices;
-  for (int round = 0; round < constants_.dense_repair_rounds; round++) {
+      "stage 5: selective critical-net compaction ({} rounds, {} nets/round)",
+      constants_.critical_compaction_rounds,
+      selectedCount);
+  for (int round = 0; round < constants_.critical_compaction_rounds; round++) {
+    std::vector<std::pair<double, int>> rankedNets;
+    rankedNets.reserve(allNetIndices.size());
+    for (const int netIndex : allNetIndices) {
+      const GRNet* net = gr_nets_[netIndex].get();
+      const int hp = std::max(net->getBoundingBox().hp(), 1);
+      const int pinDegree = std::max(net->getNumPins(), 2);
+      // Emphasize long multi-pin nets, which dominate total wire/via impact.
+      const double impact
+          = static_cast<double>(hp) * pinDegree
+            + 0.35 * static_cast<double>(hp) * static_cast<double>(hp);
+      rankedNets.emplace_back(impact, netIndex);
+    }
+    std::sort(rankedNets.begin(),
+              rankedNets.end(),
+              [](const auto& lhs, const auto& rhs) { return lhs.first > rhs.first; });
+
+    std::vector<int> rerouteIndices;
+    rerouteIndices.reserve(selectedCount);
+    const int shift = (round * std::max(selectedCount / 2, 1)) % totalNets;
+    for (int i = 0; i < selectedCount; i++) {
+      rerouteIndices.push_back(rankedNets[(shift + i) % totalNets].second);
+    }
+
     std::sort(rerouteIndices.begin(),
               rerouteIndices.end(),
               [&](int lhs, int rhs) {
                 const int lhsHp = gr_nets_[lhs]->getBoundingBox().hp();
                 const int rhsHp = gr_nets_[rhs]->getBoundingBox().hp();
                 if (lhsHp != rhsHp) {
-                  // Alternate between small-first and large-first ordering.
-                  return (round % 2 == 0) ? (lhsHp < rhsHp) : (lhsHp > rhsHp);
+                  return (round % 2 == 0) ? (lhsHp > rhsHp) : (lhsHp < rhsHp);
                 }
-                return gr_nets_[lhs]->getNumPins() < gr_nets_[rhs]->getNumPins();
+                return gr_nets_[lhs]->getNumPins() > gr_nets_[rhs]->getNumPins();
               });
 
     for (const int netIndex : rerouteIndices) {
@@ -374,15 +403,20 @@ void CUGR::denseRepairRoute(const std::vector<int>& allNetIndices)
     for (const int netIndex : rerouteIndices) {
       GRNet* net = gr_nets_[netIndex].get();
       const int hp = std::max(net->getBoundingBox().hp(), 1);
-      const int denseInterval = std::max(constants_.dense_repair_interval, 1);
+      const int denseInterval = std::max(constants_.critical_compaction_interval
+                                             + std::min(hp / 80, 2),
+                                         1);
       std::vector<CandidateGrid> candidateGrids;
-      pushGridCandidate(candidateGrids, denseInterval, 0, 0);
+      pushGridCandidate(candidateGrids,
+                        denseInterval,
+                        round + order + hp,
+                        netIndex + hp * 3);
       pushGridCandidate(
           candidateGrids, denseInterval + 1, netIndex + round, order + hp);
       pushGridCandidate(candidateGrids,
                         std::max(constants_.maze_min_interval, 1),
-                        netIndex * 2 + hp,
-                        netIndex * 3 + round);
+                        netIndex * 5 + hp,
+                        netIndex * 11 + round);
 
       RouteScore bestScore;
       std::shared_ptr<GRTreeNode> bestTree = nullptr;
@@ -407,9 +441,9 @@ void CUGR::denseRepairRoute(const std::vector<int>& allNetIndices)
         const RouteScore candidateScore
             = scoreRouteTree(candidateTree,
                              *grid_graph_,
-                             1.0,
-                             0.6,
-                             constants_.dense_repair_overflow_weight);
+                             1.2,
+                             1.4,
+                             constants_.critical_compaction_overflow_weight);
         if (candidateScore.objective < bestScore.objective) {
           bestScore = candidateScore;
           bestTree = candidateTree;
@@ -425,7 +459,7 @@ void CUGR::denseRepairRoute(const std::vector<int>& allNetIndices)
 
     std::vector<int> overflowIndices;
     updateOverflowNets(overflowIndices);
-    logger_->report("dense repair round {} complete, {} overflow nets remain",
+    logger_->report("critical compaction round {} complete, {} overflow nets remain",
                     round + 1,
                     overflowIndices.size());
   }
@@ -449,7 +483,7 @@ void CUGR::route()
   mazeRoute(netIndices);
 
   globalRebalanceRoute(allNetIndices);
-  denseRepairRoute(allNetIndices);
+  criticalCompactionRoute(allNetIndices);
 
   updateOverflowNets(netIndices);
   if (!netIndices.empty()) {

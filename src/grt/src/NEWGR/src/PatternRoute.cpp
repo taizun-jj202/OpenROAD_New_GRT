@@ -108,7 +108,7 @@ void PatternRoute::constructSteinerTree()
   }
 
   // Radical topology switch for very large nets:
-  // build a median-hub tree with shared bend junctions to compress trunks.
+  // build a bi-hub backbone with shared bend junctions around each hub.
   if (degree >= constants_.hub_topology_pin_threshold) {
     std::vector<int> xs;
     std::vector<int> ys;
@@ -122,10 +122,26 @@ void PatternRoute::constructSteinerTree()
       xFreq[accessPoint.point.x()] += 1;
       yFreq[accessPoint.point.y()] += 1;
     }
-    std::nth_element(xs.begin(), xs.begin() + degree / 2, xs.end());
-    std::nth_element(ys.begin(), ys.begin() + degree / 2, ys.end());
-    const PointT hub(xs[degree / 2], ys[degree / 2]);
-    auto root = std::make_shared<SteinerTreeNode>(hub);
+
+    std::vector<int> sortedXs(xs.begin(), xs.end());
+    std::vector<int> sortedYs(ys.begin(), ys.end());
+    std::sort(sortedXs.begin(), sortedXs.end());
+    std::sort(sortedYs.begin(), sortedYs.end());
+    const int q1 = sortedXs[degree / 4];
+    const int q3 = sortedXs[(3 * degree) / 4];
+    const int yMedian = sortedYs[degree / 2];
+    PointT hubA(q1, yMedian);
+    PointT hubB(q3, yMedian);
+    if (hubA == hubB) {
+      const int spread = std::max(1, (sortedYs.back() - sortedYs.front()) / 4);
+      const int up = std::min(sortedYs.back(), yMedian + spread);
+      const int down = std::max(sortedYs.front(), yMedian - spread);
+      hubB = PointT(q3, up == yMedian ? down : up);
+    }
+
+    auto root = std::make_shared<SteinerTreeNode>(hubA);
+    auto secondHub = std::make_shared<SteinerTreeNode>(hubB);
+    root->addChild(secondHub);
 
     auto mergeLayers = [](IntervalT& dst, const IntervalT& src) {
       if (!src.IsValid()) {
@@ -139,31 +155,49 @@ void PatternRoute::constructSteinerTree()
       dst.Update(src.high());
     };
 
-    std::map<std::pair<int, int>, std::shared_ptr<SteinerTreeNode>> junctions;
-    auto getOrCreateJunction = [&](const PointT& point) {
-      const std::pair<int, int> key(point.x(), point.y());
+    std::map<std::tuple<int, int, int>, std::shared_ptr<SteinerTreeNode>>
+        junctions;
+    auto getOrCreateJunction = [&](const int hubId, const PointT& point) {
+      const std::tuple<int, int, int> key(hubId, point.x(), point.y());
       auto it = junctions.find(key);
       if (it != junctions.end()) {
         return it->second;
       }
       auto node = std::make_shared<SteinerTreeNode>(point);
       junctions.emplace(key, node);
-      root->addChild(node);
+      if (hubId == 0) {
+        root->addChild(node);
+      } else {
+        secondHub->addChild(node);
+      }
       return node;
     };
 
     for (const auto& accessPoint : orderedAccessPoints) {
       const PointT pin = accessPoint.point;
-      if (pin == hub) {
+      const int distToA = std::abs(pin.x() - hubA.x()) + std::abs(pin.y() - hubA.y());
+      const int distToB = std::abs(pin.x() - hubB.x()) + std::abs(pin.y() - hubB.y());
+      const bool useHubA = distToA <= distToB;
+      const int hubId = useHubA ? 0 : 1;
+      const PointT hub = useHubA ? hubA : hubB;
+      std::shared_ptr<SteinerTreeNode> hubNode = useHubA ? root : secondHub;
+
+      if (pin == hubA) {
         IntervalT merged = root->getFixedLayers();
         mergeLayers(merged, accessPoint.layers);
         root->setFixedLayers(merged);
         continue;
       }
+      if (pin == hubB) {
+        IntervalT merged = secondHub->getFixedLayers();
+        mergeLayers(merged, accessPoint.layers);
+        secondHub->setFixedLayers(merged);
+        continue;
+      }
 
       auto pinNode = std::make_shared<SteinerTreeNode>(pin, accessPoint.layers);
       if (pin.x() == hub.x() || pin.y() == hub.y()) {
-        root->addChild(pinNode);
+        hubNode->addChild(pinNode);
         continue;
       }
 
@@ -171,7 +205,7 @@ void PatternRoute::constructSteinerTree()
           = yFreq[pin.y()] >= xFreq[pin.x()];
       const PointT bend = preferHorizontalTrunk ? PointT(hub.x(), pin.y())
                                                 : PointT(pin.x(), hub.y());
-      auto junction = getOrCreateJunction(bend);
+      auto junction = getOrCreateJunction(hubId, bend);
       junction->addChild(pinNode);
     }
 
