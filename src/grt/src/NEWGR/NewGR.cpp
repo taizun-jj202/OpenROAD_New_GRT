@@ -2559,6 +2559,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   long nets_taken_from_sculpted = 0;
   long nets_taken_from_shortcuts = 0;
   long nets_taken_from_anisotropic = 0;
+  long nets_taken_from_wirelength_hunter = 0;
   try {
     for (Net* net : nets) {
       if (net != nullptr && net->getDbNet() != nullptr) {
@@ -2640,18 +2641,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
     return false;
   };
-  auto route_score = [&](const GRoute& route, int scenario_overflow) {
-    long route_wl = 0;
-    long route_vias = 0;
+  auto route_stats = [](const GRoute& route) {
+    std::pair<long, long> stats{0, 0};
     for (const GSegment& segment : route) {
       if (segment.isVia()) {
-        route_vias++;
+        stats.second++;
       } else {
-        route_wl += std::abs(segment.final_x - segment.init_x)
-                    + std::abs(segment.final_y - segment.init_y);
+        stats.first += std::abs(segment.final_x - segment.init_x)
+                       + std::abs(segment.final_y - segment.init_y);
       }
     }
-    const double via_weight = static_cast<double>(tile_size) * 2.2;
+    return stats;
+  };
+  auto route_score = [&](const GRoute& route, int scenario_overflow) {
+    const auto [route_wl, route_vias] = route_stats(route);
+    // Keep this score wirelength-forward so net blending can escape
+    // FastRoute-equivalent local minima.
+    const double via_weight = static_cast<double>(tile_size) * 0.85;
     const double overflow_penalty
         = static_cast<double>(std::max(scenario_overflow, 0))
           * static_cast<double>(tile_size) * 8.0;
@@ -2723,11 +2729,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     const double base_score = route_score(route, selected.overflow);
     const double shortcut_score = route_score(shortcut_route, selected.overflow);
-    bool use_shortcut = shortcut_score + 1e-3 < base_score;
-    if (!use_shortcut && shortcut_score <= base_score * 1.015) {
+    const auto [base_wl, base_vias] = route_stats(route);
+    const auto [shortcut_wl, shortcut_vias] = route_stats(shortcut_route);
+    bool use_shortcut = shortcut_score + 1e-3 < base_score
+                        || (shortcut_wl < base_wl && shortcut_vias <= base_vias * 2);
+    if (!use_shortcut && shortcut_wl <= base_wl && shortcut_vias <= base_vias * 3) {
+      use_shortcut = true;
+    }
+    if (!use_shortcut && shortcut_score <= base_score * 1.06) {
       const auto key
           = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
-      use_shortcut = (key % 5ULL) == 0ULL;
+      use_shortcut = (key % 3ULL) == 0ULL;
     }
     if (use_shortcut) {
       selected.routes[db_net] = shortcut_route;
@@ -2779,14 +2791,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const double base_score = route_score(route, selected.overflow);
     const double anisotropic_score
         = route_score(anisotropic_route, selected.overflow);
-    bool use_anisotropic = anisotropic_score + 1e-3 < base_score;
+    const auto [base_wl, base_vias] = route_stats(route);
+    const auto [anisotropic_wl, anisotropic_vias] = route_stats(anisotropic_route);
+    bool use_anisotropic
+        = anisotropic_score + 1e-3 < base_score
+          || (anisotropic_wl < base_wl && anisotropic_vias <= base_vias * 2);
     const auto key
         = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
-    if (!use_anisotropic && anisotropic_score <= base_score * 1.05) {
-      use_anisotropic = (key % 3ULL) == 0ULL;
+    if (!use_anisotropic && anisotropic_wl <= base_wl
+        && anisotropic_vias <= base_vias * 3) {
+      use_anisotropic = true;
     }
-    if (!use_anisotropic && anisotropic_score <= base_score * 1.20) {
-      use_anisotropic = (key % 11ULL) == 0ULL;
+    if (!use_anisotropic && anisotropic_score <= base_score * 1.12) {
+      use_anisotropic = (key % 2ULL) == 0ULL;
     }
     if (use_anisotropic) {
       selected.routes[db_net] = anisotropic_route;
@@ -2794,6 +2811,94 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
   selected.name += "+anisotropic";
+  selected.metrics = compute_metrics(selected.routes);
+
+  // Radical candidate: rebuild most eligible nets through
+  // low-congestion portal/spine trunks, then re-select with
+  // wirelength-priority acceptance.
+  ScenarioResult wirelength_hunter = selected;
+  wirelength_hunter.name = "wirelength_hunter";
+  applyMedianSpineRebuild(wirelength_hunter.routes,
+                          5,
+                          94,
+                          min_routing_layer,
+                          max_routing_layer);
+  applyGlobalPortalRebuild(grouter_,
+                           wirelength_hunter.routes,
+                           baseline_rudy,
+                           4,
+                           86,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyRmstTrunkRebuild(grouter_,
+                        wirelength_hunter.routes,
+                        baseline_rudy,
+                        3,
+                        74,
+                        90,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyBipolarPortalBackboneRebuild(grouter_,
+                                    wirelength_hunter.routes,
+                                    baseline_rudy,
+                                    5,
+                                    180,
+                                    92,
+                                    min_routing_layer,
+                                    max_routing_layer);
+  applyAggressiveDoglegShortcuts(wirelength_hunter.routes,
+                                 std::max(36 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyWavefrontDetours(grouter_,
+                        wirelength_hunter.routes,
+                        baseline_rudy,
+                        std::max(22 * tile_size, 1),
+                        std::max(2 * tile_size, 1),
+                        61);
+  applyGuideCompression(wirelength_hunter.routes, std::max(10 * tile_size, 1));
+  applyViaExcursionCollapse(wirelength_hunter.routes, std::max(5 * tile_size, 1));
+  wirelength_hunter.metrics = compute_metrics(wirelength_hunter.routes);
+
+  for (const auto& [db_net, route] : selected.routes) {
+    auto hunter_it = wirelength_hunter.routes.find(db_net);
+    if (hunter_it == wirelength_hunter.routes.end()) {
+      continue;
+    }
+    const GRoute& hunter_route = hunter_it->second;
+
+    const bool base_valid = has_planar_guide(route);
+    const bool hunter_valid = has_planar_guide(hunter_route);
+    if (!hunter_valid && base_valid) {
+      continue;
+    }
+    if (hunter_valid && !base_valid) {
+      selected.routes[db_net] = hunter_route;
+      nets_taken_from_wirelength_hunter++;
+      continue;
+    }
+
+    const auto [base_wl, base_vias] = route_stats(route);
+    const auto [hunter_wl, hunter_vias] = route_stats(hunter_route);
+    const double base_score = route_score(route, selected.overflow);
+    const double hunter_score = route_score(hunter_route, selected.overflow);
+    bool use_hunter = false;
+    if (hunter_wl < static_cast<long>(base_wl * 0.97)) {
+      use_hunter = hunter_vias <= static_cast<long>(base_vias * 1.9 + 3);
+    }
+    if (!use_hunter && hunter_wl <= base_wl) {
+      use_hunter = hunter_vias <= static_cast<long>(base_vias * 1.35 + 2);
+    }
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    if (!use_hunter && hunter_score <= base_score * 1.12) {
+      use_hunter = (key % 4ULL) == 0ULL;
+    }
+    if (use_hunter) {
+      selected.routes[db_net] = hunter_route;
+      nets_taken_from_wirelength_hunter++;
+    }
+  }
+  selected.name += "+wirehunter";
   selected.metrics = compute_metrics(selected.routes);
 
   const RouteMetrics pre_wave_metrics = compute_metrics(selected.routes);
@@ -2913,6 +3018,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       = anisotropic.metrics.wirelength_um - baseline.metrics.wirelength_um;
   const long anisotropic_delta_vias
       = anisotropic.metrics.via_count - baseline.metrics.via_count;
+  const double wirelength_hunter_delta_wl
+      = wirelength_hunter.metrics.wirelength_um - baseline.metrics.wirelength_um;
+  const long wirelength_hunter_delta_vias
+      = wirelength_hunter.metrics.via_count - baseline.metrics.via_count;
   const double selected_delta_wl
       = selected.metrics.wirelength_um - baseline.metrics.wirelength_um;
   const long selected_delta_vias
@@ -2959,6 +3068,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 anisotropic_delta_vias,
                 selected.overflow);
   logger_->warn(GNR,
+                6029,
+                "NEWGR candidate {}: wl {:.0f} um vias {} (delta wl {:+.0f} "
+                "um, delta vias {:+d}, overflow {}).",
+                wirelength_hunter.name,
+                wirelength_hunter.metrics.wirelength_um,
+                wirelength_hunter.metrics.via_count,
+                wirelength_hunter_delta_wl,
+                wirelength_hunter_delta_vias,
+                selected.overflow);
+  logger_->warn(GNR,
                 6018,
                 "NEWGR selected {} over baseline {:.0f} um vias {} -> {:.0f} "
                 "um vias {} (delta wl {:+.0f} um, delta vias {:+d}).",
@@ -2982,6 +3101,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 "NEWGR blended {} nets from {} into anisotropic escape.",
                 nets_taken_from_anisotropic,
                 anisotropic.name);
+  logger_->warn(GNR,
+                6030,
+                "NEWGR blended {} nets from {} into wirelength hunter.",
+                nets_taken_from_wirelength_hunter,
+                wirelength_hunter.name);
 
   restore_snapshot(snapshot);
   return selected.routes;
