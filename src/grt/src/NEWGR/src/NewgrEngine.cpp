@@ -377,39 +377,44 @@ NetRouteMap NewgrEngine::run()
     return candidate;
   };
 
-  // NEWGR radical ensemble:
-  // - RADICAL_WL keeps shortest-path pressure high.
-  // - RADICAL_MIX adds deterministic hotspot diffusion from SPRoute ideas.
-  // - ULTRA_WL provides a tighter-box shortest-path alternative.
+  // Fast-first NEWGR policy:
+  // 1) Run one SPRoute-style profile with FastRoute-like WL bias.
+  // 2) Expand to a larger ensemble only if overflow remains, or when
+  //    explicitly requested for experimentation.
+  const bool force_full_ensemble = std::getenv("NEWGR_FULL_ENSEMBLE") != nullptr;
   CandidateResult best = run_candidate(Algo::Astar,
-                                       520,
-                                       NEWGR_CAP_PROFILE_RADICAL_WL,
-                                       "Astar_RadicalWL");
-  CandidateResult radical_mix = run_candidate(Algo::Astar,
-                                              500,
-                                              NEWGR_CAP_PROFILE_RADICAL_MIX,
-                                              "Astar_RadicalMix");
-  if (isBetterCandidate(radical_mix, best)) {
-    best = std::move(radical_mix);
-  }
-  CandidateResult ultra_wl = run_candidate(Algo::Astar,
-                                           460,
-                                           NEWGR_CAP_PROFILE_ULTRA_WL,
-                                           "Astar_UltraWL");
-  if (isBetterCandidate(ultra_wl, best)) {
-    best = std::move(ultra_wl);
+                                       420,
+                                       NEWGR_CAP_PROFILE_RADICAL_MIX,
+                                       "Astar_RadicalMix");
+
+  if (force_full_ensemble || best.overflow > 0) {
+    CandidateResult radical_wl = run_candidate(Algo::Astar,
+                                               460,
+                                               NEWGR_CAP_PROFILE_RADICAL_WL,
+                                               "Astar_RadicalWL");
+    if (isBetterCandidate(radical_wl, best)) {
+      best = std::move(radical_wl);
+    }
+
+    CandidateResult ultra_wl = run_candidate(Algo::Astar,
+                                             420,
+                                             NEWGR_CAP_PROFILE_ULTRA_WL,
+                                             "Astar_UltraWL");
+    if (isBetterCandidate(ultra_wl, best)) {
+      best = std::move(ultra_wl);
+    }
   }
 
   if (best.overflow > 0) {
     CandidateResult short3d = run_candidate(Algo::Astar,
-                                            620,
+                                            560,
                                             NEWGR_CAP_PROFILE_3D_SHORT,
                                             "Astar_3DShort_Overflow");
     if (isBetterCandidate(short3d, best)) {
       best = std::move(short3d);
     }
     CandidateResult fallback = run_candidate(Algo::DetPart_Astar_Local,
-                                             560,
+                                             520,
                                              NEWGR_CAP_PROFILE_DR_FOCUSED,
                                              "DetPart_DRFallback");
     if (isBetterCandidate(fallback, best)) {
