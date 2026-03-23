@@ -280,8 +280,6 @@ void MazeRoute::run()
   int startPinIndex = -1;
   int64_t bestTotalDistance = std::numeric_limits<int64_t>::max();
   int64_t bestCenterDistance = std::numeric_limits<int64_t>::max();
-  int closestToCenter = -1;
-  int64_t closestCenterDistance = std::numeric_limits<int64_t>::max();
   for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
     const auto& pseudoPin = graph_.getPseudoPin(pinIndex);
     int64_t totalDistance = 0;
@@ -299,10 +297,6 @@ void MazeRoute::run()
         = std::llabs(static_cast<int64_t>(pseudoPin.point.x()) - center.x())
           + std::llabs(static_cast<int64_t>(pseudoPin.point.y()) - center.y());
     centerDistances[pinIndex] = centerDistance;
-    if (centerDistance < closestCenterDistance) {
-      closestCenterDistance = centerDistance;
-      closestToCenter = pinIndex;
-    }
     if (totalDistance < bestTotalDistance
         || (totalDistance == bestTotalDistance
             && centerDistance < bestCenterDistance)) {
@@ -323,9 +317,6 @@ void MazeRoute::run()
 
   std::vector<int> startCandidates;
   addStartCandidate(startCandidates, startPinIndex);
-  if (numPseudoPins >= 5) {
-    addStartCandidate(startCandidates, closestToCenter);
-  }
 
   if (numPseudoPins >= 4) {
     int farthestFromPrimary = -1;
@@ -449,8 +440,6 @@ void MazeRoute::run()
   struct CandidateScore
   {
     uint64_t unique_manhattan = std::numeric_limits<uint64_t>::max();
-    int bbox_hp = std::numeric_limits<int>::max();
-    uint64_t center_spread = std::numeric_limits<uint64_t>::max();
     CostT total_path_cost = std::numeric_limits<CostT>::max();
     int via_steps = std::numeric_limits<int>::max();
   };
@@ -458,17 +447,10 @@ void MazeRoute::run()
   auto scoreSolutions = [&](const std::vector<std::shared_ptr<Solution>>& sols) {
     CandidateScore score;
     score.unique_manhattan = 0;
-    score.bbox_hp = 0;
-    score.center_spread = 0;
     score.total_path_cost = 0;
     score.via_steps = 0;
     robin_hood::unordered_set<uint64_t> visitedEdges;
     visitedEdges.reserve(sols.size() * 16);
-    bool hasWireEdge = false;
-    int minX = std::numeric_limits<int>::max();
-    int maxX = std::numeric_limits<int>::min();
-    int minY = std::numeric_limits<int>::max();
-    int maxY = std::numeric_limits<int>::min();
     for (const auto& solution : sols) {
       if (!solution) {
         continue;
@@ -490,23 +472,11 @@ void MazeRoute::run()
           if (dx == 0 && dy == 0) {
             score.via_steps += 1;
           } else {
-            hasWireEdge = true;
             score.unique_manhattan += static_cast<uint64_t>(dx + dy);
-            minX = std::min(minX, std::min(p.x(), q.x()));
-            maxX = std::max(maxX, std::max(p.x(), q.x()));
-            minY = std::min(minY, std::min(p.y(), q.y()));
-            maxY = std::max(maxY, std::max(p.y(), q.y()));
-            const int midX = (p.x() + q.x()) / 2;
-            const int midY = (p.y() + q.y()) / 2;
-            score.center_spread += static_cast<uint64_t>(
-                std::abs(midX - center.x()) + std::abs(midY - center.y()));
           }
         }
         temp = temp->prev;
       }
-    }
-    if (hasWireEdge) {
-      score.bbox_hp = (maxX - minX) + (maxY - minY);
     }
     return score;
   };
@@ -518,12 +488,6 @@ void MazeRoute::run()
     }
     if (lhs.unique_manhattan != rhs.unique_manhattan) {
       return lhs.unique_manhattan < rhs.unique_manhattan;
-    }
-    if (lhs.bbox_hp != rhs.bbox_hp) {
-      return lhs.bbox_hp < rhs.bbox_hp;
-    }
-    if (lhs.center_spread != rhs.center_spread) {
-      return lhs.center_spread < rhs.center_spread;
     }
     if (lhs.total_path_cost != rhs.total_path_cost) {
       return lhs.total_path_cost < rhs.total_path_cost;
