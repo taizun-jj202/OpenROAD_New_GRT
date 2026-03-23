@@ -652,16 +652,16 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	// - BALANCED : compromise between the two.
 	if (algo == Astar) {
 		if (newgr_capacity_profile == NEWGR_CAP_PROFILE_WL_FOCUSED) {
-			ENLARGE = 32;
-			ESTEP1 = 7;
-			ESTEP2 = 5;
+			ENLARGE = 36;
+			ESTEP1 = 8;
+			ESTEP2 = 6;
 			ESTEP3 = 4;
 			CSTEP1 = 1;
 			CSTEP2 = 1;
 			CSTEP3 = 1;
 			LVIter = 1;
-			VIA = 1;
-			astar_weight = 0.65f;
+			VIA = 0;
+			astar_weight = 0.70f;
 		} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_DR_FOCUSED) {
 			ENLARGE = 58;
 			ESTEP1 = 12;
@@ -751,7 +751,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 
 		VIA=2;
 		if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_WL_FOCUSED) {
-			VIA = 1;
+			VIA = 0;
 		} else if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_DR_FOCUSED) {
 			VIA = 3;
 		} else if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_3D_SHORT) {
@@ -908,7 +908,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			int enlarge_limit = max(8, max(xGrid, yGrid) / 7);
 			if (algo == Astar) {
 				if (newgr_capacity_profile == NEWGR_CAP_PROFILE_WL_FOCUSED) {
-					enlarge_limit = max(6, max(xGrid, yGrid) / 11);
+					enlarge_limit = max(6, max(xGrid, yGrid) / 10);
 				} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_DR_FOCUSED) {
 					enlarge_limit = max(8, max(xGrid, yGrid) / 7);
 				} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_3D_SHORT) {
@@ -964,14 +964,29 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			//galois::runtime::profileVtune( [&] (void) {
                 round_num = i;
 				Algo active_algo = algo;
+				float round_astar_weight = astar_weight;
 				// Mix SPRoute deterministic batching and FastRoute A* in one run:
 				// use a short deterministic phase to diffuse hotspots, then switch
 				// to low-cost A* for final WL refinement.
 				if (algo == Astar
-				    && newgr_capacity_profile == NEWGR_CAP_PROFILE_3D_SHORT
+				    && (newgr_capacity_profile == NEWGR_CAP_PROFILE_3D_SHORT
+				        || newgr_capacity_profile == NEWGR_CAP_PROFILE_WL_FOCUSED)
 				    && i <= 2
 				    && totalOverflow > 0) {
 					active_algo = DetPart_Astar_Local;
+				}
+				// CUGR/FastRoute-style annealing:
+				// high-overflow rounds prioritize escape; late rounds prioritize
+				// shortest paths for wirelength reduction.
+				if (algo == Astar
+				    && newgr_capacity_profile == NEWGR_CAP_PROFILE_WL_FOCUSED) {
+					if (totalOverflow > 3000) {
+						round_astar_weight = 0.82f;
+					} else if (totalOverflow > 600) {
+						round_astar_weight = 0.70f;
+					} else {
+						round_astar_weight = 0.52f;
+					}
 				}
 
 				switch(active_algo) {
@@ -1306,7 +1321,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 
 
 					case Astar: {
-						mazeRouteMSMD_astar(i,enlarge, costheight, ripup_threshold,mazeedge_Threshold, !(i % 3), cost_type, astar_weight, done);
+						mazeRouteMSMD_astar(i,enlarge, costheight, ripup_threshold,mazeedge_Threshold, !(i % 3), cost_type, round_astar_weight, done);
 						break;
 					}
 					default: {

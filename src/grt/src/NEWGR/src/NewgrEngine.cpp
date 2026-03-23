@@ -107,21 +107,13 @@ bool isBetterCandidate(const CandidateResult& lhs, const CandidateResult& rhs)
     return lhs.overflow < rhs.overflow;
   }
 
-  // Allow a small wirelength tie window; inside that window prefer fewer vias,
-  // which usually improves detailed-route realizability and final WL.
-  const uint64_t wl_tol = std::max<uint64_t>(
-      1,
-      std::max(lhs.metrics.wirelength, rhs.metrics.wirelength) / 400);
-  if (lhs.metrics.wirelength + wl_tol < rhs.metrics.wirelength) {
-    return true;
-  }
-  if (rhs.metrics.wirelength + wl_tol < lhs.metrics.wirelength) {
-    return false;
+  if (lhs.metrics.wirelength != rhs.metrics.wirelength) {
+    return lhs.metrics.wirelength < rhs.metrics.wirelength;
   }
   if (lhs.metrics.vias != rhs.metrics.vias) {
     return lhs.metrics.vias < rhs.metrics.vias;
   }
-  return lhs.metrics.wirelength < rhs.metrics.wirelength;
+  return false;
 }
 
 const char* algoName(Algo algo)
@@ -312,34 +304,23 @@ NetRouteMap NewgrEngine::run()
     return candidate;
   };
 
-  // Hybrid portfolio (SPRoute + FastRoute + CUGR-inspired 3D balancing):
-  // 1) DR-focused deterministic partition pass to stabilize congestion.
-  // 2) 3D-shortest A* pass that explicitly promotes upper-layer shortcuts.
-  // 3) Pure WL-focused A* pass as a fallback.
-  // 4) Balanced A* pass for robustness on hard cases.
-  std::vector<CandidateResult> candidates;
-  candidates.reserve(4);
-  candidates.push_back(run_candidate(Algo::DetPart_Astar_Local,
-                                     520,
-                                     NEWGR_CAP_PROFILE_DR_FOCUSED,
-                                     "DetPart_DR"));
-  candidates.push_back(run_candidate(Algo::Astar,
-                                     760,
-                                     NEWGR_CAP_PROFILE_3D_SHORT,
-                                     "Astar_3DShort"));
-  candidates.push_back(run_candidate(Algo::Astar,
-                                     700,
-                                     NEWGR_CAP_PROFILE_WL_FOCUSED,
-                                     "Astar_WL"));
-  candidates.push_back(run_candidate(Algo::Astar,
-                                     700,
-                                     NEWGR_CAP_PROFILE_BALANCED,
-                                     "Astar_Balanced"));
+  // Wirelength-first hybrid strategy:
+  // 1) Primary path uses FastRoute-style A* with NEWGR WL profile.
+  //    The WL profile internally starts with a short deterministic
+  //    partitioned phase (SPRoute-style) before A* refinement.
+  // 2) Only if overflow remains, run DR-focused deterministic fallback.
+  CandidateResult best = run_candidate(Algo::Astar,
+                                       760,
+                                       NEWGR_CAP_PROFILE_WL_FOCUSED,
+                                       "Astar_WLHybrid");
 
-  CandidateResult best = candidates.front();
-  for (size_t i = 1; i < candidates.size(); ++i) {
-    if (isBetterCandidate(candidates[i], best)) {
-      best = candidates[i];
+  if (best.overflow > 0) {
+    CandidateResult fallback = run_candidate(Algo::DetPart_Astar_Local,
+                                             560,
+                                             NEWGR_CAP_PROFILE_DR_FOCUSED,
+                                             "DetPart_DRFallback");
+    if (isBetterCandidate(fallback, best)) {
+      best = std::move(fallback);
     }
   }
 
