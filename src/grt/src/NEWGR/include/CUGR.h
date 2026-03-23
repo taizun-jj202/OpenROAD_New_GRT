@@ -29,48 +29,48 @@ class BoxT;
 
 struct Constants
 {
-  double weight_wire_length = 2.2;
-  double weight_via_number = 0.45;
-  double weight_short_area = 320.0;
+  double weight_wire_length = 2.9;
+  double weight_via_number = 0.22;
+  double weight_short_area = 380.0;
 
   int min_routing_layer = 1;
 
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.25;
-  int target_detour_count = 20;
+  double max_detour_ratio = 0.45;
+  int target_detour_count = 36;
 
-  double via_multiplier = 1.25;
-  double layer_depth_wire_penalty = 0.12;
-  double layer_depth_via_penalty = 0.70;
-  double layer_change_penalty = 0.75;
+  double via_multiplier = 1.05;
+  double layer_depth_wire_penalty = 0.22;
+  double layer_depth_via_penalty = 0.42;
+  double layer_change_penalty = 0.45;
 
-  int mst_topology_pin_threshold = 7;
-  double mst_bend_penalty = 3.0;
-  int hub_topology_pin_threshold = 10;
+  int mst_topology_pin_threshold = 9;
+  double mst_bend_penalty = 2.0;
+  int hub_topology_pin_threshold = 18;
   int pin_access_layer_extension = 0;
-  bool enable_early_detour_stage = false;
+  bool enable_early_detour_stage = true;
 
   double maze_logistic_slope = 1.0;
-  int maze_base_interval = 4;
-  int maze_min_interval = 2;
-  int global_rebalance_rounds = 1;
+  int maze_base_interval = 3;
+  int maze_min_interval = 1;
+  int global_rebalance_rounds = 2;
   bool enable_critical_compaction_stage = true;
-  int critical_compaction_rounds = 2;
+  int critical_compaction_rounds = 3;
   int critical_compaction_interval = 1;
-  double critical_compaction_net_ratio = 0.12;
-  double critical_compaction_overflow_weight = 180.0;
+  double critical_compaction_net_ratio = 0.45;
+  double critical_compaction_overflow_weight = 220.0;
 
   // SPRoute-inspired soft-capacity shaping.
   bool enable_soft_capacity = true;
-  double soft_capacity_ratio_min = 0.82;
+  double soft_capacity_ratio_min = 0.90;
   double soft_capacity_ratio_max = 1.00;
-  double soft_capacity_slope = 4.0;
-  double soft_capacity_congestion_mid = 0.75;
+  double soft_capacity_slope = 3.2;
+  double soft_capacity_congestion_mid = 0.85;
   double soft_capacity_rudy_weight = 1.0;
-  double soft_capacity_lower_layer_boost = 0.10;
-  double soft_capacity_min_absolute = 0.75;
+  double soft_capacity_lower_layer_boost = 0.04;
+  double soft_capacity_min_absolute = 0.88;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;

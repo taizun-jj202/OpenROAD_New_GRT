@@ -332,18 +332,20 @@ void CUGR::globalRebalanceRoute(const std::vector<int>& allNetIndices)
   }
 
   logger_->report(
-      "stage 4: global full-net maze rebalance ({} rounds)",
+      "stage 4: global full-net annealed rebalance ({} rounds)",
       constants_.global_rebalance_rounds);
   std::vector<int> rerouteIndices = allNetIndices;
   for (int round = 0; round < constants_.global_rebalance_rounds; round++) {
-    // Large nets first to reserve cleaner long corridors.
+    const bool longNetsFirst = (round % 2 == 0);
     sort(rerouteIndices.begin(), rerouteIndices.end(), [&](int lhs, int rhs) {
       const int lhsHp = gr_nets_[lhs]->getBoundingBox().hp();
       const int rhsHp = gr_nets_[rhs]->getBoundingBox().hp();
       if (lhsHp != rhsHp) {
-        return lhsHp > rhsHp;
+        return longNetsFirst ? (lhsHp > rhsHp) : (lhsHp < rhsHp);
       }
-      return gr_nets_[lhs]->getNumPins() > gr_nets_[rhs]->getNumPins();
+      const int lhsPins = gr_nets_[lhs]->getNumPins();
+      const int rhsPins = gr_nets_[rhs]->getNumPins();
+      return longNetsFirst ? (lhsPins > rhsPins) : (lhsPins < rhsPins);
     });
 
     for (const int netIndex : rerouteIndices) {
@@ -361,33 +363,82 @@ void CUGR::globalRebalanceRoute(const std::vector<int>& allNetIndices)
                                      0);
       const int adaptiveInterval = std::max(
           constants_.maze_min_interval,
-          constants_.maze_base_interval - std::min(maxShrink, hp / 25));
-      const int xOffset = (round + order) % adaptiveInterval;
-      const int yOffset = (round * 3 + netIndex) % adaptiveInterval;
+          constants_.maze_base_interval - std::min(maxShrink, hp / 20));
+      const int denseInterval = std::max(constants_.maze_min_interval,
+                                         adaptiveInterval - 1);
+      const int coarseInterval = adaptiveInterval + 1;
 
-      SparseGrid grid(adaptiveInterval, adaptiveInterval, xOffset, yOffset);
-      MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
-      mazeRoute.constructSparsifiedGraph(wireCostView, grid);
-      mazeRoute.run();
+      std::vector<CandidateGrid> candidateGrids;
+      pushGridCandidate(candidateGrids,
+                        denseInterval,
+                        round + order + hp,
+                        netIndex * 3 + hp);
+      pushGridCandidate(candidateGrids,
+                        adaptiveInterval,
+                        netIndex + hp * 5,
+                        round * 11 + order);
+      pushGridCandidate(candidateGrids,
+                        coarseInterval,
+                        netIndex * 7 + order,
+                        hp * 13 + round);
+      pushGridCandidate(candidateGrids,
+                        constants_.maze_min_interval,
+                        netIndex * 17 + hp,
+                        round * 19 + netIndex);
 
-      std::shared_ptr<SteinerTreeNode> tree = mazeRoute.getSteinerTree();
-      assert(tree != nullptr);
-      PatternRoute patternRoute(
-          net, grid_graph_.get(), stt_builder_, constants_, logger_);
-      patternRoute.setSteinerTree(tree);
-      patternRoute.constructRoutingDAG();
-      patternRoute.run();
+      RouteScore bestScore;
+      std::shared_ptr<GRTreeNode> bestTree = nullptr;
+      for (const auto& candidate : candidateGrids) {
+        SparseGrid grid(candidate.interval,
+                        candidate.interval,
+                        candidate.x_offset,
+                        candidate.y_offset);
+        MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+        mazeRoute.constructSparsifiedGraph(wireCostView, grid);
+        mazeRoute.run();
 
-      grid_graph_->commitTree(net->getRoutingTree());
-      grid_graph_->updateWireCostView(wireCostView, net->getRoutingTree());
+        std::shared_ptr<SteinerTreeNode> tree = mazeRoute.getSteinerTree();
+        assert(tree != nullptr);
+        PatternRoute patternRoute(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        patternRoute.setSteinerTree(tree);
+        patternRoute.constructRoutingDAG();
+        patternRoute.run();
+
+        double wireWeight = constants_.weight_wire_length
+                            * (longNetsFirst ? 2.4 : 2.1);
+        double viaWeight = constants_.weight_via_number * 0.35;
+        if (net->getNumPins() >= 12 || hp >= 140) {
+          wireWeight *= 1.35;
+          viaWeight *= 0.60;
+        }
+        const double overflowWeight
+            = constants_.weight_short_area * (1.3 + 0.25 * round);
+        const auto& candidateTree = net->getRoutingTree();
+        const RouteScore candidateScore = scoreRouteTree(candidateTree,
+                                                         *grid_graph_,
+                                                         wireWeight,
+                                                         viaWeight,
+                                                         overflowWeight);
+        if (candidateScore.objective < bestScore.objective) {
+          bestScore = candidateScore;
+          bestTree = candidateTree;
+        }
+      }
+
+      assert(bestTree != nullptr);
+      net->setRoutingTree(bestTree);
+      grid_graph_->commitTree(bestTree);
+      grid_graph_->updateWireCostView(wireCostView, bestTree);
       order++;
     }
 
     std::vector<int> overflowIndices;
     updateOverflowNets(overflowIndices);
     logger_->report(
-        "rebalance round {} complete, {} overflow nets remain",
+        "annealed rebalance round {} ({}) complete, {} overflow nets remain",
         round + 1,
+        longNetsFirst ? "long-first" : "short-first",
         overflowIndices.size());
   }
 }
@@ -524,13 +575,25 @@ void CUGR::route()
   for (const auto& net : gr_nets_) {
     netIndices.push_back(net->getIndex());
   }
+  const std::vector<int> allNetIndices = netIndices;
 
   patternRoute(netIndices);
 
+  if (constants_.enable_early_detour_stage) {
+    patternRouteWithDetours(netIndices);
+  }
+
   mazeRoute(netIndices);
 
+  globalRebalanceRoute(allNetIndices);
+  criticalCompactionRoute(allNetIndices);
+
   updateOverflowNets(netIndices);
-  logger_->report("stability mode: skipped detour/rebalance/compaction stages");
+  if (!netIndices.empty()) {
+    patternRouteWithDetours(netIndices);
+    updateOverflowNets(netIndices);
+  }
+  logger_->report("aggressive mode: completed detour/rebalance/compaction");
 
   printStatistics();
   if (constants_.write_heatmap) {
