@@ -95,8 +95,12 @@ RouteCost estimateRouteCost(const GRoute& route)
 
 double combinedRouteScore(const RouteCost& cost, int tile_size, int pin_count)
 {
-  const double via_weight_scale = (pin_count >= 14) ? 0.95 : (pin_count >= 8) ? 1.25 : 2.2;
-  const double via_weight = std::max(1, tile_size) * via_weight_scale;
+  const double tile_scale
+      = std::sqrt(static_cast<double>(std::max(1, tile_size)));
+  const double via_weight_scale = (pin_count >= 24) ? 3.4
+                                  : (pin_count >= 12) ? 4.8
+                                                      : 6.2;
+  const double via_weight = tile_scale * via_weight_scale;
   return static_cast<double>(cost.wirelength)
          + static_cast<double>(cost.vias) * via_weight;
 }
@@ -113,26 +117,28 @@ float reductionRatio(int base_cap,
   const float pressure_sigma_raw
       = (local_pressure - mean_pressure) / std::max(stdev_pressure, kEpsilon);
   const float pressure_sigma = std::clamp(pressure_sigma_raw, -3.0f, 4.0f);
-  const float pressure_term = 1.0f / (1.0f + std::exp(-(pressure_sigma - 0.25f) * 1.8f));
-  const float center_term = std::clamp(1.0f - distance_to_center, 0.0f, 1.0f);
+  const float pressure_term
+      = 1.0f / (1.0f + std::exp(-(pressure_sigma + 0.15f) * 2.2f));
+  const float center_term
+      = std::clamp(1.0f - distance_to_center * 1.35f, 0.0f, 1.0f);
 
-  // Radical experiment: preserve most edge capacity and only choke
-  // high-pressure core edges; this intentionally swings NEWGR toward
-  // shorter Manhattan trees with localized congestion avoidance.
-  float ratio = 0.92f + 0.06f * normalized_layer;
-  ratio -= 0.55f * pressure_term;
-  ratio -= 0.12f * center_term;
+  // Radical experiment: create a strong "highway core" by preserving center
+  // capacity and sharply reducing off-core resources.
+  float ratio = 0.22f;
+  ratio += 0.58f * center_term;
+  ratio += 0.20f * pressure_term;
+  ratio += 0.10f * normalized_layer;
   if (horizontal) {
-    ratio += 0.02f;
+    ratio += 0.04f;
   }
 
-  if (local_pressure < mean_pressure - 0.25f * std::max(stdev_pressure, kEpsilon)) {
-    ratio += 0.06f;
+  if (local_pressure < mean_pressure - 0.40f * std::max(stdev_pressure, kEpsilon)) {
+    ratio -= 0.10f;
   }
   if (base_cap <= 2) {
-    ratio += 0.03f;
+    ratio += 0.08f;
   }
-  return std::clamp(ratio, 0.20f, 1.02f);
+  return std::clamp(ratio, 0.10f, 1.00f);
 }
 
 int buildLocalizedCapacityReductions(const NewgrInput& input,
@@ -149,8 +155,8 @@ int buildLocalizedCapacityReductions(const NewgrInput& input,
   }
   const int total_edges = num_layers
                           * ((x_grids - 1) * y_grids + x_grids * (y_grids - 1));
-  // Radical experiment: sparsify soft-cap shaping to top-pressure regions.
-  const int max_reductions = std::max(2048, total_edges / 3);
+  // Radical experiment: aggressively reshape most of the resource graph.
+  const int max_reductions = std::max(4096, (total_edges * 3) / 4);
 
   std::vector<float> pin_pressure(x_grids * y_grids, 0.0f);
   for (const auto& net : input.nets) {
@@ -339,7 +345,7 @@ NetRouteMap NewgrEngine::run()
                /*OutFileName=*/"",
                congestion_map,
                timer,
-               /*maxMazeRound=*/8,
+               /*maxMazeRound=*/20,
                Algo::DetPart_Astar_RUDY);
   timer.stop();
   last_total_overflow_ = totalOverflow;
@@ -569,7 +575,10 @@ NetRouteMap NewgrEngine::extractPinFallbackRoutes(
     GRoute backbone_route;
     const bool has_backbone_route
         = appendFallbackBackboneRoute(net, backbone_route) && !backbone_route.empty();
-    if (!has_mst_route && !has_backbone_route) {
+    GRoute cross_route;
+    const bool has_cross_route
+        = appendFallbackCrossRoute(net, cross_route) && !cross_route.empty();
+    if (!has_mst_route && !has_backbone_route && !has_cross_route) {
       continue;
     }
 
@@ -578,6 +587,7 @@ NetRouteMap NewgrEngine::extractPinFallbackRoutes(
       const GRoute* selected = nullptr;
       RouteCost selected_cost;
       double selected_score = std::numeric_limits<double>::max();
+
       if (has_mst_route) {
         const RouteCost mst_cost = estimateRouteCost(mst_route);
         const double mst_score
@@ -593,6 +603,16 @@ NetRouteMap NewgrEngine::extractPinFallbackRoutes(
         if (selected == nullptr || backbone_score < selected_score) {
           selected = &backbone_route;
           selected_cost = backbone_cost;
+          selected_score = backbone_score;
+        }
+      }
+      if (has_cross_route) {
+        const RouteCost cross_cost = estimateRouteCost(cross_route);
+        const double cross_score
+            = combinedRouteScore(cross_cost, grid_.tile_size, pin_count);
+        if (selected == nullptr || cross_score < selected_score) {
+          selected = &cross_route;
+          selected_cost = cross_cost;
         }
       }
       return {selected, selected_cost};
@@ -614,20 +634,29 @@ NetRouteMap NewgrEngine::extractPinFallbackRoutes(
         = combinedRouteScore(seeded_cost, grid_.tile_size, pin_count);
     const double fallback_score
         = combinedRouteScore(fallback_cost, grid_.tile_size, pin_count);
-    const bool large_net_bias = pin_count >= 8;
-    const bool huge_net_bias = pin_count >= 16;
-    const bool wire_improved
+    const bool strong_wire_improved
         = fallback_cost.wirelength
-          < static_cast<double>(seeded_cost.wirelength) * 0.97;
+          < static_cast<double>(seeded_cost.wirelength) * 0.94;
+    const bool balanced_improved
+        = fallback_cost.wirelength
+              < static_cast<double>(seeded_cost.wirelength) * 0.98
+          && fallback_cost.vias
+                 < static_cast<double>(seeded_cost.vias) * 0.92;
     const bool via_strongly_improved
-        = fallback_cost.vias < static_cast<double>(seeded_cost.vias) * 0.72
+        = fallback_cost.vias < static_cast<double>(seeded_cost.vias) * 0.78
           && fallback_cost.wirelength
-                 < static_cast<double>(seeded_cost.wirelength) * 1.24;
+                 < static_cast<double>(seeded_cost.wirelength) * 1.10;
+    const bool giant_net_wire_bias
+        = pin_count >= 24
+          && fallback_cost.wirelength
+                 < static_cast<double>(seeded_cost.wirelength) * 0.99
+          && fallback_cost.vias
+                 <= static_cast<double>(seeded_cost.vias) * 1.02;
+    const bool force_geometric_route = pin_count >= 3;
     const bool should_replace
-        = (fallback_score < seeded_score * 0.94) || wire_improved
-          || via_strongly_improved
-          || (large_net_bias && fallback_score < seeded_score * 1.25)
-          || (huge_net_bias && fallback_score < seeded_score * 1.55);
+        = force_geometric_route || (fallback_score < seeded_score * 0.90)
+          || strong_wire_improved || balanced_improved || via_strongly_improved
+          || giant_net_wire_bias;
 
     if (should_replace) {
       route_it->second = *fallback_route;
@@ -637,7 +666,7 @@ NetRouteMap NewgrEngine::extractPinFallbackRoutes(
   if (missing_net_fallback_count > 0 || replaced_net_count > 0) {
     logger_->report(
         "NEWGR fallback routing: {} unrouted nets filled, {} FastRoute nets "
-        "replaced with via-biased MST guides.",
+        "replaced with wire-focused geometric guides.",
         missing_net_fallback_count,
         replaced_net_count);
   }
@@ -865,6 +894,89 @@ bool NewgrEngine::appendFallbackBackboneRoute(const NewgrInputNet& net,
     const int target_y = vertical_backbone ? pin.y() : median_y;
     if (!appendManhattanBridge(
             pin.x(), pin.y(), preferred_layer, target_x, target_y, preferred_layer, route)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool NewgrEngine::appendFallbackCrossRoute(const NewgrInputNet& net,
+                                           GRoute& route) const
+{
+  if (net.pins.size() < 2) {
+    return false;
+  }
+  if (net.pins.size() < 4) {
+    return appendFallbackBackboneRoute(net, route);
+  }
+
+  std::vector<int> xs;
+  std::vector<int> ys;
+  std::vector<int> ls;
+  xs.reserve(net.pins.size());
+  ys.reserve(net.pins.size());
+  ls.reserve(net.pins.size());
+
+  int min_x = std::numeric_limits<int>::max();
+  int max_x = std::numeric_limits<int>::min();
+  int min_y = std::numeric_limits<int>::max();
+  int max_y = std::numeric_limits<int>::min();
+  for (const auto& pin : net.pins) {
+    xs.push_back(pin.x());
+    ys.push_back(pin.y());
+    ls.push_back(pin.layer());
+    min_x = std::min(min_x, pin.x());
+    max_x = std::max(max_x, pin.x());
+    min_y = std::min(min_y, pin.y());
+    max_y = std::max(max_y, pin.y());
+  }
+
+  std::sort(xs.begin(), xs.end());
+  std::sort(ys.begin(), ys.end());
+  std::sort(ls.begin(), ls.end());
+  const int median_x = xs[xs.size() / 2];
+  const int median_y = ys[ys.size() / 2];
+  const int preferred_layer
+      = std::clamp(ls[ls.size() / 2], 0, std::max(0, grid_.num_layers - 1));
+
+  if (!appendManhattanBridge(
+          median_x, min_y, preferred_layer, median_x, max_y, preferred_layer, route)
+      || !appendManhattanBridge(
+          min_x, median_y, preferred_layer, max_x, median_y, preferred_layer, route)) {
+    return false;
+  }
+
+  for (const auto& pin : net.pins) {
+    if (!appendManhattanBridge(pin.x(),
+                               pin.y(),
+                               pin.layer(),
+                               pin.x(),
+                               pin.y(),
+                               preferred_layer,
+                               route)) {
+      return false;
+    }
+
+    const int target_vx = median_x;
+    const int target_vy = std::clamp(pin.y(), min_y, max_y);
+    const int target_hx = std::clamp(pin.x(), min_x, max_x);
+    const int target_hy = median_y;
+    const int vertical_distance = std::abs(pin.x() - target_vx);
+    const int horizontal_distance = std::abs(pin.y() - target_hy);
+
+    const int target_x
+        = (vertical_distance <= horizontal_distance) ? target_vx : target_hx;
+    const int target_y
+        = (vertical_distance <= horizontal_distance) ? target_vy : target_hy;
+
+    if (!appendManhattanBridge(pin.x(),
+                               pin.y(),
+                               preferred_layer,
+                               target_x,
+                               target_y,
+                               preferred_layer,
+                               route)) {
       return false;
     }
   }

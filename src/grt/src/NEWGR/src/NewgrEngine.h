@@ -61,6 +61,8 @@ class NewgrEngine
   bool appendFallbackMstRoute(const NewgrInputNet& net, grt::GRoute& route) const;
   bool appendFallbackBackboneRoute(const NewgrInputNet& net,
                                    grt::GRoute& route) const;
+  bool appendFallbackCrossRoute(const NewgrInputNet& net,
+                                grt::GRoute& route) const;
   bool appendManhattanBridge(int grid_x0,
                              int grid_y0,
                              int grid_l0,
