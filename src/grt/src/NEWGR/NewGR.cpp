@@ -12,10 +12,12 @@
 #include <utility>
 #include <vector>
 
+#include "CUGR.h"
 #include "FastRoute.h"
 #include "Grid.h"
 #include "Net.h"
 #include "grt/Rudy.h"
+#include "grt/SprouteAdapter.h"
 #include "utl/Logger.h"
 
 namespace grt {
@@ -1667,6 +1669,50 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     return nullptr;
   };
 
+  // Cross-router donor collection: pull full-route candidates from CUGR and
+  // SPRoute so per-net fusion can use different router strengths.
+  if (cugr_ != nullptr) {
+    try {
+      ScenarioResult cugr_donor;
+      cugr_donor.name = "cugr-router-donor";
+      cugr_->init(min_routing_layer, max_routing_layer);
+      cugr_->route();
+      cugr_donor.routes = cugr_->getRoutes();
+      cugr_donor.metrics = compute_metrics(cugr_donor.routes);
+      logger_->info(GNR,
+                    6012,
+                    "NEWGR scenario {} [router-donor]: wirelength {:.0f} um, vias {}",
+                    cugr_donor.name,
+                    cugr_donor.metrics.wirelength_um,
+                    cugr_donor.metrics.via_count);
+      scenario_results.push_back(std::move(cugr_donor));
+    } catch (...) {
+      logger_->warn(GNR, 6013, "NEWGR: CUGR donor routing failed; continuing without donor.");
+    }
+  }
+
+  if (grouter_->sproute_adapter_ != nullptr && grouter_->hasSprouteGridData()
+      && grouter_->hasSprouteNetData()) {
+    try {
+      ScenarioResult sproute_donor;
+      sproute_donor.name = "sproute-router-donor";
+      grouter_->sproute_adapter_->initialize(grouter_->sproute_grid_data_,
+                                             grouter_->sproute_nets_);
+      sproute_donor.routes = grouter_->sproute_adapter_->run();
+      sproute_donor.metrics = compute_metrics(sproute_donor.routes);
+      logger_->info(GNR,
+                    6014,
+                    "NEWGR scenario {} [router-donor]: wirelength {:.0f} um, vias {}",
+                    sproute_donor.name,
+                    sproute_donor.metrics.wirelength_um,
+                    sproute_donor.metrics.via_count);
+      scenario_results.push_back(std::move(sproute_donor));
+    } catch (...) {
+      logger_->warn(
+          GNR, 6015, "NEWGR: SPRoute donor routing failed; continuing without donor.");
+    }
+  }
+
   if (ScenarioResult* sporder = find_scenario_result("sporder-shortest")) {
     if (ScenarioResult* spatial
         = find_scenario_result("spatial-roundrobin-turbo")) {
@@ -1723,7 +1769,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const int y_grids = grouter_->grid_->getYGrids();
 
     std::vector<const NetRouteMap*> donors;
-    donors.reserve(8);
+    donors.reserve(10);
     const std::vector<std::string> donor_names{
         "spatial-wirelength-grafting",
         "wl-direct-focused",
@@ -1732,6 +1778,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         "ultra-compact-bsp",
         "spatial-roundrobin-turbo",
         "bsp-scheduler",
+        "cugr-router-donor",
+        "sproute-router-donor",
         "baseline"};
     for (const std::string& donor_name : donor_names) {
       if (ScenarioResult* donor = find_scenario_result(donor_name)) {
@@ -1762,13 +1810,89 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(fusion));
   }
 
+  auto best_wirelength_iter
+      = std::min_element(scenario_results.begin(),
+                         scenario_results.end(),
+                         [](const ScenarioResult& lhs, const ScenarioResult& rhs) {
+                           if (lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
+                             return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
+                           }
+                           return lhs.metrics.via_count < rhs.metrics.via_count;
+                         });
+
+  if (best_wirelength_iter != scenario_results.end()) {
+    ScenarioResult fusion;
+    fusion.name = "cross-router-wirelength-fusion";
+    fusion.routes = best_wirelength_iter->routes;
+
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+
+    std::vector<const NetRouteMap*> donors;
+    donors.reserve(scenario_results.size());
+    for (const ScenarioResult& result : scenario_results) {
+      if (result.name == fusion.name || result.name == best_wirelength_iter->name) {
+        continue;
+      }
+      donors.push_back(&result.routes);
+    }
+
+    int fused_swaps = applyMultiScenarioWirelengthFusion(fusion.routes,
+                                                         donors,
+                                                         tile_size,
+                                                         x_min,
+                                                         y_min,
+                                                         x_grids,
+                                                         y_grids,
+                                                         hotspot_map,
+                                                         std::max(tile_size / 4, 1),
+                                                         3,
+                                                         0.70);
+
+    std::vector<const NetRouteMap*> radical_donors;
+    radical_donors.reserve(4);
+    for (const char* donor_name : {"cugr-router-donor",
+                                   "sproute-router-donor",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        radical_donors.push_back(&donor->routes);
+      }
+    }
+    fused_swaps += applyMultiScenarioWirelengthFusion(fusion.routes,
+                                                      radical_donors,
+                                                      tile_size,
+                                                      x_min,
+                                                      y_min,
+                                                      x_grids,
+                                                      y_grids,
+                                                      hotspot_map,
+                                                      1,
+                                                      4,
+                                                      0.90);
+
+    fusion.metrics = compute_metrics(fusion.routes);
+    logger_->info(
+        GNR,
+        6016,
+        "NEWGR scenario {} [cross-router]: wirelength {:.0f} um, vias {}, fused nets {}",
+        fusion.name,
+        fusion.metrics.wirelength_um,
+        fusion.metrics.via_count,
+        fused_swaps);
+    scenario_results.push_back(std::move(fusion));
+  }
+
   const long baseline_vias = baseline.metrics.via_count;
   auto better_result = [baseline_vias](const ScenarioResult& lhs,
                                        const ScenarioResult& rhs) {
     const long lhs_wl = lhs.metrics.wirelength_dbu;
     const long rhs_wl = rhs.metrics.wirelength_dbu;
     const long wl_tie_window
-        = std::max<long>(120000, std::max(lhs_wl, rhs_wl) / 8000);
+        = std::max<long>(22000, std::max(lhs_wl, rhs_wl) / 18000);
     const long wl_delta = lhs_wl > rhs_wl ? lhs_wl - rhs_wl : rhs_wl - lhs_wl;
     if (wl_delta > wl_tie_window) {
       return lhs_wl < rhs_wl;
