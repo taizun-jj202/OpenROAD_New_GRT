@@ -344,13 +344,32 @@ struct FastRouteBackboneStats
   uint64_t ultra_polish_wl_gain{0};
 };
 
+enum class FastRouteBackbonePolicy
+{
+  kAggressiveMix,
+  kViaSafe
+};
+
+const char* fastRouteBackbonePolicyName(FastRouteBackbonePolicy policy)
+{
+  switch (policy) {
+    case FastRouteBackbonePolicy::kViaSafe:
+      return "ViaSafe";
+    case FastRouteBackbonePolicy::kAggressiveMix:
+    default:
+      return "AggressiveMix";
+  }
+}
+
 NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
                                          const NetRouteMap& newgr_routes,
                                          const std::map<odb::dbNet*, Net*>& db_net_map,
                                          uint64_t total_fastroute_vias,
                                          uint64_t total_fastroute_wirelength,
+                                         FastRouteBackbonePolicy policy,
                                          FastRouteBackboneStats& stats)
 {
+  const bool via_safe_policy = policy == FastRouteBackbonePolicy::kViaSafe;
   NetRouteMap hybrid_routes = fastroute_routes;
 
   struct Candidate
@@ -404,11 +423,16 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
         = static_cast<int64_t>(newgr_usage.low_layer_wl)
           - static_cast<int64_t>(fastroute_usage.low_layer_wl);
     const int center_x = (newgr_usage.min_x + newgr_usage.max_x) / 2;
-    const int64_t via_bonus = std::max<int64_t>(0, via_drop) * 24;
-    const int64_t via_penalty = std::max<int64_t>(0, via_increase) * 280;
-    const int64_t hotspot_penalty = std::max<int64_t>(0, low_layer_delta) / 4;
-    const int64_t hotspot_bonus = std::max<int64_t>(0, -low_layer_delta) / 8;
-    const int64_t fanout_penalty = (pin_count > 24) ? pin_count * 3 : 0;
+    const int64_t via_bonus
+        = std::max<int64_t>(0, via_drop) * (via_safe_policy ? 36 : 24);
+    const int64_t via_penalty
+        = std::max<int64_t>(0, via_increase) * (via_safe_policy ? 420 : 300);
+    const int64_t hotspot_penalty
+        = std::max<int64_t>(0, low_layer_delta) / (via_safe_policy ? 3 : 4);
+    const int64_t hotspot_bonus
+        = std::max<int64_t>(0, -low_layer_delta) / (via_safe_policy ? 12 : 8);
+    const int64_t fanout_penalty
+        = (pin_count > 24) ? pin_count * (via_safe_policy ? 4 : 3) : 0;
     const int64_t priority
         = wl_gain + via_bonus - via_penalty - hotspot_penalty + hotspot_bonus
           - fanout_penalty;
@@ -443,23 +467,48 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
             });
 
   stats.candidate_pool_size = candidates.size();
-  const size_t swap_limit = std::min<size_t>(
-      2400, std::max<size_t>(260, fastroute_routes.size() / 30));
+  const size_t swap_limit = via_safe_policy
+                                ? std::min<size_t>(
+                                      2000, std::max<size_t>(220, fastroute_routes.size() / 34))
+                                : std::min<size_t>(
+                                      2400, std::max<size_t>(260, fastroute_routes.size() / 30));
   const size_t polish_swap_budget
-      = std::min<size_t>(1000, std::max<size_t>(96, (swap_limit * 2) / 3));
+      = via_safe_policy
+            ? std::min<size_t>(820, std::max<size_t>(88, swap_limit / 2))
+            : std::min<size_t>(1000, std::max<size_t>(96, (swap_limit * 2) / 3));
   const size_t ultra_polish_swap_budget
-      = std::min<size_t>(1200, std::max<size_t>(120, candidates.size() / 2));
+      = via_safe_policy
+            ? std::min<size_t>(960, std::max<size_t>(96, candidates.size() / 2))
+            : std::min<size_t>(1200, std::max<size_t>(120, candidates.size() / 2));
   const int64_t total_via_drop_budget
-      = std::max<int64_t>(9800, static_cast<int64_t>(total_fastroute_vias / 10));
+      = via_safe_policy
+            ? std::max<int64_t>(8600, static_cast<int64_t>(total_fastroute_vias / 12))
+            : std::max<int64_t>(9800, static_cast<int64_t>(total_fastroute_vias / 10));
   const int64_t total_via_increase_budget
-      = std::max<int64_t>(960, static_cast<int64_t>(total_fastroute_vias / 110));
-  const uint64_t wl_gain_target = std::max<uint64_t>(
-      12000000, static_cast<uint64_t>(total_fastroute_wirelength / 42));
-  const uint64_t polish_wl_gain_target = std::max<uint64_t>(
-      4200000, static_cast<uint64_t>(total_fastroute_wirelength / 110));
-  const uint64_t ultra_polish_wl_gain_target = std::max<uint64_t>(
-      1800000, static_cast<uint64_t>(total_fastroute_wirelength / 240));
-  const size_t min_swaps_before_stop = std::max<size_t>(140, (swap_limit * 3) / 5);
+      = via_safe_policy
+            ? 0
+            : std::max<int64_t>(720, static_cast<int64_t>(total_fastroute_vias / 140));
+  const uint64_t wl_gain_target
+      = via_safe_policy
+            ? std::max<uint64_t>(
+                  9000000, static_cast<uint64_t>(total_fastroute_wirelength / 55))
+            : std::max<uint64_t>(
+                  11500000, static_cast<uint64_t>(total_fastroute_wirelength / 44));
+  const uint64_t polish_wl_gain_target
+      = via_safe_policy
+            ? std::max<uint64_t>(
+                  3500000, static_cast<uint64_t>(total_fastroute_wirelength / 130))
+            : std::max<uint64_t>(
+                  4200000, static_cast<uint64_t>(total_fastroute_wirelength / 110));
+  const uint64_t ultra_polish_wl_gain_target
+      = via_safe_policy
+            ? std::max<uint64_t>(
+                  1500000, static_cast<uint64_t>(total_fastroute_wirelength / 260))
+            : std::max<uint64_t>(
+                  1800000, static_cast<uint64_t>(total_fastroute_wirelength / 240));
+  const size_t min_swaps_before_stop = via_safe_policy
+                                           ? std::max<size_t>(120, swap_limit / 2)
+                                           : std::max<size_t>(140, (swap_limit * 3) / 5);
   int64_t consumed_via_drop = 0;
   int64_t consumed_via_increase = 0;
   uint64_t consumed_wl_gain = 0;
@@ -506,7 +555,9 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
       const int64_t via_increase = std::max<int64_t>(0, candidate.via_increase);
       const int64_t low_layer_delta = std::max<int64_t>(0, candidate.low_layer_delta);
       if (low_layer_delta
-          > std::max<int64_t>(300, candidate.wl_gain / 3 + candidate.pin_count * 12)) {
+          > std::max<int64_t>(via_safe_policy ? 200 : 280,
+                              candidate.wl_gain / (via_safe_policy ? 4 : 3)
+                                  + candidate.pin_count * (via_safe_policy ? 8 : 12))) {
         ++stats.skipped_by_layer_guard;
         continue;
       }
@@ -517,10 +568,15 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
       }
       // Accept positive-via swaps only when WL improvement is very strong and
       // low-layer demand does not increase significantly.
+      if (via_safe_policy && via_increase > 0) {
+        ++stats.skipped_by_via_guard;
+        continue;
+      }
       if (via_increase > 0
           && candidate.wl_gain
-                 < via_increase * 360 + low_layer_delta / 2
-                       + static_cast<int64_t>(220)) {
+                 < via_increase * (via_safe_policy ? 900 : 420)
+                       + low_layer_delta / (via_safe_policy ? 1 : 2)
+                       + static_cast<int64_t>(via_safe_policy ? 260 : 220)) {
         ++stats.skipped_by_via_guard;
         continue;
       }
@@ -561,7 +617,8 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
     const Candidate& candidate = candidates[idx];
     const int64_t via_increase = std::max<int64_t>(0, candidate.via_increase);
     const int64_t via_drop = std::max<int64_t>(0, candidate.via_drop);
-    if (via_increase > 0 || candidate.low_layer_delta > 350) {
+    const int64_t polish_low_layer_limit = via_safe_policy ? 120 : 350;
+    if (via_increase > 0 || candidate.low_layer_delta > polish_low_layer_limit) {
       continue;
     }
     const int64_t min_polish_gain
@@ -711,6 +768,53 @@ bool shouldPreferFastRouteBackboneHybrid(int fr_overflow,
   return wl_gain >= min_gain;
 }
 
+uint64_t detailAwareFastRouteBackboneCost(const RouteScore& fastroute_score,
+                                          uint64_t fastroute_low_layer_wl,
+                                          const RouteScore& hybrid_score,
+                                          uint64_t hybrid_low_layer_wl)
+{
+  const int64_t via_increase = static_cast<int64_t>(hybrid_score.vias)
+                               - static_cast<int64_t>(fastroute_score.vias);
+  const int64_t via_drop = static_cast<int64_t>(fastroute_score.vias)
+                           - static_cast<int64_t>(hybrid_score.vias);
+  const int64_t low_layer_delta = static_cast<int64_t>(hybrid_low_layer_wl)
+                                  - static_cast<int64_t>(fastroute_low_layer_wl);
+
+  int64_t cost = static_cast<int64_t>(hybrid_score.wirelength);
+  cost += std::max<int64_t>(0, via_increase) * 2200;
+  cost += std::max<int64_t>(0, low_layer_delta) / 4;
+  cost -= std::max<int64_t>(0, via_drop) * 40;
+  cost -= std::max<int64_t>(0, -low_layer_delta) / 20;
+  return static_cast<uint64_t>(std::max<int64_t>(0, cost));
+}
+
+bool shouldPreferViaSafeBackbone(const RouteScore& fastroute_score,
+                                 uint64_t fastroute_low_layer_wl,
+                                 const RouteScore& aggressive_score,
+                                 uint64_t aggressive_low_layer_wl,
+                                 const RouteScore& via_safe_score,
+                                 uint64_t via_safe_low_layer_wl)
+{
+  const uint64_t aggressive_cost = detailAwareFastRouteBackboneCost(
+      fastroute_score, fastroute_low_layer_wl, aggressive_score, aggressive_low_layer_wl);
+  const uint64_t via_safe_cost = detailAwareFastRouteBackboneCost(
+      fastroute_score, fastroute_low_layer_wl, via_safe_score, via_safe_low_layer_wl);
+
+  if (via_safe_cost + 60000 < aggressive_cost) {
+    return true;
+  }
+
+  const int64_t via_drop_delta = static_cast<int64_t>(aggressive_score.vias)
+                                 - static_cast<int64_t>(via_safe_score.vias);
+  const uint64_t wl_gap = (aggressive_score.wirelength > via_safe_score.wirelength)
+                              ? aggressive_score.wirelength - via_safe_score.wirelength
+                              : via_safe_score.wirelength - aggressive_score.wirelength;
+  if (via_drop_delta >= 220 && wl_gap <= 480000) {
+    return true;
+  }
+  return false;
+}
+
 bool shouldPreferNewgrBackboneHybrid(int incumbent_overflow,
                                      const RouteScore& incumbent_score,
                                      uint64_t incumbent_low_layer_wl,
@@ -806,24 +910,38 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = computeRouteScore(newgr_backbone_hybrid);
     const uint64_t newgr_backbone_low_layer_wl
         = computeLowLayerWirelength(newgr_backbone_hybrid);
-    FastRouteBackboneStats fastroute_backbone_stats;
-    NetRouteMap fastroute_backbone_hybrid
+    FastRouteBackboneStats fastroute_backbone_aggr_stats;
+    NetRouteMap fastroute_backbone_aggr_hybrid
         = buildFastRouteBackboneHybrid(fastroute_routes,
                                        routes,
                                        grouter_->db_net_map_,
                                        fastroute_score.vias,
                                        fastroute_score.wirelength,
-                                       fastroute_backbone_stats);
-    const RouteScore fastroute_backbone_score
-        = computeRouteScore(fastroute_backbone_hybrid);
-    const uint64_t fastroute_backbone_low_layer_wl
-        = computeLowLayerWirelength(fastroute_backbone_hybrid);
+                                       FastRouteBackbonePolicy::kAggressiveMix,
+                                       fastroute_backbone_aggr_stats);
+    const RouteScore fastroute_backbone_aggr_score
+        = computeRouteScore(fastroute_backbone_aggr_hybrid);
+    const uint64_t fastroute_backbone_aggr_low_layer_wl
+        = computeLowLayerWirelength(fastroute_backbone_aggr_hybrid);
+    FastRouteBackboneStats fastroute_backbone_vsafe_stats;
+    NetRouteMap fastroute_backbone_vsafe_hybrid
+        = buildFastRouteBackboneHybrid(fastroute_routes,
+                                       routes,
+                                       grouter_->db_net_map_,
+                                       fastroute_score.vias,
+                                       fastroute_score.wirelength,
+                                       FastRouteBackbonePolicy::kViaSafe,
+                                       fastroute_backbone_vsafe_stats);
+    const RouteScore fastroute_backbone_vsafe_score
+        = computeRouteScore(fastroute_backbone_vsafe_hybrid);
+    const uint64_t fastroute_backbone_vsafe_low_layer_wl
+        = computeLowLayerWirelength(fastroute_backbone_vsafe_hybrid);
 
     logger_->info(utl::GRT,
                   6006,
                   "NEWGR candidate summary: NEWGR(ofl={}, wl={}, vias={}, low_wl={}, nets={}), "
                   "NEWGR_BB_HYBRID(wl={}, vias={}, low_wl={}, nets={}, fr_swap={}, add={}), "
-                  "FR_BB_HYBRID(wl={}, vias={}, low_wl={}, nets={}, ng_swap={}, add={}, "
+                  "FR_BB_HYBRID_{}(wl={}, vias={}, low_wl={}, nets={}, ng_swap={}, add={}, "
                   "cand={}, via_guard_skip={}, layer_guard_skip={}, "
                   "swap_limit_skip={}, wl_gain={}, via_drop_used={}, via_inc_used={}, "
                   "polish_swap={}, polish_wl_gain={}, ultra_swap={}, ultra_wl_gain={}), "
@@ -839,28 +957,54 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   newgr_backbone_score.routed_nets,
                   newgr_backbone_stats.replaced_with_fastroute,
                   newgr_backbone_stats.added_missing_nets,
-                  fastroute_backbone_score.wirelength,
-                  fastroute_backbone_score.vias,
-                  fastroute_backbone_low_layer_wl,
-                  fastroute_backbone_score.routed_nets,
-                  fastroute_backbone_stats.replaced_with_newgr,
-                  fastroute_backbone_stats.added_missing_nets,
-                  fastroute_backbone_stats.candidate_pool_size,
-                  fastroute_backbone_stats.skipped_by_via_guard,
-                  fastroute_backbone_stats.skipped_by_layer_guard,
-                  fastroute_backbone_stats.skipped_by_swap_limit,
-                  fastroute_backbone_stats.consumed_wl_gain,
-                  fastroute_backbone_stats.consumed_via_drop,
-                  fastroute_backbone_stats.consumed_via_increase,
-                  fastroute_backbone_stats.polish_swaps,
-                  fastroute_backbone_stats.polish_wl_gain,
-                  fastroute_backbone_stats.ultra_polish_swaps,
-                  fastroute_backbone_stats.ultra_polish_wl_gain,
+                  fastRouteBackbonePolicyName(FastRouteBackbonePolicy::kAggressiveMix),
+                  fastroute_backbone_aggr_score.wirelength,
+                  fastroute_backbone_aggr_score.vias,
+                  fastroute_backbone_aggr_low_layer_wl,
+                  fastroute_backbone_aggr_score.routed_nets,
+                  fastroute_backbone_aggr_stats.replaced_with_newgr,
+                  fastroute_backbone_aggr_stats.added_missing_nets,
+                  fastroute_backbone_aggr_stats.candidate_pool_size,
+                  fastroute_backbone_aggr_stats.skipped_by_via_guard,
+                  fastroute_backbone_aggr_stats.skipped_by_layer_guard,
+                  fastroute_backbone_aggr_stats.skipped_by_swap_limit,
+                  fastroute_backbone_aggr_stats.consumed_wl_gain,
+                  fastroute_backbone_aggr_stats.consumed_via_drop,
+                  fastroute_backbone_aggr_stats.consumed_via_increase,
+                  fastroute_backbone_aggr_stats.polish_swaps,
+                  fastroute_backbone_aggr_stats.polish_wl_gain,
+                  fastroute_backbone_aggr_stats.ultra_polish_swaps,
+                  fastroute_backbone_aggr_stats.ultra_polish_wl_gain,
                   fastroute_overflow,
                   fastroute_score.wirelength,
                   fastroute_score.vias,
                   fastroute_low_layer_wl,
                   fastroute_score.routed_nets);
+    logger_->info(utl::GRT,
+                  6009,
+                  "NEWGR candidate summary: FR_BB_HYBRID_{}(wl={}, vias={}, low_wl={}, "
+                  "nets={}, ng_swap={}, add={}, cand={}, via_guard_skip={}, "
+                  "layer_guard_skip={}, swap_limit_skip={}, wl_gain={}, "
+                  "via_drop_used={}, via_inc_used={}, polish_swap={}, "
+                  "polish_wl_gain={}, ultra_swap={}, ultra_wl_gain={})",
+                  fastRouteBackbonePolicyName(FastRouteBackbonePolicy::kViaSafe),
+                  fastroute_backbone_vsafe_score.wirelength,
+                  fastroute_backbone_vsafe_score.vias,
+                  fastroute_backbone_vsafe_low_layer_wl,
+                  fastroute_backbone_vsafe_score.routed_nets,
+                  fastroute_backbone_vsafe_stats.replaced_with_newgr,
+                  fastroute_backbone_vsafe_stats.added_missing_nets,
+                  fastroute_backbone_vsafe_stats.candidate_pool_size,
+                  fastroute_backbone_vsafe_stats.skipped_by_via_guard,
+                  fastroute_backbone_vsafe_stats.skipped_by_layer_guard,
+                  fastroute_backbone_vsafe_stats.skipped_by_swap_limit,
+                  fastroute_backbone_vsafe_stats.consumed_wl_gain,
+                  fastroute_backbone_vsafe_stats.consumed_via_drop,
+                  fastroute_backbone_vsafe_stats.consumed_via_increase,
+                  fastroute_backbone_vsafe_stats.polish_swaps,
+                  fastroute_backbone_vsafe_stats.polish_wl_gain,
+                  fastroute_backbone_vsafe_stats.ultra_polish_swaps,
+                  fastroute_backbone_vsafe_stats.ultra_polish_wl_gain);
 
     // Detailed-route QoR has been more stable when FastRoute is used as the
     // default backbone, and NEWGR/hybrid are only used as overflow fallback.
@@ -874,20 +1018,48 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     used_fastroute_last_run_ = true;
     routes = std::move(fastroute_routes);
 
-    if (shouldPreferFastRouteBackboneHybrid(fastroute_overflow,
-                                            fastroute_score,
-                                            fastroute_low_layer_wl,
-                                            last_total_overflow_,
-                                            fastroute_backbone_score,
-                                            fastroute_backbone_low_layer_wl)) {
-      routes = std::move(fastroute_backbone_hybrid);
-      best_score = fastroute_backbone_score;
+    const bool prefer_aggressive_backbone = shouldPreferFastRouteBackboneHybrid(
+        fastroute_overflow,
+        fastroute_score,
+        fastroute_low_layer_wl,
+        last_total_overflow_,
+        fastroute_backbone_aggr_score,
+        fastroute_backbone_aggr_low_layer_wl);
+    const bool prefer_via_safe_backbone = shouldPreferFastRouteBackboneHybrid(
+        fastroute_overflow,
+        fastroute_score,
+        fastroute_low_layer_wl,
+        last_total_overflow_,
+        fastroute_backbone_vsafe_score,
+        fastroute_backbone_vsafe_low_layer_wl);
+    const bool use_via_safe_backbone
+        = prefer_via_safe_backbone
+          && (!prefer_aggressive_backbone
+              || shouldPreferViaSafeBackbone(fastroute_score,
+                                             fastroute_low_layer_wl,
+                                             fastroute_backbone_aggr_score,
+                                             fastroute_backbone_aggr_low_layer_wl,
+                                             fastroute_backbone_vsafe_score,
+                                             fastroute_backbone_vsafe_low_layer_wl));
+
+    if (prefer_aggressive_backbone || prefer_via_safe_backbone) {
+      if (use_via_safe_backbone) {
+        routes = std::move(fastroute_backbone_vsafe_hybrid);
+        best_score = fastroute_backbone_vsafe_score;
+        best_low_layer_wl = fastroute_backbone_vsafe_low_layer_wl;
+        selected_label = "FastRoute+NEWGR via-safe-graft";
+        selected_swapped_nets = fastroute_backbone_vsafe_stats.replaced_with_newgr;
+        selected_added_nets = fastroute_backbone_vsafe_stats.added_missing_nets;
+      } else {
+        routes = std::move(fastroute_backbone_aggr_hybrid);
+        best_score = fastroute_backbone_aggr_score;
+        best_low_layer_wl = fastroute_backbone_aggr_low_layer_wl;
+        selected_label = "FastRoute+NEWGR targeted-graft";
+        selected_swapped_nets = fastroute_backbone_aggr_stats.replaced_with_newgr;
+        selected_added_nets = fastroute_backbone_aggr_stats.added_missing_nets;
+      }
       best_overflow = last_total_overflow_;
-      best_low_layer_wl = fastroute_backbone_low_layer_wl;
-      selected_label = "FastRoute+NEWGR targeted-graft";
       selected_hybrid = true;
-      selected_swapped_nets = fastroute_backbone_stats.replaced_with_newgr;
-      selected_added_nets = fastroute_backbone_stats.added_missing_nets;
       used_fastroute_last_run_ = false;
     }
 
