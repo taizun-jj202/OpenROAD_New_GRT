@@ -12,7 +12,6 @@
 #include "NEWGR/src/NewgrEngine.h"
 #include "Net.h"
 #include "Pin.h"
-#include "fastroute/include/FastRoute.h"
 #include "utl/Logger.h"
 
 namespace grt {
@@ -41,7 +40,7 @@ struct SelectionPolicy
 
 enum class RouteSource
 {
-  kFastRoute,
+  kNewgrSeed,
   kNewgrBalanced,
   kNewgrCritical,
   kNewgrWirelength,
@@ -450,10 +449,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     engine_ = std::make_unique<NewgrEngine>(logger_);
   }
 
-  NetRouteMap routes = grouter_->fastroute()->run();
-
   engine_->init(grouter_->sproute_grid_data_, grouter_->sproute_nets_);
-  NetRouteMap balanced_routes = engine_->runWirelengthFirst();
+  NetRouteMap routes = engine_->run();
+  NetRouteMap balanced_routes;
   NetRouteMap critical_wirelength_routes = engine_->runCriticalWirelengthRefine();
   NetRouteMap wirelength_routes;
   NetRouteMap data_wirelength_routes;
@@ -513,8 +511,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   const int64_t global_base_via_budget
-      = std::max<int64_t>(20, baseline_total_vias / 3600);
-  const int64_t global_wl_to_via_credit = std::max<int64_t>(6, tile_size / 3);
+      = std::max<int64_t>(10, baseline_total_vias / 12000);
+  const int64_t global_wl_to_via_credit = std::max<int64_t>(10, tile_size / 2);
 
   int selected_from_balanced = 0;
   int selected_from_critical = 0;
@@ -527,7 +525,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int selected_from_astar = 0;
   int selected_from_rudy = 0;
   int selected_from_polish = 0;
-  int kept_fastroute = 0;
+  int kept_seed = 0;
   int inserted_from_balanced = 0;
   int inserted_from_critical = 0;
   int inserted_from_wl = 0;
@@ -569,7 +567,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                   baseline_score, best_score, policy)
                               + congestion_tradeoff * best_congestion_cost;
     const GRoute* selected_route = &route;
-    RouteSource selected_source = RouteSource::kFastRoute;
+    RouteSource selected_source = RouteSource::kNewgrSeed;
 
     auto consider = [&](const NetRouteMap& candidate_routes,
                         RouteSource source,
@@ -678,10 +676,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               ? std::max<int64_t>(1, tile_size / 14)
               : (policy.medium_net ? std::max<int64_t>(1, tile_size / 11)
                                    : std::max<int64_t>(1, tile_size / 8));
+    const int64_t critical_min_wl_drop
+        = policy.long_net
+              ? std::max<int64_t>(1, tile_size / 8)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 6)
+                                   : std::max<int64_t>(1, tile_size / 4));
     consider(balanced_routes, RouteSource::kNewgrBalanced, 0, false);
     consider(critical_wirelength_routes,
              RouteSource::kNewgrCritical,
-             0,
+             critical_min_wl_drop,
              true);
     consider(wirelength_routes,
              RouteSource::kNewgrWirelength,
@@ -753,7 +756,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
 
     maybeUpdateChampion(balanced_routes, RouteSource::kNewgrBalanced);
-    maybeUpdateChampion(critical_wirelength_routes, RouteSource::kNewgrCritical);
     maybeUpdateChampion(wirelength_routes, RouteSource::kNewgrWirelength);
     maybeUpdateChampion(data_wirelength_routes, RouteSource::kNewgrDataWirelength);
     maybeUpdateChampion(region_aware_routes, RouteSource::kNewgrRegionAware);
@@ -825,8 +827,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         0, best_score.vias - baseline_score.vias);
 
     switch (selected_source) {
-      case RouteSource::kFastRoute:
-        kept_fastroute++;
+      case RouteSource::kNewgrSeed:
+        kept_seed++;
         break;
       case RouteSource::kNewgrBalanced:
         selected_from_balanced++;
@@ -935,7 +937,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 6004,
                 "NEWGR portfolio hybrid selected balanced={} critical={} wl={} data={} "
                 "region={} regular={} fine={} small={} astar={} rudy={} polish={} "
-                "(kept FR={}; +balanced={} +critical={} +wl={} +data={} +region={} +regular={} "
+                "(kept seed={}; +balanced={} +critical={} +wl={} +data={} +region={} +regular={} "
                 "+fine={} +small={} +astar={} +rudy={} +polish={}). "
                 "Global WL gain={} "
                 "extra-vias={} (base via budget={} + gain/{}) out of {} total.",
@@ -950,7 +952,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 selected_from_astar,
                 selected_from_rudy,
                 selected_from_polish,
-                kept_fastroute,
+                kept_seed,
                 inserted_from_balanced,
                 inserted_from_critical,
                 inserted_from_wl,

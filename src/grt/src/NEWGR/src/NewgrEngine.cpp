@@ -75,8 +75,8 @@ void NewgrEngine::init(const SprouteGridData& grid,
 
 NetRouteMap NewgrEngine::run()
 {
-  return runWithConfig(/*max_maze_round=*/350,
-                       static_cast<int>(Algo::DetPart_Astar_Local),
+  return runWithConfig(/*max_maze_round=*/180,
+                       static_cast<int>(Algo::DetPart_Astar_Region),
                        /*warn_id=*/401);
 }
 
@@ -102,7 +102,7 @@ NetRouteMap NewgrEngine::runCriticalWirelengthRefine()
   }
 
   buildInput(critical_nets);
-  NetRouteMap routes = runWithConfig(/*max_maze_round=*/260,
+  NetRouteMap routes = runWithConfig(/*max_maze_round=*/110,
                                      static_cast<int>(Algo::DetPart_Astar_Data),
                                      /*warn_id=*/411);
   buildInput();
@@ -272,6 +272,7 @@ std::vector<int> NewgrEngine::selectCriticalNetIndices() const
     int index{0};
     int64_t hpwl{0};
     int pin_count{0};
+    int64_t score{0};
   };
 
   auto hpwlInGrid = [](const SprouteNetData& net) -> int64_t {
@@ -303,7 +304,12 @@ std::vector<int> NewgrEngine::selectCriticalNetIndices() const
     if (hpwl <= 0) {
       continue;
     }
-    ranked.push_back({i, hpwl, static_cast<int>(net.pins.size())});
+    const int pin_count = static_cast<int>(net.pins.size());
+    // Favor long nets while still prioritizing high-degree nets that have
+    // bigger topology flexibility for WL reduction.
+    const int64_t pin_weight = std::min<int>(8, pin_count - 1);
+    const int64_t score = hpwl * (12 + pin_weight);
+    ranked.push_back({i, hpwl, pin_count, score});
   }
 
   if (ranked.empty()) {
@@ -311,6 +317,9 @@ std::vector<int> NewgrEngine::selectCriticalNetIndices() const
   }
 
   std::sort(ranked.begin(), ranked.end(), [](const RankedNet& lhs, const RankedNet& rhs) {
+    if (lhs.score != rhs.score) {
+      return lhs.score > rhs.score;
+    }
     if (lhs.hpwl != rhs.hpwl) {
       return lhs.hpwl > rhs.hpwl;
     }
@@ -321,14 +330,14 @@ std::vector<int> NewgrEngine::selectCriticalNetIndices() const
   });
 
   // Route only the highest-impact nets with a heavier data-driven pass.
-  const size_t min_budget = 64;
-  const size_t max_budget = 800;
-  size_t budget = ranked.size() / 14;
+  const size_t min_budget = 32;
+  const size_t max_budget = 192;
+  size_t budget = ranked.size() / 42;
   budget = std::max(budget, min_budget);
   budget = std::min(budget, max_budget);
   budget = std::min(budget, ranked.size());
 
-  const int64_t min_hpwl = 18;
+  const int64_t min_hpwl = 24;
   std::vector<int> selected;
   selected.reserve(budget);
   for (const RankedNet& ranked_net : ranked) {
@@ -342,7 +351,7 @@ std::vector<int> NewgrEngine::selectCriticalNetIndices() const
   }
 
   if (selected.empty()) {
-    const size_t fallback = std::min<size_t>(64, ranked.size());
+    const size_t fallback = std::min<size_t>(32, ranked.size());
     selected.reserve(fallback);
     for (size_t i = 0; i < fallback; ++i) {
       selected.push_back(ranked[i].index);
