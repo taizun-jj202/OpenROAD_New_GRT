@@ -1,9 +1,12 @@
 #include "NEWGR/NewGR.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "NEWGR/src/NewgrEngine.h"
@@ -40,11 +43,7 @@ enum class RouteSource
 {
   kFastRoute,
   kNewgrBalanced,
-  kNewgrWirelength,
-  kNewgrDataWirelength,
-  kNewgrRegion,
-  kNewgrRegularRegion,
-  kNewgrFineGrain
+  kNewgrWirelength
 };
 
 enum class SegmentDirection
@@ -54,6 +53,40 @@ enum class SegmentDirection
   kVertical,
   kVia
 };
+
+enum class EdgeAxis : uint8_t
+{
+  kHorizontal = 0,
+  kVertical = 1
+};
+
+struct RouteEdgeKey
+{
+  int x{0};
+  int y{0};
+  int layer{0};  // 0-based routing layer.
+  EdgeAxis axis{EdgeAxis::kHorizontal};
+
+  bool operator==(const RouteEdgeKey& rhs) const
+  {
+    return x == rhs.x && y == rhs.y && layer == rhs.layer && axis == rhs.axis;
+  }
+};
+
+struct RouteEdgeKeyHash
+{
+  std::size_t operator()(const RouteEdgeKey& key) const
+  {
+    std::size_t hash = static_cast<std::size_t>(key.x * 1315423911u);
+    hash ^= static_cast<std::size_t>(key.y + 0x9e3779b9 + (hash << 6) + (hash >> 2));
+    hash ^= static_cast<std::size_t>(key.layer + 0x9e3779b9 + (hash << 6) + (hash >> 2));
+    hash ^= static_cast<std::size_t>(static_cast<uint8_t>(key.axis)
+                                     + 0x9e3779b9 + (hash << 6) + (hash >> 2));
+    return hash;
+  }
+};
+
+using EdgeUsageMap = std::unordered_map<RouteEdgeKey, int, RouteEdgeKeyHash>;
 
 SegmentDirection getSegmentDirection(const GSegment& segment)
 {
@@ -87,6 +120,175 @@ RouteScore scoreRoute(const GRoute& route)
     }
   }
   return score;
+}
+
+int gridIndexFromCoord(int coord, int origin, int tile_size)
+{
+  if (tile_size <= 0) {
+    return 0;
+  }
+  return (coord - origin) / tile_size;
+}
+
+template <typename Fn>
+void forEachUnitPlanarEdge(const GRoute& route,
+                           int origin_x,
+                           int origin_y,
+                           int tile_size,
+                           Fn&& fn)
+{
+  if (tile_size <= 0) {
+    return;
+  }
+
+  for (const GSegment& segment : route) {
+    if (segment.init_layer != segment.final_layer) {
+      continue;
+    }
+
+    const int layer = std::max(0, segment.init_layer - 1);
+    const int x0 = gridIndexFromCoord(segment.init_x, origin_x, tile_size);
+    const int y0 = gridIndexFromCoord(segment.init_y, origin_y, tile_size);
+    const int x1 = gridIndexFromCoord(segment.final_x, origin_x, tile_size);
+    const int y1 = gridIndexFromCoord(segment.final_y, origin_y, tile_size);
+
+    if (x0 == x1 && y0 == y1) {
+      continue;
+    }
+
+    if (y0 == y1) {
+      const int step = (x1 > x0) ? 1 : -1;
+      for (int x = x0; x != x1; x += step) {
+        fn(RouteEdgeKey{
+            std::min(x, x + step), y0, layer, EdgeAxis::kHorizontal});
+      }
+      continue;
+    }
+
+    if (x0 == x1) {
+      const int step = (y1 > y0) ? 1 : -1;
+      for (int y = y0; y != y1; y += step) {
+        fn(RouteEdgeKey{
+            x0, std::min(y, y + step), layer, EdgeAxis::kVertical});
+      }
+      continue;
+    }
+
+    // Defensive Manhattan decomposition for non-orthogonal merged segments.
+    const int x_step = (x1 > x0) ? 1 : -1;
+    for (int x = x0; x != x1; x += x_step) {
+      fn(RouteEdgeKey{
+          std::min(x, x + x_step), y0, layer, EdgeAxis::kHorizontal});
+    }
+    const int y_step = (y1 > y0) ? 1 : -1;
+    for (int y = y0; y != y1; y += y_step) {
+      fn(RouteEdgeKey{
+          x1, std::min(y, y + y_step), layer, EdgeAxis::kVertical});
+    }
+  }
+}
+
+int edgeHardCapacity(const RouteEdgeKey& edge, const SprouteGridData& grid)
+{
+  if (edge.layer < 0) {
+    return 1;
+  }
+
+  if (edge.axis == EdgeAxis::kHorizontal) {
+    if (edge.layer < static_cast<int>(grid.h_capacities.size())) {
+      return std::max<int>(1, grid.h_capacities[edge.layer]);
+    }
+    return 1;
+  }
+
+  if (edge.layer < static_cast<int>(grid.v_capacities.size())) {
+    return std::max<int>(1, grid.v_capacities[edge.layer]);
+  }
+  return 1;
+}
+
+double softRatioFromCongestion(const RouteEdgeKey& edge, double congestion)
+{
+  // SPRoute-style logistic soft capacity reservation, tighter on lower layers.
+  double min_ratio = 0.65;
+  double max_ratio = 0.92;
+  double cong_mid = 0.85;
+  double slope = 3.0;
+  if (edge.layer <= 1) {
+    min_ratio = 0.55;
+    max_ratio = 0.86;
+    cong_mid = 0.72;
+    slope = 3.8;
+  } else if (edge.layer <= 3) {
+    min_ratio = 0.60;
+    max_ratio = 0.90;
+    cong_mid = 0.80;
+    slope = 3.4;
+  }
+  return min_ratio
+         + (max_ratio - min_ratio) / (1.0 + std::exp((congestion - cong_mid) * slope));
+}
+
+int softCapacityFromDemand(const RouteEdgeKey& edge,
+                           int hard_capacity,
+                           int baseline_demand)
+{
+  if (hard_capacity <= 1) {
+    return 1;
+  }
+  const double congestion
+      = static_cast<double>(baseline_demand) / static_cast<double>(hard_capacity);
+  const double ratio = softRatioFromCongestion(edge, congestion);
+  const int soft_capacity = static_cast<int>(std::floor(hard_capacity * ratio));
+  return std::max(1, std::min(hard_capacity, soft_capacity));
+}
+
+void addRouteToUsage(const GRoute& route,
+                     int origin_x,
+                     int origin_y,
+                     int tile_size,
+                     EdgeUsageMap& usage)
+{
+  forEachUnitPlanarEdge(
+      route, origin_x, origin_y, tile_size, [&](const RouteEdgeKey& edge) {
+        usage[edge]++;
+      });
+}
+
+int64_t routeCongestionPenalty(const GRoute& route,
+                               const SprouteGridData& grid,
+                               int origin_x,
+                               int origin_y,
+                               int tile_size,
+                               const EdgeUsageMap& selected_usage,
+                               const EdgeUsageMap& soft_capacities)
+{
+  double penalty = 0.0;
+  forEachUnitPlanarEdge(
+      route, origin_x, origin_y, tile_size, [&](const RouteEdgeKey& edge) {
+        const auto usage_it = selected_usage.find(edge);
+        const int current_usage = usage_it == selected_usage.end() ? 0 : usage_it->second;
+
+        int soft_capacity = edgeHardCapacity(edge, grid);
+        const auto soft_it = soft_capacities.find(edge);
+        if (soft_it != soft_capacities.end()) {
+          soft_capacity = soft_it->second;
+        } else {
+          soft_capacity = softCapacityFromDemand(edge, soft_capacity, 0);
+        }
+
+        const int projected_usage = current_usage + 1;
+        const int overflow = std::max(0, projected_usage - soft_capacity);
+        const double logistic_cost
+            = 1.0 / (1.0 + std::exp(1.6 * static_cast<double>(soft_capacity - projected_usage)));
+
+        // CUGR-like expected overflow + logistic routability pressure.
+        penalty += static_cast<double>(overflow) * 28.0 + logistic_cost * 4.0;
+        if (projected_usage >= soft_capacity) {
+          penalty += 1.0;
+        }
+      });
+  return static_cast<int64_t>(std::llround(penalty));
 }
 
 int64_t viaGuardForNet(const RouteScore& baseline_score, int tile_size)
@@ -244,45 +446,115 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   engine_->init(grouter_->sproute_grid_data_, grouter_->sproute_nets_);
   NetRouteMap balanced_routes = engine_->run();
   NetRouteMap wirelength_routes = engine_->runWirelengthFirst();
-  NetRouteMap data_wirelength_routes = engine_->runDataDrivenWirelength();
-  NetRouteMap region_routes = engine_->runRegionAware();
-  NetRouteMap regular_region_routes = engine_->runRegularRegionAware();
-  NetRouteMap finegrain_routes = engine_->runFineGrainRefine();
+
+  const SprouteGridData& grid = grouter_->sproute_grid_data_;
+  const int origin_x = grid.origin.x();
+  const int origin_y = grid.origin.y();
+  const int tile_size = std::max(1, grouter_->getTileSize());
+
+  EdgeUsageMap baseline_demand;
+  for (const auto& [db_net, route] : routes) {
+    (void) db_net;
+    addRouteToUsage(route, origin_x, origin_y, tile_size, baseline_demand);
+  }
+
+  EdgeUsageMap soft_capacities;
+  soft_capacities.reserve(baseline_demand.size());
+  for (const auto& [edge, demand] : baseline_demand) {
+    const int hard_capacity = edgeHardCapacity(edge, grid);
+    soft_capacities.emplace(
+        edge, softCapacityFromDemand(edge, hard_capacity, demand));
+  }
+
+  struct OrderedNet
+  {
+    odb::dbNet* db_net{nullptr};
+    RouteScore baseline_score;
+  };
+
+  std::vector<OrderedNet> ordered_nets;
+  ordered_nets.reserve(routes.size());
+  for (const auto& [db_net, route] : routes) {
+    ordered_nets.push_back({db_net, scoreRoute(route)});
+  }
+  std::sort(ordered_nets.begin(),
+            ordered_nets.end(),
+            [](const OrderedNet& lhs, const OrderedNet& rhs) {
+              if (lhs.baseline_score.wirelength != rhs.baseline_score.wirelength) {
+                return lhs.baseline_score.wirelength > rhs.baseline_score.wirelength;
+              }
+              if (lhs.baseline_score.vias != rhs.baseline_score.vias) {
+                return lhs.baseline_score.vias > rhs.baseline_score.vias;
+              }
+              return lhs.db_net < rhs.db_net;
+            });
 
   int selected_from_balanced = 0;
   int selected_from_wl = 0;
-  int selected_from_data_wl = 0;
-  int selected_from_region = 0;
-  int selected_from_regular_region = 0;
-  int selected_from_finegrain = 0;
   int kept_fastroute = 0;
   int inserted_from_balanced = 0;
   int inserted_from_wl = 0;
-  int inserted_from_data_wl = 0;
-  int inserted_from_region = 0;
-  int inserted_from_regular_region = 0;
-  int inserted_from_finegrain = 0;
 
-  for (auto& [db_net, route] : routes) {
-    const int tile_size = std::max(1, grouter_->getTileSize());
-    const RouteScore baseline_score = scoreRoute(route);
+  EdgeUsageMap selected_usage;
+  selected_usage.reserve(baseline_demand.size());
+
+  for (const OrderedNet& ordered_net : ordered_nets) {
+    auto route_it = routes.find(ordered_net.db_net);
+    if (route_it == routes.end()) {
+      continue;
+    }
+
+    GRoute& route = route_it->second;
+    const RouteScore baseline_score = ordered_net.baseline_score;
     const SelectionPolicy policy = buildSelectionPolicy(baseline_score, tile_size);
+    const int64_t congestion_tradeoff = policy.long_net ? 1 : (policy.medium_net ? 2 : 3);
+
     RouteScore best_score = baseline_score;
+    int64_t best_congestion_cost
+        = routeCongestionPenalty(route,
+                                 grid,
+                                 origin_x,
+                                 origin_y,
+                                 tile_size,
+                                 selected_usage,
+                                 soft_capacities);
+    int64_t best_total_cost = effectiveWirelengthCost(
+                                  baseline_score, best_score, policy)
+                              + congestion_tradeoff * best_congestion_cost;
     const GRoute* selected_route = &route;
     RouteSource selected_source = RouteSource::kFastRoute;
 
     auto consider = [&](const NetRouteMap& candidate_routes, RouteSource source) {
-      auto candidate_it = candidate_routes.find(db_net);
+      auto candidate_it = candidate_routes.find(ordered_net.db_net);
       if (candidate_it == candidate_routes.end()) {
         return;
       }
       const RouteScore candidate_score = scoreRoute(candidate_it->second);
-      if (betterCandidate(
-              baseline_score,
-              best_score,
-              candidate_score,
-              policy)) {
+      if (!betterCandidate(
+              baseline_score, best_score, candidate_score, policy)) {
+        return;
+      }
+
+      const int64_t candidate_congestion_cost
+          = routeCongestionPenalty(candidate_it->second,
+                                   grid,
+                                   origin_x,
+                                   origin_y,
+                                   tile_size,
+                                   selected_usage,
+                                   soft_capacities);
+      const int64_t candidate_total_cost
+          = effectiveWirelengthCost(baseline_score, candidate_score, policy)
+            + congestion_tradeoff * candidate_congestion_cost;
+
+      if (candidate_total_cost < best_total_cost
+          || (candidate_total_cost == best_total_cost
+              && candidate_score.wirelength < best_score.wirelength)
+          || (candidate_total_cost == best_total_cost
+              && candidate_score.wirelength == best_score.wirelength
+              && candidate_score.vias < best_score.vias)) {
         best_score = candidate_score;
+        best_total_cost = candidate_total_cost;
         selected_route = &candidate_it->second;
         selected_source = source;
       }
@@ -290,14 +562,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     consider(balanced_routes, RouteSource::kNewgrBalanced);
     consider(wirelength_routes, RouteSource::kNewgrWirelength);
-    consider(data_wirelength_routes, RouteSource::kNewgrDataWirelength);
-    consider(region_routes, RouteSource::kNewgrRegion);
-    consider(regular_region_routes, RouteSource::kNewgrRegularRegion);
-    consider(finegrain_routes, RouteSource::kNewgrFineGrain);
 
     if (selected_route != &route) {
       route = *selected_route;
     }
+    addRouteToUsage(route, origin_x, origin_y, tile_size, selected_usage);
 
     switch (selected_source) {
       case RouteSource::kFastRoute:
@@ -308,18 +577,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         break;
       case RouteSource::kNewgrWirelength:
         selected_from_wl++;
-        break;
-      case RouteSource::kNewgrDataWirelength:
-        selected_from_data_wl++;
-        break;
-      case RouteSource::kNewgrRegion:
-        selected_from_region++;
-        break;
-      case RouteSource::kNewgrRegularRegion:
-        selected_from_regular_region++;
-        break;
-      case RouteSource::kNewgrFineGrain:
-        selected_from_finegrain++;
         break;
     }
   }
@@ -336,51 +593,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       inserted_from_wl++;
     }
   }
-  for (const auto& [db_net, route] : data_wirelength_routes) {
-    if (routes.find(db_net) == routes.end()) {
-      routes.emplace(db_net, route);
-      inserted_from_data_wl++;
-    }
-  }
-  for (const auto& [db_net, route] : region_routes) {
-    if (routes.find(db_net) == routes.end()) {
-      routes.emplace(db_net, route);
-      inserted_from_region++;
-    }
-  }
-  for (const auto& [db_net, route] : regular_region_routes) {
-    if (routes.find(db_net) == routes.end()) {
-      routes.emplace(db_net, route);
-      inserted_from_regular_region++;
-    }
-  }
-  for (const auto& [db_net, route] : finegrain_routes) {
-    if (routes.find(db_net) == routes.end()) {
-      routes.emplace(db_net, route);
-      inserted_from_finegrain++;
-    }
-  }
 
   logger_->info(utl::GRT,
                 6004,
-                "NEWGR hybrid selected {} balanced, {} WL-first, {} "
-                "data-WL-first, {} region, {} regular-region, and {} "
-                "fine-grain routes (kept {} FastRoute, +{} balanced-only, +{} "
-                "WL-only, +{} data-WL-only, +{} region-only, +{} "
-                "regular-region-only, +{} fine-grain-only) out of {} total.",
+                "NEWGR congestion-aware hybrid selected {} balanced and {} "
+                "WL-first routes (kept {} FastRoute, +{} balanced-only, +{} "
+                "WL-only) out of {} total.",
                 selected_from_balanced,
                 selected_from_wl,
-                selected_from_data_wl,
-                selected_from_region,
-                selected_from_regular_region,
-                selected_from_finegrain,
                 kept_fastroute,
                 inserted_from_balanced,
                 inserted_from_wl,
-                inserted_from_data_wl,
-                inserted_from_region,
-                inserted_from_regular_region,
-                inserted_from_finegrain,
                 routes.size());
 
   grouter_->addRemainingGuides(routes, nets, min_routing_layer, max_routing_layer);
