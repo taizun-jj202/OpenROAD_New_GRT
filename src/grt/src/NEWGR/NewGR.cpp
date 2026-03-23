@@ -33,6 +33,7 @@ struct ScenarioResult
   std::string name;
   RouteMetrics metrics;
   NetRouteMap routes;
+  int overflow = 0;
 };
 
 struct RouterSnapshot
@@ -635,14 +636,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       routes = grouter_->findRouting(
           state_nets, min_routing_layer, max_routing_layer);
     }
+    const int overflow
+        = grouter_->fastroute() != nullptr ? grouter_->fastroute()->totalOverflow()
+                                           : 0;
     RouteMetrics metrics = compute_metrics(routes);
     logger_->info(GNR,
                   6005,
-                  "NEWGR {}: wirelength {:.0f} um, vias {}",
+                  "NEWGR {}: wirelength {:.0f} um, vias {}, overflow {}",
                   name,
                   metrics.wirelength_um,
-                  metrics.via_count);
-    return ScenarioResult{name, metrics, std::move(routes)};
+                  metrics.via_count,
+                  overflow);
+    return ScenarioResult{name, metrics, std::move(routes), overflow};
   };
 
   auto collect_hotspots = [&]() -> std::vector<Hotspot> {
@@ -710,14 +715,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       routes = grouter_->findRouting(
           scenario_nets, min_routing_layer, max_routing_layer);
     }
+    const int overflow
+        = grouter_->fastroute() != nullptr ? grouter_->fastroute()->totalOverflow()
+                                           : 0;
     RouteMetrics metrics = compute_metrics(routes);
     logger_->info(GNR,
                   6006,
-                  "NEWGR scenario {}: wirelength {:.0f} um, vias {}",
+                  "NEWGR scenario {}: wirelength {:.0f} um, vias {}, overflow {}",
                   scenario.name,
                   metrics.wirelength_um,
-                  metrics.via_count);
-    return ScenarioResult{scenario.name, metrics, std::move(routes)};
+                  metrics.via_count,
+                  overflow);
+    return ScenarioResult{scenario.name, metrics, std::move(routes), overflow};
   };
 
   RouterSnapshot snapshot = capture_snapshot();
@@ -733,104 +742,134 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
   PlanarEdgeUsage baseline_usage
       = computeNormalizedBackboneUsage(grouter_, baseline.routes);
+  std::vector<Hotspot> braided_hotspots = hotspots;
+  if (!normalized_rudy.empty() && grouter_->grid_ != nullptr) {
+    const int x_limit
+        = std::min(static_cast<int>(normalized_rudy.size()),
+                   grouter_->grid_->getXGrids());
+    const int y_limit = std::min(static_cast<int>(normalized_rudy.front().size()),
+                                 grouter_->grid_->getYGrids());
+    for (int x = 2; x < x_limit - 1; x += 4) {
+      for (int y = 2; y < y_limit - 1; y += 4) {
+        const float local_rudy = normalized_rudy[x][y];
+        if (local_rudy < 0.25f || local_rudy > 0.75f) {
+          continue;
+        }
+        if (((x + y) / 2) % 4 != 0) {
+          continue;
+        }
+        Hotspot hotspot;
+        hotspot.gx = x;
+        hotspot.gy = y;
+        hotspot.severity = std::clamp(1.05f + 0.35f * local_rudy, 0.9f, 1.5f);
+        hotspot.affect_horizontal = ((x / 4) + (y / 4)) % 2 == 0;
+        hotspot.affect_vertical = !hotspot.affect_horizontal;
+        braided_hotspots.push_back(hotspot);
+      }
+    }
+  }
 
-  ScenarioDefinition backbone_def;
-  backbone_def.name = "backbone-channelized";
-  backbone_def.pre_init = [this]() {
-    grouter_->setCapacitiesPerturbationPercentage(10.0f);
+  ScenarioDefinition braided_balanced_def;
+  braided_balanced_def.name = "braided-balanced";
+  braided_balanced_def.pre_init = [this]() {
+    grouter_->setCapacitiesPerturbationPercentage(14.0f);
     grouter_->setPerturbationAmount(1);
-    grouter_->setSeed(29);
+    grouter_->setSeed(43);
     grouter_->setAllowCongestion(false);
-    grouter_->fastroute_->setCriticalNetsPercentage(28.0f);
+    grouter_->fastroute_->setCriticalNetsPercentage(34.0f);
   };
-  backbone_def.post_init
-      = [this,
-         &normalized_rudy,
-         &hotspots,
-         &baseline_usage,
-         min_routing_layer,
-         max_routing_layer]() {
-          applySoftCapacityScaling(grouter_,
-                                   normalized_rudy,
-                                   min_routing_layer,
-                                   max_routing_layer,
-                                   0.56f,
-                                   0.97f,
-                                   4.4f,
-                                   0.43f);
-          applyBackboneCapacityReinforcement(grouter_,
-                                             normalized_rudy,
-                                             baseline_usage,
-                                             min_routing_layer,
-                                             max_routing_layer,
-                                             0.34f,
-                                             1.55f,
-                                             0.62f);
-          applyAggressiveCapacityField(grouter_,
+  braided_balanced_def.post_init = [this,
+                                    &normalized_rudy,
+                                    &braided_hotspots,
+                                    &baseline_usage,
+                                    min_routing_layer,
+                                    max_routing_layer]() {
+    applySoftCapacityScaling(grouter_,
+                             normalized_rudy,
+                             min_routing_layer,
+                             max_routing_layer,
+                             0.62f,
+                             0.95f,
+                             5.6f,
+                             0.46f);
+    applyBackboneCapacityReinforcement(grouter_,
                                        normalized_rudy,
-                                       hotspots,
+                                       baseline_usage,
                                        min_routing_layer,
                                        max_routing_layer,
-                                       0.76f,
-                                       0.12f,
-                                       0.23f,
-                                       1.38f,
-                                       0.35f,
-                                       true);
-          applyHotspotPenalties(grouter_,
-                                hotspots,
-                                min_routing_layer,
-                                max_routing_layer,
-                                4,
-                                0.50f,
-                                0.90f);
-        };
-
-  ScenarioResult channelized = run_scenario(backbone_def, snapshot);
-  const int channelized_overflow
-      = grouter_->fastroute() != nullptr ? grouter_->fastroute()->totalOverflow()
-                                         : 0;
-  const bool channelized_congested = channelized_overflow > 0;
-
-  auto better_result = [](const ScenarioResult& lhs,
-                          const ScenarioResult& rhs) {
-    if (lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
-      return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
-    }
-    if (lhs.metrics.via_count != rhs.metrics.via_count) {
-      return lhs.metrics.via_count < rhs.metrics.via_count;
-    }
-    return lhs.metrics.score < rhs.metrics.score;
+                                       0.48f,
+                                       1.28f,
+                                       0.85f);
+    applyAggressiveCapacityField(grouter_,
+                                 normalized_rudy,
+                                 braided_hotspots,
+                                 min_routing_layer,
+                                 max_routing_layer,
+                                 0.72f,
+                                 0.10f,
+                                 0.48f,
+                                 1.20f,
+                                 0.22f,
+                                 false);
+    applyHotspotPenalties(grouter_,
+                          braided_hotspots,
+                          min_routing_layer,
+                          max_routing_layer,
+                          3,
+                          0.63f,
+                          0.55f);
   };
 
-  const ScenarioResult& better
-      = better_result(channelized, baseline) ? channelized : baseline;
+  ScenarioResult braided_balanced = run_scenario(braided_balanced_def, snapshot);
   logger_->info(GNR,
                 6007,
-                "NEWGR diagnostic best between baseline/backbone is '{}': "
-                "wirelength {:.0f} um, vias {}",
-                better.name,
-                better.metrics.wirelength_um,
-                better.metrics.via_count);
+                "NEWGR diagnostic baseline vs braided-balanced: baseline "
+                "wirelength {:.0f} um / vias {} / overflow {}, scenario "
+                "wirelength {:.0f} um / vias {} / overflow {}",
+                baseline.metrics.wirelength_um,
+                baseline.metrics.via_count,
+                baseline.overflow,
+                braided_balanced.metrics.wirelength_um,
+                braided_balanced.metrics.via_count,
+                braided_balanced.overflow);
 
-  if (!channelized_congested && !channelized.routes.empty()) {
+  const long wl_guard
+      = baseline.metrics.wirelength_dbu
+        + std::max(1500L, baseline.metrics.wirelength_dbu / 220);
+  const long via_guard
+      = baseline.metrics.via_count + std::max(200L, baseline.metrics.via_count / 90);
+  const bool scenario_candidate = !braided_balanced.routes.empty()
+                                  && braided_balanced.overflow == 0
+                                  && (braided_balanced.metrics.wirelength_dbu <= wl_guard
+                                      || braided_balanced.metrics.via_count <= via_guard);
+
+  if (scenario_candidate) {
+    logger_->warn(
+        GNR,
+        6010,
+        "NEWGR selected scenario '{}' with guarded overflow {}.",
+        braided_balanced.name,
+        braided_balanced.overflow);
     restore_snapshot(snapshot);
-    return std::move(channelized.routes);
+    return std::move(braided_balanced.routes);
   }
 
   logger_->warn(
       GNR,
-      6008,
-      "NEWGR backbone-channelized result has overflow {} ; replaying baseline "
-      "to guarantee routable guides.",
-      channelized_overflow);
+      6011,
+      "NEWGR scenario not selected (scenario overflow {}), replaying baseline "
+      "to keep congestion state consistent.",
+      braided_balanced.overflow);
   ScenarioDefinition baseline_replay{"baseline-replay", nullptr, nullptr};
   ScenarioResult fallback = run_scenario(baseline_replay, snapshot);
   restore_snapshot(snapshot);
   if (!fallback.routes.empty()) {
     return std::move(fallback.routes);
   }
-  return std::move(baseline.routes);
+  if (!baseline.routes.empty()) {
+    return std::move(baseline.routes);
+  }
+  return {};
 }
 
 }  // namespace grt
