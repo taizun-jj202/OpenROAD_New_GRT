@@ -74,14 +74,14 @@ void NewgrEngine::init(const SprouteGridData& grid,
 
 NetRouteMap NewgrEngine::run()
 {
-  return runWithConfig(/*max_maze_round=*/350,
+  return runWithConfig(/*max_maze_round=*/300,
                        static_cast<int>(Algo::DetPart_Astar_Local),
                        /*warn_id=*/401);
 }
 
 NetRouteMap NewgrEngine::runWirelengthFirst()
 {
-  return runWithConfig(/*max_maze_round=*/260,
+  return runWithConfig(/*max_maze_round=*/220,
                        static_cast<int>(Algo::DetPart_Astar),
                        /*warn_id=*/402);
 }
