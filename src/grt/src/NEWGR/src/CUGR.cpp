@@ -143,14 +143,131 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   updateOverflowNets(netIndices);
 }
 
-void CUGR::route()
+void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
 {
-  std::vector<int> netIndices;
-  netIndices.reserve(gr_nets_.size());
-  for (const auto& net : gr_nets_) {
-    netIndices.push_back(net->getIndex());
+  if (!constants_.enable_wirelength_recovery || netIndices.empty()) {
+    return;
   }
 
+  struct Candidate
+  {
+    int index;
+    int hpwl;
+  };
+
+  std::vector<Candidate> candidates;
+  candidates.reserve(netIndices.size());
+  for (const int netIndex : netIndices) {
+    const auto& net = gr_nets_[netIndex];
+    const auto& tree = net->getRoutingTree();
+    if (!tree) {
+      continue;
+    }
+    const int hpwl = net->getBoundingBox().hp();
+    if (hpwl < constants_.recovery_hpwl_threshold) {
+      continue;
+    }
+    if (grid_graph_->checkOverflow(tree) > 0) {
+      continue;
+    }
+    candidates.push_back({netIndex, hpwl});
+  }
+
+  if (candidates.empty()) {
+    return;
+  }
+
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const Candidate& lhs, const Candidate& rhs) {
+              return lhs.hpwl > rhs.hpwl;
+            });
+
+  int keep = static_cast<int>(
+      std::ceil(candidates.size() * constants_.recovery_refine_ratio));
+  keep = std::max(1, std::min(keep, static_cast<int>(candidates.size())));
+
+  logger_->report("stage 4: wirelength recovery on {} / {} nets",
+                  keep,
+                  candidates.size());
+
+  auto measureRoute = [&](const std::shared_ptr<GRTreeNode>& tree) {
+    std::pair<uint64_t, int> stats{0, 0};
+    if (!tree) {
+      return stats;
+    }
+    GRTreeNode::preorder(
+        tree, [&](const std::shared_ptr<GRTreeNode>& node) {
+          for (const auto& child : node->getChildren()) {
+            if (node->getLayerIdx() == child->getLayerIdx()) {
+              const int direction
+                  = grid_graph_->getLayerDirection(node->getLayerIdx());
+              const int l = std::min((*node)[direction], (*child)[direction]);
+              const int h = std::max((*node)[direction], (*child)[direction]);
+              for (int c = l; c < h; c++) {
+                stats.first += grid_graph_->getEdgeLength(direction, c);
+              }
+            } else {
+              stats.second += abs(node->getLayerIdx() - child->getLayerIdx());
+            }
+          }
+        });
+    return stats;
+  };
+
+  auto isImprovement = [](const std::pair<uint64_t, int>& candidate_stats,
+                          const std::pair<uint64_t, int>& baseline_stats) {
+    return candidate_stats.first < baseline_stats.first
+           || (candidate_stats.first == baseline_stats.first
+               && candidate_stats.second <= baseline_stats.second);
+  };
+
+  int accepted = 0;
+  for (int candidateIndex = 0; candidateIndex < keep; candidateIndex++) {
+    const int netIndex = candidates[candidateIndex].index;
+    GRNet* net = gr_nets_[netIndex].get();
+    const std::shared_ptr<GRTreeNode> original_tree = net->getRoutingTree();
+    if (!original_tree) {
+      continue;
+    }
+    const auto original_stats = measureRoute(original_tree);
+
+    grid_graph_->commitTree(original_tree, /*ripup*/ true);
+
+    PatternRoute patternRoute(
+        net, grid_graph_.get(), stt_builder_, constants_, logger_);
+    patternRoute.constructSteinerTree();
+    patternRoute.constructRoutingDAG();
+    patternRoute.run();
+
+    const std::shared_ptr<GRTreeNode> recovered_tree = net->getRoutingTree();
+    const bool overflow_free
+        = recovered_tree && grid_graph_->checkOverflow(recovered_tree) == 0;
+    const auto recovered_stats = measureRoute(recovered_tree);
+    const bool accept
+        = overflow_free && isImprovement(recovered_stats, original_stats);
+
+    if (accept) {
+      grid_graph_->commitTree(recovered_tree);
+      accepted++;
+    } else {
+      net->setRoutingTree(original_tree);
+      grid_graph_->commitTree(original_tree);
+    }
+  }
+
+  logger_->report("wirelength recovery accepted {} reroutes.", accepted);
+}
+
+void CUGR::route()
+{
+  std::vector<int> allNetIndices;
+  allNetIndices.reserve(gr_nets_.size());
+  for (const auto& net : gr_nets_) {
+    allNetIndices.push_back(net->getIndex());
+  }
+
+  std::vector<int> netIndices = allNetIndices;
   patternRoute(netIndices);
 
   std::vector<int> detourIndices = netIndices;
@@ -166,6 +283,7 @@ void CUGR::route()
         = selectCriticalNets(detourIndices, constants_.maze_refine_ratio);
   }
   mazeRoute(mazeIndices);
+  wirelengthRecovery(allNetIndices);
 
   printStatistics();
   if (constants_.write_heatmap) {
@@ -328,7 +446,7 @@ void CUGR::sortNetIndices(std::vector<int>& netIndices) const
     halfParameters[netIndex] = net->getBoundingBox().hp();
   }
   sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
-    return halfParameters[lhs] < halfParameters[rhs];
+    return halfParameters[lhs] > halfParameters[rhs];
   });
 }
 

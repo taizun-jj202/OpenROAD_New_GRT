@@ -59,6 +59,12 @@ struct Constants
   double detour_refine_ratio = 0.90;
   double maze_refine_ratio = 0.72;
 
+  // FastRoute-style post-processing pass: reroute a subset of long,
+  // overflow-free nets and keep only wirelength-improving solutions.
+  bool enable_wirelength_recovery = true;
+  int recovery_hpwl_threshold = 96;
+  double recovery_refine_ratio = 0.35;
+
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
   double wire_patch_threshold = 2.0;
@@ -85,6 +91,7 @@ class CUGR
   void patternRoute(std::vector<int>& netIndices);
   void patternRouteWithDetours(std::vector<int>& netIndices);
   void mazeRoute(std::vector<int>& netIndices);
+  void wirelengthRecovery(const std::vector<int>& netIndices);
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
