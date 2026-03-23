@@ -89,6 +89,16 @@ RouteLayerUsage analyzeRouteLayerUsage(const GRoute& route)
   return usage;
 }
 
+uint64_t computeLowLayerWirelength(const NetRouteMap& routes)
+{
+  uint64_t low_layer_wl = 0;
+  for (const auto& [db_net, route] : routes) {
+    (void) db_net;
+    low_layer_wl += analyzeRouteLayerUsage(route).low_layer_wl;
+  }
+  return low_layer_wl;
+}
+
 uint64_t routeCostForPins(const RouteScore& score, int pin_count)
 {
   // Prioritize wirelength while keeping via count under control.
@@ -428,14 +438,14 @@ NetRouteMap buildFastRouteBackboneHybrid(const NetRouteMap& fastroute_routes,
 
   stats.candidate_pool_size = candidates.size();
   const size_t swap_limit = std::min<size_t>(
-      420, std::max<size_t>(48, fastroute_routes.size() / 190));
+      1200, std::max<size_t>(96, fastroute_routes.size() / 75));
   const int64_t total_via_drop_budget
-      = std::max<int64_t>(3600, static_cast<int64_t>(total_fastroute_vias / 22));
+      = std::max<int64_t>(6400, static_cast<int64_t>(total_fastroute_vias / 16));
   const int64_t total_via_increase_budget
-      = std::max<int64_t>(320, static_cast<int64_t>(total_fastroute_vias / 260));
+      = std::max<int64_t>(640, static_cast<int64_t>(total_fastroute_vias / 160));
   const uint64_t wl_gain_target = std::max<uint64_t>(
-      2600000, static_cast<uint64_t>(total_fastroute_wirelength / 170));
-  const size_t min_swaps_before_stop = std::max<size_t>(32, swap_limit / 2);
+      7200000, static_cast<uint64_t>(total_fastroute_wirelength / 70));
+  const size_t min_swaps_before_stop = std::max<size_t>(64, (swap_limit * 3) / 5);
   int64_t consumed_via_drop = 0;
   int64_t consumed_via_increase = 0;
   uint64_t consumed_wl_gain = 0;
@@ -553,8 +563,10 @@ bool isBetterRoute(int overflow_a,
 
 bool shouldPreferFastRouteBackboneHybrid(int fr_overflow,
                                          const RouteScore& fastroute_score,
+                                         uint64_t fastroute_low_layer_wl,
                                          int hybrid_overflow,
-                                         const RouteScore& hybrid_score)
+                                         const RouteScore& hybrid_score,
+                                         uint64_t hybrid_low_layer_wl)
 {
   if (hybrid_overflow > fr_overflow) {
     return false;
@@ -582,9 +594,65 @@ bool shouldPreferFastRouteBackboneHybrid(int fr_overflow,
   }
 
   const uint64_t wl_gain = fastroute_score.wirelength - hybrid_score.wirelength;
+  const int64_t low_layer_delta = static_cast<int64_t>(hybrid_low_layer_wl)
+                                  - static_cast<int64_t>(fastroute_low_layer_wl);
+  const int64_t low_layer_budget = std::max<int64_t>(
+      2400000, static_cast<int64_t>(fastroute_low_layer_wl / 16));
+  if (low_layer_delta > low_layer_budget
+      && wl_gain
+             < static_cast<uint64_t>(low_layer_delta * 2 + static_cast<int64_t>(260000))) {
+    return false;
+  }
   const uint64_t min_gain = std::max<uint64_t>(
       140000, fastroute_score.wirelength / 4600);
   return wl_gain >= min_gain;
+}
+
+bool shouldPreferNewgrBackboneHybrid(int incumbent_overflow,
+                                     const RouteScore& incumbent_score,
+                                     uint64_t incumbent_low_layer_wl,
+                                     int candidate_overflow,
+                                     const RouteScore& candidate_score,
+                                     uint64_t candidate_low_layer_wl)
+{
+  if (candidate_overflow > incumbent_overflow) {
+    return false;
+  }
+  if (candidate_score.routed_nets < incumbent_score.routed_nets) {
+    return false;
+  }
+  if (candidate_overflow < incumbent_overflow) {
+    return true;
+  }
+  if (candidate_score.wirelength >= incumbent_score.wirelength) {
+    return false;
+  }
+
+  const uint64_t wl_gain = incumbent_score.wirelength - candidate_score.wirelength;
+  const int64_t via_increase = static_cast<int64_t>(candidate_score.vias)
+                               - static_cast<int64_t>(incumbent_score.vias);
+  const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
+                                  - static_cast<int64_t>(incumbent_low_layer_wl);
+  const int64_t via_increase_budget
+      = std::max<int64_t>(520, static_cast<int64_t>(incumbent_score.vias / 140));
+  const int64_t low_layer_budget = std::max<int64_t>(
+      3000000, static_cast<int64_t>(incumbent_low_layer_wl / 10));
+  const uint64_t min_wl_gain = std::max<uint64_t>(
+      420000, incumbent_score.wirelength / 1200);
+  if (wl_gain < min_wl_gain) {
+    return false;
+  }
+  if (via_increase > via_increase_budget
+      && wl_gain
+             < static_cast<uint64_t>(via_increase * 1200 + static_cast<int64_t>(300000))) {
+    return false;
+  }
+  if (low_layer_delta > low_layer_budget
+      && wl_gain
+             < static_cast<uint64_t>(low_layer_delta * 2 + static_cast<int64_t>(360000))) {
+    return false;
+  }
+  return true;
 }
 
 }  // namespace
@@ -626,11 +694,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const int fastroute_overflow = grouter_->fastroute()->totalOverflow();
     const RouteScore newgr_score = computeRouteScore(routes);
     const RouteScore fastroute_score = computeRouteScore(fastroute_routes);
+    const uint64_t newgr_low_layer_wl = computeLowLayerWirelength(routes);
+    const uint64_t fastroute_low_layer_wl = computeLowLayerWirelength(fastroute_routes);
     NewgrBackboneStats newgr_backbone_stats;
     NetRouteMap newgr_backbone_hybrid = buildNewgrBackboneHybrid(
         routes, fastroute_routes, grouter_->db_net_map_, newgr_backbone_stats);
     const RouteScore newgr_backbone_score
         = computeRouteScore(newgr_backbone_hybrid);
+    const uint64_t newgr_backbone_low_layer_wl
+        = computeLowLayerWirelength(newgr_backbone_hybrid);
     FastRouteBackboneStats fastroute_backbone_stats;
     NetRouteMap fastroute_backbone_hybrid
         = buildFastRouteBackboneHybrid(fastroute_routes,
@@ -641,26 +713,31 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                        fastroute_backbone_stats);
     const RouteScore fastroute_backbone_score
         = computeRouteScore(fastroute_backbone_hybrid);
+    const uint64_t fastroute_backbone_low_layer_wl
+        = computeLowLayerWirelength(fastroute_backbone_hybrid);
 
     logger_->info(utl::GRT,
                   6006,
-                  "NEWGR candidate summary: NEWGR(ofl={}, wl={}, vias={}, nets={}), "
-                  "NEWGR_BB_HYBRID(wl={}, vias={}, nets={}, fr_swap={}, add={}), "
-                  "FR_BB_HYBRID(wl={}, vias={}, nets={}, ng_swap={}, add={}, "
+                  "NEWGR candidate summary: NEWGR(ofl={}, wl={}, vias={}, low_wl={}, nets={}), "
+                  "NEWGR_BB_HYBRID(wl={}, vias={}, low_wl={}, nets={}, fr_swap={}, add={}), "
+                  "FR_BB_HYBRID(wl={}, vias={}, low_wl={}, nets={}, ng_swap={}, add={}, "
                   "cand={}, via_guard_skip={}, layer_guard_skip={}, "
                   "swap_limit_skip={}, wl_gain={}), "
-                  "FastRoute(ofl={}, wl={}, vias={}, nets={})",
+                  "FastRoute(ofl={}, wl={}, vias={}, low_wl={}, nets={})",
                   last_total_overflow_,
                   newgr_score.wirelength,
                   newgr_score.vias,
+                  newgr_low_layer_wl,
                   newgr_score.routed_nets,
                   newgr_backbone_score.wirelength,
                   newgr_backbone_score.vias,
+                  newgr_backbone_low_layer_wl,
                   newgr_backbone_score.routed_nets,
                   newgr_backbone_stats.replaced_with_fastroute,
                   newgr_backbone_stats.added_missing_nets,
                   fastroute_backbone_score.wirelength,
                   fastroute_backbone_score.vias,
+                  fastroute_backbone_low_layer_wl,
                   fastroute_backbone_score.routed_nets,
                   fastroute_backbone_stats.replaced_with_newgr,
                   fastroute_backbone_stats.added_missing_nets,
@@ -672,12 +749,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   fastroute_overflow,
                   fastroute_score.wirelength,
                   fastroute_score.vias,
+                  fastroute_low_layer_wl,
                   fastroute_score.routed_nets);
 
     // Detailed-route QoR has been more stable when FastRoute is used as the
     // default backbone, and NEWGR/hybrid are only used as overflow fallback.
     RouteScore best_score = fastroute_score;
     int best_overflow = fastroute_overflow;
+    uint64_t best_low_layer_wl = fastroute_low_layer_wl;
     const char* selected_label = "FastRoute";
     bool selected_hybrid = false;
     uint64_t selected_swapped_nets = 0;
@@ -687,24 +766,31 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     if (shouldPreferFastRouteBackboneHybrid(fastroute_overflow,
                                             fastroute_score,
+                                            fastroute_low_layer_wl,
                                             last_total_overflow_,
-                                            fastroute_backbone_score)) {
+                                            fastroute_backbone_score,
+                                            fastroute_backbone_low_layer_wl)) {
       routes = std::move(fastroute_backbone_hybrid);
       best_score = fastroute_backbone_score;
       best_overflow = last_total_overflow_;
+      best_low_layer_wl = fastroute_backbone_low_layer_wl;
       selected_label = "FastRoute+NEWGR targeted-graft";
       selected_hybrid = true;
       selected_swapped_nets = fastroute_backbone_stats.replaced_with_newgr;
       selected_added_nets = fastroute_backbone_stats.added_missing_nets;
       used_fastroute_last_run_ = false;
-    } else if (isBetterRoute(last_total_overflow_,
-                             newgr_backbone_score,
-                             best_overflow,
-                             best_score)
-               && last_total_overflow_ < best_overflow) {
+    }
+
+    if (shouldPreferNewgrBackboneHybrid(best_overflow,
+                                        best_score,
+                                        best_low_layer_wl,
+                                        last_total_overflow_,
+                                        newgr_backbone_score,
+                                        newgr_backbone_low_layer_wl)) {
       routes = std::move(newgr_backbone_hybrid);
       best_score = newgr_backbone_score;
       best_overflow = last_total_overflow_;
+      best_low_layer_wl = newgr_backbone_low_layer_wl;
       selected_label = "NEWGR+FastRoute net-graft";
       selected_hybrid = true;
       selected_swapped_nets = newgr_backbone_stats.replaced_with_fastroute;
