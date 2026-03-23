@@ -32,7 +32,7 @@ struct Constants
   // Wirelength-first weighting to counter NEWGR's CUGR-like over-detour
   // behavior on large designs.
   double weight_wire_length = 0.9;
-  double weight_via_number = 2.8;
+  double weight_via_number = 2.5;
   double weight_short_area = 500.0;
 
   int min_routing_layer = 1;
