@@ -1055,6 +1055,130 @@ int applyAdaptiveWirelengthFusion(
   return replaced_nets;
 }
 
+int applyExtremeWirelengthFusion(
+    NetRouteMap& base_routes,
+    const std::vector<const NetRouteMap*>& donor_route_sets,
+    int tile_size,
+    int x_min,
+    int y_min,
+    int x_grids,
+    int y_grids,
+    const std::map<std::int64_t, float>& hotspot_map,
+    long min_wl_gain,
+    double min_wl_gain_ratio,
+    int base_via_slack,
+    double via_gain_scale,
+    double base_hotspot_slack)
+{
+  int replaced_nets = 0;
+  tile_size = std::max(tile_size, 1);
+  min_wl_gain = std::max(min_wl_gain, 1L);
+  min_wl_gain_ratio = std::clamp(min_wl_gain_ratio, 0.0, 1.0);
+  base_via_slack = std::max(base_via_slack, 0);
+  via_gain_scale = std::max(via_gain_scale, 0.4);
+  base_hotspot_slack = std::max(base_hotspot_slack, 0.0);
+
+  const auto compute_extreme_objective = [tile_size](const NetRouteCost& cost) {
+    // Extreme mode: keep WL as the dominant signal but still discourage
+    // pathological donor swaps with excessive vias/hotspot exposure.
+    const double via_weight = static_cast<double>(tile_size) * 0.35;
+    const double hotspot_weight = static_cast<double>(tile_size) * 0.55;
+    return static_cast<double>(cost.wirelength_dbu)
+           + via_weight * static_cast<double>(cost.via_count)
+           + hotspot_weight * cost.hotspot_exposure;
+  };
+
+  for (auto& [db_net, base_route] : base_routes) {
+    const NetRouteCost base_cost = computeNetRouteCost(base_route,
+                                                       tile_size,
+                                                       x_min,
+                                                       y_min,
+                                                       x_grids,
+                                                       y_grids,
+                                                       hotspot_map);
+    const GRoute* chosen_route = &base_route;
+    NetRouteCost chosen_cost = base_cost;
+    double chosen_objective = compute_extreme_objective(base_cost);
+
+    for (const NetRouteMap* donor_routes : donor_route_sets) {
+      if (donor_routes == nullptr) {
+        continue;
+      }
+      const auto donor_it = donor_routes->find(db_net);
+      if (donor_it == donor_routes->end()) {
+        continue;
+      }
+
+      const NetRouteCost donor_cost = computeNetRouteCost(donor_it->second,
+                                                          tile_size,
+                                                          x_min,
+                                                          y_min,
+                                                          x_grids,
+                                                          y_grids,
+                                                          hotspot_map);
+      const long wl_gain_from_base
+          = base_cost.wirelength_dbu - donor_cost.wirelength_dbu;
+      if (wl_gain_from_base < min_wl_gain) {
+        continue;
+      }
+
+      const double wl_gain_ratio
+          = static_cast<double>(wl_gain_from_base)
+            / static_cast<double>(std::max(base_cost.wirelength_dbu, 1L));
+      const bool has_meaningful_gain
+          = wl_gain_ratio >= min_wl_gain_ratio
+            || wl_gain_from_base >= (2 * min_wl_gain);
+      if (!has_meaningful_gain) {
+        continue;
+      }
+
+      const int wl_bonus_via_slack = static_cast<int>(
+          static_cast<double>(wl_gain_from_base)
+          / static_cast<double>(std::max(
+              static_cast<int>(std::round(via_gain_scale * tile_size)), 1)));
+      const int large_gain_bonus = (wl_gain_from_base >= (12 * tile_size)) ? 2 : 0;
+      const int allowed_vias
+          = base_cost.via_count + base_via_slack + wl_bonus_via_slack + large_gain_bonus;
+      if (donor_cost.via_count > allowed_vias) {
+        continue;
+      }
+
+      const double wl_bonus_hotspot
+          = static_cast<double>(wl_gain_from_base)
+            / static_cast<double>(std::max(10 * tile_size, 1));
+      const double allowed_hotspot
+          = base_cost.hotspot_exposure + base_hotspot_slack + wl_bonus_hotspot;
+      if (donor_cost.hotspot_exposure > allowed_hotspot) {
+        continue;
+      }
+
+      const double donor_objective = compute_extreme_objective(donor_cost);
+      const bool wl_strictly_better
+          = donor_cost.wirelength_dbu
+            < (chosen_cost.wirelength_dbu - std::max<long>(1, min_wl_gain / 2));
+      const bool wl_not_worse
+          = donor_cost.wirelength_dbu <= chosen_cost.wirelength_dbu;
+      const bool objective_better
+          = donor_objective + (0.05 * static_cast<double>(tile_size))
+            < chosen_objective;
+      if (!wl_strictly_better && !(wl_not_worse && objective_better)) {
+        continue;
+      }
+
+      chosen_route = &donor_it->second;
+      chosen_cost = donor_cost;
+      chosen_objective = donor_objective;
+    }
+
+    if (chosen_route != &base_route) {
+      base_route = *chosen_route;
+      replaced_nets++;
+    }
+  }
+
+  return replaced_nets;
+}
+
 void applyCugrStyleGuidePatching(GlobalRouter* grouter,
                                  NetRouteMap& routes,
                                  int min_routing_layer,
@@ -1924,10 +2048,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                            return lhs.metrics.via_count < rhs.metrics.via_count;
                          });
 
-  if (best_wirelength_iter != scenario_results.end()) {
+  const bool has_best_wirelength = best_wirelength_iter != scenario_results.end();
+  std::string best_wirelength_name;
+  NetRouteMap best_wirelength_routes;
+  if (has_best_wirelength) {
+    best_wirelength_name = best_wirelength_iter->name;
+    best_wirelength_routes = best_wirelength_iter->routes;
+  }
+
+  if (has_best_wirelength) {
     ScenarioResult fusion;
     fusion.name = "cross-router-wirelength-fusion";
-    fusion.routes = best_wirelength_iter->routes;
+    fusion.routes = best_wirelength_routes;
 
     const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
     const int x_min = grouter_->grid_->getXMin();
@@ -1938,7 +2070,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     std::vector<const NetRouteMap*> donors;
     donors.reserve(scenario_results.size());
     for (const ScenarioResult& result : scenario_results) {
-      if (result.name == fusion.name || result.name == best_wirelength_iter->name) {
+      if (result.name == fusion.name || result.name == best_wirelength_name) {
         continue;
       }
       donors.push_back(&result.routes);
@@ -1990,10 +2122,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(fusion));
   }
 
-  if (best_wirelength_iter != scenario_results.end()) {
+  if (has_best_wirelength) {
     ScenarioResult radical;
     radical.name = "radical-shortpath-fusion";
-    radical.routes = best_wirelength_iter->routes;
+    radical.routes = best_wirelength_routes;
 
     const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
     const int x_min = grouter_->grid_->getXMin();
@@ -2004,7 +2136,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     std::vector<const NetRouteMap*> donors;
     donors.reserve(scenario_results.size());
     for (const ScenarioResult& result : scenario_results) {
-      if (result.name == radical.name || result.name == best_wirelength_iter->name) {
+      if (result.name == radical.name || result.name == best_wirelength_name) {
         continue;
       }
       donors.push_back(&result.routes);
@@ -2058,13 +2190,91 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(radical));
   }
 
+  if (has_best_wirelength) {
+    ScenarioResult extreme;
+    extreme.name = "extreme-wirelength-stitch";
+    if (ScenarioResult* radical = find_scenario_result("radical-shortpath-fusion")) {
+      extreme.routes = radical->routes;
+    } else if (ScenarioResult* cross = find_scenario_result("cross-router-wirelength-fusion")) {
+      extreme.routes = cross->routes;
+    } else {
+      extreme.routes = best_wirelength_routes;
+    }
+
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+
+    std::vector<const NetRouteMap*> donors;
+    donors.reserve(scenario_results.size());
+    for (const ScenarioResult& result : scenario_results) {
+      if (result.name == extreme.name) {
+        continue;
+      }
+      donors.push_back(&result.routes);
+    }
+
+    int fused_swaps = applyExtremeWirelengthFusion(extreme.routes,
+                                                   donors,
+                                                   tile_size,
+                                                   x_min,
+                                                   y_min,
+                                                   x_grids,
+                                                   y_grids,
+                                                   hotspot_map,
+                                                   std::max(tile_size / 8, 1),
+                                                   0.0035,
+                                                   8,
+                                                   2.40,
+                                                   0.85);
+
+    std::vector<const NetRouteMap*> specialist_donors;
+    specialist_donors.reserve(6);
+    for (const char* donor_name : {"cugr-router-donor",
+                                   "sproute-router-donor",
+                                   "radical-shortpath-fusion",
+                                   "cross-router-wirelength-fusion",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        specialist_donors.push_back(&donor->routes);
+      }
+    }
+
+    fused_swaps += applyExtremeWirelengthFusion(extreme.routes,
+                                                specialist_donors,
+                                                tile_size,
+                                                x_min,
+                                                y_min,
+                                                x_grids,
+                                                y_grids,
+                                                hotspot_map,
+                                                1,
+                                                0.0,
+                                                12,
+                                                1.70,
+                                                1.60);
+
+    extreme.metrics = compute_metrics(extreme.routes);
+    logger_->info(GNR,
+                  6018,
+                  "NEWGR scenario {} [radical]: wirelength {:.0f} um, vias {}, fused nets {}",
+                  extreme.name,
+                  extreme.metrics.wirelength_um,
+                  extreme.metrics.via_count,
+                  fused_swaps);
+    scenario_results.push_back(std::move(extreme));
+  }
+
   const long baseline_vias = baseline.metrics.via_count;
   auto better_result = [baseline_vias](const ScenarioResult& lhs,
                                        const ScenarioResult& rhs) {
     const long lhs_wl = lhs.metrics.wirelength_dbu;
     const long rhs_wl = rhs.metrics.wirelength_dbu;
     const long wl_tie_window
-        = std::max<long>(7000, std::max(lhs_wl, rhs_wl) / 50000);
+        = std::max<long>(4500, std::max(lhs_wl, rhs_wl) / 70000);
     const long wl_delta = lhs_wl > rhs_wl ? lhs_wl - rhs_wl : rhs_wl - lhs_wl;
     if (wl_delta > wl_tie_window) {
       return lhs_wl < rhs_wl;
@@ -2072,7 +2282,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     if (baseline_vias > 0) {
       const long max_reasonable_via
-          = static_cast<long>(std::ceil(1.35 * baseline_vias));
+          = static_cast<long>(std::ceil(1.32 * baseline_vias));
       const bool lhs_via_high = lhs.metrics.via_count > max_reasonable_via;
       const bool rhs_via_high = rhs.metrics.via_count > max_reasonable_via;
       if (lhs_via_high != rhs_via_high) {
