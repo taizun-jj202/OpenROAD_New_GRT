@@ -79,6 +79,7 @@ struct Constants
   bool enable_wirelength_recovery = true;
   bool recovery_use_maze = true;
   bool recovery_use_wirelength_maze = true;
+  double recovery_wl_maze_via_cost_scale = 0.45;
   int recovery_wl_only_hpwl_threshold = 120;
   int recovery_hpwl_threshold = 64;
   double recovery_refine_ratio = 0.97;

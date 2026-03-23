@@ -686,6 +686,8 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         if (enable_wl_only_maze) {
           GridGraphView<CostT> recoveryWlOnlyView;
           grid_graph_->extractWireLengthCostView(recoveryWlOnlyView);
+          const double wl_via_cost_scale
+              = std::clamp(constants_.recovery_wl_maze_via_cost_scale, 0.0, 1.0);
           const int wl_config_count = std::min(static_cast<int>(maze_configs.size()),
                                                deep_search ? 10 : 4);
           for (int cfg_index = 0; cfg_index < wl_config_count; cfg_index++) {
@@ -693,7 +695,8 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
             MazeRoute wlMazeRoute(net, grid_graph_.get(), logger_);
             SparseGrid wlGrid(
                 cfg.sparse_x, cfg.sparse_y, cfg.offset_x, cfg.offset_y);
-            wlMazeRoute.constructSparsifiedGraph(recoveryWlOnlyView, wlGrid);
+            wlMazeRoute.constructSparsifiedGraph(
+                recoveryWlOnlyView, wlGrid, wl_via_cost_scale);
             wlMazeRoute.run();
             if (const std::shared_ptr<SteinerTreeNode> wl_tree
                 = wlMazeRoute.getSteinerTree()) {

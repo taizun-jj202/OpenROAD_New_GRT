@@ -45,7 +45,9 @@ class SparseGraph
   {
   }
 
-  void init(const GridGraphView<CostT>& wire_cost_view, const SparseGrid& grid);
+  void init(const GridGraphView<CostT>& wire_cost_view,
+            const SparseGrid& grid,
+            double via_cost_scale = 1.0);
   int getNumVertices() const { return vertices_.size(); }
   int getNumPseudoPins() const { return pseudo_pins_.size(); }
   AccessPoint getPseudoPin(int pin_index) const
@@ -91,6 +93,7 @@ class SparseGraph
   std::vector<std::array<CostT, 3>> costs_;
   robin_hood::unordered_map<int, int> vertex_pin_;
   std::vector<int> pin_vertex_;
+  double via_cost_scale_ = 1.0;
 };
 
 struct Solution
@@ -115,9 +118,10 @@ class MazeRoute
 
   void run();
   void constructSparsifiedGraph(const GridGraphView<CostT>& wire_cost_view,
-                                const SparseGrid& grid)
+                                const SparseGrid& grid,
+                                double via_cost_scale = 1.0)
   {
-    graph_.init(wire_cost_view, grid);
+    graph_.init(wire_cost_view, grid, via_cost_scale);
   }
   std::shared_ptr<SteinerTreeNode> getSteinerTree() const;
 
