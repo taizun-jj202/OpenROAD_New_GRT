@@ -69,39 +69,93 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   pxs.emplace_back(std::clamp(box.cx(), 0, xSize - 1));
   pys.emplace_back(std::clamp(box.cy(), 0, ySize - 1));
 
-  std::sort(pxs.begin(), pxs.end());
-  std::sort(pys.begin(), pys.end());
+  // CUGR-style coarse-to-fine corridor search: bound sparse-graph expansion to
+  // each net neighborhood to suppress long global detours.
+  const int pins = std::max(2, net_->getNumPins());
+  const int hp = std::max(1, box.hp());
+  int margin = std::clamp(hp / (pins >= 10 ? 7 : 5), 8, 72);
+  if (pins <= 3) {
+    margin = std::max(margin, 14);
+  }
+  margin += std::max(grid.interval.x(), grid.interval.y());
+  int xLow = std::max(0, box.lx() - margin);
+  int xHigh = std::min(xSize - 1, box.hx() + margin);
+  int yLow = std::max(0, box.ly() - margin);
+  int yHigh = std::min(ySize - 1, box.hy() + margin);
 
-  xs_.reserve(xSize / grid.interval.x() + pxs.size());
-  ys_.reserve(ySize / grid.interval.y() + pys.size());
-  for (int i = 0, j = 0; true; i++) {
-    const int x = i * grid.interval.x() + grid.offset.x();
-    for (; j < pxs.size() && pxs[j] <= x; j++) {
-      if ((!xs_.empty() && pxs[j] == xs_.back()) || pxs[j] == x) {
-        continue;
-      }
-      xs_.emplace_back(pxs[j]);
-    }
-    if (x < xSize) {
-      xs_.emplace_back(x);
-    } else {
-      break;
+  if (oldTree) {
+    int treeXL = xSize - 1;
+    int treeXH = 0;
+    int treeYL = ySize - 1;
+    int treeYH = 0;
+    GRTreeNode::preorder(
+        oldTree, [&](const std::shared_ptr<GRTreeNode>& node) {
+          treeXL = std::min(treeXL, node->x());
+          treeXH = std::max(treeXH, node->x());
+          treeYL = std::min(treeYL, node->y());
+          treeYH = std::max(treeYH, node->y());
+        });
+    const int treePadding = std::max(4, margin / 3);
+    xLow = std::min(xLow, std::max(0, treeXL - treePadding));
+    xHigh = std::max(xHigh, std::min(xSize - 1, treeXH + treePadding));
+    yLow = std::min(yLow, std::max(0, treeYL - treePadding));
+    yHigh = std::max(yHigh, std::min(ySize - 1, treeYH + treePadding));
+  }
+
+  if (xLow == xHigh) {
+    if (xHigh + 1 < xSize) {
+      xHigh += 1;
+    } else if (xLow > 0) {
+      xLow -= 1;
     }
   }
-  for (int i = 0, j = 0; true; i++) {
-    const int y = i * grid.interval.y() + grid.offset.y();
-    for (; j < pys.size() && pys[j] <= y; j++) {
-      if ((!ys_.empty() && pys[j] == ys_.back()) || pys[j] == y) {
-        continue;
-      }
-      ys_.emplace_back(pys[j]);
-    }
-    if (y < ySize) {
-      ys_.emplace_back(y);
-    } else {
-      break;
+  if (yLow == yHigh) {
+    if (yHigh + 1 < ySize) {
+      yHigh += 1;
+    } else if (yLow > 0) {
+      yLow -= 1;
     }
   }
+
+  auto buildSparseAxis = [](std::vector<int>& axis,
+                            const std::vector<int>& pinCoords,
+                            int low,
+                            int high,
+                            int interval,
+                            int offset) {
+    std::vector<int> coords;
+    coords.reserve(pinCoords.size() + 16);
+    for (const int c : pinCoords) {
+      if (c >= low && c <= high) {
+        coords.push_back(c);
+      }
+    }
+    coords.push_back(low);
+    coords.push_back(high);
+    coords.push_back((low + high) / 2);
+    if (high - low > 2 * interval) {
+      coords.push_back(std::clamp(low + interval, low, high));
+      coords.push_back(std::clamp(high - interval, low, high));
+    }
+
+    const int first = (low - offset + interval - 1) / interval;
+    const int last = (high - offset) / interval;
+    for (int i = first; i <= last; i++) {
+      const int c = i * interval + offset;
+      if (c >= low && c <= high) {
+        coords.push_back(c);
+      }
+    }
+
+    std::sort(coords.begin(), coords.end());
+    coords.erase(std::unique(coords.begin(), coords.end()), coords.end());
+    axis.swap(coords);
+  };
+
+  buildSparseAxis(
+      xs_, pxs, xLow, xHigh, grid.interval.x(), grid.offset.x());
+  buildSparseAxis(
+      ys_, pys, yLow, yHigh, grid.interval.y(), grid.offset.y());
 
   // 2. Add vertices
   vertices_.reserve(2 * xs_.size() * ys_.size());

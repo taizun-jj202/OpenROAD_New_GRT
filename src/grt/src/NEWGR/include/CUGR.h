@@ -87,6 +87,7 @@ class CUGR
   void wirelengthRecovery();
   void finalPatternTighten();
   void globalCompaction();
+  void strictWirelengthCompaction();
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
