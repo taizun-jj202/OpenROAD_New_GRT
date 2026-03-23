@@ -713,6 +713,7 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
   if (core == nullptr || grouter->grid() == nullptr) {
     return;
   }
+  const int tile_size = std::max(grouter->grid()->getTileSize(), 1);
 
   core->computeCongestionInformation();
 
@@ -741,7 +742,7 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
       const float usage_ratio
           = static_cast<float>(usage) / static_cast<float>(capacity);
 
-      if (usage_ratio < 0.92f && overflow == 0) {
+      if (usage_ratio < 0.60f && overflow == 0) {
         continue;
       }
 
@@ -764,13 +765,14 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
         return lhs.severity > rhs.severity;
       });
 
-  const int edge_budget = 160;
+  const int edge_budget = 220;
   const int sources_per_edge = 3;
   const int patches_per_net = 10;
-  const int total_patch_budget = 1000;
+  const int total_patch_budget = 2200;
 
   int patched_edges = 0;
   int added_segments = 0;
+  int congestion_added_segments = 0;
   std::map<odb::dbNet*, int> per_net_patch_count;
 
   for (const CongestionPatchCandidate& candidate : candidates) {
@@ -843,6 +845,7 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
           = static_cast<int>(route.size() - route_size_before);
       if (new_segments > 0) {
         added_segments += new_segments;
+        congestion_added_segments += new_segments;
         net_budget++;
         source_count++;
         edge_patched = true;
@@ -854,11 +857,92 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
     }
   }
 
+  // CUGR-inspired long segment patching: add nearby adjacent-layer guide
+  // alternatives for long wires to reduce detailed-route detours.
+  const int long_seg_threshold = 3 * tile_size;
+  const int long_seg_patches_per_net = 5;
+  const int long_seg_segment_budget = 1400;
+  int long_seg_added_segments = 0;
+  std::map<odb::dbNet*, int> long_seg_patch_count;
+
+  for (auto& [db_net, route] : routes) {
+    if (added_segments >= total_patch_budget
+        || long_seg_added_segments >= long_seg_segment_budget) {
+      break;
+    }
+    int& net_budget = long_seg_patch_count[db_net];
+    if (net_budget >= long_seg_patches_per_net) {
+      continue;
+    }
+
+    const GRoute original_route = route;
+    for (const GSegment& base : original_route) {
+      if (added_segments >= total_patch_budget
+          || long_seg_added_segments >= long_seg_segment_budget
+          || net_budget >= long_seg_patches_per_net) {
+        break;
+      }
+      if (base.isVia() || base.length() < long_seg_threshold) {
+        continue;
+      }
+      if (base.init_layer != base.final_layer) {
+        continue;
+      }
+
+      const int base_layer = base.init_layer;
+      if (base_layer < min_routing_layer || base_layer > max_routing_layer) {
+        continue;
+      }
+      const int alt_layer = (base_layer < max_routing_layer) ? base_layer + 1
+                                                              : base_layer - 1;
+      if (alt_layer < min_routing_layer || alt_layer > max_routing_layer
+          || alt_layer == base_layer) {
+        continue;
+      }
+
+      const int low_layer = std::min(base_layer, alt_layer);
+      const int high_layer = std::max(base_layer, alt_layer);
+      const size_t route_size_before = route.size();
+
+      appendUniqueRouteSegment(route,
+                               GSegment(base.init_x,
+                                        base.init_y,
+                                        alt_layer,
+                                        base.final_x,
+                                        base.final_y,
+                                        alt_layer));
+      appendUniqueRouteSegment(route,
+                               GSegment(base.init_x,
+                                        base.init_y,
+                                        low_layer,
+                                        base.init_x,
+                                        base.init_y,
+                                        high_layer));
+      appendUniqueRouteSegment(route,
+                               GSegment(base.final_x,
+                                        base.final_y,
+                                        low_layer,
+                                        base.final_x,
+                                        base.final_y,
+                                        high_layer));
+
+      const int new_segments
+          = static_cast<int>(route.size() - route_size_before);
+      if (new_segments > 0) {
+        added_segments += new_segments;
+        long_seg_added_segments += new_segments;
+        net_budget++;
+      }
+    }
+  }
+
   if (logger != nullptr && added_segments > 0) {
     logger->info(GNR,
                  6009,
-                 "NEWGR patching: added {} guide segments across {} hotspots",
+                 "NEWGR patching: added {} guide segments (congestion {}, long-segment {}) across {} hotspots",
                  added_segments,
+                 congestion_added_segments,
+                 long_seg_added_segments,
                  patched_edges);
   }
 }
