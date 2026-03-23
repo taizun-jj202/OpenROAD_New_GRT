@@ -3278,6 +3278,50 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   applyViaExcursionCollapse(radical_hyper.routes, std::max(5 * tile_size, 1));
   radical_hyper.metrics = compute_metrics(radical_hyper.routes);
 
+  // Axial-force scenario: rebuild almost every eligible net through
+  // median/portal/trunk structures to escape compact-route fixed points.
+  ScenarioResult axial_force = compact;
+  axial_force.name = "axial_force";
+  applyMedianSpineRebuild(
+      axial_force.routes, 3, 100, min_routing_layer, max_routing_layer);
+  applyQuadrantPortalHypergraphRebuild(grouter_,
+                                       axial_force.routes,
+                                       baseline_rudy,
+                                       3,
+                                       4096,
+                                       100,
+                                       min_routing_layer,
+                                       max_routing_layer);
+  applyGlobalPortalRebuild(grouter_,
+                           axial_force.routes,
+                           baseline_rudy,
+                           3,
+                           100,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyRmstTrunkRebuild(grouter_,
+                        axial_force.routes,
+                        baseline_rudy,
+                        3,
+                        4096,
+                        100,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyBipolarPortalBackboneRebuild(grouter_,
+                                    axial_force.routes,
+                                    baseline_rudy,
+                                    3,
+                                    4096,
+                                    100,
+                                    min_routing_layer,
+                                    max_routing_layer);
+  applyAggressiveDoglegShortcuts(axial_force.routes,
+                                 std::max(42 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(axial_force.routes, std::max(8 * tile_size, 1));
+  applyViaExcursionCollapse(axial_force.routes, std::max(4 * tile_size, 1));
+  axial_force.metrics = compute_metrics(axial_force.routes);
+
   struct CandidateEntry
   {
     const char* name;
@@ -3289,7 +3333,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       {"shortcut", &shortcut},
       {"anisotropic", &anisotropic},
       {"wirehunter", &wirelength_hunter},
-      {"radical_hyper", &radical_hyper}};
+      {"radical_hyper", &radical_hyper},
+      {"axial_force", &axial_force}};
   if (sculpted_available) {
     candidates.push_back({"sculpted", &sculpted});
   }
@@ -3305,12 +3350,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   };
 
   auto scenario_admissible = [&](const ScenarioResult& scenario) {
+    if (scenario.routes.empty()) {
+      return false;
+    }
     const bool wl_guard
         = static_cast<double>(scenario.metrics.wirelength_dbu)
-          <= static_cast<double>(baseline.metrics.wirelength_dbu) * 1.28;
+          <= static_cast<double>(baseline.metrics.wirelength_dbu) * 3.00;
     const bool via_guard
         = static_cast<double>(scenario.metrics.via_count)
-          <= static_cast<double>(baseline.metrics.via_count) * 1.90;
+          <= static_cast<double>(baseline.metrics.via_count) * 4.00;
     return wl_guard && via_guard;
   };
 
@@ -3323,11 +3371,29 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const long wl_cap
         = std::max(ref_wl + static_cast<long>(8 * tile_size),
                    static_cast<long>(
-                       std::ceil(static_cast<double>(ref_wl) * 1.55)));
+                       std::ceil(static_cast<double>(ref_wl) * 2.80)));
     const long via_cap
         = std::max(ref_vias + 8L,
                    static_cast<long>(
-                       std::ceil(static_cast<double>(ref_vias) * 2.80 + 4.0)));
+                       std::ceil(static_cast<double>(ref_vias) * 5.00 + 8.0)));
+    return cand_wl <= wl_cap && cand_vias <= via_cap;
+  };
+
+  auto route_admissible_relaxed = [&](const GRoute& candidate,
+                                      const GRoute& reference) {
+    const auto [cand_wl, cand_vias] = route_stats(candidate);
+    const auto [ref_wl, ref_vias] = route_stats(reference);
+    if (ref_wl <= 0) {
+      return true;
+    }
+    const long wl_cap
+        = std::max(ref_wl + static_cast<long>(12 * tile_size),
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_wl) * 1.85)));
+    const long via_cap
+        = std::max(ref_vias + 16L,
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_vias) * 3.40 + 8.0)));
     return cand_wl <= wl_cap && cand_vias <= via_cap;
   };
 
@@ -3344,6 +3410,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   selected = compact;
   selected.name = "deterministic_tournament";
   std::vector<long> tournament_picks(candidates.size(), 0);
+  long axial_forced_nets = 0;
 
   for (const auto& [db_net, base_route] : compact.routes) {
     const GRoute* best_route = &base_route;
@@ -3396,6 +3463,60 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
   selected.metrics = compute_metrics(selected.routes);
 
+  // Force a second-pass axial replacement on complex nets so the run
+  // can break out of compact-route local minima.
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto axial_it = axial_force.routes.find(db_net);
+    if (axial_it == axial_force.routes.end()) {
+      continue;
+    }
+    const GRoute& axial_route = axial_it->second;
+    if (!has_planar_guide(axial_route)) {
+      continue;
+    }
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+    if (node_count < 2) {
+      continue;
+    }
+    if (!route_admissible_relaxed(axial_route, current_route)) {
+      continue;
+    }
+
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const auto [base_wl, base_vias] = route_stats(current_route);
+    const auto [axial_wl, axial_vias] = route_stats(axial_route);
+    const double base_score = route_objective(current_route, selected.overflow);
+    const double axial_score
+        = route_objective(axial_route, axial_force.overflow);
+
+    bool use_axial = axial_wl < static_cast<long>(base_wl * 0.985);
+    if (!use_axial
+        && axial_score <= base_score * (node_count >= 14 ? 1.10 : 1.06)) {
+      use_axial = (key % 3ULL) == 0ULL;
+    }
+    if (!use_axial && node_count >= 16
+        && axial_wl <= static_cast<long>(base_wl * 1.22)
+        && axial_vias <= static_cast<long>(base_vias * 2.90 + 6)) {
+      use_axial = (key % 2ULL) == 0ULL;
+    }
+    if (!use_axial && node_count >= 2
+        && axial_wl <= static_cast<long>(base_wl * 2.50)
+        && axial_vias <= static_cast<long>(base_vias * 6.00 + 20)) {
+      use_axial = (key % 5ULL) == 0ULL;
+    }
+
+    if (use_axial) {
+      selected.routes[db_net] = axial_route;
+      axial_forced_nets++;
+    }
+  }
+  if (axial_forced_nets > 0) {
+    selected.name += "+axial_force";
+    selected.metrics = compute_metrics(selected.routes);
+  }
+
   ScenarioResult stabilized = selected;
   stabilized.name = "stabilized_radical_hyper";
   applyQuadrantPortalHypergraphRebuild(grouter_,
@@ -3422,9 +3543,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Final safeguard to prevent catastrophic regressions.
   const bool catastrophic
       = static_cast<double>(selected.metrics.wirelength_dbu)
-            > static_cast<double>(baseline.metrics.wirelength_dbu) * 1.35
+            > static_cast<double>(baseline.metrics.wirelength_dbu) * 3.50
         || static_cast<double>(selected.metrics.via_count)
-               > static_cast<double>(baseline.metrics.via_count) * 2.10;
+               > static_cast<double>(baseline.metrics.via_count) * 6.00;
   if (catastrophic) {
     selected = compact;
     selected.name = "catastrophic_fallback_compact";
@@ -3450,21 +3571,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   logger_->warn(GNR,
                 6033,
                 "NEWGR tournament picks: compact {} shortcut {} anisotropic {} "
-                "wirehunter {} radical_hyper {} sculpted {}.",
+                "wirehunter {} radical_hyper {} axial_force {} sculpted {}.",
                 tournament_picks.size() > 0 ? tournament_picks[0] : 0,
                 tournament_picks.size() > 1 ? tournament_picks[1] : 0,
                 tournament_picks.size() > 2 ? tournament_picks[2] : 0,
                 tournament_picks.size() > 3 ? tournament_picks[3] : 0,
                 tournament_picks.size() > 4 ? tournament_picks[4] : 0,
-                tournament_picks.size() > 5 ? tournament_picks[5] : 0);
+                tournament_picks.size() > 5 ? tournament_picks[5] : 0,
+                tournament_picks.size() > 6 ? tournament_picks[6] : 0);
   logger_->warn(GNR,
                 6034,
                 "NEWGR blend counters: sculpted {} shortcuts {} anisotropic {} "
-                "wirehunter {}.",
+                "wirehunter {} axial_force {}.",
                 nets_taken_from_sculpted,
                 nets_taken_from_shortcuts,
                 nets_taken_from_anisotropic,
-                nets_taken_from_wirelength_hunter);
+                nets_taken_from_wirelength_hunter,
+                axial_forced_nets);
 
   restore_snapshot(snapshot);
   return selected.routes;
