@@ -4390,8 +4390,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           28L,
           static_cast<long>(std::ceil(
               static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00010)));
-      const long via_gain_floor = std::max<long>(120L, tile_size * 5L);
-      const long via_trade_guard = std::max<long>(64L, tile_size * 3L);
+      const long via_gain_floor = std::max<long>(
+          120L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.0012)));
+      const long via_trade_guard = std::max<long>(
+          64L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.0010)));
 
       const ScenarioResult* pareto_upgrade = nullptr;
       for (const ScenarioResult* candidate : wl_champion_pool) {
@@ -4461,12 +4467,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           static_cast<long>(std::ceil(
               static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00010)));
       const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
-      const long base_via_guard = std::max<long>(120L, tile_size * 5L);
+      const long base_via_guard = std::max<long>(
+          120L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.0013)));
       const long wl_scaled_via_credit = std::max<long>(
           0L,
           static_cast<long>(std::ceil(
-              static_cast<double>(std::max(0L, wl_gain)) * 0.0012)));
-      const long via_guard = std::max<long>(base_via_guard, 220L + wl_scaled_via_credit);
+              static_cast<double>(std::max(0L, wl_gain)) * 0.00004)));
+      const long via_guard
+          = std::max<long>(base_via_guard, 160L + wl_scaled_via_credit);
       const bool via_guard_ok
           = forced_wl_ptr->metrics.via_count <= wl_anchor->metrics.via_count + via_guard;
       const long detour_guard = std::max<long>(tile_size * 20L, 10000L);
@@ -4491,7 +4501,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const bool proxy_dominant_upgrade
           = wl_gain >= 0 && via_guard_ok && via_drop_guard_ok && structural_guard
             && challenger_proxy + 1e-3 < anchor_proxy * 1.010;
-      const long via_gain_floor = std::max<long>(120L, tile_size * 5L);
+      const long via_gain_floor = std::max<long>(
+          120L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.0012)));
       const bool via_dominant_upgrade
           = wl_gain >= 0
             && forced_wl_ptr->metrics.via_count + via_gain_floor
@@ -4617,9 +4630,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = static_cast<long>(via_floor_ptr->metrics.via_count)
             - static_cast<long>(wl_anchor->metrics.via_count);
       const long max_via_rise = std::max<long>(
-          420L,
+          160L,
           static_cast<long>(std::ceil(
-              static_cast<double>(wl_anchor->metrics.via_count) * 0.0045)));
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.0018)));
       const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
       const long detour_guard = std::max<long>(tile_size * 14L, 7000L);
       const long high_layer_guard = std::max<long>(
