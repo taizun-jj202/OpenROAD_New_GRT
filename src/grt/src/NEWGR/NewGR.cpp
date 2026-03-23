@@ -101,11 +101,11 @@ double estimateDetailedRouteProxyCost(const RouteMetrics& metrics)
   // 2) penalize guide detour and upper-layer drift (detail-route stability);
   // 3) softly penalize via-heavy choices;
   // 4) keep overflow terms dominant whenever present.
-  const double via_term = static_cast<double>(metrics.via_count) * 0.65;
-  const double detour_term = static_cast<double>(metrics.detour_dbu) * 0.0020;
+  const double via_term = static_cast<double>(metrics.via_count) * 0.72;
+  const double detour_term = static_cast<double>(metrics.detour_dbu) * 0.0016;
   const double high_layer_term
-      = static_cast<double>(metrics.high_layer_dbu) * 0.00003;
-  const double span_term = static_cast<double>(metrics.layer_span_sum) * 3.0;
+      = static_cast<double>(metrics.high_layer_dbu) * 0.00010;
+  const double span_term = static_cast<double>(metrics.layer_span_sum) * 4.0;
   const double hotspot_term
       = static_cast<double>(metrics.near_capacity_edges) * 12.0;
   const double overflow_term = static_cast<double>(metrics.overflow_edges) * 2000.0
@@ -496,11 +496,6 @@ bool parsePerturbScenarioName(const std::string& name,
   }
   perturb_pct = static_cast<float>(perturb_x10) / 10.0f;
   return true;
-}
-
-bool isWirelengthPriorityScenario(const std::string& name)
-{
-  return name == "hybrid-netmix-wl" || name == "hybrid-netmix-ultra-wl";
 }
 
 int getSoftCapacityForEdge(uint64_t key,
@@ -1581,6 +1576,228 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     };
 
+    auto append_pareto_softcap_hybrid = [&](const std::string& hybrid_name,
+                                            int source_count,
+                                            long via_weight,
+                                            int logger_code) {
+      source_count = std::max(1, std::min(source_count, static_cast<int>(ranked.size())));
+      ScenarioResult hybrid_result;
+      hybrid_result.name = hybrid_name;
+
+      FastRouteCore* core = grouter_->fastroute();
+      if (core == nullptr || hybrid_nets.empty()) {
+        return;
+      }
+
+      struct CandidateRoute
+      {
+        const GRoute* route = nullptr;
+        RouteEdgeStats stats;
+      };
+
+      // Mix of FastRoute shortest-path preference and SPRoute soft-cap
+      // pressure: use a per-net Pareto gate first, then pick the candidate
+      // with lowest soft-capacity incremental penalty.
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      const double overflow_weight = static_cast<double>(tile_size) * 40.0;
+      const double near_weight = static_cast<double>(tile_size) * 0.60;
+      const double high_layer_weight = 0.035;
+      const double layer_span_weight = static_cast<double>(tile_size) * 0.55;
+      std::unordered_map<uint64_t, int> edge_usage;
+      std::unordered_map<uint64_t, int> softcap_cache;
+      edge_usage.reserve(1 << 20);
+      softcap_cache.reserve(1 << 20);
+      double total_soft_penalty = 0.0;
+      int pareto_hits = 0;
+
+      std::vector<odb::dbNet*> ordered_nets = hybrid_nets;
+      std::unordered_map<odb::dbNet*, long> best_wl_per_net;
+      best_wl_per_net.reserve(ordered_nets.size());
+      for (odb::dbNet* db_net : ordered_nets) {
+        if (db_net == nullptr) {
+          continue;
+        }
+        long best_wl = std::numeric_limits<long>::max();
+        for (int idx = 0; idx < source_count; ++idx) {
+          const ScenarioResult* source = ranked[idx];
+          if (source == nullptr) {
+            continue;
+          }
+          const auto route_it = source->routes.find(db_net);
+          if (route_it == source->routes.end()) {
+            continue;
+          }
+          const RouteEdgeStats stats
+              = collectRouteEdgeStats(route_it->second, grouter_->grid_);
+          best_wl = std::min(best_wl, stats.wirelength_dbu);
+        }
+        best_wl_per_net.emplace(db_net, best_wl);
+      }
+      std::sort(ordered_nets.begin(),
+                ordered_nets.end(),
+                [&](odb::dbNet* lhs, odb::dbNet* rhs) {
+                  const auto lhs_it = best_wl_per_net.find(lhs);
+                  const auto rhs_it = best_wl_per_net.find(rhs);
+                  const long lhs_wl = lhs_it != best_wl_per_net.end()
+                                          ? lhs_it->second
+                                          : std::numeric_limits<long>::max();
+                  const long rhs_wl = rhs_it != best_wl_per_net.end()
+                                          ? rhs_it->second
+                                          : std::numeric_limits<long>::max();
+                  return lhs_wl > rhs_wl;
+                });
+
+      for (odb::dbNet* db_net : ordered_nets) {
+        if (db_net == nullptr) {
+          continue;
+        }
+
+        std::vector<CandidateRoute> candidates;
+        candidates.reserve(source_count);
+        long min_wl = std::numeric_limits<long>::max();
+        long min_high_layer = std::numeric_limits<long>::max();
+        int min_layer_span = std::numeric_limits<int>::max();
+        for (int idx = 0; idx < source_count; ++idx) {
+          const ScenarioResult* source = ranked[idx];
+          if (source == nullptr) {
+            continue;
+          }
+          const auto route_it = source->routes.find(db_net);
+          if (route_it == source->routes.end()) {
+            continue;
+          }
+          CandidateRoute candidate;
+          candidate.route = &route_it->second;
+          candidate.stats = collectRouteEdgeStats(route_it->second, grouter_->grid_);
+          min_wl = std::min(min_wl, candidate.stats.wirelength_dbu);
+          min_high_layer = std::min(min_high_layer, candidate.stats.high_layer_dbu);
+          min_layer_span = std::min(min_layer_span, candidate.stats.layer_span);
+          candidates.push_back(std::move(candidate));
+        }
+        if (candidates.empty()) {
+          continue;
+        }
+
+        const long wl_slack = std::max<long>(
+            tile_size * 2L,
+            static_cast<long>(std::ceil(static_cast<double>(min_wl) * 0.012)));
+        const long high_layer_slack = std::max<long>(
+            tile_size * 20L,
+            static_cast<long>(
+                std::ceil(static_cast<double>(std::max(1L, min_high_layer)) * 0.15)));
+        const int layer_span_slack = 1;
+
+        const GRoute* best_route = nullptr;
+        EdgeCountMap best_edge_counts;
+        double best_delta_penalty = 0.0;
+        long best_wl = std::numeric_limits<long>::max();
+        int best_vias = std::numeric_limits<int>::max();
+        double best_objective = std::numeric_limits<double>::max();
+
+        auto evaluate_candidates = [&](bool use_pareto_gate) {
+          bool found = false;
+          for (const CandidateRoute& candidate : candidates) {
+            const RouteEdgeStats& stats = candidate.stats;
+            if (use_pareto_gate) {
+              if (stats.wirelength_dbu > min_wl + wl_slack
+                  || stats.high_layer_dbu > min_high_layer + high_layer_slack
+                  || stats.layer_span > min_layer_span + layer_span_slack) {
+                continue;
+              }
+            }
+
+            double delta_penalty = 0.0;
+            for (const auto& [edge_key, add_usage] : stats.edge_counts) {
+              const auto usage_it = edge_usage.find(edge_key);
+              const int usage = usage_it == edge_usage.end() ? 0 : usage_it->second;
+              const int soft_cap = getSoftCapacityForEdge(
+                  edge_key, core, normalized_rudy, softcap_cache);
+              const int near_cap
+                  = std::max(1, static_cast<int>(std::floor(soft_cap * 0.90)));
+
+              const int over_before = std::max(0, usage - soft_cap);
+              const int over_after = std::max(0, usage + add_usage - soft_cap);
+              const int near_before = std::max(0, usage - near_cap);
+              const int near_after = std::max(0, usage + add_usage - near_cap);
+
+              delta_penalty += overflow_weight
+                               * static_cast<double>(over_after * over_after
+                                                     - over_before * over_before);
+              delta_penalty += near_weight
+                               * static_cast<double>(near_after - near_before);
+            }
+
+            const double objective
+                = static_cast<double>(stats.wirelength_dbu)
+                  + static_cast<double>(via_weight) * static_cast<double>(stats.via_count)
+                  + high_layer_weight * static_cast<double>(stats.high_layer_dbu)
+                  + layer_span_weight * static_cast<double>(stats.layer_span)
+                  + delta_penalty;
+            if (objective < best_objective
+                || (objective == best_objective
+                    && stats.wirelength_dbu < best_wl)
+                || (objective == best_objective
+                    && stats.wirelength_dbu == best_wl
+                    && stats.via_count < best_vias)) {
+              found = true;
+              best_objective = objective;
+              best_delta_penalty = delta_penalty;
+              best_wl = stats.wirelength_dbu;
+              best_vias = stats.via_count;
+              best_route = candidate.route;
+              best_edge_counts = stats.edge_counts;
+            }
+          }
+          return found;
+        };
+
+        const bool found_in_pareto = evaluate_candidates(true);
+        if (!found_in_pareto) {
+          static_cast<void>(evaluate_candidates(false));
+        } else {
+          pareto_hits++;
+        }
+
+        if (best_route == nullptr) {
+          continue;
+        }
+
+        hybrid_result.routes.emplace(db_net, *best_route);
+        total_soft_penalty += best_delta_penalty;
+        for (const auto& [edge_key, add_usage] : best_edge_counts) {
+          edge_usage[edge_key] += add_usage;
+        }
+      }
+
+      const std::size_t coverage_threshold
+          = expected_net_count > 0 ? (expected_net_count * 95) / 100 : 0;
+      if (hybrid_result.routes.size() >= coverage_threshold) {
+        hybrid_result.metrics = compute_metrics(hybrid_result.routes);
+        logger_->info(
+            GNR,
+            logger_code,
+            "NEWGR {} from top {} scenarios: wirelength {:.0f} um, vias {}, "
+            "routed nets {}/{}, soft-penalty {:.0f}, pareto-hits {}",
+            hybrid_name,
+            source_count,
+            hybrid_result.metrics.wirelength_um,
+            hybrid_result.metrics.via_count,
+            hybrid_result.routes.size(),
+            expected_net_count,
+            total_soft_penalty,
+            pareto_hits);
+        scenario_results.push_back(std::move(hybrid_result));
+      } else {
+        logger_->info(
+            GNR,
+            6024,
+            "NEWGR skipped {} due low net coverage ({}/{}).",
+            hybrid_name,
+            hybrid_result.routes.size(),
+            expected_net_count);
+      }
+    };
+
     // Drastic recombination:
     // 1) a wirelength-first hybrid (FastRoute shortest-path intent),
     // 2) a balanced hybrid that softly penalizes vias (SPRoute/CUGR flavor).
@@ -1594,6 +1811,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const int softcap_source_count = std::min<int>(16, ranked.size());
     const int consensus_source_count = std::min<int>(22, ranked.size());
     const int detour_source_count = std::min<int>(24, ranked.size());
+    const int pareto_softcap_source_count = std::min<int>(28, ranked.size());
     const long balanced_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 3L);
     const long softcap_via_weight
@@ -1608,6 +1826,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 16L);
     const long dr_shield_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 12L);
+    const long pareto_softcap_via_weight
+        = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 14L);
     append_hybrid("hybrid-netmix-wl", wl_source_count, 0, 0.24, 0.50, 6010);
     append_hybrid(
         "hybrid-netmix-ultra-wl", ultra_wl_source_count, 0, 0.40, 0.95, 6013);
@@ -1670,6 +1890,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                             0.55,
                             0.85,
                             6017);
+    append_pareto_softcap_hybrid("hybrid-netmix-pareto-softcap",
+                                 pareto_softcap_source_count,
+                                 pareto_softcap_via_weight,
+                                 6023);
   }
 
   auto robust_better = [](const ScenarioResult& lhs,
@@ -1743,16 +1967,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const long tie_via_wl_band
       = std::max<long>(24, static_cast<long>(std::ceil(shortest_wl * 0.00008)));
   const long tie_quality_wl_band
-      = std::max<long>(80, static_cast<long>(std::ceil(shortest_wl * 0.0018)));
+      = std::max<long>(120, static_cast<long>(std::ceil(shortest_wl * 0.0032)));
   auto wirelength_with_quality_tie_better = [&](const ScenarioResult& lhs,
                                                 const ScenarioResult& rhs) {
     const long wl_gap = std::llabs(lhs.metrics.wirelength_dbu
                                    - rhs.metrics.wirelength_dbu);
-    const bool lhs_wl_priority = isWirelengthPriorityScenario(lhs.name);
-    const bool rhs_wl_priority = isWirelengthPriorityScenario(rhs.name);
-    if (lhs_wl_priority != rhs_wl_priority && wl_gap <= tie_quality_wl_band) {
-      return lhs_wl_priority;
-    }
     if (wl_gap <= tie_quality_wl_band) {
       const double lhs_proxy = estimateDetailedRouteProxyCost(lhs.metrics);
       const double rhs_proxy = estimateDetailedRouteProxyCost(rhs.metrics);
