@@ -75,7 +75,7 @@ struct Constants
   int stage3_max_maze_configs = 16;
   bool stage3_use_wirelength_maze = true;
   int stage3_wl_only_hpwl_threshold = 140;
-  int stage3_wl_config_limit = 6;
+  int stage3_wl_config_limit = 7;
   double stage3_wl_via_cost_scale = 0.35;
 
   // FastRoute-style post-processing pass: reroute a subset of long,
@@ -83,15 +83,15 @@ struct Constants
   bool enable_wirelength_recovery = true;
   bool recovery_use_maze = true;
   bool recovery_use_wirelength_maze = true;
-  double recovery_wl_maze_via_cost_scale = 0.25;
+  double recovery_wl_maze_via_cost_scale = 0.22;
   int recovery_wl_only_hpwl_threshold = 120;
   int recovery_hpwl_threshold = 64;
-  double recovery_refine_ratio = 0.68;
-  int recovery_max_passes = 3;
+  double recovery_refine_ratio = 0.74;
+  int recovery_max_passes = 4;
   double recovery_pass_decay = 0.80;
   int recovery_maze_sparse_x = 3;
   int recovery_maze_sparse_y = 3;
-  double recovery_deep_ratio = 0.50;
+  double recovery_deep_ratio = 0.60;
   int recovery_deep_hpwl_threshold = 140;
   int recovery_aniso_sparse_long = 7;
   int recovery_aniso_sparse_short = 3;
@@ -100,10 +100,10 @@ struct Constants
   int recovery_full_offset_hpwl_threshold = 220;
   int recovery_dense_sparse_x = 2;
   int recovery_dense_sparse_y = 2;
-  int recovery_max_maze_configs = 14;
+  int recovery_max_maze_configs = 16;
   int recovery_max_via_increase = 6;
   bool recovery_use_full_grid_maze = true;
-  int recovery_full_grid_top_n = 12;
+  int recovery_full_grid_top_n = 16;
   int recovery_full_grid_hpwl_threshold = 160;
   double recovery_full_grid_via_cost_scale = 0.03;
 

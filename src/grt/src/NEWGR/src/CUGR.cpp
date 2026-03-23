@@ -282,9 +282,10 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
     const BoxT& bbox = net->getBoundingBox();
     const int hpwl = bbox.hp();
+    const int gcell_span = std::max(1, design_->getGridlineSize());
     const uint64_t approx_hpwl_dbu
         = static_cast<uint64_t>(std::max(1, hpwl))
-          * static_cast<uint64_t>(std::max(1, grid_graph_->getM2Pitch()));
+          * static_cast<uint64_t>(gcell_span);
     const double baseline_stretch
         = approx_hpwl_dbu > 0
               ? static_cast<double>(original_stats.wirelength)
@@ -536,9 +537,10 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         continue;
       }
       const auto route_stats = measureRoute(tree);
+      const int gcell_span = std::max(1, design_->getGridlineSize());
       const uint64_t approx_hpwl_dbu
           = static_cast<uint64_t>(std::max(1, hpwl))
-            * static_cast<uint64_t>(std::max(1, grid_graph_->getM2Pitch()));
+            * static_cast<uint64_t>(gcell_span);
       const double stretch_ratio
           = approx_hpwl_dbu > 0
                 ? static_cast<double>(route_stats.first)
