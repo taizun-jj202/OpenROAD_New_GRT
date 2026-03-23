@@ -59,6 +59,8 @@ class NewgrEngine
   NetRouteMap extractPinFallbackRoutes(const NetRouteMap& seeded_routes) const;
   bool appendRouteSegments(int net_id, grt::GRoute& route) const;
   bool appendFallbackMstRoute(const NewgrInputNet& net, grt::GRoute& route) const;
+  bool appendFallbackBackboneRoute(const NewgrInputNet& net,
+                                   grt::GRoute& route) const;
   bool appendManhattanBridge(int grid_x0,
                              int grid_y0,
                              int grid_l0,
