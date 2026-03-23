@@ -511,20 +511,31 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                              8.0f));
   }
 
-  auto make_random_def = [&](int seed, float perturb_pct) {
+  auto make_random_def = [&](int seed,
+                             float perturb_pct,
+                             float critical_pct = 5.0f) {
     ScenarioDefinition def;
-    def.name = "perturb-seed" + std::to_string(seed);
-    def.pre_init = [this, seed, perturb_pct]() {
+    def.name = "perturb-s" + std::to_string(seed)
+               + "-p" + std::to_string(static_cast<int>(perturb_pct * 10.0f));
+    def.pre_init = [this, seed, perturb_pct, critical_pct]() {
       grouter_->setCapacitiesPerturbationPercentage(perturb_pct);
       grouter_->setPerturbationAmount(perturb_pct > 0.0f ? 1 : 0);
       grouter_->setSeed(seed);
-      grouter_->fastroute_->setCriticalNetsPercentage(5.0f);
+      grouter_->fastroute_->setCriticalNetsPercentage(critical_pct);
     };
     return def;
   };
 
-  scenario_defs.push_back(make_random_def(11, 6.0f));
-  scenario_defs.push_back(make_random_def(29, 4.0f));
+  // Multi-seed sweep (SPRoute-inspired exploration) with a narrow perturbation
+  // range to search for lower-wirelength minima while preserving routability.
+  scenario_defs.push_back(make_random_def(11, 6.0f, 6.0f));
+  scenario_defs.push_back(make_random_def(29, 4.0f, 5.0f));
+  scenario_defs.push_back(make_random_def(7, 3.5f, 4.0f));
+  scenario_defs.push_back(make_random_def(17, 3.0f, 4.0f));
+  scenario_defs.push_back(make_random_def(23, 5.0f, 6.0f));
+  scenario_defs.push_back(make_random_def(31, 2.5f, 3.0f));
+  scenario_defs.push_back(make_random_def(37, 1.5f, 2.0f));
+  scenario_defs.push_back(make_random_def(41, 4.5f, 5.0f));
 
   for (const ScenarioDefinition& def : scenario_defs) {
     ScenarioResult result = run_scenario(def, snapshot);
