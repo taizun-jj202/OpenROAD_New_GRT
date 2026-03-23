@@ -3032,6 +3032,47 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const ScenarioResult* wl_anchor = find_scenario_by_name("hybrid-netmix-wl");
     const ScenarioResult* patched_ptr
         = find_scenario_by_name("hybrid-netmix-cugr-patched");
+    const ScenarioResult* length_adaptive_ptr
+        = find_scenario_by_name("hybrid-netmix-length-adaptive");
+    const ScenarioResult* preferred_wl_ptr = nullptr;
+
+    if (wl_anchor != nullptr && length_adaptive_ptr != nullptr) {
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      const long anchor_wl_guard = std::max<long>(
+          160,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00065)));
+      const long via_guard = std::max<long>(40L, tile_size * 2L);
+      const long detour_guard = std::max<long>(tile_size * 12L, 6000L);
+      const bool within_wl_guard
+          = length_adaptive_ptr->metrics.wirelength_dbu
+            <= wl_anchor->metrics.wirelength_dbu + anchor_wl_guard;
+      const bool within_via_guard
+          = length_adaptive_ptr->metrics.via_count
+            <= wl_anchor->metrics.via_count + via_guard;
+      const bool within_detour_guard
+          = length_adaptive_ptr->metrics.detour_dbu
+            <= wl_anchor->metrics.detour_dbu + detour_guard;
+      const double anchor_proxy = estimateDetailedRouteProxyCost(wl_anchor->metrics);
+      const double adaptive_proxy
+          = estimateDetailedRouteProxyCost(length_adaptive_ptr->metrics);
+      const bool proxy_better = adaptive_proxy + 1e-3 < anchor_proxy * 0.985;
+
+      if (within_wl_guard && within_via_guard && within_detour_guard
+          && proxy_better) {
+        preferred_wl_ptr = length_adaptive_ptr;
+        logger_->info(
+            GNR,
+            7312,
+            "NEWGR pre-selecting '{}' over '{}' in overflow-free mode "
+            "(wl delta {}, via delta {}, proxy ratio {:.3f}).",
+            preferred_wl_ptr->name,
+            wl_anchor->name,
+            preferred_wl_ptr->metrics.wirelength_dbu - wl_anchor->metrics.wirelength_dbu,
+            preferred_wl_ptr->metrics.via_count - wl_anchor->metrics.via_count,
+            anchor_proxy > 1e-9 ? adaptive_proxy / anchor_proxy : 1.0);
+      }
+    }
 
     // Wirelength champion pool (mixing aggressive FastRoute-like shortest-path
     // hybrids with low-via variants): pick the best WL candidate first, then
@@ -3078,6 +3119,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           });
     } else {
       forced_wl_ptr = wl_anchor;
+    }
+    if (preferred_wl_ptr != nullptr) {
+      forced_wl_ptr = preferred_wl_ptr;
     }
 
     if (forced_wl_ptr != nullptr && wl_anchor != nullptr
