@@ -529,7 +529,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
   sortNetIndices(netIndices);
-  const int base_sparse_interval = netIndices.size() < 2000 ? 6 : 10;
+  const int base_sparse_interval = netIndices.size() < 2000 ? 7 : 11;
   int rank = 0;
   int accepted = 0;
   int totalCandidates = 0;
@@ -549,7 +549,11 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     } else if (pins >= 4 || hp >= 70) {
       interval = std::max(5, base_sparse_interval - 1);
     }
-    const int max_candidates = (pins >= 10 || hp >= 130) ? 4 : 3;
+    int max_candidates = (pins >= 10 || hp >= 130) ? 3 : 2;
+    if ((rank > static_cast<int>(netIndices.size() * 3 / 5))
+        && pins <= 4 && hp <= 80) {
+      max_candidates = 1;
+    }
     const auto candidateGrids
         = buildMazeCandidateGrids(interval, rank, hp, pins, max_candidates);
     totalCandidates += static_cast<int>(candidateGrids.size());
@@ -1154,16 +1158,20 @@ void CUGR::strictWirelengthCompaction()
   const bool useXAxisWavefront = (strictCallCount % 2 == 0);
   strictCallCount++;
   const int compactionBudget
-      = std::min(totalNets, std::max(1024, totalNets / 24));
+      = std::min(totalNets, std::max(224, totalNets / 96));
   if (compactionBudget <= 0) {
     return;
   }
 
+  const int longWireRank
+      = std::min(compactionBudget - 1, std::max(0, compactionBudget / 4));
+  const uint64_t longWireThreshold
+      = routedScores[netIndices[longWireRank]].wire_length;
   const int detourRank
       = std::min(compactionBudget - 1, std::max(0, compactionBudget / 5));
   const double detourRatioThreshold = detourRatios[netIndices[detourRank]];
   const int denseMazeBudget
-      = std::min(compactionBudget, std::max(192, compactionBudget / 8));
+      = std::min(compactionBudget, std::max(56, compactionBudget / 6));
   std::vector<int> scheduledNetIndices = buildSpatialCompactionOrder(
       netIndices, gr_nets_, compactionBudget, useXAxisWavefront);
   if (scheduledNetIndices.empty()) {
@@ -1220,8 +1228,8 @@ void CUGR::strictWirelengthCompaction()
 
     const bool runMazeCandidate
         = rank < denseMazeBudget || oldScore.overflow_edges > 0
-          || oldDetourRatio >= detourRatioThreshold * 1.02
-          || oldScore.via_count >= 12;
+          || oldDetourRatio >= detourRatioThreshold * 1.03
+          || oldScore.wire_length >= longWireThreshold;
     if (runMazeCandidate) {
       const int hp = net->getBoundingBox().hp();
       const int pins = net->getNumPins();
@@ -1246,9 +1254,7 @@ void CUGR::strictWirelengthCompaction()
       if (resetTopologyMode) {
         interval = std::max(2, interval - 1);
       }
-      const int maxMazeCandidates = rank < denseMazeBudget / 10
-                                        ? 3
-                                        : (rank < denseMazeBudget / 2 ? 2 : 1);
+      const int maxMazeCandidates = rank < denseMazeBudget / 8 ? 2 : 1;
       const auto candidateGrids
           = buildMazeCandidateGrids(interval,
                                     rank + oldScore.via_count * 3
@@ -1309,36 +1315,28 @@ void CUGR::route()
 
   grid_graph_->setSoftCapacityEnabled(false);
 
-  // FastRoute-style adaptive emphasis: start wirelength-first and raise
-  // congestion pressure in the middle RRR passes.
-  grid_graph_->setStageCostScales(0.75, 0.75, 1.20);
+  // FastRoute-style wirelength-first initialization.
+  grid_graph_->setStageCostScales(0.72, 0.74, 1.15);
   patternRoute(netIndices);
 
-  // Run maze reroute before detours so most overflow repairs come from a
-  // shortest-path engine instead of detour inflation.
-  grid_graph_->setStageCostScales(1.10, 1.15, 1.10);
+  // SPRoute-inspired shortest-topology repair with sparse maze candidates.
+  grid_graph_->setStageCostScales(1.08, 1.10, 1.08);
   mazeRoute(netIndices);
 
-  // Keep detours as a final cleanup pass for residual difficult hotspots.
-  grid_graph_->setStageCostScales(1.22, 1.24, 1.00);
+  // Retain a small detour phase only for residual hotspots.
+  grid_graph_->setStageCostScales(1.16, 1.18, 1.00);
   patternRouteWithDetours(netIndices);
 
-  // FastRoute-style final RRR cleanup: re-run maze search to pull inflated
-  // detours back to shorter legal paths after hotspot repair.
-  grid_graph_->setStageCostScales(1.32, 1.35, 1.05);
-  mazeRoute(netIndices);
+  // If overflow remains, one extra shortest-path cleanup is enough.
+  if (!netIndices.empty()) {
+    grid_graph_->setStageCostScales(1.24, 1.26, 1.02);
+    mazeRoute(netIndices);
+  }
 
-  // FastRoute-inspired post-congestion tightening: re-run pure pattern
-  // routing and accept only net-level improvements in
-  // overflow/wirelength/via score.
+  // Replace the previous heavy late multi-pass loop with one compact
+  // wirelength-focused pass on top detour nets.
   grid_graph_->setSoftCapacityEnabled(false);
-  grid_graph_->setStageCostScales(0.46, 0.50, 1.20);
-  wirelengthRecovery();
-  grid_graph_->setStageCostScales(0.36, 0.38, 1.15);
-  finalPatternTighten();
-  grid_graph_->setStageCostScales(0.18, 0.20, 1.05);
-  globalCompaction();
-  grid_graph_->setStageCostScales(0.09, 0.10, 0.95);
+  grid_graph_->setStageCostScales(0.14, 0.16, 0.98);
   strictWirelengthCompaction();
   updateOverflowNets(netIndices);
 
