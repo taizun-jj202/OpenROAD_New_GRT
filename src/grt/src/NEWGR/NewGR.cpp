@@ -498,6 +498,11 @@ bool parsePerturbScenarioName(const std::string& name,
   return true;
 }
 
+bool isPreferredWirelengthScenario(const std::string& name)
+{
+  return name == "hybrid-netmix-wl" || name == "hybrid-netmix-wl-safe";
+}
+
 int getSoftCapacityForEdge(uint64_t key,
                            FastRouteCore* core,
                            const RudyGrid& normalized_rudy,
@@ -1972,6 +1977,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                                 const ScenarioResult& rhs) {
     const long wl_gap = std::llabs(lhs.metrics.wirelength_dbu
                                    - rhs.metrics.wirelength_dbu);
+    const bool lhs_pref = isPreferredWirelengthScenario(lhs.name);
+    const bool rhs_pref = isPreferredWirelengthScenario(rhs.name);
+    if (lhs_pref != rhs_pref && wl_gap <= tie_quality_wl_band) {
+      return lhs_pref;
+    }
     if (wl_gap <= tie_quality_wl_band) {
       const double lhs_proxy = estimateDetailedRouteProxyCost(lhs.metrics);
       const double rhs_proxy = estimateDetailedRouteProxyCost(rhs.metrics);
