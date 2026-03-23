@@ -1872,10 +1872,12 @@ NetRouteMap buildWirelengthOracleHybrid(
 {
   NetRouteMap hybrid_routes = seed_routes;
   const uint64_t seed_total_wirelength = computeRouteScore(seed_routes).wirelength;
+  // CUGR-style detailed-routability guard:
+  // keep oracle swaps from consuming too much low-layer resource for small WL wins.
   const int64_t via_increase_budget = std::max<int64_t>(
-      1800, static_cast<int64_t>(seed_total_vias / 64));
+      780, static_cast<int64_t>(seed_total_vias / 165));
   const int64_t low_layer_growth_budget = std::max<int64_t>(
-      16000000, static_cast<int64_t>(seed_low_layer_wl / 3));
+      620000, static_cast<int64_t>(seed_low_layer_wl / 700));
   const uint64_t wl_gain_target = std::max<uint64_t>(
       3000000, seed_total_wirelength / 130);
   const size_t min_swaps_before_stop
@@ -1973,23 +1975,24 @@ NetRouteMap buildWirelengthOracleHybrid(
 
       const int64_t via_soft_limit
           = maxInterleavedViaIncrease(pin_count)
-            + ((pin_count <= 12) ? 4 : ((pin_count <= 32) ? 6 : 8));
+            + ((pin_count <= 12) ? 2 : ((pin_count <= 32) ? 4 : 5));
       if (via_increase > via_soft_limit
           && wl_gain
-                 < via_increase * 140 + std::max<int64_t>(0, low_layer_delta) / 8
-                       + static_cast<int64_t>(80)) {
+                 < via_increase * 210 + std::max<int64_t>(0, low_layer_delta) / 3
+                       + static_cast<int64_t>(180)) {
         ++stats.skipped_by_via_guard;
         continue;
       }
       if (low_layer_delta > 0
           && wl_gain
-                 < low_layer_delta / 10 + static_cast<int64_t>(36)) {
+                 < low_layer_delta / 2 + via_increase * 120
+                       + static_cast<int64_t>(260)) {
         ++stats.skipped_by_layer_guard;
         continue;
       }
       const int64_t via_bonus = std::max<int64_t>(0, via_drop) * 14;
-      const int64_t via_penalty = std::max<int64_t>(0, via_increase) * 95;
-      const int64_t low_layer_penalty = std::max<int64_t>(0, low_layer_delta) / 8;
+      const int64_t via_penalty = std::max<int64_t>(0, via_increase) * 220;
+      const int64_t low_layer_penalty = std::max<int64_t>(0, low_layer_delta) / 2;
       const int64_t low_layer_bonus = std::max<int64_t>(0, -low_layer_delta) / 16;
       const int64_t priority
           = wl_gain * 3 + via_bonus - via_penalty - low_layer_penalty
@@ -2051,14 +2054,14 @@ NetRouteMap buildWirelengthOracleHybrid(
             - static_cast<int64_t>(live_base_usage.low_layer_wl));
     if (via_increase > 0
         && wl_gain
-               < via_increase * 95 + low_layer_growth / 12
-                     + static_cast<int64_t>(40)) {
+               < via_increase * 180 + low_layer_growth / 3
+                     + static_cast<int64_t>(180)) {
       ++stats.skipped_by_via_guard;
       continue;
     }
     if (low_layer_growth > 0
         && wl_gain
-               < low_layer_growth / 20 + static_cast<int64_t>(120)) {
+               < low_layer_growth / 3 + static_cast<int64_t>(220)) {
       ++stats.skipped_by_layer_guard;
       continue;
     }
@@ -2420,27 +2423,24 @@ bool shouldPreferWirelengthOracleHybrid(int incumbent_overflow,
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
   const uint64_t min_wl_gain
-      = std::max<uint64_t>(45000, incumbent_score.wirelength / 24000);
+      = std::max<uint64_t>(82000, incumbent_score.wirelength / 17000);
   if (wl_gain < min_wl_gain) {
     return false;
   }
   const int64_t via_increase_budget
-      = std::max<int64_t>(1600, static_cast<int64_t>(incumbent_score.vias / 72));
+      = std::max<int64_t>(620, static_cast<int64_t>(incumbent_score.vias / 210));
   if (via_increase > via_increase_budget
       && wl_gain
-             < static_cast<uint64_t>(via_increase * 120 + static_cast<int64_t>(70000))) {
+             < static_cast<uint64_t>(via_increase * 220 + static_cast<int64_t>(140000))) {
     return false;
   }
   const int64_t low_layer_budget = std::max<int64_t>(
-      8000000, static_cast<int64_t>(incumbent_low_layer_wl / 4));
+      700000, static_cast<int64_t>(incumbent_low_layer_wl / 560));
   if (low_layer_delta > low_layer_budget
-      && wl_gain
-             < static_cast<uint64_t>(low_layer_delta / 10 + static_cast<int64_t>(100000))) {
-    return false;
-  }
-  if (low_layer_delta > 0
-      && wl_gain
-             < static_cast<uint64_t>(low_layer_delta / 16 + static_cast<int64_t>(60000))) {
+      || (low_layer_delta > 0
+          && wl_gain
+                 < static_cast<uint64_t>(low_layer_delta / 3
+                                         + static_cast<int64_t>(180000)))) {
     return false;
   }
   return true;
