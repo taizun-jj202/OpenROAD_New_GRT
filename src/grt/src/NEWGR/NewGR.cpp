@@ -4074,11 +4074,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                     : 0L;
     const long deep_via_drop_wl_gain = wl_anchor != nullptr
                                            ? std::max<long>(
-                                                 180L,
+                                                 120L,
                                                  static_cast<long>(std::ceil(
                                                      static_cast<double>(
                                                          wl_anchor->metrics.wirelength_dbu)
-                                                     * 0.00070)))
+                                                     * 0.00045)))
                                            : 0L;
     const long deep_via_drop_detour_bonus = std::max<long>(
         9000L, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1) * 18L));
@@ -4429,8 +4429,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = (forced_wl_ptr->metrics.wirelength_dbu <= wl_anchor->metrics.wirelength_dbu)
             && (forced_wl_ptr->metrics.via_count <= wl_anchor->metrics.via_count)
             && structural_guard;
+      // If a candidate is a structural Pareto improvement on both WL and vias,
+      // do not block it solely on aggressive via-drop heuristics.
       const bool bypass_via_drop_guard = proxy_dominant_upgrade
-                                         || via_dominant_upgrade || equal_wl_via_win;
+                                         || via_dominant_upgrade
+                                         || equal_wl_via_win || strict_dominates;
 
       if (!((wl_gain >= min_wl_gain && proxy_guard && via_guard_ok
            && structural_guard)
