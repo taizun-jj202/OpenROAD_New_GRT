@@ -5085,24 +5085,130 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     selected = stabilized;
   }
 
-  // Final radical move for this iteration: force a perimeter-ring collapse
-  // followed by a high-amplitude global wave detour pass.
+  // Final radical move for this iteration: force a deterministic phase flip
+  // where many nets are reassigned to very different donor topologies.
+  auto route_admissible_radical = [&](const GRoute& candidate,
+                                      const GRoute& reference) {
+    const auto [cand_wl, cand_vias] = route_stats(candidate);
+    const auto [ref_wl, ref_vias] = route_stats(reference);
+    if (ref_wl <= 0) {
+      return true;
+    }
+    const long wl_cap
+        = std::max(ref_wl + static_cast<long>(24 * tile_size),
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_wl) * 3.10)));
+    const long via_cap
+        = std::max(ref_vias + 24L,
+                   static_cast<long>(
+                       std::ceil(static_cast<double>(ref_vias) * 6.50 + 24.0)));
+    return cand_wl <= wl_cap && cand_vias <= via_cap;
+  };
+
+  long phase_orbital_nets = 0;
+  long phase_shock_nets = 0;
+  long phase_mono_nets = 0;
+  long phase_mesh_nets = 0;
+  long phase_axial_nets = 0;
+  long phase_hyper_nets = 0;
+
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+
+    const NetRouteMap* donor_routes = nullptr;
+    int donor_class = -1;
+    if (node_count >= 14) {
+      const int bucket = static_cast<int>(key % 3ULL);
+      donor_class = bucket;
+      donor_routes = bucket == 0 ? &orbital_ringblast.routes
+                    : bucket == 1 ? &shockwave.routes
+                                  : &monorail.routes;
+    } else if (node_count >= 9) {
+      donor_class = (key % 2ULL) == 0ULL ? 3 : 4;
+      donor_routes = donor_class == 3 ? &meshwarp.routes : &axial_force.routes;
+    } else if (node_count >= 5) {
+      donor_class = 5;
+      donor_routes
+          = (key % 3ULL) == 0ULL ? &radical_hyper.routes : &shockwave.routes;
+    } else if (node_count >= 2 && (key % 4ULL) == 1ULL) {
+      donor_class = 4;
+      donor_routes = &axial_force.routes;
+    }
+
+    if (donor_routes == nullptr) {
+      continue;
+    }
+
+    const auto donor_it = donor_routes->find(db_net);
+    if (donor_it == donor_routes->end()) {
+      continue;
+    }
+    const GRoute& donor_route = donor_it->second;
+    if (!has_planar_guide(donor_route)) {
+      continue;
+    }
+    if (!route_admissible_radical(donor_route, current_route)) {
+      continue;
+    }
+
+    selected.routes[db_net] = donor_route;
+    switch (donor_class) {
+      case 0:
+        phase_orbital_nets++;
+        break;
+      case 1:
+        phase_shock_nets++;
+        break;
+      case 2:
+        phase_mono_nets++;
+        break;
+      case 3:
+        phase_mesh_nets++;
+        break;
+      case 4:
+        phase_axial_nets++;
+        break;
+      case 5:
+        phase_hyper_nets++;
+        break;
+      default:
+        break;
+    }
+  }
+  selected.name += "+phaseflip";
+  selected.metrics = compute_metrics(selected.routes);
+
+  // Collapse the mixed topologies into portal/ring backbones with stronger
+  // wave amplitude to ensure this iteration diverges from prior fixed points.
+  applyGlobalPortalRebuild(grouter_,
+                           selected.routes,
+                           baseline_rudy,
+                           2,
+                           100,
+                           min_routing_layer,
+                           max_routing_layer);
   applyPerimeterRingCollapse(grouter_,
                              selected.routes,
                              baseline_rudy,
-                             2,
+                             1,
                              100,
-                             10,
+                             12,
                              min_routing_layer,
                              max_routing_layer);
   applyWavefrontDetours(grouter_,
                         selected.routes,
                         baseline_rudy,
-                        std::max(2 * tile_size, 1),
-                        std::max(10 * tile_size, 1),
+                        std::max(tile_size, 1),
+                        std::max(18 * tile_size, 1),
                         100);
+  applyAggressiveDoglegShortcuts(selected.routes,
+                                 std::max(24 * tile_size, 1),
+                                 std::max(tile_size, 1));
   applyViaExcursionCollapse(selected.routes, std::max(2 * tile_size, 1));
-  selected.name += "+final_orbital_waveforce";
+  selected.name += "+ringstorm";
   selected.metrics = compute_metrics(selected.routes);
 
   // Final safeguard to prevent catastrophic regressions.
@@ -5163,6 +5269,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 monorail_forced_nets,
                 meshwarp_forced_nets,
                 orbital_forced_nets);
+  logger_->warn(GNR,
+                6035,
+                "NEWGR phaseflip picks: orbital {} shockwave {} monorail {} "
+                "meshwarp {} axial {} hyper {}.",
+                phase_orbital_nets,
+                phase_shock_nets,
+                phase_mono_nets,
+                phase_mesh_nets,
+                phase_axial_nets,
+                phase_hyper_nets);
 
   restore_snapshot(snapshot);
   return selected.routes;
