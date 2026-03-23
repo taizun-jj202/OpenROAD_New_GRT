@@ -4,6 +4,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <map>
 #include <numeric>
 #include <set>
 #include <string>
@@ -686,6 +687,182 @@ void applyHotspotPenalties(GlobalRouter* grouter,
   }
 }
 
+void appendUniqueRouteSegment(GRoute& route, const GSegment& segment)
+{
+  if (segment.init_x == segment.final_x && segment.init_y == segment.final_y
+      && segment.init_layer == segment.final_layer) {
+    return;
+  }
+  if (std::find(route.begin(), route.end(), segment) != route.end()) {
+    return;
+  }
+  route.push_back(segment);
+}
+
+void applyCugrStyleGuidePatching(GlobalRouter* grouter,
+                                 NetRouteMap& routes,
+                                 int min_routing_layer,
+                                 int max_routing_layer,
+                                 utl::Logger* logger)
+{
+  if (grouter == nullptr || routes.empty()) {
+    return;
+  }
+
+  FastRouteCore* core = grouter->fastroute();
+  if (core == nullptr || grouter->grid() == nullptr) {
+    return;
+  }
+
+  core->computeCongestionInformation();
+
+  std::vector<CongestionInformation> vertical;
+  std::vector<CongestionInformation> horizontal;
+  core->getCongestionGrid(vertical, horizontal);
+
+  struct CongestionPatchCandidate
+  {
+    const CongestionInformation* info = nullptr;
+    float severity = 0.0f;
+  };
+
+  std::vector<CongestionPatchCandidate> candidates;
+  candidates.reserve(vertical.size() + horizontal.size());
+
+  const auto append_candidates = [&](const std::vector<CongestionInformation>& edges) {
+    for (const CongestionInformation& info : edges) {
+      if (info.sources.empty()) {
+        continue;
+      }
+
+      const int capacity = std::max(info.congestion.capacity, 1);
+      const int usage = std::max(info.congestion.usage, 0);
+      const int overflow = std::max(usage - capacity, 0);
+      const float usage_ratio
+          = static_cast<float>(usage) / static_cast<float>(capacity);
+
+      if (usage_ratio < 0.92f && overflow == 0) {
+        continue;
+      }
+
+      const float severity = usage_ratio + 0.08f * static_cast<float>(overflow);
+      candidates.push_back({&info, severity});
+    }
+  };
+
+  append_candidates(horizontal);
+  append_candidates(vertical);
+
+  if (candidates.empty()) {
+    return;
+  }
+
+  std::stable_sort(
+      candidates.begin(),
+      candidates.end(),
+      [](const CongestionPatchCandidate& lhs, const CongestionPatchCandidate& rhs) {
+        return lhs.severity > rhs.severity;
+      });
+
+  const int edge_budget = 160;
+  const int sources_per_edge = 3;
+  const int patches_per_net = 10;
+  const int total_patch_budget = 1000;
+
+  int patched_edges = 0;
+  int added_segments = 0;
+  std::map<odb::dbNet*, int> per_net_patch_count;
+
+  for (const CongestionPatchCandidate& candidate : candidates) {
+    if (patched_edges >= edge_budget || added_segments >= total_patch_budget) {
+      break;
+    }
+    if (candidate.info == nullptr) {
+      continue;
+    }
+
+    const GSegment& base = candidate.info->segment;
+    const int base_layer = base.init_layer;
+    if (base_layer < min_routing_layer || base_layer > max_routing_layer) {
+      continue;
+    }
+
+    const int alt_layer = (base_layer < max_routing_layer) ? base_layer + 1
+                                                            : base_layer - 1;
+    if (alt_layer < min_routing_layer || alt_layer > max_routing_layer
+        || alt_layer == base_layer) {
+      continue;
+    }
+
+    bool edge_patched = false;
+    int source_count = 0;
+    const int low_layer = std::min(base_layer, alt_layer);
+    const int high_layer = std::max(base_layer, alt_layer);
+
+    for (odb::dbNet* db_net : candidate.info->sources) {
+      if (source_count >= sources_per_edge
+          || added_segments >= total_patch_budget) {
+        break;
+      }
+      auto route_it = routes.find(db_net);
+      if (route_it == routes.end()) {
+        continue;
+      }
+
+      int& net_budget = per_net_patch_count[db_net];
+      if (net_budget >= patches_per_net) {
+        continue;
+      }
+
+      GRoute& route = route_it->second;
+      const size_t route_size_before = route.size();
+
+      appendUniqueRouteSegment(route,
+                               GSegment(base.init_x,
+                                        base.init_y,
+                                        alt_layer,
+                                        base.final_x,
+                                        base.final_y,
+                                        alt_layer));
+      appendUniqueRouteSegment(route,
+                               GSegment(base.init_x,
+                                        base.init_y,
+                                        low_layer,
+                                        base.init_x,
+                                        base.init_y,
+                                        high_layer));
+      appendUniqueRouteSegment(route,
+                               GSegment(base.final_x,
+                                        base.final_y,
+                                        low_layer,
+                                        base.final_x,
+                                        base.final_y,
+                                        high_layer));
+
+      const int new_segments
+          = static_cast<int>(route.size() - route_size_before);
+      if (new_segments > 0) {
+        added_segments += new_segments;
+        net_budget++;
+        source_count++;
+        edge_patched = true;
+      }
+    }
+
+    if (edge_patched) {
+      patched_edges++;
+    }
+  }
+
+  if (logger != nullptr && added_segments > 0) {
+    logger->info(GNR,
+                 6009,
+                 "NEWGR patching: added {} guide segments across {} hotspots",
+                 added_segments,
+                 patched_edges);
+  }
+}
+
 }  // namespace
 
 NewGR::NewGR(GlobalRouter* grouter, CUGR* cugr, utl::Logger* logger)
@@ -1078,6 +1255,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 final_result.name,
                 final_result.metrics.wirelength_um,
                 final_result.metrics.via_count);
+
+  applyCugrStyleGuidePatching(grouter_,
+                              final_result.routes,
+                              min_routing_layer,
+                              max_routing_layer,
+                              logger_);
 
   return std::move(final_result.routes);
 }

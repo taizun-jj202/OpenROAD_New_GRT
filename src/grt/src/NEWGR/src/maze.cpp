@@ -1144,7 +1144,8 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
                            const int d_y,
                            const bool add_via,
                            const bool maybe_hyper,
-                           const int net_id) {
+                           const int net_id,
+                           const bool is_turn) {
     const bool is_horizontal = d_x != 0;
     auto& hyper = is_horizontal ? hyper_h_ : hyper_v_;
 
@@ -1178,6 +1179,14 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
       if (detour > 0) {
         tmp += corridor_detour_penalty * detour;
       }
+    }
+
+    // Penalize bends to keep paths straighter (shorter and lower-via),
+    // while still allowing turns when congestion requires it.
+    if (is_turn) {
+      const bool critical_net = nets_[net_id]->isCritical();
+      const double turn_penalty = critical_net ? 0.75 : 1.10;
+      tmp += turn_penalty;
     }
 
     if (add_via && d1[cur_y][cur_x] != 0) {
@@ -1271,7 +1280,7 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
             && treeedge->route.routelen
                    > static_cast<int>(1.5 * treeedge->route.last_routelen);
       const double base_detour_penalty
-          = nets_[netID]->isCritical() || route_stretched ? 1.1 : 0.65;
+          = nets_[netID]->isCritical() || route_stretched ? 1.50 : 0.95;
       const double iter_relax
           = std::clamp((iter - 1) / 40.0, 0.0, 0.5);
       corridor_detour_penalty = base_detour_penalty * (1.0 - iter_relax);
@@ -1338,19 +1347,47 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
 
         if (curX > regionX1) {  // left
           relaxAdjacent(
-              curX, curY, -1, 0, preY != curY, curX < regionX2 - 1, netID);
+              curX,
+              curY,
+              -1,
+              0,
+              preY != curY,
+              curX < regionX2 - 1,
+              netID,
+              preY != curY);
         }
         if (curX < regionX2) {  // right
           relaxAdjacent(
-              curX, curY, 1, 0, preY != curY, curX > regionX1 + 1, netID);
+              curX,
+              curY,
+              1,
+              0,
+              preY != curY,
+              curX > regionX1 + 1,
+              netID,
+              preY != curY);
         }
         if (curY > regionY1) {  // bottom
           relaxAdjacent(
-              curX, curY, 0, -1, preX != curX, curY < regionY2 - 1, netID);
+              curX,
+              curY,
+              0,
+              -1,
+              preX != curX,
+              curY < regionY2 - 1,
+              netID,
+              preX != curX);
         }
         if (curY < regionY2) {  // top
           relaxAdjacent(
-              curX, curY, 0, 1, preX != curX, curY > regionY1 + 1, netID);
+              curX,
+              curY,
+              0,
+              1,
+              preX != curX,
+              curY > regionY1 + 1,
+              netID,
+              preX != curX);
         }
 
         // update ind1 for next loop
