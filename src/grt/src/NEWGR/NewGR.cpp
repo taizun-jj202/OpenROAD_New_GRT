@@ -59,9 +59,9 @@ RouteScore computeRouteScore(const NetRouteMap& routes)
 
 uint64_t routeCostForPins(const RouteScore& score, int pin_count)
 {
-  // Favor FastRoute replacement on local nets where shortness tends to map
-  // directly to detailed-route wirelength improvements.
-  const uint64_t via_weight = (pin_count <= 3) ? 14 : 18;
+  // Prioritize wirelength while keeping via count under control.
+  const uint64_t via_weight
+      = (pin_count <= 4) ? 10 : ((pin_count <= 12) ? 12 : 16);
   return score.wirelength + score.vias * via_weight;
 }
 
@@ -75,31 +75,54 @@ bool shouldSwapToFastRoute(const RouteScore& newgr_score,
   if (newgr_score.segments == 0) {
     return true;
   }
-  if (pin_count > 6) {
+  if (pin_count > 24) {
     return false;
   }
+
+  const uint64_t wirelength_gain = (newgr_score.wirelength > fastroute_score.wirelength)
+                                       ? (newgr_score.wirelength - fastroute_score.wirelength)
+                                       : 0;
+  const uint64_t via_increase = (fastroute_score.vias > newgr_score.vias)
+                                    ? (fastroute_score.vias - newgr_score.vias)
+                                    : 0;
 
   const uint64_t newgr_cost = routeCostForPins(newgr_score, pin_count);
   const uint64_t fastroute_cost = routeCostForPins(fastroute_score, pin_count);
-  if (fastroute_cost >= newgr_cost) {
-    return false;
+  if (fastroute_cost < newgr_cost) {
+    const uint64_t gain = newgr_cost - fastroute_cost;
+    const uint64_t min_gain
+        = (pin_count <= 4)
+              ? 20
+              : ((pin_count <= 12)
+                     ? 80
+                     : std::max<uint64_t>(200, newgr_cost / 500));
+    if (gain >= min_gain) {
+      return true;
+    }
   }
 
-  const uint64_t gain = newgr_cost - fastroute_cost;
-  const uint64_t min_gain = (pin_count <= 3)
-                                ? std::max<uint64_t>(3000, newgr_cost / 80)
-                                : std::max<uint64_t>(5000, newgr_cost / 60);
-  if (gain < min_gain) {
+  // Absolute wirelength win gate: allow modest via increase in exchange for
+  // a direct Manhattan-length gain.
+  if (wirelength_gain == 0) {
     return false;
   }
-
-  // Avoid replacing with routes that are strictly longer and not lower-via.
-  if (fastroute_score.wirelength > newgr_score.wirelength
-      && fastroute_score.vias >= newgr_score.vias) {
-    return false;
+  const uint64_t min_wl_gain
+      = (pin_count <= 4)
+            ? 16
+            : ((pin_count <= 12)
+                   ? 64
+                   : std::max<uint64_t>(120, newgr_score.wirelength / 250));
+  const uint64_t via_budget
+      = (pin_count <= 4) ? 8 : ((pin_count <= 12) ? 14 : 20);
+  if (wirelength_gain >= min_wl_gain && via_increase <= via_budget) {
+    return true;
+  }
+  if (wirelength_gain >= std::max<uint64_t>(400, newgr_score.wirelength / 120)
+      && via_increase <= via_budget * 2) {
+    return true;
   }
 
-  return true;
+  return false;
 }
 
 struct HybridStats
@@ -196,9 +219,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   last_total_overflow_ = engine_->getTotalOverflow();
   used_fastroute_last_run_ = false;
 
-  const bool enable_fastroute_graft
-      = std::getenv("NEWGR_ENABLE_FASTROUTE_GRAFT") != nullptr;
-  if (enable_fastroute_graft && grouter_->fastroute() != nullptr) {
+  const bool disable_fastroute_graft
+      = std::getenv("NEWGR_DISABLE_FASTROUTE_GRAFT") != nullptr;
+  if (!disable_fastroute_graft && grouter_->fastroute() != nullptr) {
     NetRouteMap fastroute_routes = grouter_->fastroute()->run();
     const int fastroute_overflow = grouter_->fastroute()->totalOverflow();
     const RouteScore newgr_score = computeRouteScore(routes);
@@ -286,11 +309,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                     best_score.vias,
                     best_score.routed_nets);
     }
-  } else if (!enable_fastroute_graft && grouter_->fastroute() != nullptr) {
+  } else if (disable_fastroute_graft && grouter_->fastroute() != nullptr) {
     logger_->info(utl::GRT,
                   6008,
-                  "NEWGR FastRoute net-graft is disabled (set "
-                  "NEWGR_ENABLE_FASTROUTE_GRAFT=1 to enable).");
+                  "NEWGR FastRoute net-graft is disabled via "
+                  "NEWGR_DISABLE_FASTROUTE_GRAFT.");
   }
 
   grouter_->addRemainingGuides(routes, nets, min_routing_layer, max_routing_layer);
