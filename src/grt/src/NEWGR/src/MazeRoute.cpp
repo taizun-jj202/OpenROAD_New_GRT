@@ -612,7 +612,7 @@ void MazeRoute::run()
     }
 
     // Runtime guardrail: use the metric closure only for small/medium nets.
-    constexpr int kMaxMetricClosurePins = 40;
+    constexpr int kMaxMetricClosurePins = 56;
     if (num_pins > kMaxMetricClosurePins) {
       return result;
     }
@@ -1073,11 +1073,11 @@ void MazeRoute::run()
   } else if (num_pins <= 32) {
     max_seeds = 10;
   } else if (num_pins <= 64) {
-    max_seeds = 7;
+    max_seeds = 10;
   } else if (num_pins <= 96) {
-    max_seeds = 5;
+    max_seeds = 6;
   } else {
-    max_seeds = 3;
+    max_seeds = 4;
   }
   if (max_seeds < static_cast<int>(seeds.size())) {
     seeds.resize(max_seeds);
@@ -1101,8 +1101,16 @@ void MazeRoute::run()
   runPairCandidate(min_x_seed, max_x_seed);
   runPairCandidate(min_y_seed, max_y_seed);
   runPairCandidate(center_seed, far_seed);
-  if (num_pins <= 96) {
+  if (num_pins <= 128) {
     runPairCandidate(far_pair_lhs, far_pair_rhs);
+  }
+  if (num_pins <= 64) {
+    runPairCandidate(min_x_seed, max_y_seed);
+    runPairCandidate(max_x_seed, min_y_seed);
+    runPairCandidate(center_seed, min_x_seed);
+    runPairCandidate(center_seed, max_x_seed);
+    runPairCandidate(center_seed, min_y_seed);
+    runPairCandidate(center_seed, max_y_seed);
   }
 
   for (const int seed : seeds) {
