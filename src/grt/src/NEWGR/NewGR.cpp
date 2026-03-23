@@ -2224,17 +2224,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                                    x_grids,
                                                    y_grids,
                                                    hotspot_map,
-                                                   std::max(tile_size / 8, 1),
-                                                   0.0035,
-                                                   8,
-                                                   2.40,
-                                                   0.85);
+                                                   std::max(tile_size / 2, 1),
+                                                   0.0150,
+                                                   3,
+                                                   3.40,
+                                                   0.45);
 
     std::vector<const NetRouteMap*> specialist_donors;
     specialist_donors.reserve(6);
-    for (const char* donor_name : {"cugr-router-donor",
-                                   "sproute-router-donor",
-                                   "radical-shortpath-fusion",
+    for (const char* donor_name : {"radical-shortpath-fusion",
                                    "cross-router-wirelength-fusion",
                                    "multi-router-wirelength-fusion",
                                    "spatial-wirelength-grafting"}) {
@@ -2251,11 +2249,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                                 x_grids,
                                                 y_grids,
                                                 hotspot_map,
-                                                1,
-                                                0.0,
-                                                12,
-                                                1.70,
-                                                1.60);
+                                                std::max(tile_size / 3, 1),
+                                                0.0100,
+                                                4,
+                                                2.80,
+                                                0.80);
 
     extreme.metrics = compute_metrics(extreme.routes);
     logger_->info(GNR,
