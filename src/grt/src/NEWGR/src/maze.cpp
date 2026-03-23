@@ -1087,6 +1087,20 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
   int detour_ymin = 0;
   int detour_ymax = 0;
   double detour_penalty = 0.0;
+  int edge_src_x = 0;
+  int edge_src_y = 0;
+  int edge_dst_x = 0;
+  int edge_dst_y = 0;
+  int edge_mid_x = 0;
+  int edge_mid_y = 0;
+  int edge_dx = 0;
+  int edge_dy = 0;
+  bool prefer_horizontal = true;
+  double soft_cap_ratio = 0.8;
+  double soft_overflow_penalty = 0.0;
+  double util_penalty = 0.0;
+  double centerline_penalty = 0.0;
+  double orthogonal_penalty = 0.0;
   // Keep turn pressure active even when the legacy VIA knob is temporarily 0.
   const double turn_penalty = 0.75;
 
@@ -1171,6 +1185,21 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
     const int next_x = cur_x + d_x;
     const int next_y = cur_y + d_y;
 
+    // SPRoute-like soft capacity: start penalizing before hard overflow.
+    const int edge_cap = is_horizontal
+                             ? static_cast<int>(graph2d_.getCapH(p1_x, p1_y))
+                             : static_cast<int>(graph2d_.getCapV(p1_x, p1_y));
+    const double soft_cap = std::max(1.0, soft_cap_ratio * edge_cap);
+    const double soft_excess = std::max(0.0, pos1 - soft_cap);
+    tmp += soft_overflow_penalty * soft_excess * soft_excess;
+
+    const double util
+        = static_cast<double>(pos1) / std::max(1.0, static_cast<double>(edge_cap));
+    if (util > 0.55) {
+      const double util_excess = util - 0.55;
+      tmp += util_penalty * util_excess * util_excess;
+    }
+
     if (detour_penalty > 0.0) {
       const int outside_x = next_x < detour_xmin
                                 ? (detour_xmin - next_x)
@@ -1181,6 +1210,24 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
                                 : (next_y > detour_ymax ? next_y - detour_ymax
                                                          : 0);
       tmp += detour_penalty * (outside_x + outside_y);
+    }
+
+    // CUGR-style geometric guidance: favor paths that remain around a
+    // centerline corridor between source and target.
+    const int line_norm = std::max(1, std::abs(edge_dx) + std::abs(edge_dy));
+    const int rel_x = next_x - edge_src_x;
+    const int rel_y = next_y - edge_src_y;
+    const int line_dist = std::abs(edge_dy * rel_x - edge_dx * rel_y);
+    tmp += centerline_penalty * static_cast<double>(line_dist) / line_norm;
+
+    const int radial_dist
+        = std::abs(next_x - edge_mid_x) + std::abs(next_y - edge_mid_y);
+    tmp += 0.06 * centerline_penalty * static_cast<double>(radial_dist)
+           / line_norm;
+
+    if ((prefer_horizontal && !is_horizontal)
+        || (!prefer_horizontal && is_horizontal)) {
+      tmp += orthogonal_penalty;
     }
 
     if (add_via && d1[cur_y][cur_x] != 0) {
@@ -1258,8 +1305,8 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
 
       enlarge_ = std::min(origENG, (iter / 6 + 3) * treeedge->route.routelen);
       const int manhattan_len = treeedge->len;
-      const int min_local_expand = 3;
-      const double expand_ratio = 0.35;
+      const int min_local_expand = 5;
+      const double expand_ratio = ((netID + edgeID + iter) & 1) ? 0.8 : 0.25;
       const int dynamic_cap
           = min_local_expand
             + static_cast<int>(std::round(manhattan_len * expand_ratio));
@@ -1282,13 +1329,33 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
       detour_xmax = xmax;
       detour_ymin = ymin;
       detour_ymax = ymax;
-      detour_penalty = 1.0 + 0.03 * std::min(manhattan_len, 120);
+      detour_penalty = 0.4 + 0.02 * std::min(manhattan_len, 120);
       if (nets_[netID]->isCritical()) {
-        detour_penalty *= 1.4;
+        detour_penalty *= 0.9;
       }
       if (iter > 20) {
-        detour_penalty *= 0.85;
+        detour_penalty *= 1.1;
       }
+
+      edge_src_x = n1x;
+      edge_src_y = n1y;
+      edge_dst_x = n2x;
+      edge_dst_y = n2y;
+      edge_mid_x = (edge_src_x + edge_dst_x) / 2;
+      edge_mid_y = (edge_src_y + edge_dst_y) / 2;
+      edge_dx = edge_dst_x - edge_src_x;
+      edge_dy = edge_dst_y - edge_src_y;
+
+      prefer_horizontal = std::abs(edge_dx) >= std::abs(edge_dy);
+      if (((netID + edgeID + iter) % 3) == 0) {
+        prefer_horizontal = !prefer_horizontal;
+      }
+
+      soft_cap_ratio = nets_[netID]->isCritical() ? 0.72 : 0.84;
+      soft_overflow_penalty = 0.4 + 0.015 * std::min(manhattan_len, 90);
+      util_penalty = 3.0 + 0.02 * std::min(manhattan_len, 120);
+      centerline_penalty = 0.6 + 0.02 * std::min(manhattan_len, 80);
+      orthogonal_penalty = 0.75 + 0.01 * std::min(manhattan_len, 90);
 
       // initialize d1[][] and d2[][] as BIG_INT
       for (int i = regionY1; i <= regionY2; i++) {
