@@ -488,6 +488,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
   {
     int index;
     int hpwl;
+    double stretch;
   };
 
   auto measureRoute = [&](const std::shared_ptr<GRTreeNode>& tree) {
@@ -530,6 +531,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     const double pass_scale = std::pow(pass_decay, pass);
     const int hpwl_threshold = std::max(
         24, static_cast<int>(std::ceil(constants_.recovery_hpwl_threshold * pass_scale)));
+    const int gcell_span = std::max(1, design_->getGridlineSize());
     for (const int netIndex : netIndices) {
       const auto& net = gr_nets_[netIndex];
       const auto& tree = net->getRoutingTree();
@@ -543,7 +545,21 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
       if (grid_graph_->checkOverflow(tree) > 0) {
         continue;
       }
-      candidates.push_back({netIndex, hpwl});
+      const auto route_stats = measureRoute(tree);
+      const uint64_t approx_hpwl_dbu
+          = static_cast<uint64_t>(std::max(1, hpwl))
+            * static_cast<uint64_t>(gcell_span);
+      const double stretch = approx_hpwl_dbu > 0
+                                 ? static_cast<double>(route_stats.first)
+                                       / static_cast<double>(approx_hpwl_dbu)
+                                 : 1.0;
+      // Prioritize nets with measurable length inflation; very long nets are
+      // still kept even if stretch is modest.
+      if (stretch < constants_.recovery_min_stretch
+          && hpwl < constants_.recovery_deep_hpwl_threshold) {
+        continue;
+      }
+      candidates.push_back({netIndex, hpwl, stretch});
     }
 
     if (candidates.empty()) {
@@ -553,6 +569,10 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     std::sort(candidates.begin(),
               candidates.end(),
               [](const Candidate& lhs, const Candidate& rhs) {
+                constexpr double kStretchEpsilon = 1e-4;
+                if (std::abs(lhs.stretch - rhs.stretch) > kStretchEpsilon) {
+                  return lhs.stretch > rhs.stretch;
+                }
                 return lhs.hpwl > rhs.hpwl;
               });
 
@@ -564,16 +584,21 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     int keep
         = static_cast<int>(std::ceil(candidates.size() * pass_ratio));
     keep = std::max(1, std::min(keep, static_cast<int>(candidates.size())));
+    const int candidate_cap = std::max(1, constants_.recovery_candidate_cap);
+    keep = std::min(keep, candidate_cap);
     int deep_keep = static_cast<int>(std::ceil(
         keep * std::clamp(constants_.recovery_deep_ratio, 0.0, 1.0)));
+    deep_keep = std::min(
+        deep_keep, std::max(1, constants_.recovery_deep_search_cap));
     deep_keep = std::max(1, std::min(deep_keep, keep));
 
     logger_->report("stage 4.{}: wirelength recovery on {} / {} nets (deep "
-                    "search on {} nets)",
+                    "search on {} nets, top stretch {:.3f})",
                     pass + 1,
                     keep,
                     candidates.size(),
-                    deep_keep);
+                    deep_keep,
+                    candidates.front().stretch);
 
     int accepted_in_pass = 0;
     for (int candidateIndex = 0; candidateIndex < keep; candidateIndex++) {
@@ -586,7 +611,8 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
       const bool deep_search = candidateIndex < deep_keep
                                || candidates[candidateIndex].hpwl
                                       >= constants_.recovery_deep_hpwl_threshold
-                               || pass > 0;
+                               || candidates[candidateIndex].stretch
+                                      >= constants_.recovery_min_stretch + 0.12;
       const auto original_stats = measureRoute(original_tree);
       const int original_tree_overflow = grid_graph_->checkOverflow(original_tree);
       const int max_via_allowed
@@ -646,8 +672,13 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
 
         std::vector<MazeConfig> maze_configs;
         maze_configs.reserve(64);
-        const int max_maze_configs
-            = std::max(2, constants_.recovery_max_maze_configs);
+        const int maze_limit = deep_search
+                                   ? constants_.recovery_deep_maze_config_limit
+                                   : constants_.recovery_shallow_maze_config_limit;
+        const int max_maze_configs = std::max(
+            2,
+            std::min(std::max(2, constants_.recovery_max_maze_configs),
+                     std::max(2, maze_limit)));
         auto addMazeConfig = [&](int sparse_x,
                                  int sparse_y,
                                  int offset_x,
@@ -767,8 +798,12 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
           grid_graph_->extractWireLengthCostView(recoveryWlOnlyView);
           const double wl_via_cost_scale
               = std::clamp(constants_.recovery_wl_maze_via_cost_scale, 0.0, 1.0);
-          const int wl_config_count = std::min(static_cast<int>(maze_configs.size()),
-                                               deep_search ? 10 : 4);
+          const int wl_config_limit = std::max(
+              1,
+              deep_search ? constants_.recovery_deep_wl_config_limit
+                          : constants_.recovery_shallow_wl_config_limit);
+          const int wl_config_count
+              = std::min(static_cast<int>(maze_configs.size()), wl_config_limit);
           for (int cfg_index = 0; cfg_index < wl_config_count; cfg_index++) {
             const auto& cfg = maze_configs[cfg_index];
             MazeRoute wlMazeRoute(net, grid_graph_.get(), logger_);
@@ -797,7 +832,9 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
               && deep_search
               && candidateIndex < std::max(1, constants_.recovery_full_grid_top_n)
               && candidates[candidateIndex].hpwl
-                     >= constants_.recovery_full_grid_hpwl_threshold;
+                     >= constants_.recovery_full_grid_hpwl_threshold
+              && candidates[candidateIndex].stretch
+                     >= constants_.recovery_min_stretch;
         if (enable_full_grid_maze) {
           GridGraphView<CostT> fullGridWlOnlyView;
           grid_graph_->extractWireLengthCostView(fullGridWlOnlyView);
@@ -888,19 +925,31 @@ std::vector<int> CUGR::selectCriticalNets(
     int index;
     int overflow;
     int hpwl;
+    double stretch;
     bool critical;
   };
 
   std::vector<ScoredNet> scored;
   scored.reserve(candidates.size());
+  const int gcell_span = std::max(1, design_->getGridlineSize());
   for (const int netIndex : candidates) {
     const auto& net = gr_nets_[netIndex];
     const int overflow = grid_graph_->checkOverflow(net->getRoutingTree());
     const int hpwl = net->getBoundingBox().hp();
+    const RouteStats stats
+        = measureRouteStats(grid_graph_.get(), net->getRoutingTree());
+    const uint64_t approx_hpwl_dbu
+        = static_cast<uint64_t>(std::max(1, hpwl))
+          * static_cast<uint64_t>(gcell_span);
+    const double stretch = approx_hpwl_dbu > 0
+                               ? static_cast<double>(stats.wirelength)
+                                     / static_cast<double>(approx_hpwl_dbu)
+                               : 1.0;
     const bool critical
         = overflow >= constants_.refinement_overflow_threshold
-          || hpwl >= constants_.refinement_hpwl_threshold;
-    scored.push_back({netIndex, overflow, hpwl, critical});
+          || (hpwl >= constants_.refinement_hpwl_threshold
+              && stretch >= constants_.refinement_stretch_threshold);
+    scored.push_back({netIndex, overflow, hpwl, stretch, critical});
   }
 
   std::sort(scored.begin(),
@@ -911,6 +960,9 @@ std::vector<int> CUGR::selectCriticalNets(
               }
               if (lhs.overflow != rhs.overflow) {
                 return lhs.overflow > rhs.overflow;
+              }
+              if (std::abs(lhs.stretch - rhs.stretch) > 1e-4) {
+                return lhs.stretch > rhs.stretch;
               }
               return lhs.hpwl > rhs.hpwl;
             });
@@ -925,6 +977,11 @@ std::vector<int> CUGR::selectCriticalNets(
     critical_count++;
   }
   keep = std::max(keep, critical_count);
+  if (constants_.refinement_max_selected_nets > 0) {
+    keep = std::min(keep,
+                    std::max(critical_count,
+                             constants_.refinement_max_selected_nets));
+  }
 
   std::vector<int> selected;
   selected.reserve(keep);

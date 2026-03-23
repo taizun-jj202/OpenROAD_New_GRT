@@ -63,6 +63,8 @@ struct Constants
   bool wirelength_first_refinement = true;
   int refinement_overflow_threshold = 1;
   int refinement_hpwl_threshold = 80;
+  double refinement_stretch_threshold = 1.08;
+  int refinement_max_selected_nets = 0;
   double detour_refine_ratio = 0.95;
   double maze_refine_ratio = 0.88;
 
@@ -92,8 +94,15 @@ struct Constants
   double recovery_wl_maze_via_cost_scale = 0.30;
   int recovery_wl_only_hpwl_threshold = 120;
   int recovery_hpwl_threshold = 64;
+  double recovery_min_stretch = 1.06;
+  int recovery_candidate_cap = 280;
+  int recovery_deep_search_cap = 120;
+  int recovery_shallow_maze_config_limit = 4;
+  int recovery_deep_maze_config_limit = 12;
+  int recovery_shallow_wl_config_limit = 2;
+  int recovery_deep_wl_config_limit = 8;
   double recovery_refine_ratio = 0.82;
-  int recovery_max_passes = 4;
+  int recovery_max_passes = 3;
   double recovery_pass_decay = 0.80;
   int recovery_maze_sparse_x = 3;
   int recovery_maze_sparse_y = 3;
