@@ -1971,6 +1971,214 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     };
 
+    auto append_length_adaptive_hybrid = [&](const std::string& hybrid_name,
+                                             int source_count,
+                                             long via_weight,
+                                             int logger_code) {
+      source_count
+          = std::max(1, std::min(source_count, static_cast<int>(ranked.size())));
+      ScenarioResult hybrid_result;
+      hybrid_result.name = hybrid_name;
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      int long_net_picks = 0;
+      int short_net_picks = 0;
+
+      struct CandidateRoute
+      {
+        const GRoute* route = nullptr;
+        RouteEdgeStats stats;
+        long detour_dbu = 0;
+        double consensus_penalty = 0.0;
+      };
+
+      for (odb::dbNet* db_net : hybrid_nets) {
+        if (db_net == nullptr) {
+          continue;
+        }
+
+        std::vector<CandidateRoute> candidates;
+        candidates.reserve(source_count);
+        std::unordered_map<uint64_t, int> edge_frequency;
+        edge_frequency.reserve(64);
+
+        long min_wl = std::numeric_limits<long>::max();
+        long min_detour = std::numeric_limits<long>::max();
+
+        for (int idx = 0; idx < source_count; ++idx) {
+          const ScenarioResult* source = ranked[idx];
+          if (source == nullptr) {
+            continue;
+          }
+          const auto route_it = source->routes.find(db_net);
+          if (route_it == source->routes.end()) {
+            continue;
+          }
+
+          CandidateRoute candidate;
+          candidate.route = &route_it->second;
+          candidate.stats = collectRouteEdgeStats(route_it->second, grouter_->grid_);
+          const long bbox_hpwl = getRouteBBoxHpwl(route_it->second);
+          candidate.detour_dbu
+              = std::max(0L, candidate.stats.wirelength_dbu - bbox_hpwl);
+          for (const auto& [edge_key, usage] : candidate.stats.edge_counts) {
+            if (usage > 0) {
+              edge_frequency[edge_key] += 1;
+            }
+          }
+          min_wl = std::min(min_wl, candidate.stats.wirelength_dbu);
+          min_detour = std::min(min_detour, candidate.detour_dbu);
+          candidates.push_back(std::move(candidate));
+        }
+
+        if (candidates.empty()) {
+          continue;
+        }
+
+        for (CandidateRoute& candidate : candidates) {
+          long vote_sum = 0;
+          for (const auto& [edge_key, usage] : candidate.stats.edge_counts) {
+            if (usage > 0) {
+              const auto vote_it = edge_frequency.find(edge_key);
+              if (vote_it != edge_frequency.end()) {
+                vote_sum += vote_it->second;
+              }
+            }
+          }
+          const int edge_count
+              = std::max(1, static_cast<int>(candidate.stats.edge_counts.size()));
+          const double avg_vote
+              = static_cast<double>(vote_sum) / static_cast<double>(edge_count);
+          const double vote_target = static_cast<double>(source_count) * 0.78;
+          candidate.consensus_penalty = std::max(0.0, vote_target - avg_vote);
+        }
+
+        // Mix and match by net scale:
+        // long/high-detour nets use aggressive shortest-path scoring, while
+        // shorter nets use DR-stable scoring with stronger structural penalties.
+        const bool long_net = min_wl >= tile_size * 40L || min_detour >= tile_size * 14L;
+        const long wl_slack = std::max<long>(
+            long_net ? tile_size * 4L : tile_size * 2L,
+            static_cast<long>(
+                std::ceil(static_cast<double>(min_wl)
+                          * (long_net ? 0.0048 : 0.0032))));
+        const long detour_slack = std::max<long>(
+            long_net ? tile_size * 20L : tile_size * 12L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(std::max(1L, min_detour))
+                * (long_net ? 0.22 : 0.14))));
+
+        const GRoute* best_route = nullptr;
+        double best_objective = std::numeric_limits<double>::max();
+        long best_wl = std::numeric_limits<long>::max();
+        int best_vias = std::numeric_limits<int>::max();
+        long best_detour = std::numeric_limits<long>::max();
+
+        auto evaluate = [&](bool strict_gate) {
+          bool found = false;
+          for (const CandidateRoute& candidate : candidates) {
+            if (strict_gate && (candidate.stats.wirelength_dbu > min_wl + wl_slack
+                                || candidate.detour_dbu > min_detour + detour_slack)) {
+              continue;
+            }
+
+            const double objective = long_net
+                                         ? static_cast<double>(candidate.stats.wirelength_dbu)
+                                               + static_cast<double>(via_weight)
+                                                     * static_cast<double>(candidate.stats.via_count)
+                                               + 0.12
+                                                     * static_cast<double>(candidate.detour_dbu)
+                                               + 0.0035
+                                                     * static_cast<double>(candidate.stats.high_layer_dbu)
+                                               + static_cast<double>(tile_size) * 0.14
+                                                     * static_cast<double>(candidate.stats.layer_span)
+                                               + 0.40
+                                                     * static_cast<double>(candidate.stats.segment_count)
+                                               + 2.8
+                                                     * static_cast<double>(candidate.stats.bend_count)
+                                               + static_cast<double>(tile_size) * 0.22
+                                                     * candidate.consensus_penalty
+                                         : static_cast<double>(candidate.stats.wirelength_dbu)
+                                               + static_cast<double>(via_weight)
+                                                     * static_cast<double>(candidate.stats.via_count)
+                                               + 0.38
+                                                     * static_cast<double>(candidate.detour_dbu)
+                                               + 0.022
+                                                     * static_cast<double>(candidate.stats.high_layer_dbu)
+                                               + static_cast<double>(tile_size) * 0.72
+                                                     * static_cast<double>(candidate.stats.layer_span)
+                                               + 1.25
+                                                     * static_cast<double>(candidate.stats.segment_count)
+                                               + 8.0
+                                                     * static_cast<double>(candidate.stats.bend_count)
+                                               + static_cast<double>(tile_size) * 0.95
+                                                     * candidate.consensus_penalty;
+            if (objective < best_objective
+                || (objective == best_objective
+                    && candidate.stats.wirelength_dbu < best_wl)
+                || (objective == best_objective
+                    && candidate.stats.wirelength_dbu == best_wl
+                    && candidate.stats.via_count < best_vias)
+                || (objective == best_objective
+                    && candidate.stats.wirelength_dbu == best_wl
+                    && candidate.stats.via_count == best_vias
+                    && candidate.detour_dbu < best_detour)) {
+              found = true;
+              best_objective = objective;
+              best_wl = candidate.stats.wirelength_dbu;
+              best_vias = candidate.stats.via_count;
+              best_detour = candidate.detour_dbu;
+              best_route = candidate.route;
+            }
+          }
+          return found;
+        };
+
+        const bool found_strict = evaluate(true);
+        if (!found_strict) {
+          static_cast<void>(evaluate(false));
+        }
+        if (best_route != nullptr) {
+          hybrid_result.routes.emplace(db_net, *best_route);
+          if (long_net) {
+            long_net_picks++;
+          } else {
+            short_net_picks++;
+          }
+        }
+      }
+
+      const std::size_t coverage_threshold
+          = expected_net_count > 0 ? (expected_net_count * 95) / 100 : 0;
+      if (hybrid_result.routes.size() >= coverage_threshold) {
+        hybrid_result.metrics = compute_metrics(hybrid_result.routes);
+        logger_->info(
+            GNR,
+            logger_code,
+            "NEWGR {} from top {} scenarios: wirelength {:.0f} um, vias {}, "
+            "routed nets {}/{}, long-net picks {}, short-net picks {}, "
+            "detour {}, high-layer {}",
+            hybrid_name,
+            source_count,
+            hybrid_result.metrics.wirelength_um,
+            hybrid_result.metrics.via_count,
+            hybrid_result.routes.size(),
+            expected_net_count,
+            long_net_picks,
+            short_net_picks,
+            hybrid_result.metrics.detour_dbu,
+            hybrid_result.metrics.high_layer_dbu);
+        scenario_results.push_back(std::move(hybrid_result));
+      } else {
+        logger_->info(
+            GNR,
+            7311,
+            "NEWGR skipped {} due low net coverage ({}/{}).",
+            hybrid_name,
+            hybrid_result.routes.size(),
+            expected_net_count);
+      }
+    };
+
     auto append_softcap_hybrid = [&](const std::string& hybrid_name,
                                      int source_count,
                                      long via_weight,
@@ -2522,6 +2730,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const int consensus_source_count = std::min<int>(22, ranked.size());
     const int detour_source_count = std::min<int>(24, ranked.size());
     const int pareto_softcap_source_count = std::min<int>(28, ranked.size());
+    const int length_adaptive_source_count = std::min<int>(24, ranked.size());
     const long balanced_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 3L);
     const long softcap_via_weight
@@ -2540,10 +2749,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 14L);
     const long pareto_softcap_via_weight
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 14L);
+    const long length_adaptive_via_weight
+        = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 20L);
     const long min_wl_via_weight = 0L;
     append_hybrid("hybrid-netmix-wl", wl_source_count, 0, 0.24, 0.50, 6010);
     append_hybrid(
         "hybrid-netmix-ultra-wl", ultra_wl_source_count, 0, 0.40, 0.95, 6013);
+    append_length_adaptive_hybrid("hybrid-netmix-length-adaptive",
+                                  length_adaptive_source_count,
+                                  length_adaptive_via_weight,
+                                  7310);
     append_min_wl_hybrid("hybrid-netmix-min-wl",
                          min_wl_source_count,
                          min_wl_via_weight,
@@ -2822,13 +3037,30 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     // hybrids with low-via variants): pick the best WL candidate first, then
     // gate it by DR proxy/via drift to avoid pathological detailed-routing
     // behavior.
+    auto wl_champion_better = [&](const ScenarioResult& lhs,
+                                  const ScenarioResult& rhs) {
+      const long wl_gap = std::llabs(lhs.metrics.wirelength_dbu
+                                     - rhs.metrics.wirelength_dbu);
+      const long dr_tie_band
+          = std::max<long>(80, static_cast<long>(std::ceil(shortest_wl * 0.00045)));
+      if (wl_gap <= dr_tie_band) {
+        const double lhs_proxy = estimateDetailedRouteProxyCost(lhs.metrics);
+        const double rhs_proxy = estimateDetailedRouteProxyCost(rhs.metrics);
+        if (std::abs(lhs_proxy - rhs_proxy) > 1e-3) {
+          return lhs_proxy < rhs_proxy;
+        }
+      }
+      return wirelength_first_better(lhs, rhs);
+    };
+
     std::vector<const ScenarioResult*> wl_champion_pool;
-    wl_champion_pool.reserve(8);
-    for (const char* name : std::array<const char*, 8>{
+    wl_champion_pool.reserve(9);
+    for (const char* name : std::array<const char*, 9>{
              "hybrid-netmix-absolute-wl",
              "hybrid-netmix-min-wl-wide",
              "hybrid-netmix-min-wl-extreme",
              "hybrid-netmix-min-wl",
+             "hybrid-netmix-length-adaptive",
              "hybrid-netmix-smooth-wl",
              "hybrid-netmix-ultra-wl",
              "hybrid-netmix-wl-safe",
@@ -2842,7 +3074,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           wl_champion_pool.begin(),
           wl_champion_pool.end(),
           [&](const ScenarioResult* lhs, const ScenarioResult* rhs) {
-            return wirelength_first_better(*lhs, *rhs);
+            return wl_champion_better(*lhs, *rhs);
           });
     } else {
       forced_wl_ptr = wl_anchor;
@@ -2870,9 +3102,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = forced_wl_ptr->metrics.high_layer_dbu <= wl_anchor->metrics.high_layer_dbu
             && forced_wl_ptr->metrics.detour_dbu
                    <= wl_anchor->metrics.detour_dbu + detour_guard;
+      const bool proxy_dominant_upgrade
+          = wl_gain >= 0 && via_guard_ok && structural_guard
+            && challenger_proxy + 1e-3 < anchor_proxy * 0.97;
 
-      if (!(wl_gain >= min_wl_gain && proxy_guard && via_guard_ok
-            && structural_guard)) {
+      if (!((wl_gain >= min_wl_gain && proxy_guard && via_guard_ok
+             && structural_guard)
+            || proxy_dominant_upgrade)) {
         forced_wl_ptr = wl_anchor;
       } else {
         logger_->info(
