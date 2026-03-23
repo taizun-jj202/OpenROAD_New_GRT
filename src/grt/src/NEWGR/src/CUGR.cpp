@@ -35,6 +35,7 @@ struct RouteStats
   uint64_t wirelength = 0;
   int vias = 0;
   int overflow = 0;
+  CapacityT total_overflow = std::numeric_limits<CapacityT>::max();
 };
 
 RouteStats measureRouteStats(const GridGraph* grid_graph,
@@ -69,21 +70,39 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
                              const RouteStats& current_best,
                              const int baseline_overflow)
 {
-  // When the baseline still has overflow, prioritize relieving it.
-  if (baseline_overflow > 0) {
-    if (candidate.overflow != current_best.overflow) {
-      return candidate.overflow < current_best.overflow;
-    }
-    if (candidate.wirelength != current_best.wirelength) {
-      return candidate.wirelength < current_best.wirelength;
-    }
-    return candidate.vias < current_best.vias;
+  constexpr double kOverflowEpsilon = 1e-6;
+  constexpr double kAllowedOverflowIncreaseForWlGain = 10.0;
+  constexpr double kStrongOverflowDropThreshold = 16.0;
+
+  // Wirelength-first objective:
+  // keep shorter candidates as long as they don't cause a large overflow jump.
+  if (candidate.wirelength < current_best.wirelength) {
+    return candidate.total_overflow
+           <= current_best.total_overflow + kAllowedOverflowIncreaseForWlGain;
   }
 
-  // Once overflow-free, prioritize wirelength and then vias.
-  if (candidate.wirelength != current_best.wirelength) {
-    return candidate.wirelength < current_best.wirelength;
+  const double overflow_drop
+      = current_best.total_overflow - candidate.total_overflow;
+  if (overflow_drop > kStrongOverflowDropThreshold) {
+    // Accept a large overflow reduction even without immediate WL gain.
+    constexpr int64_t kMaxWirelengthTradeoff = 80;
+    if (candidate.wirelength
+        > current_best.wirelength + kMaxWirelengthTradeoff) {
+      return false;
+    }
+    if (candidate.vias != current_best.vias) {
+      return candidate.vias < current_best.vias;
+    }
+    return true;
   }
+
+  if (std::abs(overflow_drop) > kOverflowEpsilon) {
+    if (baseline_overflow > 0) {
+      return overflow_drop > 0.0;
+    }
+    return overflow_drop > 0.0 && candidate.wirelength <= current_best.wirelength;
+  }
+
   if (candidate.vias != current_best.vias) {
     return candidate.vias < current_best.vias;
   }
@@ -208,11 +227,31 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
-    const int baseline_overflow = baseline_stats[netIndex].overflow;
     const auto baseline_tree = baseline_trees[netIndex];
-    RouteStats best_stats = baseline_stats[netIndex];
-    std::shared_ptr<GRTreeNode> best_tree = baseline_tree;
-    bool changed = false;
+    const RouteStats original_stats = baseline_stats[netIndex];
+
+    RouteStats best_stats;
+    std::shared_ptr<GRTreeNode> best_tree = nullptr;
+    bool best_is_baseline = false;
+    int baseline_overflow = original_stats.overflow;
+
+    auto evaluateTree = [&](const std::shared_ptr<GRTreeNode>& tree,
+                            RouteStats& stats) {
+      if (!tree) {
+        return false;
+      }
+      grid_graph_->commitTree(tree);
+      stats = measureRouteStats(grid_graph_.get(), tree);
+      stats.total_overflow = grid_graph_->getTotalOverflow();
+      grid_graph_->commitTree(tree, /*ripup*/ true);
+      return true;
+    };
+
+    if (baseline_tree && evaluateTree(baseline_tree, best_stats)) {
+      best_tree = baseline_tree;
+      best_is_baseline = true;
+      baseline_overflow = best_stats.overflow;
+    }
 
     std::vector<MazeConfig> maze_configs;
     maze_configs.reserve(12);
@@ -266,14 +305,10 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
                     (base_sparse - 1) / 2);
     }
 
-    auto considerCandidate = [&](const std::shared_ptr<GRTreeNode>& tree) {
-      if (!tree) {
-        return;
-      }
-      grid_graph_->commitTree(tree);
-      const RouteStats candidate_stats = measureRouteStats(grid_graph_.get(), tree);
-      grid_graph_->commitTree(tree, /*ripup*/ true);
-      if (candidate_stats.overflow > baseline_overflow) {
+    auto considerCandidate = [&](const std::shared_ptr<GRTreeNode>& tree,
+                                 const bool is_baseline_candidate) {
+      RouteStats candidate_stats;
+      if (!evaluateTree(tree, candidate_stats)) {
         return;
       }
       if (!best_tree
@@ -281,7 +316,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
               candidate_stats, best_stats, baseline_overflow)) {
         best_tree = tree;
         best_stats = candidate_stats;
-        changed = true;
+        best_is_baseline = is_baseline_candidate;
       }
     };
 
@@ -300,20 +335,22 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       patternRoute.setSteinerTree(tree);
       patternRoute.constructRoutingDAG();
       patternRoute.run();
-      considerCandidate(net->getRoutingTree());
+      considerCandidate(net->getRoutingTree(), /*is_baseline_candidate*/ false);
       evaluated_candidates++;
     }
 
     if (!best_tree && baseline_tree) {
       best_tree = baseline_tree;
-      best_stats = baseline_stats[netIndex];
+      best_stats = original_stats;
+      best_stats.total_overflow = grid_graph_->getTotalOverflow();
+      best_is_baseline = true;
     }
 
     if (best_tree) {
       net->setRoutingTree(best_tree);
       grid_graph_->commitTree(best_tree);
       grid_graph_->updateWireCostView(wireCostView, best_tree);
-      if (changed && best_stats.wirelength < baseline_stats[netIndex].wirelength) {
+      if (!best_is_baseline && best_stats.wirelength < original_stats.wirelength) {
         improved_nets++;
       }
     } else {

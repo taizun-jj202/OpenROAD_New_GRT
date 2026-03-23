@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -226,7 +227,31 @@ void MazeRoute::run()
   solutions_.reserve(net_->getNumPins());
 
   std::vector<bool> visited(net_->getNumPins(), false);
-  const int startPinIndex = 0;
+  int startPinIndex = 0;
+  if (graph_.getNumPseudoPins() > 1) {
+    int min_x = std::numeric_limits<int>::max();
+    int max_x = std::numeric_limits<int>::min();
+    int min_y = std::numeric_limits<int>::max();
+    int max_y = std::numeric_limits<int>::min();
+    for (int pin_index = 0; pin_index < graph_.getNumPseudoPins(); pin_index++) {
+      const PointT point = graph_.getPseudoPin(pin_index).point;
+      min_x = std::min(min_x, point.x());
+      max_x = std::max(max_x, point.x());
+      min_y = std::min(min_y, point.y());
+      max_y = std::max(max_y, point.y());
+    }
+    const PointT center((min_x + max_x) / 2, (min_y + max_y) / 2);
+    int best_dist = std::numeric_limits<int>::max();
+    for (int pin_index = 0; pin_index < graph_.getNumPseudoPins(); pin_index++) {
+      const PointT point = graph_.getPseudoPin(pin_index).point;
+      const int dist = std::abs(point.x() - center.x())
+                       + std::abs(point.y() - center.y());
+      if (dist < best_dist) {
+        best_dist = dist;
+        startPinIndex = pin_index;
+      }
+    }
+  }
   visited[startPinIndex] = true;
   int numDetached = graph_.getNumPseudoPins() - 1;
   updateSolution(std::make_shared<Solution>(

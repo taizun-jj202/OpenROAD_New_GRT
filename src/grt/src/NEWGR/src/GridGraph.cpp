@@ -604,6 +604,25 @@ int GridGraph::checkOverflow(const std::shared_ptr<GRTreeNode>& tree) const
   return num;
 }
 
+CapacityT GridGraph::getTotalOverflow() const
+{
+  CapacityT overflow = 0.0;
+  for (int layer_index = constants_.min_routing_layer;
+       layer_index < num_layers_;
+       layer_index++) {
+    const int direction = layer_directions_[layer_index];
+    for (int x = 0; x < x_size_ - 1 + direction; x++) {
+      for (int y = 0; y < y_size_ - direction; y++) {
+        const GraphEdge& edge = graph_edges_[layer_index][x][y];
+        if (edge.demand > edge.capacity) {
+          overflow += edge.demand - edge.capacity;
+        }
+      }
+    }
+  }
+  return overflow;
+}
+
 std::string GridGraph::getPythonString(
     const std::shared_ptr<GRTreeNode>& routing_tree) const
 {

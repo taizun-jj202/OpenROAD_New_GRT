@@ -121,6 +121,7 @@ class GridGraph
                     PointT v) const;  // Check wire overflow
   int checkOverflow(const std::shared_ptr<GRTreeNode>& tree)
       const;  // Check routing tree overflow (Only wires are checked)
+  CapacityT getTotalOverflow() const;
   std::string getPythonString(
       const std::shared_ptr<GRTreeNode>& routing_tree) const;
 
