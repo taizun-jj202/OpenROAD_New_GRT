@@ -87,13 +87,13 @@ bool isBetterScore(const RouteScore& candidate, const RouteScore& baseline)
     // FastRoute-style RRR acceptance pressure to prevent long detours from
     // being admitted early and then requiring expensive cleanup later.
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 14ULL;
+        = static_cast<uint64_t>(overflowGain) * 5ULL;
     const uint64_t allowedWireLength
         = baseline.wire_length + allowedIncrease;
     if (candidate.wire_length > allowedWireLength) {
       return false;
     }
-    const int viaSlack = std::max(1, overflowGain / 5);
+    const int viaSlack = std::max(1, overflowGain / 7);
     return candidate.via_count <= baseline.via_count + viaSlack;
   }
   if (candidate.overflow_edges > baseline.overflow_edges) {
@@ -117,13 +117,13 @@ bool isRecoveryScoreBetter(const RouteScore& candidate,
   if (candidate.overflow_edges < baseline.overflow_edges) {
     const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 9ULL;
+        = static_cast<uint64_t>(overflowGain) * 3ULL;
     const uint64_t allowedWireLength
         = baseline.wire_length + allowedIncrease;
     if (candidate.wire_length > allowedWireLength) {
       return false;
     }
-    const int viaSlack = std::max(1, overflowGain / 6);
+    const int viaSlack = std::max(1, overflowGain / 8);
     return candidate.via_count <= baseline.via_count + viaSlack;
   }
   if (candidate.wire_length < baseline.wire_length) {
@@ -148,7 +148,7 @@ bool isTightenScoreBetter(const RouteScore& candidate, const RouteScore& baselin
     // Tightening is wirelength-focused. Overflow reduction can grow wire only
     // slightly to avoid reintroducing long detours late in the flow.
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 3ULL;
+        = static_cast<uint64_t>(overflowGain) * 2ULL;
     const uint64_t allowedWireLength
         = baseline.wire_length + allowedIncrease;
     if (candidate.wire_length > allowedWireLength) {
@@ -178,11 +178,11 @@ bool isCompactionScoreBetter(const RouteScore& candidate,
     const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
     // Keep overflow relief but enforce near wirelength neutrality.
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain);
+        = std::max<uint64_t>(1ULL, static_cast<uint64_t>(overflowGain) / 3ULL);
     if (candidate.wire_length > baseline.wire_length + allowedIncrease) {
       return false;
     }
-    return candidate.via_count <= baseline.via_count;
+    return candidate.via_count <= baseline.via_count + 1;
   }
   if (candidate.wire_length < baseline.wire_length) {
     if (candidate.via_count <= baseline.via_count + 2) {
@@ -213,11 +213,11 @@ bool isStrictWirelengthScoreBetter(const RouteScore& candidate,
     // Preserve overflow relief while keeping the route close to wirelength
     // neutral.
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain);
+        = std::max<uint64_t>(1ULL, static_cast<uint64_t>(overflowGain) / 4ULL);
     if (candidate.wire_length > baseline.wire_length + allowedIncrease) {
       return false;
     }
-    return candidate.via_count <= baseline.via_count + 1;
+    return candidate.via_count <= baseline.via_count;
   }
   // For overflow-neutral updates, require strict wirelength reduction.
   if (candidate.wire_length >= baseline.wire_length) {
@@ -239,7 +239,8 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
                                                  int max_candidates)
 {
   const bool criticalLongNet
-      = (pins >= 10 || hp >= 150) && rank < 512;
+      = (pins >= 8 || hp >= 120) && rank < 2048;
+  const bool extremeLongNet = (pins >= 12 || hp >= 180) && rank < 1536;
   std::vector<int> intervals{
       base_interval,
       std::max(3, base_interval - 1),
@@ -252,6 +253,10 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
     intervals.emplace_back(2);
   }
   if (pins >= 12 || hp >= 160) {
+    intervals.emplace_back(3);
+  }
+  if (extremeLongNet) {
+    intervals.emplace_back(2);
     intervals.emplace_back(3);
   }
   if (pins <= 3 && hp <= 60) {
@@ -1062,7 +1067,7 @@ void CUGR::strictWirelengthCompaction()
   const bool useXAxisWavefront = (strictCallCount % 2 == 0);
   strictCallCount++;
   const int compactionBudget
-      = std::min(totalNets, std::max(8192, (totalNets * 4) / 5));
+      = std::min(totalNets, std::max(6144, (totalNets * 3) / 5));
   if (compactionBudget <= 0) {
     return;
   }
@@ -1072,7 +1077,7 @@ void CUGR::strictWirelengthCompaction()
   const uint64_t longWireThreshold
       = routedScores[netIndices[longNetRank]].wire_length;
   const int denseMazeBudget
-      = std::min(compactionBudget, std::max(1024, compactionBudget / 3));
+      = std::min(compactionBudget, std::max(1536, compactionBudget / 2));
   std::vector<int> scheduledNetIndices = buildSpatialCompactionOrder(
       netIndices, gr_nets_, compactionBudget, useXAxisWavefront);
   if (scheduledNetIndices.empty()) {
@@ -1136,12 +1141,16 @@ void CUGR::strictWirelengthCompaction()
       int interval = 4;
       if (rank < denseMazeBudget * 2 / 3 || oldScore.overflow_edges > 0) {
         interval = 3;
+      }
+      if (rank < denseMazeBudget / 6
+          || (oldScore.wire_length >= longWireThreshold && pins >= 6)) {
+        interval = 2;
       } else if (pins <= 3 && hp <= 80) {
         interval = 5;
       }
       const int maxMazeCandidates = rank < denseMazeBudget / 6
-                                        ? 5
-                                        : (rank < denseMazeBudget / 2 ? 4 : 3);
+                                        ? 6
+                                        : (rank < denseMazeBudget / 2 ? 5 : 4);
       const auto candidateGrids
           = buildMazeCandidateGrids(interval,
                                     rank + oldScore.via_count * 3
@@ -1233,6 +1242,8 @@ void CUGR::route()
   grid_graph_->setStageCostScales(0.04, 0.05, 0.90);
   strictWirelengthCompaction();
   grid_graph_->setStageCostScales(0.01, 0.02, 0.88);
+  strictWirelengthCompaction();
+  grid_graph_->setStageCostScales(0.0, 0.01, 0.92);
   strictWirelengthCompaction();
 
   printStatistics();
