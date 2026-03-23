@@ -285,56 +285,118 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
 void CUGR::wirelengthRecovery()
 {
-  logger_->report("stage 4: wirelength recovery with pattern reroute");
+  logger_->report(
+      "stage 4: wirelength recovery with multi-candidate reroute");
   std::vector<int> netIndices;
   netIndices.reserve(gr_nets_.size());
   for (const auto& net : gr_nets_) {
     netIndices.push_back(net->getIndex());
   }
-  sortNetIndices(netIndices);
+  // Prioritize nets by current committed wire length contribution so the
+  // largest detours are tightened first.
+  std::vector<uint64_t> routedWireLength(gr_nets_.size(), 0);
+  for (const int netIndex : netIndices) {
+    const auto tree = gr_nets_[netIndex]->getRoutingTree();
+    routedWireLength[netIndex]
+        = evaluateRouteScore(tree, grid_graph_.get()).wire_length;
+  }
+  std::sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
+    if (routedWireLength[lhs] != routedWireLength[rhs]) {
+      return routedWireLength[lhs] > routedWireLength[rhs];
+    }
+    return lhs < rhs;
+  });
 
+  GridGraphView<CostT> wireCostView;
+  grid_graph_->extractWireCostView(wireCostView);
+
+  const int mazeCandidateBudget
+      = std::max(64, static_cast<int>(netIndices.size() / 6));
   int accepted = 0;
+  int acceptedFromMaze = 0;
+  int rank = 0;
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
     const auto oldTree = net->getRoutingTree();
     if (!oldTree) {
+      rank++;
       continue;
     }
 
-    grid_graph_->commitTree(oldTree, /*ripup*/ true);
+    const RouteScore oldScore = evaluateRouteScore(oldTree, grid_graph_.get());
 
+    // Remove current net and keep sparse maze costs synchronized.
+    grid_graph_->commitTree(oldTree, /*ripup*/ true);
+    grid_graph_->updateWireCostView(wireCostView, oldTree);
+
+    std::shared_ptr<GRTreeNode> bestTree = oldTree;
+    RouteScore bestScore = oldScore;
+    bool bestFromMaze = false;
+
+    auto tryCandidate = [&](const std::shared_ptr<GRTreeNode>& candidateTree,
+                            const bool fromMaze) {
+      if (!candidateTree) {
+        return;
+      }
+      grid_graph_->commitTree(candidateTree);
+      const RouteScore candidateScore
+          = evaluateRouteScore(candidateTree, grid_graph_.get());
+      grid_graph_->commitTree(candidateTree, /*ripup*/ true);
+      if (isRecoveryScoreBetter(candidateScore, bestScore)) {
+        bestTree = candidateTree;
+        bestScore = candidateScore;
+        bestFromMaze = fromMaze;
+      }
+    };
+
+    // Candidate A: CUGR-style pattern reroute.
     PatternRoute patternRoute(
         net, grid_graph_.get(), stt_builder_, constants_, logger_);
     patternRoute.constructSteinerTree();
     patternRoute.constructRoutingDAG();
     patternRoute.run();
-    const auto candidateTree = net->getRoutingTree();
+    tryCandidate(net->getRoutingTree(), /*fromMaze*/ false);
 
-    if (!candidateTree) {
-      net->setRoutingTree(oldTree);
-      grid_graph_->commitTree(oldTree);
-      continue;
+    // Candidate B: SPRoute-like selective sparse maze refinement for
+    // critical/overflow nets.
+    const bool runMazeCandidate
+        = (rank < mazeCandidateBudget || oldScore.overflow_edges > 0);
+    if (runMazeCandidate) {
+      const int interval = oldScore.overflow_edges > 0 ? 4 : 5;
+      const int xOffset = rank % interval;
+      const int yOffset = (rank * 3) % interval;
+      SparseGrid recoveryGrid(interval, interval, xOffset, yOffset);
+
+      MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+      mazeRoute.constructSparsifiedGraph(wireCostView, recoveryGrid);
+      mazeRoute.run();
+      std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();
+      if (steinerTree) {
+        PatternRoute mazeRefineRoute(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        mazeRefineRoute.setSteinerTree(steinerTree);
+        mazeRefineRoute.constructRoutingDAG();
+        mazeRefineRoute.run();
+        tryCandidate(net->getRoutingTree(), /*fromMaze*/ true);
+      }
     }
 
-    grid_graph_->commitTree(oldTree);
-    const RouteScore oldScore = evaluateRouteScore(oldTree, grid_graph_.get());
-    grid_graph_->commitTree(oldTree, /*ripup*/ true);
-
-    grid_graph_->commitTree(candidateTree);
-    const RouteScore candidateScore
-        = evaluateRouteScore(candidateTree, grid_graph_.get());
-
-    if (isRecoveryScoreBetter(candidateScore, oldScore)) {
+    if (bestTree != oldTree) {
       accepted++;
-      continue;
+      if (bestFromMaze) {
+        acceptedFromMaze++;
+      }
     }
 
-    grid_graph_->commitTree(candidateTree, /*ripup*/ true);
-    net->setRoutingTree(oldTree);
-    grid_graph_->commitTree(oldTree);
+    net->setRoutingTree(bestTree);
+    grid_graph_->commitTree(bestTree);
+    grid_graph_->updateWireCostView(wireCostView, bestTree);
+    rank++;
   }
 
-  logger_->report("wirelength recovery accepted {} net updates.", accepted);
+  logger_->report("wirelength recovery accepted {} net updates ({} from maze).",
+                  accepted,
+                  acceptedFromMaze);
 }
 
 void CUGR::route()
