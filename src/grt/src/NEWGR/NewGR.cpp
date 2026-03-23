@@ -103,8 +103,8 @@ double estimateDetailedRouteProxyCost(const RouteMetrics& metrics, int tile_size
   // - Keep overflow terms dominant when present.
   const double via_term
       = static_cast<double>(metrics.via_count) * static_cast<double>(tile_size) * 0.34;
-  const double detour_term = static_cast<double>(metrics.detour_dbu) * 0.10;
-  const double high_layer_term = static_cast<double>(metrics.high_layer_dbu) * 0.030;
+  const double detour_term = static_cast<double>(metrics.detour_dbu) * 0.14;
+  const double high_layer_term = static_cast<double>(metrics.high_layer_dbu) * 0.004;
   const double layer_span_term
       = static_cast<double>(metrics.layer_span_sum) * static_cast<double>(tile_size) * 0.50;
   const double overflow_term
@@ -1717,7 +1717,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const long tie_via_wl_band
       = std::max<long>(24, static_cast<long>(std::ceil(shortest_wl * 0.00008)));
   const long tie_quality_wl_band
-      = std::max<long>(80, static_cast<long>(std::ceil(shortest_wl * 0.0025)));
+      = std::max<long>(80, static_cast<long>(std::ceil(shortest_wl * 0.0005)));
   const int final_tile_size = std::max(grouter_->grid_->getTileSize(), 1);
   auto wirelength_with_quality_tie_better = [&](const ScenarioResult& lhs,
                                                 const ScenarioResult& rhs) {
