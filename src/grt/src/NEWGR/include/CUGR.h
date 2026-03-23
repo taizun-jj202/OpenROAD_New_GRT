@@ -79,10 +79,10 @@ struct Constants
   bool enable_wirelength_recovery = true;
   bool recovery_use_maze = true;
   bool recovery_use_wirelength_maze = true;
-  double recovery_wl_maze_via_cost_scale = 0.45;
-  int recovery_wl_only_hpwl_threshold = 120;
+  double recovery_wl_maze_via_cost_scale = 0.2;
+  int recovery_wl_only_hpwl_threshold = 96;
   int recovery_hpwl_threshold = 64;
-  double recovery_refine_ratio = 0.97;
+  double recovery_refine_ratio = 1.0;
   int recovery_max_passes = 5;
   double recovery_pass_decay = 0.86;
   int recovery_maze_sparse_x = 3;
@@ -97,7 +97,7 @@ struct Constants
   int recovery_dense_sparse_x = 2;
   int recovery_dense_sparse_y = 2;
   int recovery_max_maze_configs = 30;
-  int recovery_max_via_increase = 3;
+  int recovery_max_via_increase = 8;
 
   double pin_patch_threshold = 1000000.0;
   int pin_patch_padding = 3;

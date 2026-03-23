@@ -71,7 +71,7 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
                              const int baseline_overflow)
 {
   constexpr double kOverflowEpsilon = 1e-6;
-  constexpr double kAllowedOverflowIncreaseForWlGain = 6.0;
+  constexpr double kAllowedOverflowIncreaseForWlGain = 16.0;
   constexpr double kStrongOverflowDropThreshold = 20.0;
 
   // Wirelength-first objective:
@@ -85,7 +85,7 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
       = current_best.total_overflow - candidate.total_overflow;
   if (overflow_drop > kStrongOverflowDropThreshold) {
     // Accept a large overflow reduction even without immediate WL gain.
-    constexpr int64_t kMaxWirelengthTradeoff = 24;
+    constexpr int64_t kMaxWirelengthTradeoff = 40;
     if (candidate.wirelength
         > current_best.wirelength + kMaxWirelengthTradeoff) {
       return false;
@@ -524,13 +524,15 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         if (!tree) {
           return;
         }
+        constexpr int kRecoveryOverflowSlack = 2;
         // Evaluate overflow after adding the candidate tree back to the live
         // graph. This avoids selecting routes that appear legal in rip-up mode
         // but create new overflows once committed.
         grid_graph_->commitTree(tree);
         const int overflow_after_commit = grid_graph_->checkOverflow(tree);
         grid_graph_->commitTree(tree, /*ripup*/ true);
-        if (overflow_after_commit > original_tree_overflow) {
+        if (overflow_after_commit
+            > original_tree_overflow + kRecoveryOverflowSlack) {
           return;
         }
         const auto stats = measureRoute(tree);
