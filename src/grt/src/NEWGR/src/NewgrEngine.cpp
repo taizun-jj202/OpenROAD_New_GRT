@@ -115,18 +115,19 @@ float reductionRatio(int base_cap,
   const float pressure_term = 1.0f / (1.0f + std::exp(-(pressure_sigma - 0.25f) * 1.8f));
   const float center_term = std::clamp(1.0f - distance_to_center, 0.0f, 1.0f);
 
-  // Lower layers reserve more resources for detailed routing.
-  float ratio = 0.62f + 0.26f * normalized_layer;
-  ratio += 0.08f * center_term;
-  ratio -= 0.22f * pressure_term;
+  // Radical experiment: aggressively choke congested low-layer edges to force
+  // detours earlier in global routing.
+  float ratio = 0.54f + 0.34f * normalized_layer;
+  ratio += 0.14f * center_term;
+  ratio -= 0.38f * pressure_term;
   if (horizontal) {
-    ratio += 0.02f;
+    ratio -= 0.02f;
   }
 
   if (base_cap <= 2) {
-    ratio += 0.05f;
+    ratio += 0.03f;
   }
-  return std::clamp(ratio, 0.40f, 0.96f);
+  return std::clamp(ratio, 0.25f, 0.92f);
 }
 
 int buildLocalizedCapacityReductions(const NewgrInput& input,
@@ -143,7 +144,8 @@ int buildLocalizedCapacityReductions(const NewgrInput& input,
   }
   const int total_edges = num_layers
                           * ((x_grids - 1) * y_grids + x_grids * (y_grids - 1));
-  const int max_reductions = std::max(2048, (total_edges * 7) / 10);
+  // Radical experiment: apply soft-cap shaping to almost the full grid.
+  const int max_reductions = std::max(2048, total_edges);
 
   std::vector<float> pin_pressure(x_grids * y_grids, 0.0f);
   for (const auto& net : input.nets) {
@@ -332,7 +334,7 @@ NetRouteMap NewgrEngine::run()
                /*OutFileName=*/"",
                congestion_map,
                timer,
-               /*maxMazeRound=*/40,
+               /*maxMazeRound=*/8,
                Algo::DetPart_Astar_RUDY);
   timer.stop();
   last_total_overflow_ = totalOverflow;
