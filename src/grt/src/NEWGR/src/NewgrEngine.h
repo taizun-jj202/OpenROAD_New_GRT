@@ -48,6 +48,9 @@ class NewgrEngine
   NetRouteMap runRegionAware();
   NetRouteMap runRegularRegionAware();
   NetRouteMap runFineGrainRefine();
+  NetRouteMap runSmallNetAware();
+  NetRouteMap runAstarClassic();
+  NetRouteMap runRudyDriven();
 
   const NewgrInput& getInput() const { return input_; }
   int getTotalOverflow() const { return last_total_overflow_; }

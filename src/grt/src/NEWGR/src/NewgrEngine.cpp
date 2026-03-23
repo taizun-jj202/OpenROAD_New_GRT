@@ -114,6 +114,27 @@ NetRouteMap NewgrEngine::runFineGrainRefine()
                        /*warn_id=*/404);
 }
 
+NetRouteMap NewgrEngine::runSmallNetAware()
+{
+  return runWithConfig(/*max_maze_round=*/200,
+                       static_cast<int>(Algo::DetPart_Astar_Small),
+                       /*warn_id=*/408);
+}
+
+NetRouteMap NewgrEngine::runAstarClassic()
+{
+  return runWithConfig(/*max_maze_round=*/220,
+                       static_cast<int>(Algo::Astar),
+                       /*warn_id=*/409);
+}
+
+NetRouteMap NewgrEngine::runRudyDriven()
+{
+  return runWithConfig(/*max_maze_round=*/200,
+                       static_cast<int>(Algo::DetPart_Astar_RUDY),
+                       /*warn_id=*/407);
+}
+
 NetRouteMap NewgrEngine::runWithConfig(int max_maze_round, int algo_id, int warn_id)
 {
   if (!input_ready_) {
