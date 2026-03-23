@@ -613,7 +613,7 @@ void CUGR::wirelengthRecovery()
 
   const int totalNets = static_cast<int>(netIndices.size());
   const int recoveryBudget
-      = std::min(totalNets, std::max(2048, totalNets / 20));
+      = std::min(totalNets, std::max(2048, totalNets / 18));
   const int mazeCandidateBudget = std::max(192, recoveryBudget / 3);
   const int denseMazeBudget = std::max(64, recoveryBudget / 12);
   const int longNetRank
@@ -742,7 +742,7 @@ void CUGR::finalPatternTighten()
 
   const int totalNets = static_cast<int>(netIndices.size());
   const int tightenBudget
-      = std::min(totalNets, std::max(1024, totalNets / 24));
+      = std::min(totalNets, std::max(1024, totalNets / 22));
   const int mazeTightenBudget
       = std::min(tightenBudget, std::max(128, tightenBudget / 12));
   GridGraphView<CostT> wireCostView;
@@ -859,8 +859,8 @@ void CUGR::globalCompaction()
   };
 
   const std::vector<CompactionRound> rounds{
-      {24, 1024, true, 2},
-      {48, 512, false, 1}};
+      {22, 1280, true, 2},
+      {44, 640, false, 1}};
 
   int totalAccepted = 0;
   int totalAcceptedPattern = 0;
@@ -1106,7 +1106,7 @@ void CUGR::strictWirelengthCompaction()
   const bool useXAxisWavefront = (strictCallCount % 2 == 0);
   strictCallCount++;
   const int compactionBudget
-      = std::min(totalNets, std::max(1024, totalNets / 24));
+      = std::min(totalNets, std::max(1024, totalNets / 22));
   if (compactionBudget <= 0) {
     return;
   }
