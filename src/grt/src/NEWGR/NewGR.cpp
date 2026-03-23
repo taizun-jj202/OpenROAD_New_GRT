@@ -9,6 +9,7 @@
 #include <numeric>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1436,6 +1437,26 @@ int applyViaAwareStabilizationFusion(
   return replaced_nets;
 }
 
+void deduplicateRouteSegments(GRoute& route)
+{
+  if (route.size() < 2) {
+    return;
+  }
+
+  std::unordered_set<GSegment, GSegmentHash> seen;
+  seen.reserve(route.size() * 2);
+
+  GRoute deduplicated;
+  deduplicated.reserve(route.size());
+  for (const GSegment& segment : route) {
+    if (seen.insert(segment).second) {
+      deduplicated.push_back(segment);
+    }
+  }
+
+  route = std::move(deduplicated);
+}
+
 void applyCugrStyleGuidePatching(GlobalRouter* grouter,
                                  NetRouteMap& routes,
                                  int min_routing_layer,
@@ -2577,7 +2598,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(stabilized));
   }
 
-  if (has_best_wirelength) {
+  if (false && has_best_wirelength) {
     ScenarioResult longnet_fusion;
     longnet_fusion.name = "longnet-priority-fusion";
     if (ScenarioResult* extreme = find_scenario_result("extreme-wirelength-stitch")) {
@@ -2730,6 +2751,29 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                 min_routing_layer,
                                 max_routing_layer,
                                 logger_);
+  }
+
+  // Normalize mixed-source guides (FastRoute/CUGR/SPRoute donors) before
+  // handing them to detailed routing.
+  std::vector<Net*> final_nets;
+  final_nets.reserve(final_result.routes.size());
+  for (const auto& [db_net, route] : final_result.routes) {
+    static_cast<void>(route);
+    Net* net = grouter_->getNet(db_net);
+    if (net != nullptr) {
+      final_nets.push_back(net);
+    }
+  }
+  grouter_->addRemainingGuides(
+      final_result.routes, final_nets, min_routing_layer, max_routing_layer);
+  grouter_->connectPadPins(final_result.routes);
+  for (auto& [db_net, route] : final_result.routes) {
+    Net* net = grouter_->getNet(db_net);
+    if (net == nullptr) {
+      continue;
+    }
+    grouter_->mergeSegments(net->getPins(), route);
+    deduplicateRouteSegments(route);
   }
 
   return std::move(final_result.routes);
