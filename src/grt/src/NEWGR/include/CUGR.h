@@ -30,7 +30,7 @@ class BoxT;
 struct Constants
 {
   double weight_wire_length = 0.9;
-  double weight_via_number = 1.6;
+  double weight_via_number = 1.35;
   double weight_short_area = 320.0;
 
   int min_routing_layer = 1;
@@ -78,12 +78,12 @@ struct Constants
   bool stage3_use_wirelength_maze = true;
   int stage3_wl_only_hpwl_threshold = 140;
   int stage3_wl_config_limit = 5;
-  double stage3_wl_via_cost_scale = 0.27;
+  double stage3_wl_via_cost_scale = 0.20;
   bool stage3_use_full_grid_wl_maze = true;
   int stage3_full_grid_hpwl_threshold = 220;
   int stage3_full_grid_pin_limit = 20;
   int stage3_full_grid_overflow_threshold = 2;
-  double stage3_full_grid_via_cost_scale = 0.02;
+  double stage3_full_grid_via_cost_scale = 0.015;
   double stage3_full_grid_min_stretch = 1.18;
 
   // FastRoute-style post-processing pass: reroute a subset of long,
@@ -91,8 +91,8 @@ struct Constants
   bool enable_wirelength_recovery = true;
   bool recovery_use_maze = true;
   bool recovery_use_wirelength_maze = true;
-  double recovery_wl_maze_via_cost_scale = 0.23;
-  int recovery_wl_only_hpwl_threshold = 120;
+  double recovery_wl_maze_via_cost_scale = 0.15;
+  int recovery_wl_only_hpwl_threshold = 112;
   int recovery_hpwl_threshold = 88;
   double recovery_min_stretch = 1.05;
   int recovery_candidate_cap = 112;
@@ -126,9 +126,9 @@ struct Constants
   int recovery_spatial_batches = 6;
   int recovery_spatial_pool_multiplier = 2;
   bool recovery_use_full_grid_maze = true;
-  int recovery_full_grid_top_n = 8;
+  int recovery_full_grid_top_n = 10;
   int recovery_full_grid_hpwl_threshold = 180;
-  double recovery_full_grid_via_cost_scale = 0.03;
+  double recovery_full_grid_via_cost_scale = 0.02;
 
   double pin_patch_threshold = 1000000.0;
   int pin_patch_padding = 3;

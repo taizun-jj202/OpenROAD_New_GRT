@@ -448,6 +448,15 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
 
   std::vector<int> selected_indices(pin_access_points.size(), -1);
   std::vector<PointT> selected_points(pin_access_points.size(), PointT(0, 0));
+  std::vector<int> min_allowed_accessibility(pin_access_points.size(), 0);
+  for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
+    int max_pin_accessibility = -1;
+    for (const auto& point : pin_access_points[pin_index]) {
+      max_pin_accessibility = std::max(max_pin_accessibility, getAccessibility(point));
+    }
+    min_allowed_accessibility[pin_index]
+        = std::max(0, max_pin_accessibility - 1);
+  }
 
   auto evaluateHpwl = [&](const int pin_to_replace, const GRPoint& replacement) {
     int min_x = std::numeric_limits<int>::max();
@@ -597,12 +606,6 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
         continue;
       }
 
-      int max_pin_accessibility = -1;
-      for (const auto& point : access_points) {
-        max_pin_accessibility = std::max(max_pin_accessibility, getAccessibility(point));
-      }
-      const int min_allowed_accessibility = std::max(0, max_pin_accessibility - 1);
-
       int best_index = selected_indices[pin_index];
       int best_accessibility = std::numeric_limits<int>::min();
       int best_hpwl = std::numeric_limits<int>::max();
@@ -611,7 +614,7 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       for (int index = 0; index < access_points.size(); index++) {
         const GRPoint& point = access_points[index];
         const int accessibility = getAccessibility(point);
-        if (accessibility < min_allowed_accessibility) {
+        if (accessibility < min_allowed_accessibility[pin_index]) {
           continue;
         }
         const int hpwl = evaluateHpwl(pin_index, point);
@@ -660,6 +663,254 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     }
     if (!changed) {
       break;
+    }
+  }
+
+  auto computeGlobalShapeScore = [&](const std::vector<PointT>& points) {
+    std::vector<PointT> active_points;
+    active_points.reserve(points.size());
+    int min_x = std::numeric_limits<int>::max();
+    int max_x = std::numeric_limits<int>::min();
+    int min_y = std::numeric_limits<int>::max();
+    int max_y = std::numeric_limits<int>::min();
+    int64_t center_dist_sum = 0;
+    for (int pin_index = 0; pin_index < selected_indices.size(); pin_index++) {
+      if (selected_indices[pin_index] < 0) {
+        continue;
+      }
+      const auto& point = points[pin_index];
+      active_points.push_back(point);
+      min_x = std::min(min_x, point.x());
+      max_x = std::max(max_x, point.x());
+      min_y = std::min(min_y, point.y());
+      max_y = std::max(max_y, point.y());
+      center_dist_sum += std::abs(net_center.x() - point.x())
+                         + std::abs(net_center.y() - point.y());
+    }
+    if (active_points.size() <= 1) {
+      return static_cast<int64_t>(0);
+    }
+
+    const int hpwl = (max_x - min_x) + (max_y - min_y);
+    const int n = active_points.size();
+    std::vector<int> best(n, std::numeric_limits<int>::max());
+    std::vector<bool> used(n, false);
+    best[0] = 0;
+    int mst_wire = 0;
+    for (int iter = 0; iter < n; iter++) {
+      int v = -1;
+      int best_cost = std::numeric_limits<int>::max();
+      for (int i = 0; i < n; i++) {
+        if (!used[i] && best[i] < best_cost) {
+          best_cost = best[i];
+          v = i;
+        }
+      }
+      if (v < 0) {
+        break;
+      }
+      used[v] = true;
+      mst_wire += best[v];
+      for (int u = 0; u < n; u++) {
+        if (used[u]) {
+          continue;
+        }
+        const int dist = std::abs(active_points[v].x() - active_points[u].x())
+                         + std::abs(active_points[v].y() - active_points[u].y());
+        if (dist < best[u]) {
+          best[u] = dist;
+        }
+      }
+    }
+
+    return static_cast<int64_t>(hpwl) * 4096
+           + static_cast<int64_t>(mst_wire) * 1024 + center_dist_sum * 8;
+  };
+
+  // Pairwise local search on the most topologically influential pins.
+  // This escapes one-pin-at-a-time local minima without exploding runtime.
+  if (pin_access_points.size() >= 4) {
+    struct PinPriority
+    {
+      int pin_index;
+      int center_dist;
+      int num_options;
+    };
+
+    std::vector<PinPriority> variable_pins;
+    variable_pins.reserve(pin_access_points.size());
+    for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
+      if (selected_indices[pin_index] < 0 || pin_access_points[pin_index].size() <= 1) {
+        continue;
+      }
+      const auto& point = selected_points[pin_index];
+      const int center_dist
+          = std::abs(net_center.x() - point.x()) + std::abs(net_center.y() - point.y());
+      variable_pins.push_back(
+          {pin_index, center_dist, static_cast<int>(pin_access_points[pin_index].size())});
+    }
+
+    std::sort(variable_pins.begin(),
+              variable_pins.end(),
+              [](const PinPriority& lhs, const PinPriority& rhs) {
+                if (lhs.center_dist != rhs.center_dist) {
+                  return lhs.center_dist > rhs.center_dist;
+                }
+                if (lhs.num_options != rhs.num_options) {
+                  return lhs.num_options > rhs.num_options;
+                }
+                return lhs.pin_index < rhs.pin_index;
+              });
+
+    const int max_pair_pins
+        = std::min(static_cast<int>(variable_pins.size()), 8);
+    if (max_pair_pins >= 2) {
+      std::vector<int> focus_pins;
+      focus_pins.reserve(max_pair_pins);
+      for (int i = 0; i < max_pair_pins; i++) {
+        focus_pins.push_back(variable_pins[i].pin_index);
+      }
+
+      auto getCandidateIndices = [&](const int pin_index) {
+        struct RankedOption
+        {
+          int index;
+          int accessibility;
+          int center_dist;
+        };
+        std::vector<RankedOption> ranked;
+        ranked.reserve(pin_access_points[pin_index].size());
+        for (int index = 0; index < pin_access_points[pin_index].size(); index++) {
+          const auto& point = pin_access_points[pin_index][index];
+          const int accessibility = getAccessibility(point);
+          if (accessibility < min_allowed_accessibility[pin_index]) {
+            continue;
+          }
+          const int center_dist = std::abs(net_center.x() - point.x())
+                                  + std::abs(net_center.y() - point.y());
+          ranked.push_back({index, accessibility, center_dist});
+        }
+        std::sort(ranked.begin(),
+                  ranked.end(),
+                  [](const RankedOption& lhs, const RankedOption& rhs) {
+                    if (lhs.accessibility != rhs.accessibility) {
+                      return lhs.accessibility > rhs.accessibility;
+                    }
+                    if (lhs.center_dist != rhs.center_dist) {
+                      return lhs.center_dist < rhs.center_dist;
+                    }
+                    return lhs.index < rhs.index;
+                  });
+
+        std::vector<int> indices;
+        constexpr int kMaxCandidatesPerPin = 4;
+        indices.reserve(kMaxCandidatesPerPin + 1);
+        for (int i = 0;
+             i < static_cast<int>(ranked.size()) && i < kMaxCandidatesPerPin;
+             i++) {
+          indices.push_back(ranked[i].index);
+        }
+        const int selected_index = selected_indices[pin_index];
+        if (selected_index >= 0
+            && std::find(indices.begin(), indices.end(), selected_index)
+                   == indices.end()) {
+          indices.push_back(selected_index);
+        }
+        return indices;
+      };
+
+      int64_t global_best_score = computeGlobalShapeScore(selected_points);
+      bool improved = false;
+      constexpr int kPairBudget = 12;
+      for (int pass = 0; pass < 2; pass++) {
+        int pair_trials = 0;
+        bool improved_in_pass = false;
+        for (int lhs_idx = 0; lhs_idx < static_cast<int>(focus_pins.size());
+             lhs_idx++) {
+          for (int rhs_idx = lhs_idx + 1;
+               rhs_idx < static_cast<int>(focus_pins.size());
+               rhs_idx++) {
+            if (pair_trials >= kPairBudget) {
+              break;
+            }
+            pair_trials++;
+
+            const int lhs_pin = focus_pins[lhs_idx];
+            const int rhs_pin = focus_pins[rhs_idx];
+            const auto lhs_options = getCandidateIndices(lhs_pin);
+            const auto rhs_options = getCandidateIndices(rhs_pin);
+            if (lhs_options.empty() || rhs_options.empty()) {
+              continue;
+            }
+
+            int best_lhs_index = selected_indices[lhs_pin];
+            int best_rhs_index = selected_indices[rhs_pin];
+            int best_access_sum = -1;
+            int64_t best_pair_score = global_best_score;
+            const PointT orig_lhs = selected_points[lhs_pin];
+            const PointT orig_rhs = selected_points[rhs_pin];
+
+            for (const int lhs_option : lhs_options) {
+              const auto& lhs_point = pin_access_points[lhs_pin][lhs_option];
+              const int lhs_access = getAccessibility(lhs_point);
+              for (const int rhs_option : rhs_options) {
+                if (lhs_option == selected_indices[lhs_pin]
+                    && rhs_option == selected_indices[rhs_pin]) {
+                  continue;
+                }
+                const auto& rhs_point = pin_access_points[rhs_pin][rhs_option];
+                const int rhs_access = getAccessibility(rhs_point);
+                selected_points[lhs_pin] = {lhs_point.x(), lhs_point.y()};
+                selected_points[rhs_pin] = {rhs_point.x(), rhs_point.y()};
+                const int64_t score = computeGlobalShapeScore(selected_points);
+                const int access_sum = lhs_access + rhs_access;
+                if (score < best_pair_score
+                    || (score == best_pair_score && access_sum > best_access_sum)) {
+                  best_pair_score = score;
+                  best_access_sum = access_sum;
+                  best_lhs_index = lhs_option;
+                  best_rhs_index = rhs_option;
+                }
+              }
+            }
+            selected_points[lhs_pin] = orig_lhs;
+            selected_points[rhs_pin] = orig_rhs;
+
+            if ((best_lhs_index != selected_indices[lhs_pin]
+                 || best_rhs_index != selected_indices[rhs_pin])
+                && best_pair_score <= global_best_score) {
+              selected_indices[lhs_pin] = best_lhs_index;
+              selected_indices[rhs_pin] = best_rhs_index;
+              const auto& best_lhs_point = pin_access_points[lhs_pin][best_lhs_index];
+              const auto& best_rhs_point = pin_access_points[rhs_pin][best_rhs_index];
+              selected_points[lhs_pin]
+                  = {best_lhs_point.x(), best_lhs_point.y()};
+              selected_points[rhs_pin]
+                  = {best_rhs_point.x(), best_rhs_point.y()};
+              global_best_score = best_pair_score;
+              improved = true;
+              improved_in_pass = true;
+            }
+          }
+          if (pair_trials >= kPairBudget) {
+            break;
+          }
+        }
+        if (!improved_in_pass) {
+          break;
+        }
+      }
+
+      if (improved) {
+        for (const int pin_index : focus_pins) {
+          const int selected_index = selected_indices[pin_index];
+          if (selected_index < 0) {
+            continue;
+          }
+          const auto& point = pin_access_points[pin_index][selected_index];
+          selected_points[pin_index] = {point.x(), point.y()};
+        }
+      }
     }
   }
 
