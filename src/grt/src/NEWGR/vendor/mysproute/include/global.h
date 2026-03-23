@@ -16,6 +16,7 @@ float max_rudy;
 #define NEWGR_CAP_PROFILE_WL_FOCUSED 1
 #define NEWGR_CAP_PROFILE_DR_FOCUSED 2
 #define NEWGR_CAP_PROFILE_3D_SHORT 3
+#define NEWGR_CAP_PROFILE_ULTRA_WL 4
 int newgr_capacity_profile = NEWGR_CAP_PROFILE_BALANCED;
 
 // NEWGR hybrid policy:
@@ -57,12 +58,18 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 		const bool dr_profile = (newgr_capacity_profile == NEWGR_CAP_PROFILE_DR_FOCUSED);
 		const bool short3d_profile
 			= (newgr_capacity_profile == NEWGR_CAP_PROFILE_3D_SHORT);
+		const bool ultra_wl_profile
+			= (newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL);
 		// In low congestion regions, keep hard capacity to avoid unnecessary
 		// global-route detours that tend to increase wirelength.
 		if (rudy < 1.0) {
-			adj = wl_profile ? 1.0f : (dr_profile ? 0.93f : (short3d_profile ? 0.98f : 0.97f));
+			adj = ultra_wl_profile ? 1.0f
+			                       : (wl_profile ? 1.0f : (dr_profile ? 0.93f : (short3d_profile ? 0.98f : 0.97f)));
 		} else if (rudy < 2.0) {
-			adj = wl_profile ? 0.98f : (dr_profile ? 0.88f : (short3d_profile ? 0.94f : 0.95f));
+			adj = ultra_wl_profile ? 1.0f
+			                       : (wl_profile ? 0.98f : (dr_profile ? 0.88f : (short3d_profile ? 0.94f : 0.95f)));
+		} else if (rudy < 4.0 && ultra_wl_profile) {
+			adj = (layerID <= 1) ? 0.96f : ((layerID <= 3) ? 0.98f : 1.0f);
 		} else
 
 		if(layerID == 1) //metal2
@@ -83,6 +90,16 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 				adj -= 0.02f;
 			}
 		}
+		if (ultra_wl_profile) {
+			if (layerID <= 1 && rudy > 6.0f) {
+				adj -= 0.05f;
+			} else if (layerID <= 3 && rudy > 7.0f) {
+				adj -= 0.03f;
+			}
+			if (layerID >= 5 && rudy > 2.5f) {
+				adj += 0.03f;
+			}
+		}
 		// CUGR-like 3D preference for NEWGR:
 		// keep lower-layer reserve in congestion, but free upper layers so
 		// the maze can climb and avoid long 2D detours.
@@ -99,7 +116,8 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 
 		// Keep a reserve in severe hotspots; reserve depth depends on profile.
 		const float hotspot_adj_floor
-			= wl_profile ? 0.92f : (dr_profile ? 0.82f : (short3d_profile ? 0.85f : 0.88f));
+			= ultra_wl_profile ? 0.90f
+			                   : (wl_profile ? 0.92f : (dr_profile ? 0.82f : (short3d_profile ? 0.85f : 0.88f)));
 		if (rudy > 8.0f && adj > hotspot_adj_floor) {
 			adj = hotspot_adj_floor;
 		}

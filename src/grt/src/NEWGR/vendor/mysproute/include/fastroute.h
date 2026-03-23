@@ -651,6 +651,7 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 	// - DR_FOCUSED: wider expansion, more routability reserve.
 	// - BALANCED : compromise between the two.
 	if (algo == Astar) {
+		noADJ = (newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL);
 		if (newgr_capacity_profile == NEWGR_CAP_PROFILE_WL_FOCUSED) {
 			ENLARGE = 36;
 			ESTEP1 = 8;
@@ -686,6 +687,17 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 			LVIter = 2;
 			VIA = 0;
 			astar_weight = 0.62f;
+		} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL) {
+			ENLARGE = 24;
+			ESTEP1 = 4;
+			ESTEP2 = 3;
+			ESTEP3 = 2;
+			CSTEP1 = 1;
+			CSTEP2 = 1;
+			CSTEP3 = 1;
+			LVIter = 1;
+			VIA = 0;
+			astar_weight = 0.56f;
 		} else {
 			ENLARGE = 40;
 			ESTEP1 = 9;
@@ -755,6 +767,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 		} else if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_DR_FOCUSED) {
 			VIA = 3;
 		} else if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_3D_SHORT) {
+			VIA = 0;
+		} else if (algo == Astar && newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL) {
 			VIA = 0;
 		}
 		//viacost = VIA;
@@ -913,6 +927,8 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 					enlarge_limit = max(8, max(xGrid, yGrid) / 7);
 				} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_3D_SHORT) {
 					enlarge_limit = max(6, max(xGrid, yGrid) / 12);
+				} else if (newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL) {
+					enlarge_limit = max(5, max(xGrid, yGrid) / 14);
 				} else {
 					enlarge_limit = max(7, max(xGrid, yGrid) / 9);
 				}
@@ -974,6 +990,11 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 				    && i <= 2
 				    && totalOverflow > 0) {
 					active_algo = DetPart_Astar_Local;
+				} else if (algo == Astar
+				           && newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL
+				           && i == 1
+				           && totalOverflow > 4500) {
+					active_algo = DetPart_Astar_Local;
 				}
 				// CUGR/FastRoute-style annealing:
 				// high-overflow rounds prioritize escape; late rounds prioritize
@@ -986,6 +1007,15 @@ void runFastRoute(parser::grGenerator grGen, string benchFile, string OutFileNam
 						round_astar_weight = 0.70f;
 					} else {
 						round_astar_weight = 0.52f;
+					}
+				} else if (algo == Astar
+				           && newgr_capacity_profile == NEWGR_CAP_PROFILE_ULTRA_WL) {
+					if (totalOverflow > 3500) {
+						round_astar_weight = 0.72f;
+					} else if (totalOverflow > 700) {
+						round_astar_weight = 0.56f;
+					} else {
+						round_astar_weight = 0.42f;
 					}
 				}
 

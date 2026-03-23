@@ -135,6 +135,8 @@ const char* capacityProfileName(int profile)
   switch (profile) {
     case NEWGR_CAP_PROFILE_3D_SHORT:
       return "3D_SHORT";
+    case NEWGR_CAP_PROFILE_ULTRA_WL:
+      return "ULTRA_WL";
     case NEWGR_CAP_PROFILE_WL_FOCUSED:
       return "WL_FOCUSED";
     case NEWGR_CAP_PROFILE_DR_FOCUSED:
@@ -304,15 +306,31 @@ NetRouteMap NewgrEngine::run()
     return candidate;
   };
 
-  // Wirelength-first hybrid strategy:
-  // 1) Primary path uses FastRoute-style A* with NEWGR WL profile.
-  //    The WL profile internally starts with a short deterministic
-  //    partitioned phase (SPRoute-style) before A* refinement.
-  // 2) Only if overflow remains, run DR-focused deterministic fallback.
+  // Drastic multi-router hybrid strategy:
+  // 1) ULTRA_WL: FastRoute-like shortest path bias + CUGR-like selective 3D
+  //    escape in hotspots + reduced topology warping (SPRoute noADJ).
+  // 2) WL_Hybrid: previous robust wirelength profile.
+  // 3) 3D_SHORT: upper-layer friendly profile for stubborn congestion pockets.
+  // 4) DR fallback only if overflow remains after the WL-focused set.
   CandidateResult best = run_candidate(Algo::Astar,
-                                       760,
-                                       NEWGR_CAP_PROFILE_WL_FOCUSED,
-                                       "Astar_WLHybrid");
+                                       700,
+                                       NEWGR_CAP_PROFILE_ULTRA_WL,
+                                       "Astar_UltraWL");
+  CandidateResult wl_hybrid = run_candidate(Algo::Astar,
+                                            760,
+                                            NEWGR_CAP_PROFILE_WL_FOCUSED,
+                                            "Astar_WLHybrid");
+  if (isBetterCandidate(wl_hybrid, best)) {
+    best = std::move(wl_hybrid);
+  }
+
+  CandidateResult short3d = run_candidate(Algo::Astar,
+                                          620,
+                                          NEWGR_CAP_PROFILE_3D_SHORT,
+                                          "Astar_3DShort");
+  if (isBetterCandidate(short3d, best)) {
+    best = std::move(short3d);
+  }
 
   if (best.overflow > 0) {
     CandidateResult fallback = run_candidate(Algo::DetPart_Astar_Local,
