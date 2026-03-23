@@ -32,7 +32,7 @@ struct Constants
   // Wirelength-first weighting to counter NEWGR's CUGR-like over-detour
   // behavior on large designs.
   double weight_wire_length = 0.9;
-  double weight_via_number = 2.5;
+  double weight_via_number = 2.8;
   double weight_short_area = 500.0;
 
   int min_routing_layer = 1;
@@ -42,8 +42,8 @@ struct Constants
   // allowed stem length increase to trunk length ratio
   // Keep detours as a final overflow repair tool instead of a broad
   // topology-changing mechanism.
-  double max_detour_ratio = 0.055;
-  int target_detour_count = 4;
+  double max_detour_ratio = 0.045;
+  int target_detour_count = 3;
 
   double via_multiplier = 1.4;
 

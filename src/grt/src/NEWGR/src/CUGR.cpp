@@ -133,6 +133,36 @@ bool isRecoveryScoreBetter(const RouteScore& candidate,
   return candidate.via_count < baseline.via_count;
 }
 
+bool isTightenScoreBetter(const RouteScore& candidate, const RouteScore& baseline)
+{
+  if (baseline.overflow_edges == std::numeric_limits<int>::max()) {
+    return true;
+  }
+  if (candidate.overflow_edges > baseline.overflow_edges) {
+    return false;
+  }
+  if (candidate.overflow_edges < baseline.overflow_edges) {
+    const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
+    // Tightening is wirelength-focused. Overflow reduction can grow wire only
+    // slightly to avoid reintroducing long detours late in the flow.
+    const uint64_t allowedIncrease
+        = static_cast<uint64_t>(overflowGain) * 8ULL;
+    const uint64_t allowedWireLength
+        = baseline.wire_length + allowedIncrease;
+    if (candidate.wire_length > allowedWireLength) {
+      return false;
+    }
+    return candidate.via_count <= baseline.via_count + 1;
+  }
+  if (candidate.wire_length < baseline.wire_length) {
+    return true;
+  }
+  if (candidate.wire_length > baseline.wire_length) {
+    return false;
+  }
+  return candidate.via_count < baseline.via_count;
+}
+
 std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
                                                  int rank,
                                                  int hp,
@@ -252,7 +282,27 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
   GridGraphView<bool> congestionView;
   grid_graph_->extractCongestionView(congestionView);
   sortNetIndices(netIndices);
+  std::vector<int> overflowEdges(gr_nets_.size(), 0);
   for (const int netIndex : netIndices) {
+    overflowEdges[netIndex]
+        = grid_graph_->checkOverflow(gr_nets_[netIndex]->getRoutingTree());
+  }
+  std::stable_sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
+    if (overflowEdges[lhs] != overflowEdges[rhs]) {
+      return overflowEdges[lhs] > overflowEdges[rhs];
+    }
+    return lhs < rhs;
+  });
+  const int detourBudget = std::max(128, static_cast<int>(netIndices.size() / 3));
+  const int minOverflowForDetour = 2;
+  int considered = 0;
+  int accepted = 0;
+  for (int rank = 0; rank < netIndices.size(); rank++) {
+    const int netIndex = netIndices[rank];
+    if (rank >= detourBudget || overflowEdges[netIndex] < minOverflowForDetour) {
+      continue;
+    }
+    considered++;
     GRNet* net = gr_nets_[netIndex].get();
     const auto oldTree = net->getRoutingTree();
     grid_graph_->commitTree(oldTree, /*ripup*/ true);
@@ -285,6 +335,7 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
         = evaluateRouteScore(candidateTree, grid_graph_.get());
 
     if (isBetterScore(candidateScore, oldScore)) {
+      accepted++;
       continue;
     }
 
@@ -292,6 +343,9 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
     net->setRoutingTree(oldTree);
     grid_graph_->commitTree(oldTree);
   }
+  logger_->report("stage 2 detour candidates accepted {} / {} nets.",
+                  accepted,
+                  considered);
 
   updateOverflowNets(netIndices);
 }
@@ -590,7 +644,7 @@ void CUGR::finalPatternTighten()
       const RouteScore patternScore
           = evaluateRouteScore(patternTree, grid_graph_.get());
       grid_graph_->commitTree(patternTree, /*ripup*/ true);
-      if (isRecoveryScoreBetter(patternScore, bestScore)) {
+      if (isTightenScoreBetter(patternScore, bestScore)) {
         bestTree = patternTree;
         bestScore = patternScore;
       }
@@ -617,7 +671,7 @@ void CUGR::finalPatternTighten()
           const RouteScore mazeScore
               = evaluateRouteScore(mazeTree, grid_graph_.get());
           grid_graph_->commitTree(mazeTree, /*ripup*/ true);
-          if (isRecoveryScoreBetter(mazeScore, bestScore)) {
+          if (isTightenScoreBetter(mazeScore, bestScore)) {
             bestTree = mazeTree;
             bestScore = mazeScore;
             acceptedFromMaze++;
@@ -659,20 +713,20 @@ void CUGR::route()
   mazeRoute(netIndices);
 
   // Keep detours as a final cleanup pass for residual difficult hotspots.
-  grid_graph_->setStageCostScales(1.28, 1.28, 1.00);
+  grid_graph_->setStageCostScales(1.22, 1.24, 1.00);
   patternRouteWithDetours(netIndices);
 
   // FastRoute-style final RRR cleanup: re-run maze search to pull inflated
   // detours back to shorter legal paths after hotspot repair.
-  grid_graph_->setStageCostScales(1.40, 1.45, 1.05);
+  grid_graph_->setStageCostScales(1.32, 1.35, 1.05);
   mazeRoute(netIndices);
 
   // FastRoute-inspired post-congestion tightening: re-run pure pattern
   // routing and accept only net-level improvements in
   // overflow/wirelength/via score.
-  grid_graph_->setStageCostScales(0.55, 0.60, 1.35);
+  grid_graph_->setStageCostScales(0.50, 0.54, 1.40);
   wirelengthRecovery();
-  grid_graph_->setStageCostScales(0.50, 0.50, 1.40);
+  grid_graph_->setStageCostScales(0.42, 0.44, 1.55);
   finalPatternTighten();
 
   printStatistics();
