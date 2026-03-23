@@ -419,8 +419,8 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
     return lhs < rhs;
   });
   const int detourBudget
-      = std::max(128, static_cast<int>(netIndices.size() / 6));
-  const int minOverflowForDetour = 2;
+      = std::max(96, static_cast<int>(netIndices.size() / 7));
+  const int minOverflowForDetour = 3;
   if (overflowEdges[netIndices.front()] < minOverflowForDetour) {
     logger_->report("stage 2 skipped: overflow is below detour trigger.");
     updateOverflowNets(netIndices);
@@ -514,7 +514,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     } else if (pins >= 4 || hp >= 70) {
       interval = std::max(5, base_sparse_interval - 1);
     }
-    const int max_candidates = (pins >= 10 || hp >= 130) ? 5 : 4;
+    const int max_candidates = (pins >= 10 || hp >= 130) ? 4 : 3;
     const auto candidateGrids
         = buildMazeCandidateGrids(interval, rank, hp, pins, max_candidates);
     totalCandidates += static_cast<int>(candidateGrids.size());
@@ -611,23 +611,23 @@ void CUGR::wirelengthRecovery()
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
 
+  const int totalNets = static_cast<int>(netIndices.size());
+  const int recoveryBudget = std::min(totalNets, std::max(6144, totalNets / 8));
   const int mazeCandidateBudget
-      = std::max(128, static_cast<int>(netIndices.size() / 4));
+      = std::max(256, recoveryBudget / 2);
   const int denseMazeBudget
-      = std::max(64, static_cast<int>(netIndices.size() / 20));
+      = std::max(96, recoveryBudget / 10);
   const int longNetRank
-      = std::min(static_cast<int>(netIndices.size()) - 1,
-                 std::max(0, static_cast<int>(netIndices.size() / 8)));
+      = std::min(recoveryBudget - 1, std::max(0, recoveryBudget / 8));
   const uint64_t longWireThreshold
       = routedWireLength[netIndices[longNetRank]];
   int accepted = 0;
   int acceptedFromMaze = 0;
-  int rank = 0;
-  for (const int netIndex : netIndices) {
+  for (int rank = 0; rank < recoveryBudget; rank++) {
+    const int netIndex = netIndices[rank];
     GRNet* net = gr_nets_[netIndex].get();
     const auto oldTree = net->getRoutingTree();
     if (!oldTree) {
-      rank++;
       continue;
     }
 
@@ -709,10 +709,11 @@ void CUGR::wirelengthRecovery()
     net->setRoutingTree(bestTree);
     grid_graph_->commitTree(bestTree);
     grid_graph_->updateWireCostView(wireCostView, bestTree);
-    rank++;
   }
 
-  logger_->report("wirelength recovery accepted {} net updates ({} from maze).",
+  logger_->report("wirelength recovery scheduled {} nets: accepted {} net "
+                  "updates ({} from maze).",
+                  recoveryBudget,
                   accepted,
                   acceptedFromMaze);
 }
@@ -740,11 +741,11 @@ void CUGR::finalPatternTighten()
     return lhs < rhs;
   });
 
+  const int totalNets = static_cast<int>(netIndices.size());
   const int tightenBudget
-      = std::min(static_cast<int>(netIndices.size()),
-                 std::max(4096, static_cast<int>(netIndices.size() / 2)));
+      = std::min(totalNets, std::max(2048, totalNets / 8));
   const int mazeTightenBudget
-      = std::min(tightenBudget, std::max(512, tightenBudget / 12));
+      = std::min(tightenBudget, std::max(256, tightenBudget / 10));
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
   int accepted = 0;
@@ -820,7 +821,9 @@ void CUGR::finalPatternTighten()
   }
 
   logger_->report(
-      "final pattern tightening accepted {} net updates ({} from maze).",
+      "final pattern tightening scheduled {} nets: accepted {} net updates ({} "
+      "from maze).",
+      tightenBudget,
       accepted,
       acceptedFromMaze);
 }
@@ -857,23 +860,31 @@ void CUGR::globalCompaction()
   };
 
   const std::vector<CompactionRound> rounds{
-      {3, 4096, true, 2},
-      {6, 2048, false, 2},
-      {12, 1024, true, 1}};
+      {12, 1536, true, 2},
+      {24, 768, false, 1},
+      {48, 384, true, 1}};
 
   int totalAccepted = 0;
   int totalAcceptedPattern = 0;
   int totalAcceptedMaze = 0;
 
   std::vector<RouteScore> routedScores(gr_nets_.size());
+  std::vector<double> detourRatios(gr_nets_.size(), 1.0);
   for (size_t roundIdx = 0; roundIdx < rounds.size(); roundIdx++) {
     const auto& round = rounds[roundIdx];
     for (const int netIndex : netIndices) {
       routedScores[netIndex]
           = evaluateRouteScore(gr_nets_[netIndex]->getRoutingTree(),
                                grid_graph_.get());
+      const int hp = std::max(1, gr_nets_[netIndex]->getBoundingBox().hp());
+      detourRatios[netIndex]
+          = static_cast<double>(routedScores[netIndex].wire_length)
+            / static_cast<double>(hp);
     }
     std::sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
+      if (std::abs(detourRatios[lhs] - detourRatios[rhs]) > 1e-9) {
+        return detourRatios[lhs] > detourRatios[rhs];
+      }
       if (routedScores[lhs].overflow_edges != routedScores[rhs].overflow_edges) {
         return routedScores[lhs].overflow_edges > routedScores[rhs].overflow_edges;
       }
@@ -899,11 +910,15 @@ void CUGR::globalCompaction()
         = std::min(compactionBudget - 1, std::max(0, compactionBudget / 6));
     const uint64_t longWireThreshold
         = routedScores[netIndices[longNetRank]].wire_length;
+    const int detourRank
+        = std::min(compactionBudget - 1, std::max(0, compactionBudget / 5));
+    const double detourRatioThreshold = detourRatios[netIndices[detourRank]];
     const int denseMazeBudget
         = std::min(compactionBudget,
-                   std::max(256,
-                            compactionBudget
-                                / std::max(2, static_cast<int>(roundIdx) + 2)));
+                   std::max(
+                       128,
+                       compactionBudget
+                           / std::max(4, 4 + static_cast<int>(roundIdx) * 2)));
     std::vector<int> scheduledNetIndices = buildSpatialCompactionOrder(
         netIndices, gr_nets_, compactionBudget, round.use_x_axis);
     if (scheduledNetIndices.empty()) {
@@ -924,6 +939,7 @@ void CUGR::globalCompaction()
       }
       const RouteScore oldScore
           = evaluateRouteScore(oldTree, grid_graph_.get());
+      const double oldDetourRatio = detourRatios[netIndex];
 
       grid_graph_->commitTree(oldTree, /*ripup*/ true);
       grid_graph_->updateWireCostView(wireCostView, oldTree);
@@ -957,6 +973,7 @@ void CUGR::globalCompaction()
 
       const bool runMazeCandidate
           = rank < denseMazeBudget || oldScore.overflow_edges > 0
+            || oldDetourRatio >= detourRatioThreshold
             || oldScore.wire_length >= longWireThreshold
             || oldScore.via_count >= (roundIdx == 0 ? 8 : 6);
       if (runMazeCandidate) {
@@ -964,17 +981,21 @@ void CUGR::globalCompaction()
         int interval = 4;
         if (rank < denseMazeBudget / 3 || oldScore.overflow_edges > 0) {
           interval = 3;
+        }
+        if (rank < denseMazeBudget / 8
+            || oldDetourRatio >= detourRatioThreshold * 1.08) {
+          interval = 2;
         } else if (roundIdx > 0 && net->getNumPins() <= 3 && hp <= 70) {
           interval = 5;
         }
         const int maxMazeCandidates = std::clamp(
             round.maze_candidate_base
-                + ((rank < denseMazeBudget / 3
-                    || oldScore.wire_length >= longWireThreshold)
+                + ((rank < denseMazeBudget / 4
+                    || oldDetourRatio >= detourRatioThreshold)
                        ? 1
                        : 0),
             1,
-            4);
+            3);
         const int seed = rank + oldScore.via_count
                          + static_cast<int>(roundIdx) * 97;
         const auto candidateGrids
@@ -1075,7 +1096,7 @@ void CUGR::strictWirelengthCompaction()
   const bool useXAxisWavefront = (strictCallCount % 2 == 0);
   strictCallCount++;
   const int compactionBudget
-      = std::min(totalNets, std::max(3072, totalNets / 3));
+      = std::min(totalNets, std::max(1536, totalNets / 16));
   if (compactionBudget <= 0) {
     return;
   }
@@ -1084,7 +1105,7 @@ void CUGR::strictWirelengthCompaction()
       = std::min(compactionBudget - 1, std::max(0, compactionBudget / 5));
   const double detourRatioThreshold = detourRatios[netIndices[detourRank]];
   const int denseMazeBudget
-      = std::min(compactionBudget, std::max(1024, compactionBudget / 3));
+      = std::min(compactionBudget, std::max(384, compactionBudget / 6));
   std::vector<int> scheduledNetIndices = buildSpatialCompactionOrder(
       netIndices, gr_nets_, compactionBudget, useXAxisWavefront);
   if (scheduledNetIndices.empty()) {
@@ -1141,23 +1162,23 @@ void CUGR::strictWirelengthCompaction()
 
     const bool runMazeCandidate
         = rank < denseMazeBudget || oldScore.overflow_edges > 0
-          || oldDetourRatio >= detourRatioThreshold || oldScore.via_count >= 9;
+          || oldDetourRatio >= detourRatioThreshold || oldScore.via_count >= 10;
     if (runMazeCandidate) {
       const int hp = net->getBoundingBox().hp();
       const int pins = net->getNumPins();
       int interval = 4;
-      if (rank < denseMazeBudget / 2 || oldScore.overflow_edges > 0) {
+      if (rank < denseMazeBudget / 3 || oldScore.overflow_edges > 0) {
         interval = 3;
       }
-      if (rank < denseMazeBudget / 10
-          || (oldDetourRatio >= detourRatioThreshold && pins >= 6)) {
+      if (rank < denseMazeBudget / 12
+          || (oldDetourRatio >= detourRatioThreshold * 1.10 && pins >= 6)) {
         interval = 2;
       } else if (pins <= 3 && hp <= 80) {
         interval = 5;
       }
       const int maxMazeCandidates = rank < denseMazeBudget / 10
-                                        ? 6
-                                        : (rank < denseMazeBudget / 2 ? 5 : 4);
+                                        ? 4
+                                        : (rank < denseMazeBudget / 2 ? 3 : 2);
       const auto candidateGrids
           = buildMazeCandidateGrids(interval,
                                     rank + oldScore.via_count * 3
@@ -1246,22 +1267,9 @@ void CUGR::route()
   globalCompaction();
   grid_graph_->setStageCostScales(0.09, 0.10, 0.95);
   strictWirelengthCompaction();
-  grid_graph_->setStageCostScales(0.04, 0.05, 0.90);
-  strictWirelengthCompaction();
-  grid_graph_->setStageCostScales(0.01, 0.02, 0.88);
-  strictWirelengthCompaction();
-  grid_graph_->setStageCostScales(0.0, 0.01, 0.92);
+  grid_graph_->setStageCostScales(0.03, 0.04, 0.90);
   strictWirelengthCompaction();
   updateOverflowNets(netIndices);
-  if (!netIndices.empty()) {
-    // Final overflow cleanup with a moderate congestion weight; this follows
-    // FastRoute/SPRoute RRR intuition that a small late cleanup reduces
-    // detailed-route detours.
-    grid_graph_->setStageCostScales(0.24, 0.60, 1.02);
-    mazeRoute(netIndices);
-    grid_graph_->setStageCostScales(0.02, 0.03, 0.90);
-    strictWirelengthCompaction();
-  }
 
   printStatistics();
   if (constants_.write_heatmap) {
