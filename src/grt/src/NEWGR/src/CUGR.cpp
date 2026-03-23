@@ -212,7 +212,8 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
   GridGraphView<CostT> wireLengthCostView;
-  if (constants_.stage3_use_wirelength_maze) {
+  if (constants_.stage3_use_wirelength_maze
+      || constants_.stage3_use_full_grid_wl_maze) {
     grid_graph_->extractWireLengthCostView(wireLengthCostView);
   }
   sortNetIndices(netIndices);
@@ -430,6 +431,32 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         wlPatternRoute.setSteinerTree(wl_tree);
         wlPatternRoute.constructRoutingDAG();
         wlPatternRoute.run();
+        considerCandidate(net->getRoutingTree(), /*is_baseline_candidate*/ false);
+        evaluated_candidates++;
+      }
+    }
+
+    // FastRoute-style critical-net intensification:
+    // run one full-grid wirelength-only maze for high-stretch long nets.
+    if (constants_.stage3_use_full_grid_wl_maze
+        && hpwl >= constants_.stage3_full_grid_hpwl_threshold
+        && net->getNumPins() >= 3
+        && net->getNumPins() <= constants_.stage3_full_grid_pin_limit
+        && baseline_stretch >= constants_.stage3_full_grid_min_stretch) {
+      const double full_grid_via_scale = std::clamp(
+          constants_.stage3_full_grid_via_cost_scale, 0.0, 1.0);
+      MazeRoute fullGridWlMaze(net, grid_graph_.get(), logger_);
+      fullGridWlMaze.constructSparsifiedGraph(
+          wireLengthCostView, SparseGrid(1, 1, 0, 0), full_grid_via_scale);
+      fullGridWlMaze.run();
+      const std::shared_ptr<SteinerTreeNode> full_grid_tree
+          = fullGridWlMaze.getSteinerTree();
+      if (full_grid_tree) {
+        PatternRoute fullGridPatternRoute(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        fullGridPatternRoute.setSteinerTree(full_grid_tree);
+        fullGridPatternRoute.constructRoutingDAG();
+        fullGridPatternRoute.run();
         considerCandidate(net->getRoutingTree(), /*is_baseline_candidate*/ false);
         evaluated_candidates++;
       }

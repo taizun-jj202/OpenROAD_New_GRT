@@ -77,6 +77,11 @@ struct Constants
   int stage3_wl_only_hpwl_threshold = 140;
   int stage3_wl_config_limit = 7;
   double stage3_wl_via_cost_scale = 0.35;
+  bool stage3_use_full_grid_wl_maze = true;
+  int stage3_full_grid_hpwl_threshold = 180;
+  int stage3_full_grid_pin_limit = 40;
+  double stage3_full_grid_via_cost_scale = 0.05;
+  double stage3_full_grid_min_stretch = 1.10;
 
   // FastRoute-style post-processing pass: reroute a subset of long,
   // overflow-free nets and keep only wirelength-improving solutions.
@@ -103,9 +108,9 @@ struct Constants
   int recovery_max_maze_configs = 16;
   int recovery_max_via_increase = 6;
   bool recovery_use_full_grid_maze = true;
-  int recovery_full_grid_top_n = 16;
+  int recovery_full_grid_top_n = 20;
   int recovery_full_grid_hpwl_threshold = 160;
-  double recovery_full_grid_via_cost_scale = 0.03;
+  double recovery_full_grid_via_cost_scale = 0.00;
 
   double pin_patch_threshold = 1000000.0;
   int pin_patch_padding = 3;
