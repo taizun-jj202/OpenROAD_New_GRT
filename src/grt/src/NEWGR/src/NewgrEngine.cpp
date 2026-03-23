@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -72,55 +73,60 @@ int cellIndex(int x, int y, int x_grids)
   return y * x_grids + x;
 }
 
+struct RouteCost
+{
+  int64_t wirelength{0};
+  int64_t vias{0};
+};
+
+RouteCost estimateRouteCost(const GRoute& route)
+{
+  RouteCost cost;
+  for (const GSegment& segment : route) {
+    cost.wirelength += std::llabs(static_cast<long long>(segment.init_x)
+                                  - static_cast<long long>(segment.final_x));
+    cost.wirelength += std::llabs(static_cast<long long>(segment.init_y)
+                                  - static_cast<long long>(segment.final_y));
+    cost.vias += std::llabs(static_cast<long long>(segment.init_layer)
+                            - static_cast<long long>(segment.final_layer));
+  }
+  return cost;
+}
+
+double combinedRouteScore(const RouteCost& cost, int tile_size)
+{
+  const double via_weight = std::max(1, tile_size) * 2.4;
+  return static_cast<double>(cost.wirelength)
+         + static_cast<double>(cost.vias) * via_weight;
+}
+
 float reductionRatio(int base_cap,
                      float local_pressure,
                      float mean_pressure,
                      float stdev_pressure,
-                     float px,
-                     float py,
-                     float quarter_y,
-                     float center_y,
-                     float three_quarter_y,
-                     float quarter_x,
-                     float center_x,
-                     float three_quarter_x,
-                     float corridor_half_width,
-                     int layer,
-                     bool& should_shape)
+                     float distance_to_center,
+                     float normalized_layer,
+                     bool horizontal)
 {
   constexpr float kEpsilon = 1e-3f;
-  const float pressure_sigma
+  const float pressure_sigma_raw
       = (local_pressure - mean_pressure) / std::max(stdev_pressure, kEpsilon);
-  const float hotspot_term = std::clamp(pressure_sigma / 2.5f, 0.0f, 1.0f);
+  const float pressure_sigma = std::clamp(pressure_sigma_raw, -3.0f, 4.0f);
+  const float pressure_term = 1.0f / (1.0f + std::exp(-(pressure_sigma - 0.25f) * 1.8f));
+  const float center_term = std::clamp(1.0f - distance_to_center, 0.0f, 1.0f);
 
-  const float y_spine_dist = std::min(
-      {std::abs(py - quarter_y), std::abs(py - center_y), std::abs(py - three_quarter_y)});
-  const float x_spine_dist = std::min(
-      {std::abs(px - quarter_x), std::abs(px - center_x), std::abs(px - three_quarter_x)});
-  const bool on_express_corridor
-      = (y_spine_dist <= corridor_half_width) || (x_spine_dist <= corridor_half_width);
-
-  // Sparse chokepoints to force global detours and produce materially different topologies.
-  const bool choke_pattern
-      = ((static_cast<int>(px * 13.0f + py * 7.0f) + layer * 11) % 17) == 0;
-
-  should_shape = on_express_corridor || choke_pattern || hotspot_term > 0.08f;
-  if (!should_shape || base_cap <= 1) {
-    return 1.0f;
+  // Lower layers reserve more resources for detailed routing.
+  float ratio = 0.62f + 0.26f * normalized_layer;
+  ratio += 0.08f * center_term;
+  ratio -= 0.22f * pressure_term;
+  if (horizontal) {
+    ratio += 0.02f;
   }
 
-  if (on_express_corridor) {
-    const float lane_ratio = (layer < 2) ? 0.95f : ((layer < 4) ? 0.92f : 0.88f);
-    const float hotspot_bonus = 0.03f * hotspot_term;
-    return std::clamp(lane_ratio + hotspot_bonus, 0.82f, 0.98f);
+  if (base_cap <= 2) {
+    ratio += 0.05f;
   }
-
-  float ratio = (layer < 2) ? 0.42f : ((layer < 4) ? 0.55f : 0.68f);
-  ratio -= 0.18f * hotspot_term;
-  if (choke_pattern) {
-    ratio -= 0.12f;
-  }
-  return std::clamp(ratio, 0.22f, 0.88f);
+  return std::clamp(ratio, 0.40f, 0.96f);
 }
 
 int buildLocalizedCapacityReductions(const NewgrInput& input,
@@ -137,7 +143,7 @@ int buildLocalizedCapacityReductions(const NewgrInput& input,
   }
   const int total_edges = num_layers
                           * ((x_grids - 1) * y_grids + x_grids * (y_grids - 1));
-  const int max_reductions = std::max(256, total_edges / 16);
+  const int max_reductions = std::max(2048, (total_edges * 7) / 10);
 
   std::vector<float> pin_pressure(x_grids * y_grids, 0.0f);
   for (const auto& net : input.nets) {
@@ -184,12 +190,8 @@ int buildLocalizedCapacityReductions(const NewgrInput& input,
 
   const float center_x = (x_grids - 1) * 0.5f;
   const float center_y = (y_grids - 1) * 0.5f;
-  const float quarter_x = std::max(0.0f, (x_grids - 1) * 0.25f);
-  const float three_quarter_x = std::max(0.0f, (x_grids - 1) * 0.75f);
-  const float quarter_y = std::max(0.0f, (y_grids - 1) * 0.25f);
-  const float three_quarter_y = std::max(0.0f, (y_grids - 1) * 0.75f);
-  const float corridor_half_width
-      = std::max(1.0f, 0.03f * static_cast<float>(std::min(x_grids, y_grids)));
+  const float max_center_dist
+      = std::max(1.0f, std::sqrt(center_x * center_x + center_y * center_y));
 
   int reduction_count = 0;
   for (int layer = 0; layer < num_layers; ++layer) {
@@ -213,25 +215,18 @@ int buildLocalizedCapacityReductions(const NewgrInput& input,
           const float p0 = smooth_pressure[cellIndex(x, y, x_grids)];
           const float p1 = smooth_pressure[cellIndex(x + 1, y, x_grids)];
           const float local_pressure = 0.5f * (p0 + p1);
-          bool should_shape = false;
           const float ratio = reductionRatio(base_hcap,
                                              local_pressure,
                                              mean_pressure,
                                              stdev_pressure,
-                                             x + 0.5f,
-                                             static_cast<float>(y),
-                                             quarter_y,
-                                             center_y,
-                                             three_quarter_y,
-                                             quarter_x,
-                                             center_x,
-                                             three_quarter_x,
-                                             corridor_half_width,
-                                             layer,
-                                             should_shape);
-          if (!should_shape) {
-            continue;
-          }
+                                             std::sqrt((x + 0.5f - center_x)
+                                                           * (x + 0.5f - center_x)
+                                                       + (y - center_y)
+                                                             * (y - center_y))
+                                                 / max_center_dist,
+                                             static_cast<float>(layer)
+                                                 / std::max(1, num_layers - 1),
+                                             /*horizontal=*/true);
           if (reduction_count >= max_reductions) {
             return reduction_count;
           }
@@ -258,25 +253,18 @@ int buildLocalizedCapacityReductions(const NewgrInput& input,
           const float p0 = smooth_pressure[cellIndex(x, y, x_grids)];
           const float p1 = smooth_pressure[cellIndex(x, y + 1, x_grids)];
           const float local_pressure = 0.5f * (p0 + p1);
-          bool should_shape = false;
           const float ratio = reductionRatio(base_vcap,
                                              local_pressure,
                                              mean_pressure,
                                              stdev_pressure,
-                                             static_cast<float>(x),
-                                             y + 0.5f,
-                                             quarter_y,
-                                             center_y,
-                                             three_quarter_y,
-                                             quarter_x,
-                                             center_x,
-                                             three_quarter_x,
-                                             corridor_half_width,
-                                             layer,
-                                             should_shape);
-          if (!should_shape) {
-            continue;
-          }
+                                             std::sqrt((x - center_x)
+                                                           * (x - center_x)
+                                                       + (y + 0.5f - center_y)
+                                                             * (y + 0.5f - center_y))
+                                                 / max_center_dist,
+                                             static_cast<float>(layer)
+                                                 / std::max(1, num_layers - 1),
+                                             /*horizontal=*/false);
           if (reduction_count >= max_reductions) {
             return reduction_count;
           }
@@ -344,8 +332,8 @@ NetRouteMap NewgrEngine::run()
                /*OutFileName=*/"",
                congestion_map,
                timer,
-               /*maxMazeRound=*/180,
-               Algo::DetPart_Astar);
+               /*maxMazeRound=*/40,
+               Algo::DetPart_Astar_RUDY);
   timer.stop();
   last_total_overflow_ = totalOverflow;
 
@@ -561,27 +549,45 @@ NetRouteMap NewgrEngine::extractPinFallbackRoutes(
     const NetRouteMap& seeded_routes) const
 {
   NetRouteMap routes = seeded_routes;
-  int fallback_net_count = 0;
+  int missing_net_fallback_count = 0;
+  int replaced_net_count = 0;
   for (const auto& net : input_.nets) {
     if (net.db_net == nullptr || net.pins.size() < 2) {
       continue;
     }
-    if (routes.find(net.db_net) != routes.end()) {
+
+    GRoute fallback_route;
+    if (!appendFallbackMstRoute(net, fallback_route) || fallback_route.empty()) {
       continue;
     }
 
-    GRoute route;
-    if (!appendFallbackMstRoute(net, route)) {
+    auto route_it = routes.find(net.db_net);
+    if (route_it == routes.end()) {
+      routes[net.db_net] = std::move(fallback_route);
+      ++missing_net_fallback_count;
       continue;
     }
-    if (!route.empty()) {
-      routes[net.db_net] = std::move(route);
-      ++fallback_net_count;
+
+    const RouteCost seeded_cost = estimateRouteCost(route_it->second);
+    const RouteCost fallback_cost = estimateRouteCost(fallback_route);
+    const double seeded_score = combinedRouteScore(seeded_cost, grid_.tile_size);
+    const double fallback_score = combinedRouteScore(fallback_cost, grid_.tile_size);
+    const bool large_net_bias = net.pins.size() >= 8;
+    const bool should_replace
+        = (fallback_score < seeded_score * 0.93)
+          || (large_net_bias && fallback_score < seeded_score * 1.12);
+
+    if (should_replace) {
+      route_it->second = std::move(fallback_route);
+      ++replaced_net_count;
     }
   }
-  if (fallback_net_count > 0) {
-    logger_->report("NEWGR applied MST fallback routing for {} nets.",
-                    fallback_net_count);
+  if (missing_net_fallback_count > 0 || replaced_net_count > 0) {
+    logger_->report(
+        "NEWGR fallback routing: {} unrouted nets filled, {} FastRoute nets "
+        "replaced with via-biased MST guides.",
+        missing_net_fallback_count,
+        replaced_net_count);
   }
   return routes;
 }
@@ -609,7 +615,8 @@ bool NewgrEngine::appendRouteSegments(int net_id, GRoute& route) const
     if (edge_route.routelen > max_reasonable_routelen) {
       return false;
     }
-    for (int i = 0; i < edge_route.routelen; ++i) {
+    const int route_steps = std::max(0, edge_route.routelen - 1);
+    for (int i = 0; i < route_steps; ++i) {
       const int x0 = edge_route.gridsX[i];
       const int y0 = edge_route.gridsY[i];
       const int l0 = edge_route.gridsL[i];
@@ -650,6 +657,16 @@ bool NewgrEngine::appendFallbackMstRoute(const NewgrInputNet& net,
   if (seed_pin < 0 || seed_pin >= pin_count) {
     seed_pin = 0;
   }
+  std::vector<int> pin_layers;
+  pin_layers.reserve(pin_count);
+  for (const auto& pin : net.pins) {
+    pin_layers.push_back(pin.layer());
+  }
+  std::sort(pin_layers.begin(), pin_layers.end());
+  int preferred_layer = pin_layers[pin_layers.size() / 2];
+  preferred_layer = std::clamp(preferred_layer, 0, std::max(0, grid_.num_layers - 1));
+  const int layer_mismatch_weight = (pin_count >= 8) ? 4 : 3;
+  const bool use_layer_spine = pin_count >= 5;
 
   std::vector<bool> in_tree(pin_count, false);
   in_tree[seed_pin] = true;
@@ -658,8 +675,11 @@ bool NewgrEngine::appendFallbackMstRoute(const NewgrInputNet& net,
   auto weightedDistance = [&](int lhs_idx, int rhs_idx) {
     const RoutePt& lhs = net.pins[lhs_idx];
     const RoutePt& rhs = net.pins[rhs_idx];
+    const int lhs_bias = std::abs(lhs.layer() - preferred_layer);
+    const int rhs_bias = std::abs(rhs.layer() - preferred_layer);
     return std::abs(lhs.x() - rhs.x()) + std::abs(lhs.y() - rhs.y())
-           + 2 * std::abs(lhs.layer() - rhs.layer());
+           + layer_mismatch_weight * std::abs(lhs.layer() - rhs.layer())
+           + lhs_bias + rhs_bias;
   };
 
   while (connected_count < pin_count) {
@@ -689,13 +709,30 @@ bool NewgrEngine::appendFallbackMstRoute(const NewgrInputNet& net,
 
     const RoutePt& src = net.pins[best_u];
     const RoutePt& dst = net.pins[best_v];
+    const int src_spine_layer = use_layer_spine ? preferred_layer : src.layer();
+    const int dst_spine_layer = use_layer_spine ? preferred_layer : dst.layer();
+
     if (!appendManhattanBridge(src.x(),
                                src.y(),
                                src.layer(),
-                               dst.x(),
-                               dst.y(),
-                               dst.layer(),
-                               route)) {
+                               src.x(),
+                               src.y(),
+                               src_spine_layer,
+                               route)
+        || !appendManhattanBridge(src.x(),
+                                  src.y(),
+                                  src_spine_layer,
+                                  dst.x(),
+                                  dst.y(),
+                                  dst_spine_layer,
+                                  route)
+        || !appendManhattanBridge(dst.x(),
+                                  dst.y(),
+                                  dst_spine_layer,
+                                  dst.x(),
+                                  dst.y(),
+                                  dst.layer(),
+                                  route)) {
       return false;
     }
     in_tree[best_v] = true;
