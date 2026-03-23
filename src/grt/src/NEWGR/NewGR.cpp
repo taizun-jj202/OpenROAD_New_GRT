@@ -1,6 +1,7 @@
 #include "NEWGR/NewGR.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -494,7 +495,7 @@ GuidePatchStats applyCugrGuidePatches(
     int long_patch_added_for_net = 0;
 
     auto add_endpoint_relief = [&](const NetRouteMap* alt_routes) {
-      if (alt_routes == nullptr || endpoint_added_for_net >= 4) {
+      if (alt_routes == nullptr || endpoint_added_for_net >= 6) {
         return;
       }
       const auto alt_it = alt_routes->find(db_net);
@@ -502,13 +503,13 @@ GuidePatchStats applyCugrGuidePatches(
         return;
       }
       for (const GSegment& candidate : alt_it->second) {
-        if (endpoint_added_for_net >= 4) {
+        if (endpoint_added_for_net >= 6) {
           break;
         }
         if (candidate.isVia() || candidate.init_layer != candidate.final_layer) {
           continue;
         }
-        if (candidate.length() <= 0 || candidate.length() > tile_size * 3) {
+        if (candidate.length() <= 0 || candidate.length() > tile_size * 5) {
           continue;
         }
         const uint64_t node0 = packRouteNodeKey(
@@ -519,10 +520,10 @@ GuidePatchStats applyCugrGuidePatches(
         const auto degree1_it = node_degrees.find(node1);
         const int degree0 = degree0_it != node_degrees.end() ? degree0_it->second : 0;
         const int degree1 = degree1_it != node_degrees.end() ? degree1_it->second : 0;
-        if (degree0 <= 0 || degree1 <= 0) {
+        if (degree0 <= 0 && degree1 <= 0) {
           continue;
         }
-        if (degree0 > 1 && degree1 > 1) {
+        if (std::min(degree0, degree1) > 2) {
           continue;
         }
         if (addUniqueGuideSegment(route, seen, candidate)) {
@@ -874,11 +875,6 @@ bool parsePerturbScenarioName(const std::string& name,
   }
   perturb_pct = static_cast<float>(perturb_x10) / 10.0f;
   return true;
-}
-
-bool isGuidePatchedScenario(const std::string& name)
-{
-  return name == "hybrid-netmix-cugr-patched";
 }
 
 int getSoftCapacityForEdge(uint64_t key,
@@ -2682,7 +2678,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           max_routing_layer);
 
       if (patch_stats.nets_touched > 0) {
-        patched_result.metrics = wl_hybrid->metrics;
+        patched_result.metrics = compute_metrics(patched_result.routes);
+        apply_routability_proxy(patched_result.metrics);
         const double patch_credit = std::min(
             3500.0, static_cast<double>(patch_stats.nets_touched) * 0.12);
         patched_result.metrics.score
@@ -2691,11 +2688,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                       6030,
                       "NEWGR hybrid-netmix-cugr-patched from wl hybrid: "
                       "patched nets {}, endpoint guides {}, long patches {}, "
-                      "patch vias {}",
+                      "patch vias {}, wirelength {:.0f} um, vias {}, detour {}",
                       patch_stats.nets_touched,
                       patch_stats.endpoint_segments_added,
                       patch_stats.long_segment_patches,
-                      patch_stats.via_patches_added);
+                      patch_stats.via_patches_added,
+                      patched_result.metrics.wirelength_um,
+                      patched_result.metrics.via_count,
+                      patched_result.metrics.detour_dbu);
         scenario_results.push_back(std::move(patched_result));
       } else {
         logger_->info(
@@ -2803,16 +2803,90 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   const ScenarioResult* forced_wl_ptr = nullptr;
   if (overflow_free_sweep) {
-    const ScenarioResult* wl_anchor = nullptr;
-    const ScenarioResult* patched_ptr = nullptr;
-    for (const ScenarioResult& result : scenario_results) {
-      if (result.name == "hybrid-netmix-wl") {
-        wl_anchor = &result;
-      } else if (isGuidePatchedScenario(result.name)) {
-        patched_ptr = &result;
+    auto find_scenario_by_name = [&](const std::string& name) {
+      const ScenarioResult* match = nullptr;
+      for (const ScenarioResult& result : scenario_results) {
+        if (result.name == name) {
+          match = &result;
+          break;
+        }
+      }
+      return match;
+    };
+
+    const ScenarioResult* wl_anchor = find_scenario_by_name("hybrid-netmix-wl");
+    const ScenarioResult* patched_ptr
+        = find_scenario_by_name("hybrid-netmix-cugr-patched");
+
+    // Wirelength champion pool (mixing aggressive FastRoute-like shortest-path
+    // hybrids with low-via variants): pick the best WL candidate first, then
+    // gate it by DR proxy/via drift to avoid pathological detailed-routing
+    // behavior.
+    std::vector<const ScenarioResult*> wl_champion_pool;
+    wl_champion_pool.reserve(8);
+    for (const char* name : std::array<const char*, 8>{
+             "hybrid-netmix-absolute-wl",
+             "hybrid-netmix-min-wl-wide",
+             "hybrid-netmix-min-wl-extreme",
+             "hybrid-netmix-min-wl",
+             "hybrid-netmix-smooth-wl",
+             "hybrid-netmix-ultra-wl",
+             "hybrid-netmix-wl-safe",
+             "hybrid-netmix-wl"}) {
+      if (const ScenarioResult* candidate = find_scenario_by_name(name)) {
+        wl_champion_pool.push_back(candidate);
       }
     }
-    forced_wl_ptr = wl_anchor;
+    if (!wl_champion_pool.empty()) {
+      forced_wl_ptr = *std::min_element(
+          wl_champion_pool.begin(),
+          wl_champion_pool.end(),
+          [&](const ScenarioResult* lhs, const ScenarioResult* rhs) {
+            return wirelength_first_better(*lhs, *rhs);
+          });
+    } else {
+      forced_wl_ptr = wl_anchor;
+    }
+
+    if (forced_wl_ptr != nullptr && wl_anchor != nullptr
+        && forced_wl_ptr != wl_anchor) {
+      const long wl_gain
+          = wl_anchor->metrics.wirelength_dbu - forced_wl_ptr->metrics.wirelength_dbu;
+      const long min_wl_gain = std::max<long>(
+          90,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00030)));
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      const long via_guard = std::max<long>(40L, tile_size * 2L);
+      const double anchor_proxy
+          = estimateDetailedRouteProxyCost(wl_anchor->metrics);
+      const double challenger_proxy
+          = estimateDetailedRouteProxyCost(forced_wl_ptr->metrics);
+      const bool proxy_guard = challenger_proxy + 1e-3 < anchor_proxy * 0.99;
+      const bool via_guard_ok
+          = forced_wl_ptr->metrics.via_count <= wl_anchor->metrics.via_count + via_guard;
+      const long detour_guard = std::max<long>(tile_size * 12L, 6000L);
+      const bool structural_guard
+          = forced_wl_ptr->metrics.high_layer_dbu <= wl_anchor->metrics.high_layer_dbu
+            && forced_wl_ptr->metrics.detour_dbu
+                   <= wl_anchor->metrics.detour_dbu + detour_guard;
+
+      if (!(wl_gain >= min_wl_gain && proxy_guard && via_guard_ok
+            && structural_guard)) {
+        forced_wl_ptr = wl_anchor;
+      } else {
+        logger_->info(
+            GNR,
+            6032,
+            "NEWGR overflow-free champion '{}' accepted over '{}' (wl gain {}, "
+            "vias delta {}, proxy ratio {:.3f}).",
+            forced_wl_ptr->name,
+            wl_anchor->name,
+            wl_gain,
+            forced_wl_ptr->metrics.via_count - wl_anchor->metrics.via_count,
+            anchor_proxy > 1e-9 ? challenger_proxy / anchor_proxy : 1.0);
+      }
+    }
 
     // Keep FastRoute-like short guides as the baseline final choice; only
     // upgrade to patched guides when patching stays near anchor WL and wins
