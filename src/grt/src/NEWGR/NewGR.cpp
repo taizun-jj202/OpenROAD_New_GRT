@@ -358,8 +358,10 @@ bool segmentTouchesHotspot(const GSegment& segment,
 
   if (segment.init_y == segment.final_y) {
     const int gy = coord_to_grid(segment.init_y, y_min, max_y_idx);
-    const int gx0 = coord_to_grid(segment.init_x, x_min, max_x_idx);
-    const int gx1 = coord_to_grid(segment.final_x, x_min, max_x_idx);
+    const int gx0 = coord_to_grid(
+        std::min(segment.init_x, segment.final_x), x_min, max_x_idx);
+    const int gx1 = coord_to_grid(
+        std::max(segment.init_x, segment.final_x), x_min, max_x_idx);
     for (int gx = gx0; gx < gx1; ++gx) {
       if (gx < 0 || gy < 0 || gx >= x_grids || gy >= y_grids) {
         continue;
@@ -370,8 +372,10 @@ bool segmentTouchesHotspot(const GSegment& segment,
     }
   } else if (segment.init_x == segment.final_x) {
     const int gx = coord_to_grid(segment.init_x, x_min, max_x_idx);
-    const int gy0 = coord_to_grid(segment.init_y, y_min, max_y_idx);
-    const int gy1 = coord_to_grid(segment.final_y, y_min, max_y_idx);
+    const int gy0 = coord_to_grid(
+        std::min(segment.init_y, segment.final_y), y_min, max_y_idx);
+    const int gy1 = coord_to_grid(
+        std::max(segment.init_y, segment.final_y), y_min, max_y_idx);
     for (int gy = gy0; gy < gy1; ++gy) {
       if (gx < 0 || gy < 0 || gx >= x_grids || gy >= y_grids) {
         continue;
@@ -401,17 +405,19 @@ bool buildMidpointPatchSegment(const GSegment& base_segment,
   const int y_max = y_min + std::max(0, grid->getYGrids() - 1) * tile_size;
 
   if (base_segment.init_y == base_segment.final_y) {
+    const int x_start = std::min(base_segment.init_x, base_segment.final_x);
+    const int x_end = std::max(base_segment.init_x, base_segment.final_x);
     const int span_steps = std::max(
-        1, (base_segment.final_x - base_segment.init_x) / tile_size);
+        1, (x_end - x_start) / tile_size);
     if (span_steps < 2) {
       return false;
     }
     const int mid_step = span_steps / 2;
-    int x0 = base_segment.init_x + mid_step * tile_size;
-    int x1 = std::min(base_segment.final_x, x0 + tile_size);
+    int x0 = x_start + mid_step * tile_size;
+    int x1 = std::min(x_end, x0 + tile_size);
     if (x1 <= x0) {
-      x0 = std::max(base_segment.init_x, x0 - tile_size);
-      x1 = std::min(base_segment.final_x, x0 + tile_size);
+      x0 = std::max(x_start, x0 - tile_size);
+      x1 = std::min(x_end, x0 + tile_size);
       if (x1 <= x0) {
         return false;
       }
@@ -427,17 +433,19 @@ bool buildMidpointPatchSegment(const GSegment& base_segment,
   }
 
   if (base_segment.init_x == base_segment.final_x) {
+    const int y_start = std::min(base_segment.init_y, base_segment.final_y);
+    const int y_end = std::max(base_segment.init_y, base_segment.final_y);
     const int span_steps = std::max(
-        1, (base_segment.final_y - base_segment.init_y) / tile_size);
+        1, (y_end - y_start) / tile_size);
     if (span_steps < 2) {
       return false;
     }
     const int mid_step = span_steps / 2;
-    int y0 = base_segment.init_y + mid_step * tile_size;
-    int y1 = std::min(base_segment.final_y, y0 + tile_size);
+    int y0 = y_start + mid_step * tile_size;
+    int y1 = std::min(y_end, y0 + tile_size);
     if (y1 <= y0) {
-      y0 = std::max(base_segment.init_y, y0 - tile_size);
-      y1 = std::min(base_segment.final_y, y0 + tile_size);
+      y0 = std::max(y_start, y0 - tile_size);
+      y1 = std::min(y_end, y0 + tile_size);
       if (y1 <= y0) {
         return false;
       }
@@ -866,23 +874,6 @@ bool parsePerturbScenarioName(const std::string& name,
   }
   perturb_pct = static_cast<float>(perturb_x10) / 10.0f;
   return true;
-}
-
-bool isPreferredWirelengthScenario(const std::string& name)
-{
-  // Favor DR-stable wirelength hybrids over ultra-min guide-WL variants.
-  return name == "hybrid-netmix-wl" || name == "hybrid-netmix-wl-safe"
-         || name == "hybrid-netmix-dr-stable"
-         || name == "hybrid-netmix-cugr-patched";
-}
-
-bool isAggressiveWirelengthScenario(const std::string& name)
-{
-  return name == "hybrid-netmix-hpwl-lock"
-         || name == "hybrid-netmix-absolute-wl"
-         || name == "hybrid-netmix-min-wl-extreme"
-         || name == "hybrid-netmix-min-wl-wide"
-         || name == "hybrid-netmix-min-wl";
 }
 
 bool isGuidePatchedScenario(const std::string& name)
@@ -2785,33 +2776,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   const long tie_via_wl_band
       = std::max<long>(28, static_cast<long>(std::ceil(shortest_wl * 0.00011)));
-  const long tie_preferred_wl_band
-      = std::max<long>(150, static_cast<long>(std::ceil(shortest_wl * 0.0034)));
   const long tie_proxy_wl_band
       = std::max<long>(220, static_cast<long>(std::ceil(shortest_wl * 0.0052)));
   auto wirelength_with_dr_proxy_tie_better = [&](const ScenarioResult& lhs,
                                                   const ScenarioResult& rhs) {
     const long wl_gap = std::llabs(lhs.metrics.wirelength_dbu
                                    - rhs.metrics.wirelength_dbu);
-    if (wl_gap <= tie_proxy_wl_band) {
-      const bool lhs_patched = isGuidePatchedScenario(lhs.name);
-      const bool rhs_patched = isGuidePatchedScenario(rhs.name);
-      if (lhs_patched != rhs_patched) {
-        return lhs_patched;
-      }
-    }
-    const bool lhs_pref = isPreferredWirelengthScenario(lhs.name);
-    const bool rhs_pref = isPreferredWirelengthScenario(rhs.name);
-    if (lhs_pref != rhs_pref && wl_gap <= tie_preferred_wl_band) {
-      return lhs_pref;
-    }
-    if (wl_gap <= tie_proxy_wl_band) {
-      const bool lhs_aggressive = isAggressiveWirelengthScenario(lhs.name);
-      const bool rhs_aggressive = isAggressiveWirelengthScenario(rhs.name);
-      if (lhs_aggressive != rhs_aggressive) {
-        return !lhs_aggressive;
-      }
-    }
     if (wl_gap <= tie_proxy_wl_band) {
       const double lhs_proxy = estimateDetailedRouteProxyCost(lhs.metrics);
       const double rhs_proxy = estimateDetailedRouteProxyCost(rhs.metrics);
@@ -2833,10 +2803,37 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   const ScenarioResult* forced_wl_ptr = nullptr;
   if (overflow_free_sweep) {
+    const ScenarioResult* wl_anchor = nullptr;
+    const ScenarioResult* patched_ptr = nullptr;
     for (const ScenarioResult& result : scenario_results) {
-      if (result.name == "hybrid-netmix-cugr-patched") {
-        forced_wl_ptr = &result;
-        break;
+      if (result.name == "hybrid-netmix-wl") {
+        wl_anchor = &result;
+      } else if (isGuidePatchedScenario(result.name)) {
+        patched_ptr = &result;
+      }
+    }
+    forced_wl_ptr = wl_anchor;
+
+    // Keep FastRoute-like short guides as the baseline final choice; only
+    // upgrade to patched guides when patching stays near anchor WL and wins
+    // the DR-proxy objective.
+    if (forced_wl_ptr != nullptr && patched_ptr != nullptr) {
+      const long patch_wl_guard = std::max<long>(
+          80,
+          static_cast<long>(std::ceil(
+              static_cast<double>(forced_wl_ptr->metrics.wirelength_dbu)
+              * 0.00055)));
+      const bool patched_within_guard
+          = patched_ptr->metrics.wirelength_dbu
+            <= forced_wl_ptr->metrics.wirelength_dbu + patch_wl_guard;
+      if (patched_within_guard) {
+        const double anchor_proxy
+            = estimateDetailedRouteProxyCost(forced_wl_ptr->metrics);
+        const double patched_proxy
+            = estimateDetailedRouteProxyCost(patched_ptr->metrics);
+        if (patched_proxy + 1e-3 < anchor_proxy) {
+          forced_wl_ptr = patched_ptr;
+        }
       }
     }
   }
