@@ -530,7 +530,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     GRoute& route = route_it->second;
     const RouteScore baseline_score = ordered_net.baseline_score;
     const SelectionPolicy policy = buildSelectionPolicy(baseline_score, tile_size);
-    const int64_t congestion_tradeoff = policy.long_net ? 0 : (policy.medium_net ? 1 : 2);
+    const int64_t congestion_tradeoff = policy.long_net ? 1 : (policy.medium_net ? 2 : 3);
 
     RouteScore best_score = baseline_score;
     int64_t best_congestion_cost
@@ -547,12 +547,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const GRoute* selected_route = &route;
     RouteSource selected_source = RouteSource::kFastRoute;
 
-    auto consider = [&](const NetRouteMap& candidate_routes, RouteSource source) {
+    auto consider = [&](const NetRouteMap& candidate_routes,
+                        RouteSource source,
+                        int64_t min_wl_drop_required) {
       auto candidate_it = candidate_routes.find(ordered_net.db_net);
       if (candidate_it == candidate_routes.end()) {
         return;
       }
       const RouteScore candidate_score = scoreRoute(candidate_it->second);
+      if (min_wl_drop_required > 0
+          && candidate_score.wirelength + min_wl_drop_required
+                 > best_score.wirelength) {
+        return;
+      }
       if (!betterCandidate(
               baseline_score, best_score, candidate_score, policy)) {
         return;
@@ -612,11 +619,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     };
 
-    consider(balanced_routes, RouteSource::kNewgrBalanced);
-    consider(wirelength_routes, RouteSource::kNewgrWirelength);
-    consider(data_wirelength_routes, RouteSource::kNewgrDataWirelength);
-    consider(region_aware_routes, RouteSource::kNewgrRegionAware);
-    consider(regular_region_routes, RouteSource::kNewgrRegularRegion);
+    const int64_t exploratory_min_wl_drop
+        = policy.long_net
+              ? std::max<int64_t>(1, tile_size / 8)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 6)
+                                   : std::max<int64_t>(1, tile_size / 4));
+    consider(balanced_routes, RouteSource::kNewgrBalanced, 0);
+    consider(wirelength_routes, RouteSource::kNewgrWirelength, 0);
+    consider(data_wirelength_routes,
+             RouteSource::kNewgrDataWirelength,
+             exploratory_min_wl_drop);
+    consider(region_aware_routes,
+             RouteSource::kNewgrRegionAware,
+             exploratory_min_wl_drop);
+    consider(regular_region_routes,
+             RouteSource::kNewgrRegularRegion,
+             exploratory_min_wl_drop);
 
     if (selected_route != &route) {
       route = *selected_route;
