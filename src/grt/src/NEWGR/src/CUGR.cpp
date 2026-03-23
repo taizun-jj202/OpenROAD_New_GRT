@@ -238,11 +238,19 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
                                                  int pins,
                                                  int max_candidates)
 {
+  const bool criticalLongNet
+      = (pins >= 10 || hp >= 150) && rank < 512;
   std::vector<int> intervals{
       base_interval,
       std::max(3, base_interval - 1),
       std::max(3, base_interval - 2),
       std::min(12, base_interval + 1)};
+  if (criticalLongNet) {
+    // Add a dense sparse-grid option only for critical long nets to expose
+    // shorter reconnection opportunities without applying the runtime hit to
+    // all nets.
+    intervals.emplace_back(2);
+  }
   if (pins >= 12 || hp >= 160) {
     intervals.emplace_back(3);
   }
@@ -253,7 +261,7 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
   std::vector<SparseGrid> grids;
   grids.reserve(max_candidates);
   auto addGrid = [&](int interval, int x_offset, int y_offset) {
-    interval = std::clamp(interval, 3, 12);
+    interval = std::clamp(interval, 2, 12);
     x_offset = ((x_offset % interval) + interval) % interval;
     y_offset = ((y_offset % interval) + interval) % interval;
     for (const auto& grid : grids) {
@@ -271,7 +279,7 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
        idx < intervals.size()
        && grids.size() < static_cast<size_t>(max_candidates);
        idx++) {
-    const int interval = std::clamp(intervals[idx], 3, 12);
+    const int interval = std::clamp(intervals[idx], 2, 12);
     const int idx_int = static_cast<int>(idx);
     const int x_offset
         = (rank * (3 + idx_int * 2) + hp + idx_int * 5) % interval;
@@ -1214,17 +1222,17 @@ void CUGR::route()
   // routing and accept only net-level improvements in
   // overflow/wirelength/via score.
   grid_graph_->setSoftCapacityEnabled(false);
-  grid_graph_->setStageCostScales(0.48, 0.52, 1.28);
+  grid_graph_->setStageCostScales(0.46, 0.50, 1.20);
   wirelengthRecovery();
-  grid_graph_->setStageCostScales(0.40, 0.42, 1.35);
+  grid_graph_->setStageCostScales(0.36, 0.38, 1.15);
   finalPatternTighten();
-  grid_graph_->setStageCostScales(0.23, 0.25, 1.30);
+  grid_graph_->setStageCostScales(0.18, 0.20, 1.05);
   globalCompaction();
-  grid_graph_->setStageCostScales(0.15, 0.17, 1.35);
+  grid_graph_->setStageCostScales(0.09, 0.10, 0.95);
   strictWirelengthCompaction();
-  grid_graph_->setStageCostScales(0.09, 0.10, 1.30);
+  grid_graph_->setStageCostScales(0.04, 0.05, 0.90);
   strictWirelengthCompaction();
-  grid_graph_->setStageCostScales(0.03, 0.04, 1.28);
+  grid_graph_->setStageCostScales(0.01, 0.02, 0.88);
   strictWirelengthCompaction();
 
   printStatistics();
