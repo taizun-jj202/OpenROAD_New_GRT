@@ -774,7 +774,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       scenario_results.begin(), scenario_results.end(), [](const auto& result) {
         return result.metrics.overflow_edges == 0;
       });
-  const double wl_guard_ratio = overflow_free_sweep ? 0.025 : 0.0125;
+  const double wl_guard_ratio = overflow_free_sweep ? 0.0035 : 0.0125;
   const long wl_guard_band
       = std::max<long>(200, static_cast<long>(std::ceil(wl_guard_ratio * shortest_wl)));
 
@@ -791,10 +791,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
 
+  auto wirelength_first_better = [](const ScenarioResult& lhs,
+                                    const ScenarioResult& rhs) {
+    if (lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
+      return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
+    }
+    if (lhs.metrics.via_count != rhs.metrics.via_count) {
+      return lhs.metrics.via_count < rhs.metrics.via_count;
+    }
+    return lhs.metrics.score < rhs.metrics.score;
+  };
+
   auto best_ptr = *std::min_element(
       shortlist.begin(),
       shortlist.end(),
       [&](const ScenarioResult* lhs, const ScenarioResult* rhs) {
+        if (overflow_free_sweep) {
+          return wirelength_first_better(*lhs, *rhs);
+        }
         return robust_better(*lhs, *rhs);
       });
   auto best_iter = scenario_results.begin()
