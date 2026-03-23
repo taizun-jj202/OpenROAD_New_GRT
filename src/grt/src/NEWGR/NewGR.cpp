@@ -2,16 +2,19 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdio>
 #include <cmath>
 #include <functional>
 #include <limits>
 #include <numeric>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "FastRoute.h"
 #include "Grid.h"
+#include "Net.h"
 #include "grt/Rudy.h"
 #include "utl/Logger.h"
 
@@ -316,6 +319,31 @@ CongestionSummary collectCongestionSummary(GlobalRouter* grouter,
   accumulate(horizontal);
   accumulate(vertical);
   return summary;
+}
+
+bool parseCriticalScenarioName(const std::string& name,
+                               int& seed,
+                               float& critical_pct)
+{
+  int critical_x10 = 0;
+  if (std::sscanf(name.c_str(), "critical-s%d-c%d", &seed, &critical_x10)
+      != 2) {
+    return false;
+  }
+  critical_pct = static_cast<float>(critical_x10) / 10.0f;
+  return true;
+}
+
+bool parsePerturbScenarioName(const std::string& name,
+                              int& seed,
+                              float& perturb_pct)
+{
+  int perturb_x10 = 0;
+  if (std::sscanf(name.c_str(), "perturb-s%d-p%d", &seed, &perturb_x10) != 2) {
+    return false;
+  }
+  perturb_pct = static_cast<float>(perturb_x10) / 10.0f;
+  return true;
 }
 
 }  // namespace
@@ -738,6 +766,195 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   for (const ScenarioDefinition& def : scenario_defs) {
     ScenarioResult result = run_scenario(def, snapshot);
     scenario_results.push_back(std::move(result));
+  }
+
+  // Two-stage exploration:
+  // Stage 1: broad SPRoute-like diversification (seed/critical sweep).
+  // Stage 2: CUGR/FastRoute-inspired exploitation around elite low-WL runs.
+  const bool initial_overflow_free_sweep = std::all_of(
+      scenario_results.begin(), scenario_results.end(), [](const auto& result) {
+        return result.metrics.overflow_edges == 0;
+      });
+  if (initial_overflow_free_sweep) {
+    std::vector<const ScenarioResult*> ranked;
+    ranked.reserve(scenario_results.size());
+    for (const ScenarioResult& result : scenario_results) {
+      ranked.push_back(&result);
+    }
+    std::sort(
+        ranked.begin(), ranked.end(), [](const ScenarioResult* lhs, const ScenarioResult* rhs) {
+          if (lhs->metrics.wirelength_dbu != rhs->metrics.wirelength_dbu) {
+            return lhs->metrics.wirelength_dbu < rhs->metrics.wirelength_dbu;
+          }
+          return lhs->metrics.via_count < rhs->metrics.via_count;
+        });
+
+    std::vector<ScenarioDefinition> refinement_defs;
+    refinement_defs.reserve(12);
+    std::set<std::string> scenario_names;
+    for (const ScenarioResult& result : scenario_results) {
+      scenario_names.insert(result.name);
+    }
+
+    auto add_refinement = [&](ScenarioDefinition def) {
+      if (refinement_defs.size() >= 12) {
+        return;
+      }
+      if (scenario_names.insert(def.name).second) {
+        refinement_defs.push_back(std::move(def));
+      }
+    };
+
+    const int elite_count = std::min<int>(4, ranked.size());
+    for (int i = 0; i < elite_count; ++i) {
+      const std::string& elite_name = ranked[i]->name;
+      int seed = 0;
+      float critical_pct = 0.0f;
+      float perturb_pct = 0.0f;
+
+      if (parseCriticalScenarioName(elite_name, seed, critical_pct)) {
+        const float tighter_low
+            = std::clamp(critical_pct - 2.0f, 0.0f, 20.0f);
+        const float tighter_high
+            = std::clamp(critical_pct + 2.0f, 0.0f, 20.0f);
+        add_refinement(make_critical_sweep_def(seed, tighter_low));
+        add_refinement(make_critical_sweep_def(seed, tighter_high));
+        add_refinement(make_random_def(seed + 2, 0.0f, critical_pct));
+        add_refinement(make_random_def(seed + 4, 0.0f, tighter_low));
+      } else if (parsePerturbScenarioName(elite_name, seed, perturb_pct)) {
+        const float reduced_perturb = std::max(0.0f, perturb_pct - 1.0f);
+        add_refinement(make_random_def(seed, reduced_perturb, 8.0f));
+        add_refinement(make_random_def(seed + 6,
+                                       std::max(0.0f, reduced_perturb - 0.5f),
+                                       8.0f));
+        add_refinement(make_critical_sweep_def(seed, 8.0f));
+      } else if (elite_name == "baseline") {
+        add_refinement(make_random_def(snapshot.seed + 71, 0.0f, 6.0f));
+        add_refinement(make_critical_sweep_def(snapshot.seed + 17, 8.0f));
+      }
+    }
+
+    for (const ScenarioDefinition& def : refinement_defs) {
+      ScenarioResult result = run_scenario(def, snapshot);
+      scenario_results.push_back(std::move(result));
+    }
+
+    if (!refinement_defs.empty()) {
+      logger_->info(
+          GNR,
+          6009,
+          "NEWGR ran {} elite refinement scenarios for wirelength exploitation.",
+          refinement_defs.size());
+    }
+  }
+
+  // Cross-scenario net-level recombination:
+  // pick each net route from the best wirelength scenarios (SPRoute-style
+  // diversification) and combine into one hybrid guide set.
+  if (initial_overflow_free_sweep && scenario_results.size() > 2) {
+    std::vector<const ScenarioResult*> ranked;
+    ranked.reserve(scenario_results.size());
+    for (const ScenarioResult& result : scenario_results) {
+      ranked.push_back(&result);
+    }
+    std::sort(
+        ranked.begin(), ranked.end(), [](const ScenarioResult* lhs, const ScenarioResult* rhs) {
+          if (lhs->metrics.wirelength_dbu != rhs->metrics.wirelength_dbu) {
+            return lhs->metrics.wirelength_dbu < rhs->metrics.wirelength_dbu;
+          }
+          return lhs->metrics.via_count < rhs->metrics.via_count;
+        });
+
+    const int source_count = std::min<int>(6, ranked.size());
+    const long via_mix_weight
+        = static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) * 2L;
+    const std::size_t expected_net_count = ranked.front()->routes.size();
+
+    std::vector<odb::dbNet*> hybrid_nets;
+    hybrid_nets.reserve(expected_net_count);
+    std::set<int> hybrid_net_ids;
+    for (int idx = 0; idx < source_count; ++idx) {
+      for (const auto& [route_net, route] : ranked[idx]->routes) {
+        static_cast<void>(route);
+        if (route_net == nullptr) {
+          continue;
+        }
+        if (hybrid_net_ids.insert(route_net->getId()).second) {
+          hybrid_nets.push_back(route_net);
+        }
+      }
+    }
+
+    ScenarioResult hybrid_result;
+    hybrid_result.name = "hybrid-netmix";
+
+    for (odb::dbNet* db_net : hybrid_nets) {
+      const int target_id = db_net->getId();
+      const GRoute* best_route = nullptr;
+      long best_cost = std::numeric_limits<long>::max();
+      long best_wl = std::numeric_limits<long>::max();
+      int best_via = std::numeric_limits<int>::max();
+
+      for (int idx = 0; idx < source_count; ++idx) {
+        const ScenarioResult* source = ranked[idx];
+        const GRoute* source_route = nullptr;
+        for (const auto& [route_net, route] : source->routes) {
+          if (route_net != nullptr && route_net->getId() == target_id) {
+            source_route = &route;
+            break;
+          }
+        }
+        if (source_route == nullptr) {
+          continue;
+        }
+
+        long wl = 0;
+        int vias = 0;
+        for (const GSegment& segment : *source_route) {
+          if (segment.isVia()) {
+            vias++;
+          } else {
+            wl += std::abs(segment.final_x - segment.init_x)
+                  + std::abs(segment.final_y - segment.init_y);
+          }
+        }
+        const long cost = wl + via_mix_weight * static_cast<long>(vias);
+        if (cost < best_cost || (cost == best_cost && wl < best_wl)
+            || (cost == best_cost && wl == best_wl && vias < best_via)) {
+          best_cost = cost;
+          best_wl = wl;
+          best_via = vias;
+          best_route = source_route;
+        }
+      }
+
+      if (best_route != nullptr) {
+        hybrid_result.routes.emplace(db_net, *best_route);
+      }
+    }
+
+    const std::size_t coverage_threshold
+        = expected_net_count > 0 ? (expected_net_count * 95) / 100 : 0;
+    if (hybrid_result.routes.size() >= coverage_threshold) {
+      hybrid_result.metrics = compute_metrics(hybrid_result.routes);
+      logger_->info(GNR,
+                    6010,
+                    "NEWGR hybrid-netmix from top {} scenarios: wirelength "
+                    "{:.0f} um, vias {}, routed nets {}/{}",
+                    source_count,
+                    hybrid_result.metrics.wirelength_um,
+                    hybrid_result.metrics.via_count,
+                    hybrid_result.routes.size(),
+                    expected_net_count);
+      scenario_results.push_back(std::move(hybrid_result));
+    } else {
+      logger_->info(
+          GNR,
+          6011,
+          "NEWGR skipped hybrid-netmix due low net coverage ({}/{}).",
+          hybrid_result.routes.size(),
+          expected_net_count);
+    }
   }
 
   auto robust_better = [](const ScenarioResult& lhs,
