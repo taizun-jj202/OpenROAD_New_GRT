@@ -7180,6 +7180,206 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     selected.metrics = compute_metrics(selected.routes);
   }
 
+  // Iteration 45 radical mode:
+  // Theory:
+  // 1) Prior iterations largely blend two topology families. To force a
+  //    stronger route-space jump, add a third family and hash-permute donors.
+  // 2) Build two new extremes:
+  //    - hyperring: portal-hypergraph + perimeter collapse + high wavefront.
+  //    - spinecorr: spine/trunk + corridor + braid/layer hopping.
+  // 3) Deterministically spread nets across hyperring/spinecorr/fluxfield so
+  //    broad net populations flip to distinct topology basins each iteration.
+  ScenarioResult radical45_hyperring = selected;
+  radical45_hyperring.name = "radical45_hyperring";
+  applyQuadrantPortalHypergraphRebuild(grouter_,
+                                       radical45_hyperring.routes,
+                                       baseline_rudy,
+                                       2,
+                                       16384,
+                                       132,
+                                       min_routing_layer,
+                                       max_routing_layer);
+  applyPerimeterRingCollapse(grouter_,
+                             radical45_hyperring.routes,
+                             baseline_rudy,
+                             2,
+                             100,
+                             28,
+                             min_routing_layer,
+                             max_routing_layer);
+  applyGlobalPortalRebuild(grouter_,
+                           radical45_hyperring.routes,
+                           baseline_rudy,
+                           2,
+                           120,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical45_hyperring.routes,
+                        baseline_rudy,
+                        std::max(2 * tile_size, 1),
+                        std::max(30 * tile_size, 1),
+                        214);
+  applyAggressiveDoglegShortcuts(radical45_hyperring.routes,
+                                 std::max(38 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical45_hyperring.routes, std::max(10 * tile_size, 1));
+  applyViaExcursionCollapse(radical45_hyperring.routes,
+                            std::max(5 * tile_size, 1));
+  radical45_hyperring.metrics = compute_metrics(radical45_hyperring.routes);
+
+  ScenarioResult radical45_spinecorr = selected;
+  radical45_spinecorr.name = "radical45_spinecorr";
+  applyMedianSpineRebuild(
+      radical45_spinecorr.routes, 2, 16384, min_routing_layer, max_routing_layer);
+  applyRmstTrunkRebuild(grouter_,
+                        radical45_spinecorr.routes,
+                        baseline_rudy,
+                        2,
+                        16384,
+                        132,
+                        min_routing_layer,
+                        max_routing_layer);
+  applyRudyCorridorBackboneRebuild(grouter_,
+                                   radical45_spinecorr.routes,
+                                   baseline_rudy,
+                                   2,
+                                   132,
+                                   min_routing_layer,
+                                   max_routing_layer);
+  applyBraidedDetourWeave(grouter_, radical45_spinecorr.routes, baseline_rudy);
+  applyLayerHoppingDetours(grouter_,
+                           radical45_spinecorr.routes,
+                           baseline_rudy,
+                           min_routing_layer,
+                           max_routing_layer);
+  applyWavefrontDetours(grouter_,
+                        radical45_spinecorr.routes,
+                        baseline_rudy,
+                        std::max(tile_size, 1),
+                        std::max(28 * tile_size, 1),
+                        208);
+  applyAggressiveDoglegShortcuts(radical45_spinecorr.routes,
+                                 std::max(36 * tile_size, 1),
+                                 std::max(tile_size, 1));
+  applyGuideCompression(radical45_spinecorr.routes, std::max(9 * tile_size, 1));
+  applyViaExcursionCollapse(radical45_spinecorr.routes,
+                            std::max(4 * tile_size, 1));
+  radical45_spinecorr.metrics = compute_metrics(radical45_spinecorr.routes);
+
+  long radical45_hyperring_picks = 0;
+  long radical45_spinecorr_picks = 0;
+  long radical45_fluxfield_picks = 0;
+  long radical45_compact_rescue = 0;
+
+  for (const auto& [db_net, current_route] : selected.routes) {
+    const auto key
+        = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(db_net));
+    const int node_count
+        = static_cast<int>(collectUniqueRouteNodes(current_route).size());
+
+    const NetRouteMap* donor_routes = nullptr;
+    int donor_class = -1;
+    if (node_count >= 11) {
+      const int bucket = static_cast<int>(key % 3ULL);
+      donor_class = bucket;
+      donor_routes = bucket == 0   ? &radical45_hyperring.routes
+                    : bucket == 1 ? &radical45_spinecorr.routes
+                                  : &fluxfield.routes;
+    } else if (node_count >= 6) {
+      donor_class = (key % 2ULL) == 0ULL ? 0 : 1;
+      donor_routes = donor_class == 0 ? &radical45_hyperring.routes
+                                      : &radical45_spinecorr.routes;
+    } else if (node_count >= 3 && (key % 7ULL) == 3ULL) {
+      donor_class = 0;
+      donor_routes = &radical45_hyperring.routes;
+    }
+
+    if (donor_routes == nullptr) {
+      continue;
+    }
+
+    const auto donor_it = donor_routes->find(db_net);
+    if (donor_it == donor_routes->end()) {
+      continue;
+    }
+    const GRoute& donor_route = donor_it->second;
+    if (!has_planar_guide(donor_route)) {
+      continue;
+    }
+
+    const auto [current_wl, current_vias] = route_stats(current_route);
+    const auto [donor_wl, donor_vias] = route_stats(donor_route);
+    const int donor_overflow
+        = donor_class == 0   ? radical45_hyperring.overflow
+          : donor_class == 1 ? radical45_spinecorr.overflow
+                             : fluxfield.overflow;
+    const double current_score
+        = route_objective(current_route, selected.overflow);
+    const double donor_score = route_objective(donor_route, donor_overflow);
+
+    bool use_donor = false;
+    if (node_count >= 9
+        && ((key % 2ULL) == 0ULL || (key % 5ULL) == 1ULL)) {
+      use_donor = route_admissible_radical(donor_route, current_route);
+    }
+    if (!use_donor && donor_score <= current_score * 1.60
+        && donor_wl <= static_cast<long>(current_wl * 2.40 + 64)) {
+      use_donor = route_admissible_radical(donor_route, current_route);
+    }
+    if (!use_donor && node_count >= 13 && (key % 11ULL) == 6ULL
+        && donor_wl <= static_cast<long>(current_wl * 3.20 + 96)
+        && donor_vias <= static_cast<long>(current_vias * 9.50 + 64)) {
+      use_donor = true;
+    }
+    if (!use_donor && node_count >= 5 && (key % 17ULL) == 4ULL
+        && donor_wl <= static_cast<long>(current_wl * 1.35 + 24)
+        && donor_vias <= static_cast<long>(current_vias * 2.50 + 16)) {
+      use_donor = true;
+    }
+
+    if (use_donor) {
+      selected.routes[db_net] = donor_route;
+      if (donor_class == 0) {
+        radical45_hyperring_picks++;
+      } else if (donor_class == 1) {
+        radical45_spinecorr_picks++;
+      } else {
+        radical45_fluxfield_picks++;
+      }
+      continue;
+    }
+
+    if (node_count <= 2 && (key % 6ULL) == 2ULL) {
+      const auto compact_it = compact.routes.find(db_net);
+      if (compact_it != compact.routes.end()) {
+        const GRoute& compact_route = compact_it->second;
+        if (has_planar_guide(compact_route)
+            && route_admissible(compact_route, current_route)) {
+          selected.routes[db_net] = compact_route;
+          radical45_compact_rescue++;
+        }
+      }
+    }
+  }
+
+  if (radical45_hyperring_picks > 0 || radical45_spinecorr_picks > 0
+      || radical45_fluxfield_picks > 0 || radical45_compact_rescue > 0) {
+    applyWavefrontDetours(grouter_,
+                          selected.routes,
+                          baseline_rudy,
+                          std::max(tile_size, 1),
+                          std::max(24 * tile_size, 1),
+                          188);
+    applyAggressiveDoglegShortcuts(selected.routes,
+                                   std::max(34 * tile_size, 1),
+                                   std::max(tile_size, 1));
+    applyGuideCompression(selected.routes, std::max(9 * tile_size, 1));
+    applyViaExcursionCollapse(selected.routes, std::max(4 * tile_size, 1));
+    selected.name += "+rad45";
+    selected.metrics = compute_metrics(selected.routes);
+  }
+
   // Final safeguard to prevent catastrophic regressions.
   const bool catastrophic
       = static_cast<double>(selected.metrics.wirelength_dbu)
@@ -7268,6 +7468,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 radical44_spine_picks,
                 radical44_perimeter_picks,
                 radical44_compact_rescue);
+  logger_->warn(GNR,
+                6039,
+                "NEWGR rad45 picks: hyperring {} spinecorr {} fluxfield {} "
+                "compact_rescue {}.",
+                radical45_hyperring_picks,
+                radical45_spinecorr_picks,
+                radical45_fluxfield_picks,
+                radical45_compact_rescue);
 
   restore_snapshot(snapshot);
   return selected.routes;
