@@ -75,7 +75,7 @@ void NewgrEngine::init(const SprouteGridData& grid,
 
 NetRouteMap NewgrEngine::run()
 {
-  return runWithConfig(/*max_maze_round=*/180,
+  return runWithConfig(/*max_maze_round=*/150,
                        static_cast<int>(Algo::DetPart_Astar_Region),
                        /*warn_id=*/401);
 }
@@ -102,9 +102,24 @@ NetRouteMap NewgrEngine::runCriticalWirelengthRefine()
   }
 
   buildInput(critical_nets);
-  NetRouteMap routes = runWithConfig(/*max_maze_round=*/110,
+  NetRouteMap routes = runWithConfig(/*max_maze_round=*/90,
                                      static_cast<int>(Algo::DetPart_Astar_Data),
                                      /*warn_id=*/411);
+  buildInput();
+  return routes;
+}
+
+NetRouteMap NewgrEngine::runCriticalTopologyRefine()
+{
+  const std::vector<int> critical_nets = selectCriticalNetIndices();
+  if (critical_nets.empty()) {
+    return {};
+  }
+
+  buildInput(critical_nets);
+  NetRouteMap routes = runWithConfig(/*max_maze_round=*/70,
+                                     static_cast<int>(Algo::DetPart_Astar),
+                                     /*warn_id=*/412);
   buildInput();
   return routes;
 }
@@ -330,14 +345,14 @@ std::vector<int> NewgrEngine::selectCriticalNetIndices() const
   });
 
   // Route only the highest-impact nets with a heavier data-driven pass.
-  const size_t min_budget = 32;
-  const size_t max_budget = 192;
-  size_t budget = ranked.size() / 42;
+  const size_t min_budget = 24;
+  const size_t max_budget = 112;
+  size_t budget = ranked.size() / 64;
   budget = std::max(budget, min_budget);
   budget = std::min(budget, max_budget);
   budget = std::min(budget, ranked.size());
 
-  const int64_t min_hpwl = 24;
+  const int64_t min_hpwl = 22;
   std::vector<int> selected;
   selected.reserve(budget);
   for (const RankedNet& ranked_net : ranked) {
@@ -351,7 +366,7 @@ std::vector<int> NewgrEngine::selectCriticalNetIndices() const
   }
 
   if (selected.empty()) {
-    const size_t fallback = std::min<size_t>(32, ranked.size());
+    const size_t fallback = std::min<size_t>(24, ranked.size());
     selected.reserve(fallback);
     for (size_t i = 0; i < fallback; ++i) {
       selected.push_back(ranked[i].index);

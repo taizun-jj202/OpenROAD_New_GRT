@@ -43,6 +43,7 @@ enum class RouteSource
   kNewgrSeed,
   kNewgrBalanced,
   kNewgrCritical,
+  kNewgrCriticalTopology,
   kNewgrWirelength,
   kNewgrDataWirelength,
   kNewgrRegionAware,
@@ -453,6 +454,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   NetRouteMap routes = engine_->run();
   NetRouteMap balanced_routes;
   NetRouteMap critical_wirelength_routes = engine_->runCriticalWirelengthRefine();
+  NetRouteMap critical_topology_routes = engine_->runCriticalTopologyRefine();
   NetRouteMap wirelength_routes;
   NetRouteMap data_wirelength_routes;
   NetRouteMap region_aware_routes;
@@ -511,11 +513,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   const int64_t global_base_via_budget
-      = std::max<int64_t>(10, baseline_total_vias / 12000);
-  const int64_t global_wl_to_via_credit = std::max<int64_t>(10, tile_size / 2);
+      = std::max<int64_t>(14, baseline_total_vias / 9000);
+  const int64_t global_wl_to_via_credit = std::max<int64_t>(8, tile_size / 3);
 
   int selected_from_balanced = 0;
   int selected_from_critical = 0;
+  int selected_from_critical_topology = 0;
   int selected_from_wl = 0;
   int selected_from_data_wl = 0;
   int selected_from_region = 0;
@@ -528,6 +531,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int kept_seed = 0;
   int inserted_from_balanced = 0;
   int inserted_from_critical = 0;
+  int inserted_from_critical_topology = 0;
   int inserted_from_wl = 0;
   int inserted_from_data_wl = 0;
   int inserted_from_region = 0;
@@ -552,7 +556,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     GRoute& route = route_it->second;
     const RouteScore baseline_score = ordered_net.baseline_score;
     const SelectionPolicy policy = buildSelectionPolicy(baseline_score, tile_size);
-    const int64_t congestion_tradeoff = policy.long_net ? 0 : (policy.medium_net ? 1 : 2);
+    const int64_t congestion_tradeoff = policy.long_net ? 0 : 1;
 
     RouteScore best_score = baseline_score;
     int64_t best_congestion_cost
@@ -678,14 +682,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                    : std::max<int64_t>(1, tile_size / 8));
     const int64_t critical_min_wl_drop
         = policy.long_net
-              ? std::max<int64_t>(1, tile_size / 8)
-              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 6)
-                                   : std::max<int64_t>(1, tile_size / 4));
+              ? std::max<int64_t>(1, tile_size / 16)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 12)
+                                   : std::max<int64_t>(1, tile_size / 9));
+    const int64_t critical_topology_min_wl_drop
+        = policy.long_net
+              ? std::max<int64_t>(1, tile_size / 20)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 14)
+                                   : std::max<int64_t>(1, tile_size / 11));
     consider(balanced_routes, RouteSource::kNewgrBalanced, 0, false);
     consider(critical_wirelength_routes,
              RouteSource::kNewgrCritical,
              critical_min_wl_drop,
              true);
+    consider(critical_topology_routes,
+             RouteSource::kNewgrCriticalTopology,
+             critical_topology_min_wl_drop,
+             false);
     consider(wirelength_routes,
              RouteSource::kNewgrWirelength,
              0,
@@ -756,6 +769,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
 
     maybeUpdateChampion(balanced_routes, RouteSource::kNewgrBalanced);
+    maybeUpdateChampion(critical_wirelength_routes, RouteSource::kNewgrCritical);
+    maybeUpdateChampion(critical_topology_routes,
+                        RouteSource::kNewgrCriticalTopology);
     maybeUpdateChampion(wirelength_routes, RouteSource::kNewgrWirelength);
     maybeUpdateChampion(data_wirelength_routes, RouteSource::kNewgrDataWirelength);
     maybeUpdateChampion(region_aware_routes, RouteSource::kNewgrRegionAware);
@@ -836,6 +852,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       case RouteSource::kNewgrCritical:
         selected_from_critical++;
         break;
+      case RouteSource::kNewgrCriticalTopology:
+        selected_from_critical_topology++;
+        break;
       case RouteSource::kNewgrWirelength:
         selected_from_wl++;
         break;
@@ -876,6 +895,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (routes.find(db_net) == routes.end()) {
       routes.emplace(db_net, route);
       inserted_from_critical++;
+    }
+  }
+  for (const auto& [db_net, route] : critical_topology_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_critical_topology++;
     }
   }
   for (const auto& [db_net, route] : wirelength_routes) {
@@ -935,14 +960,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   logger_->info(utl::GRT,
                 6004,
-                "NEWGR portfolio hybrid selected balanced={} critical={} wl={} data={} "
+                "NEWGR portfolio hybrid selected balanced={} critical={} critical_top={} wl={} data={} "
                 "region={} regular={} fine={} small={} astar={} rudy={} polish={} "
-                "(kept seed={}; +balanced={} +critical={} +wl={} +data={} +region={} +regular={} "
+                "(kept seed={}; +balanced={} +critical={} +critical_top={} +wl={} +data={} +region={} +regular={} "
                 "+fine={} +small={} +astar={} +rudy={} +polish={}). "
                 "Global WL gain={} "
                 "extra-vias={} (base via budget={} + gain/{}) out of {} total.",
                 selected_from_balanced,
                 selected_from_critical,
+                selected_from_critical_topology,
                 selected_from_wl,
                 selected_from_data_wl,
                 selected_from_region,
@@ -955,6 +981,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 kept_seed,
                 inserted_from_balanced,
                 inserted_from_critical,
+                inserted_from_critical_topology,
                 inserted_from_wl,
                 inserted_from_data_wl,
                 inserted_from_region,
