@@ -29,8 +29,8 @@ class BoxT;
 
 struct Constants
 {
-  double weight_wire_length = 2.9;
-  double weight_via_number = 0.22;
+  double weight_wire_length = 3.6;
+  double weight_via_number = 0.35;
   double weight_short_area = 380.0;
 
   int min_routing_layer = 1;
@@ -46,9 +46,9 @@ struct Constants
   double layer_depth_via_penalty = 0.42;
   double layer_change_penalty = 0.45;
 
-  int mst_topology_pin_threshold = 9;
-  double mst_bend_penalty = 2.0;
-  int hub_topology_pin_threshold = 18;
+  int mst_topology_pin_threshold = 6;
+  double mst_bend_penalty = 4.8;
+  int hub_topology_pin_threshold = 12;
   int pin_access_layer_extension = 0;
   bool enable_early_detour_stage = false;
 
@@ -60,12 +60,12 @@ struct Constants
   double wirelength_pulse_net_ratio = 0.08;
   int wirelength_pulse_dense_interval = 1;
   int wirelength_pulse_relaxed_interval = 3;
-  int global_rebalance_rounds = 2;
+  int global_rebalance_rounds = 1;
   bool enable_critical_compaction_stage = true;
-  int critical_compaction_rounds = 3;
+  int critical_compaction_rounds = 2;
   int critical_compaction_interval = 1;
-  double critical_compaction_net_ratio = 0.45;
-  double critical_compaction_overflow_weight = 220.0;
+  double critical_compaction_net_ratio = 0.24;
+  double critical_compaction_overflow_weight = 260.0;
 
   // SPRoute-inspired soft-capacity shaping.
   bool enable_soft_capacity = true;

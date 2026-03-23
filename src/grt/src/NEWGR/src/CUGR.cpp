@@ -489,7 +489,7 @@ void CUGR::globalRebalanceRoute(const std::vector<int>& allNetIndices)
   }
 
   logger_->report(
-      "stage 4: global full-net annealed rebalance ({} rounds)",
+      "stage 5: global full-net annealed rebalance ({} rounds)",
       constants_.global_rebalance_rounds);
   std::vector<int> rerouteIndices = allNetIndices;
   for (int round = 0; round < constants_.global_rebalance_rounds; round++) {
@@ -615,7 +615,7 @@ void CUGR::criticalCompactionRoute(const std::vector<int>& allNetIndices)
       totalNets);
 
   logger_->report(
-      "stage 5: selective critical-net compaction ({} rounds, {} nets/round)",
+      "stage 6: selective critical-net compaction ({} rounds, {} nets/round)",
       constants_.critical_compaction_rounds,
       selectedCount);
   for (int round = 0; round < constants_.critical_compaction_rounds; round++) {
@@ -701,8 +701,8 @@ void CUGR::criticalCompactionRoute(const std::vector<int>& allNetIndices)
         const RouteScore candidateScore
             = scoreRouteTree(candidateTree,
                              *grid_graph_,
-                             1.2,
-                             1.4,
+                             5.2,
+                             2.1,
                              constants_.critical_compaction_overflow_weight);
         if (candidateScore.objective < bestScore.objective) {
           bestScore = candidateScore;
@@ -742,13 +742,15 @@ void CUGR::route()
 
   mazeRoute(netIndices);
   wirelengthPulseRoute(allNetIndices);
+  globalRebalanceRoute(allNetIndices);
+  criticalCompactionRoute(allNetIndices);
 
   updateOverflowNets(netIndices);
   if (constants_.enable_early_detour_stage && !netIndices.empty()) {
     patternRouteWithDetours(netIndices);
     updateOverflowNets(netIndices);
   }
-  logger_->report("pulse mode: completed focused reroute stage");
+  logger_->report("completed pulse + rebalance + compaction stages");
 
   printStatistics();
   if (constants_.write_heatmap) {
