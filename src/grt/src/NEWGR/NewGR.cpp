@@ -2816,31 +2816,41 @@ bool shouldPreferWirelengthOracleHybrid(int incumbent_overflow,
                                - static_cast<int64_t>(incumbent_score.vias);
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
+  // SPRoute/CUGR-style soft-cap guard:
+  // allow modest via growth when candidate releases significant low-layer
+  // demand (proxy for reducing pin-access/resource risk).
+  const uint64_t low_layer_release_credit = static_cast<uint64_t>(
+      std::max<int64_t>(0, -low_layer_delta) / 6);
+  const uint64_t effective_wl_gain = wl_gain + low_layer_release_credit;
   const bool strong_risk_drop
-      = via_increase <= 0 && low_layer_delta <= -80000;
+      = low_layer_delta <= -100000
+        && (via_increase <= 0 || via_increase <= 180);
   const uint64_t min_wl_gain
       = std::max<uint64_t>(30000, incumbent_score.wirelength / 28000);
-  if (wl_gain < min_wl_gain
+  if (effective_wl_gain < min_wl_gain
       && !(strong_risk_drop && wl_gain >= min_wl_gain / 2)) {
     return false;
   }
   const int64_t via_increase_budget
       = std::max<int64_t>(420, static_cast<int64_t>(incumbent_score.vias / 250));
   if (via_increase > via_increase_budget
-      && wl_gain
+      && effective_wl_gain
              < static_cast<uint64_t>(via_increase * 360 + static_cast<int64_t>(70000))) {
     return false;
   }
   if (via_increase > 0
-      && wl_gain
-             < static_cast<uint64_t>(via_increase * 280 + static_cast<int64_t>(60000))) {
+      && effective_wl_gain
+             < std::max<uint64_t>(
+                 static_cast<uint64_t>(via_increase * 340
+                                       + static_cast<int64_t>(70000)),
+                 static_cast<uint64_t>(100000))) {
     return false;
   }
   const int64_t low_layer_budget = std::max<int64_t>(
       1100000, static_cast<int64_t>(incumbent_low_layer_wl / 360));
   if (low_layer_delta > low_layer_budget
       || (low_layer_delta > 0
-          && wl_gain
+          && effective_wl_gain
                  < static_cast<uint64_t>(low_layer_delta / 3
                                          + static_cast<int64_t>(70000)))) {
     return false;
@@ -2873,36 +2883,45 @@ bool shouldPreferWirelengthClosureHybrid(int incumbent_overflow,
                                - static_cast<int64_t>(incumbent_score.vias);
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
+  // Promote routes that release low-layer resources while keeping via growth
+  // bounded; this mirrors soft-cap balancing from SPRoute and CUGR.
+  const uint64_t low_layer_release_credit = static_cast<uint64_t>(
+      std::max<int64_t>(0, -low_layer_delta) / 5);
+  const uint64_t effective_wl_gain = wl_gain + low_layer_release_credit;
   const bool strong_risk_drop
-      = via_increase <= 0 && low_layer_delta <= -60000;
+      = low_layer_delta <= -90000
+        && (via_increase <= 0 || via_increase <= 160);
   const uint64_t min_wl_gain
       = std::max<uint64_t>(24000, incumbent_score.wirelength / 32000);
-  if (wl_gain < min_wl_gain
+  if (effective_wl_gain < min_wl_gain
       && !(strong_risk_drop && wl_gain >= min_wl_gain / 2)) {
     return false;
   }
   const int64_t via_increase_budget
       = std::max<int64_t>(260, static_cast<int64_t>(incumbent_score.vias / 360));
   if (via_increase > via_increase_budget
-      && wl_gain
+      && effective_wl_gain
              < static_cast<uint64_t>(via_increase * 420 + static_cast<int64_t>(90000))) {
     return false;
   }
   if (via_increase > 0
-      && wl_gain
-             < static_cast<uint64_t>(via_increase * 320 + static_cast<int64_t>(70000))) {
+      && effective_wl_gain
+             < std::max<uint64_t>(
+                 static_cast<uint64_t>(via_increase * 360
+                                       + static_cast<int64_t>(90000)),
+                 static_cast<uint64_t>(120000))) {
     return false;
   }
   const int64_t low_layer_budget = std::max<int64_t>(
       780000, static_cast<int64_t>(incumbent_low_layer_wl / 220));
   if (low_layer_delta > low_layer_budget
-      && wl_gain
+      && effective_wl_gain
              < static_cast<uint64_t>(low_layer_delta / 2
                                      + static_cast<int64_t>(90000))) {
     return false;
   }
   if (low_layer_delta > 0 && via_increase > 0
-      && wl_gain
+      && effective_wl_gain
              < static_cast<uint64_t>(low_layer_delta / 2
                                      + via_increase * 320
                                      + static_cast<int64_t>(90000))) {
