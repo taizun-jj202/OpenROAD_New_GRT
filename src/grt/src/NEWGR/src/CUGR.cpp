@@ -526,18 +526,72 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     return;
   }
   logger_->report("stage 3: maze routing on sparsified routing graph");
+  sortNetIndices(netIndices);
+  std::vector<int> overflowEdges(gr_nets_.size(), 0);
   for (const int netIndex : netIndices) {
+    overflowEdges[netIndex]
+        = grid_graph_->checkOverflow(gr_nets_[netIndex]->getRoutingTree());
+  }
+  // SPRoute-style selective scheduling:
+  // reroute only the highest-impact overflow nets to reduce runtime while
+  // preserving quality on critical hotspots.
+  std::vector<int> scheduledNetIndices = netIndices;
+  std::stable_sort(scheduledNetIndices.begin(),
+                   scheduledNetIndices.end(),
+                   [&](int lhs, int rhs) {
+                     if (overflowEdges[lhs] != overflowEdges[rhs]) {
+                       return overflowEdges[lhs] > overflowEdges[rhs];
+                     }
+                     const auto& lhsBox = gr_nets_[lhs]->getBoundingBox();
+                     const auto& rhsBox = gr_nets_[rhs]->getBoundingBox();
+                     const int lhsPins = std::max(2, gr_nets_[lhs]->getNumPins());
+                     const int rhsPins = std::max(2, gr_nets_[rhs]->getNumPins());
+                     const double lhsPriority
+                         = static_cast<double>(lhsBox.hp())
+                           * (1.0 + std::log2(lhsPins));
+                     const double rhsPriority
+                         = static_cast<double>(rhsBox.hp())
+                           * (1.0 + std::log2(rhsPins));
+                     if (lhsPriority != rhsPriority) {
+                       return lhsPriority > rhsPriority;
+                     }
+                     return lhs < rhs;
+                   });
+  const int totalOverflowNets = static_cast<int>(scheduledNetIndices.size());
+  int mazeBudget = totalOverflowNets;
+  if (totalOverflowNets > 1000) {
+    mazeBudget = std::max(560, totalOverflowNets * 5 / 9);
+  } else if (totalOverflowNets > 700) {
+    mazeBudget = std::max(480, totalOverflowNets * 2 / 3);
+  } else if (totalOverflowNets > 400) {
+    mazeBudget = std::max(320, totalOverflowNets * 4 / 5);
+  }
+  mazeBudget = std::min(totalOverflowNets, mazeBudget);
+  if (mazeBudget <= 0) {
+    updateOverflowNets(netIndices);
+    return;
+  }
+  if (mazeBudget < totalOverflowNets) {
+    scheduledNetIndices.resize(mazeBudget);
+    logger_->report("stage 3 selective scheduling routed {} / {} overflow nets.",
+                    mazeBudget,
+                    totalOverflowNets);
+  } else {
+    logger_->report("stage 3 selective scheduling routed all {} overflow nets.",
+                    totalOverflowNets);
+  }
+
+  for (const int netIndex : scheduledNetIndices) {
     grid_graph_->commitTree(gr_nets_[netIndex]->getRoutingTree(),
                             /*ripup*/ true);
   }
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
-  sortNetIndices(netIndices);
-  const int base_sparse_interval = netIndices.size() < 2000 ? 7 : 11;
+  const int base_sparse_interval = scheduledNetIndices.size() < 800 ? 8 : 10;
   int rank = 0;
   int accepted = 0;
   int totalCandidates = 0;
-  for (const int netIndex : netIndices) {
+  for (const int netIndex : scheduledNetIndices) {
     GRNet* net = gr_nets_[netIndex].get();
     const auto oldTree = net->getRoutingTree();
 
@@ -567,16 +621,11 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     }
 
     int max_candidates = 1;
-    if ((pins >= 10 || hp >= 130)
-        && (oldOverflow > 0
-            || rank < static_cast<int>(netIndices.size() / 3))) {
+    if ((pins >= 10 || hp >= 130 || oldOverflow >= 3)
+        && rank < static_cast<int>(scheduledNetIndices.size() / 3)) {
       max_candidates = 2;
     }
-    if ((pins >= 16 || hp >= 180) && oldOverflow >= 4
-        && rank < static_cast<int>(netIndices.size() / 6)) {
-      max_candidates = 3;
-    }
-    if ((rank > static_cast<int>(netIndices.size() * 4 / 5))
+    if ((rank > static_cast<int>(scheduledNetIndices.size() * 4 / 5))
         && pins <= 4 && hp <= 80) {
       max_candidates = 1;
     }
@@ -588,8 +637,6 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
       MazeBuildOptions mazeOptions;
       if (oldOverflow >= 6 || (pins >= 12 && hp >= 150)) {
-        mazeOptions.max_start_candidates = 3;
-      } else if (pins >= 6 || hp >= 100 || oldOverflow >= 2) {
         mazeOptions.max_start_candidates = 2;
       } else {
         mazeOptions.max_start_candidates = 1;
@@ -643,7 +690,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
   logger_->report("stage 3 accepted {} / {} nets ({} candidates tested).",
                   accepted,
-                  netIndices.size(),
+                  scheduledNetIndices.size(),
                   totalCandidates);
   updateOverflowNets(netIndices);
 }
@@ -1390,12 +1437,12 @@ void CUGR::route()
   }
 
   // One extra shortest-path cleanup for heavy-overflow states only.
-  if (netIndices.size() > 900) {
+  if (netIndices.size() > 1500) {
     grid_graph_->setStageCostScales(1.24, 1.26, 1.02);
     mazeRoute(netIndices);
   } else if (!netIndices.empty()) {
     logger_->report("stage 3 repeat skipped: overflow-net count {} is below "
-                    "threshold 900.",
+                    "threshold 1500.",
                     netIndices.size());
   }
 
