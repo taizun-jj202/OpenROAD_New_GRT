@@ -12,22 +12,22 @@ int acc_count;
 int n_small_undone;
 float max_rudy;
 
-#define M2_ADJ_MIN 0.68
+#define M2_ADJ_MIN 0.82
 #define M2_ADJ_MAX 0.98
 #define M2_ADJ_MID 4.2
 #define M2_ADJ_K 1.6
 
-#define M3_ADJ_MIN 0.70
+#define M3_ADJ_MIN 0.84
 #define M3_ADJ_MAX 0.98
 #define M3_ADJ_MID 4.2
 #define M3_ADJ_K 1.6
 
-#define MID_ADJ_MIN 0.92
+#define MID_ADJ_MIN 0.96
 #define MID_ADJ_MAX 1.00
 #define MID_ADJ_MID 5.5
 #define MID_ADJ_K 1.2
 
-#define HIGH_ADJ 0.92
+#define HIGH_ADJ 0.98
 
 #define OBS_NO_STOP 0 // 1 == go through OBS, 0 == hard stop
 
@@ -57,11 +57,11 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 			adj = HIGH_ADJ;
 
 		// Keep near-hard capacity in sparse regions to avoid unnecessary detours.
-		if (rudy < 1.5f) {
-			adj = (adj + 0.08f > 1.0f) ? 1.0f : (adj + 0.08f);
-		} else if (rudy > 7.0f) {
-			adj *= 0.90f;
-		}
+			if (rudy < 2.0f) {
+				adj = (adj + 0.15f > 1.0f) ? 1.0f : (adj + 0.15f);
+			} else if (rudy > 7.0f) {
+				adj *= 0.95f;
+			}
 
 		const int adjusted = static_cast<int>((float) x * adj);
 		return (adjusted < 1) ? 1 : adjusted;
