@@ -3599,7 +3599,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(hyper_collapse));
   }
 
-  if (false && has_best_wirelength) {
+  if (has_best_wirelength) {
     ScenarioResult donor_minwl;
     donor_minwl.name = "router-donor-minwl-fusion";
     if (ScenarioResult* hyper = find_scenario_result("hyper-collapse-fusion")) {
@@ -3635,14 +3635,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                                            x_grids,
                                                            y_grids,
                                                            hotspot_map,
-                                                           std::max(tile_size / 5, 1),
-                                                           0.008,
-                                                           5,
-                                                           20,
-                                                           0.20,
-                                                           2.80,
-                                                           1.18,
-                                                           3.40);
+                                                           std::max(tile_size / 6, 1),
+                                                           0.003,
+                                                           6,
+                                                           26,
+                                                           0.30,
+                                                           3.10,
+                                                           1.22,
+                                                           3.80);
 
     std::vector<const NetRouteMap*> router_specialists;
     router_specialists.reserve(12);
@@ -3673,12 +3673,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                                        hotspot_map,
                                                        1,
                                                        0.0,
-                                                       8,
-                                                       28,
-                                                       0.45,
-                                                       3.60,
-                                                       1.25,
-                                                       4.10);
+                                                       10,
+                                                       34,
+                                                       0.60,
+                                                       4.30,
+                                                       1.32,
+                                                       4.80);
 
     donor_minwl.metrics = compute_metrics(donor_minwl.routes);
     logger_->info(
@@ -3692,13 +3692,109 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(donor_minwl));
   }
 
+  if (has_best_wirelength) {
+    // Radical donor envelope:
+    // 1) Seed from the shortest collapse candidate.
+    // 2) For each net, pull shortest viable routes across FastRoute/CUGR/SPRoute
+    //    donor pools with long-net-biased via slack.
+    // 3) Re-run long-net collapse to further squeeze Manhattan detours.
+    ScenarioResult envelope_minwl;
+    envelope_minwl.name = "ultra-minwl-envelope-fusion";
+    if (ScenarioResult* donor = find_scenario_result("router-donor-minwl-fusion")) {
+      envelope_minwl.routes = donor->routes;
+    } else if (ScenarioResult* donor = find_scenario_result("hyper-collapse-fusion")) {
+      envelope_minwl.routes = donor->routes;
+    } else if (ScenarioResult* donor = find_scenario_result("longnet-priority-fusion")) {
+      envelope_minwl.routes = donor->routes;
+    } else {
+      envelope_minwl.routes = best_wirelength_routes;
+    }
+
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+
+    std::vector<const NetRouteMap*> broad_donors;
+    broad_donors.reserve(scenario_results.size());
+    for (const ScenarioResult& result : scenario_results) {
+      if (result.name == envelope_minwl.name) {
+        continue;
+      }
+      broad_donors.push_back(&result.routes);
+    }
+
+    int fused_swaps = applyRouterDonorMinWirelengthFusion(envelope_minwl.routes,
+                                                           broad_donors,
+                                                           tile_size,
+                                                           x_min,
+                                                           y_min,
+                                                           x_grids,
+                                                           y_grids,
+                                                           hotspot_map,
+                                                           1,
+                                                           0.0,
+                                                           12,
+                                                           40,
+                                                           0.90,
+                                                           5.20,
+                                                           1.40,
+                                                           5.50);
+
+    std::vector<const NetRouteMap*> specialist_donors;
+    specialist_donors.reserve(14);
+    for (const char* donor_name : {"router-donor-minwl-fusion",
+                                   "hyper-collapse-fusion",
+                                   "longnet-priority-fusion",
+                                   "consensus-collapse-fusion",
+                                   "extreme-wirelength-stitch",
+                                   "radical-shortpath-fusion",
+                                   "cross-router-wirelength-fusion",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting",
+                                   "dr-stable-shortest-fusion",
+                                   "wl-direct-focused",
+                                   "sporder-shortest",
+                                   "cugr-router-donor",
+                                   "sproute-router-donor"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        specialist_donors.push_back(&donor->routes);
+      }
+    }
+
+    fused_swaps += applyLongNetPriorityFusion(envelope_minwl.routes,
+                                              specialist_donors,
+                                              tile_size,
+                                              x_min,
+                                              y_min,
+                                              x_grids,
+                                              y_grids,
+                                              hotspot_map,
+                                              1,
+                                              30,
+                                              4.80);
+
+    envelope_minwl.metrics = compute_metrics(envelope_minwl.routes);
+    logger_->info(GNR,
+                  6028,
+                  "NEWGR scenario {} [radical]: wirelength {:.0f} um, vias {}, fused nets {}",
+                  envelope_minwl.name,
+                  envelope_minwl.metrics.wirelength_um,
+                  envelope_minwl.metrics.via_count,
+                  fused_swaps);
+    scenario_results.push_back(std::move(envelope_minwl));
+  }
+
   const long baseline_vias = baseline.metrics.via_count;
   auto better_result = [baseline_vias](const ScenarioResult& lhs,
                                        const ScenarioResult& rhs) {
     const long lhs_wl = lhs.metrics.wirelength_dbu;
     const long rhs_wl = rhs.metrics.wirelength_dbu;
+    // Stronger WL-first arbitration: only invoke via tie-breaks when two
+    // candidates are almost equal in Manhattan length.
     const long wl_tie_window
-        = std::max<long>(4500, std::max(lhs_wl, rhs_wl) / 70000);
+        = std::max<long>(1200, std::max(lhs_wl, rhs_wl) / 220000);
     const long wl_delta = lhs_wl > rhs_wl ? lhs_wl - rhs_wl : rhs_wl - lhs_wl;
     if (wl_delta > wl_tie_window) {
       return lhs_wl < rhs_wl;
@@ -3830,8 +3926,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     dr_aware_choice = dr_pick.first;
   }
 
+  // Replaying the winning scenario can perturb congestion history and lose the
+  // shortest route seen in the search ensemble. Keep the exact best candidate.
+  const bool replay_best_scenario = false;
   const ScenarioDefinition* replay_def = nullptr;
-  if (best_iter->name != scenario_results.back().name) {
+  if (replay_best_scenario && best_iter->name != scenario_results.back().name) {
     if (best_iter->name == "baseline") {
       replay_def = &baseline_def;
     } else {
@@ -3851,9 +3950,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // extra late-stage detours. If the stabilized candidate is close in
   // wirelength, prefer it to reduce guide volatility.
   if (ScenarioResult* stabilized = find_scenario_result("stabilized-dr-fusion")) {
-    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
-    const long wl_window = std::max<long>(12L * tile_size, 1L);
-    if (stabilized->metrics.wirelength_dbu <= final_result.metrics.wirelength_dbu + wl_window
+    if (stabilized->metrics.wirelength_dbu <= final_result.metrics.wirelength_dbu
         && stabilized->metrics.via_count < final_result.metrics.via_count) {
       final_result = *stabilized;
     }
@@ -3864,7 +3961,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   if (dr_aware_choice != nullptr && dr_aware_choice->name != final_result.name) {
     // Guardrail: do not replace a clearly shorter guide set with a "DR-aware"
     // candidate unless wirelength loss is negligible and via reduction is real.
-    const long wl_guard = std::max<long>(4L * proxy_tile_size, best_wirelength / 4000L);
+    const long wl_guard = 0;
     const long via_guard = std::max<long>(proxy_tile_size,
                                           final_result.metrics.via_count / 200L);
     const bool wl_safe = dr_aware_choice->metrics.wirelength_dbu
@@ -3894,6 +3991,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                        || final_result.name == "longnet-priority-fusion"
                                        || final_result.name == "hyper-collapse-fusion"
                                        || final_result.name == "router-donor-minwl-fusion"
+                                       || final_result.name == "ultra-minwl-envelope-fusion"
                                        || final_result.name == "cross-router-wirelength-fusion"
                                        || final_result.name == "radical-shortpath-fusion"
                                        || final_result.name == "extreme-wirelength-stitch"
