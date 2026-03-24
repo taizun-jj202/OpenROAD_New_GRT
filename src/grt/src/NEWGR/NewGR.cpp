@@ -2558,17 +2558,6 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
   append_candidates(horizontal);
   append_candidates(vertical);
 
-  if (candidates.empty()) {
-    return;
-  }
-
-  std::stable_sort(
-      candidates.begin(),
-      candidates.end(),
-      [](const CongestionPatchCandidate& lhs, const CongestionPatchCandidate& rhs) {
-        return lhs.severity > rhs.severity;
-      });
-
   const int edge_budget = 160;
   const int sources_per_edge = 2;
   const int patches_per_net = 9;
@@ -2579,111 +2568,120 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
   int congestion_added_segments = 0;
   std::map<odb::dbNet*, int> per_net_patch_count;
 
-  for (const CongestionPatchCandidate& candidate : candidates) {
-    if (patched_edges >= edge_budget || added_segments >= total_patch_budget) {
-      break;
-    }
-    if (candidate.info == nullptr) {
-      continue;
-    }
+  if (!candidates.empty()) {
+    std::stable_sort(
+        candidates.begin(),
+        candidates.end(),
+        [](const CongestionPatchCandidate& lhs, const CongestionPatchCandidate& rhs) {
+          return lhs.severity > rhs.severity;
+        });
 
-    const GSegment& base = candidate.info->segment;
-    const int base_layer = base.init_layer;
-    if (base_layer < min_routing_layer || base_layer > max_routing_layer) {
-      continue;
-    }
-
-    std::vector<int> alt_layers;
-    if (base_layer < max_routing_layer) {
-      alt_layers.push_back(base_layer + 1);
-    }
-    if (base_layer > min_routing_layer) {
-      alt_layers.push_back(base_layer - 1);
-    }
-    if (alt_layers.empty()) {
-      continue;
-    }
-
-    const int capacity = std::max(candidate.info->congestion.capacity, 1);
-    const int usage = std::max(candidate.info->congestion.usage, 0);
-    const int overflow = std::max(usage - capacity, 0);
-    const float usage_ratio
-        = static_cast<float>(usage) / static_cast<float>(capacity);
-    const bool dual_layer_patch = overflow > 0 || usage_ratio >= 1.02f;
-    if (!dual_layer_patch && alt_layers.size() > 1) {
-      alt_layers.resize(1);
-    }
-
-    bool edge_patched = false;
-    int source_count = 0;
-
-    for (odb::dbNet* db_net : candidate.info->sources) {
-      if (source_count >= sources_per_edge
-          || added_segments >= total_patch_budget) {
+    for (const CongestionPatchCandidate& candidate : candidates) {
+      if (patched_edges >= edge_budget || added_segments >= total_patch_budget) {
         break;
       }
-      auto route_it = routes.find(db_net);
-      if (route_it == routes.end()) {
+      if (candidate.info == nullptr) {
         continue;
       }
 
-      int& net_budget = per_net_patch_count[db_net];
-      if (net_budget >= patches_per_net) {
+      const GSegment& base = candidate.info->segment;
+      const int base_layer = base.init_layer;
+      if (base_layer < min_routing_layer || base_layer > max_routing_layer) {
         continue;
       }
 
-      GRoute& route = route_it->second;
-      const size_t route_size_before = route.size();
+      std::vector<int> alt_layers;
+      if (base_layer < max_routing_layer) {
+        alt_layers.push_back(base_layer + 1);
+      }
+      if (base_layer > min_routing_layer) {
+        alt_layers.push_back(base_layer - 1);
+      }
+      if (alt_layers.empty()) {
+        continue;
+      }
 
-      for (const int alt_layer : alt_layers) {
-        if (alt_layer < min_routing_layer || alt_layer > max_routing_layer
-            || alt_layer == base_layer) {
-          continue;
-        }
-        const int low_layer = std::min(base_layer, alt_layer);
-        const int high_layer = std::max(base_layer, alt_layer);
+      const int capacity = std::max(candidate.info->congestion.capacity, 1);
+      const int usage = std::max(candidate.info->congestion.usage, 0);
+      const int overflow = std::max(usage - capacity, 0);
+      const float usage_ratio
+          = static_cast<float>(usage) / static_cast<float>(capacity);
+      const bool dual_layer_patch = overflow > 0 || usage_ratio >= 1.02f;
+      if (!dual_layer_patch && alt_layers.size() > 1) {
+        alt_layers.resize(1);
+      }
 
-        appendUniqueRouteSegment(route,
-                                 GSegment(base.init_x,
-                                          base.init_y,
-                                          alt_layer,
-                                          base.final_x,
-                                          base.final_y,
-                                          alt_layer));
-        appendUniqueRouteSegment(route,
-                                 GSegment(base.init_x,
-                                          base.init_y,
-                                          low_layer,
-                                          base.init_x,
-                                          base.init_y,
-                                          high_layer));
-        appendUniqueRouteSegment(route,
-                                 GSegment(base.final_x,
-                                          base.final_y,
-                                          low_layer,
-                                          base.final_x,
-                                          base.final_y,
-                                          high_layer));
+      bool edge_patched = false;
+      int source_count = 0;
 
-        // Non-overflow edges only get one adjacent-layer corridor.
-        if (!dual_layer_patch) {
+      for (odb::dbNet* db_net : candidate.info->sources) {
+        if (source_count >= sources_per_edge
+            || added_segments >= total_patch_budget) {
           break;
         }
+        auto route_it = routes.find(db_net);
+        if (route_it == routes.end()) {
+          continue;
+        }
+
+        int& net_budget = per_net_patch_count[db_net];
+        if (net_budget >= patches_per_net) {
+          continue;
+        }
+
+        GRoute& route = route_it->second;
+        const size_t route_size_before = route.size();
+
+        for (const int alt_layer : alt_layers) {
+          if (alt_layer < min_routing_layer || alt_layer > max_routing_layer
+              || alt_layer == base_layer) {
+            continue;
+          }
+          const int low_layer = std::min(base_layer, alt_layer);
+          const int high_layer = std::max(base_layer, alt_layer);
+
+          appendUniqueRouteSegment(route,
+                                   GSegment(base.init_x,
+                                            base.init_y,
+                                            alt_layer,
+                                            base.final_x,
+                                            base.final_y,
+                                            alt_layer));
+          appendUniqueRouteSegment(route,
+                                   GSegment(base.init_x,
+                                            base.init_y,
+                                            low_layer,
+                                            base.init_x,
+                                            base.init_y,
+                                            high_layer));
+          appendUniqueRouteSegment(route,
+                                   GSegment(base.final_x,
+                                            base.final_y,
+                                            low_layer,
+                                            base.final_x,
+                                            base.final_y,
+                                            high_layer));
+
+          // Non-overflow edges only get one adjacent-layer corridor.
+          if (!dual_layer_patch) {
+            break;
+          }
+        }
+
+        const int new_segments
+            = static_cast<int>(route.size() - route_size_before);
+        if (new_segments > 0) {
+          added_segments += new_segments;
+          congestion_added_segments += new_segments;
+          net_budget++;
+          source_count++;
+          edge_patched = true;
+        }
       }
 
-      const int new_segments
-          = static_cast<int>(route.size() - route_size_before);
-      if (new_segments > 0) {
-        added_segments += new_segments;
-        congestion_added_segments += new_segments;
-        net_budget++;
-        source_count++;
-        edge_patched = true;
+      if (edge_patched) {
+        patched_edges++;
       }
-    }
-
-    if (edge_patched) {
-      patched_edges++;
     }
   }
 
