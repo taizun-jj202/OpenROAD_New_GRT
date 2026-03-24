@@ -7886,6 +7886,75 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         forced_wl_ptr = wl_locked_ptr;
       }
     }
+
+    // SPRoute-style deterministic WL-plateau collapse:
+    // once we have an overflow-free candidate pool, lock to the absolute
+    // shortest-WL plateau and choose the most compact route (vias first),
+    // then use DR-proxy tie-breakers.
+    int min_overflow_edges = std::numeric_limits<int>::max();
+    long min_plateau_wl = std::numeric_limits<long>::max();
+    for (const ScenarioResult& candidate : scenario_results) {
+      if (candidate.metrics.overflow_edges < min_overflow_edges) {
+        min_overflow_edges = candidate.metrics.overflow_edges;
+        min_plateau_wl = candidate.metrics.wirelength_dbu;
+      } else if (candidate.metrics.overflow_edges == min_overflow_edges) {
+        min_plateau_wl
+            = std::min(min_plateau_wl, candidate.metrics.wirelength_dbu);
+      }
+    }
+    if (min_overflow_edges != std::numeric_limits<int>::max()
+        && min_plateau_wl != std::numeric_limits<long>::max()) {
+      const long wl_plateau_band
+          = std::max<long>(4L, static_cast<long>(std::ceil(
+                                   static_cast<double>(min_plateau_wl) * 0.00001)));
+      const ScenarioResult* plateau_pick = nullptr;
+      auto plateau_better = [&](const ScenarioResult& lhs,
+                                const ScenarioResult& rhs) {
+        if (lhs.metrics.via_count != rhs.metrics.via_count) {
+          return lhs.metrics.via_count < rhs.metrics.via_count;
+        }
+        const double lhs_proxy = estimateDetailedRouteProxyCost(lhs.metrics);
+        const double rhs_proxy = estimateDetailedRouteProxyCost(rhs.metrics);
+        if (std::abs(lhs_proxy - rhs_proxy) > 1e-3) {
+          return lhs_proxy < rhs_proxy;
+        }
+        if (lhs.metrics.detour_dbu != rhs.metrics.detour_dbu) {
+          return lhs.metrics.detour_dbu < rhs.metrics.detour_dbu;
+        }
+        if (lhs.metrics.high_layer_dbu != rhs.metrics.high_layer_dbu) {
+          return lhs.metrics.high_layer_dbu < rhs.metrics.high_layer_dbu;
+        }
+        return lhs.name < rhs.name;
+      };
+
+      for (const ScenarioResult& candidate : scenario_results) {
+        if (candidate.metrics.overflow_edges != min_overflow_edges) {
+          continue;
+        }
+        if (candidate.metrics.wirelength_dbu > min_plateau_wl + wl_plateau_band) {
+          continue;
+        }
+        if (plateau_pick == nullptr || plateau_better(candidate, *plateau_pick)) {
+          plateau_pick = &candidate;
+        }
+      }
+
+      if (plateau_pick != nullptr
+          && (forced_wl_ptr == nullptr
+              || wirelength_first_better(*plateau_pick, *forced_wl_ptr))) {
+        logger_->info(
+            GNR,
+            7364,
+            "NEWGR WL-plateau lock selecting '{}' (min WL {}, band {}, vias {}) "
+            "over '{}'.",
+            plateau_pick->name,
+            min_plateau_wl,
+            wl_plateau_band,
+            plateau_pick->metrics.via_count,
+            forced_wl_ptr != nullptr ? forced_wl_ptr->name : std::string("none"));
+        forced_wl_ptr = plateau_pick;
+      }
+    }
   }
 
   const ScenarioResult* best_ptr = forced_wl_ptr;
