@@ -60,6 +60,13 @@ void applyRouteProfile(NewgrEngine::RouteProfile profile)
       NEWGR_RUDY_WEIGHT_SCALE = 0.06f;
       NEWGR_PIN_DENSITY_SCALE = 0.10f;
       break;
+    case NewgrEngine::RouteProfile::kPinDensityFocused:
+      // CUGR-like local density pressure while preserving direct trunks.
+      NEWGR_CAP_MODEL = 2;
+      NEWGR_CAP_SCALE = 1.0f;
+      NEWGR_RUDY_WEIGHT_SCALE = 0.30f;
+      NEWGR_PIN_DENSITY_SCALE = 2.40f;
+      break;
   }
 }
 
@@ -177,6 +184,24 @@ NetRouteMap NewgrEngine::runAstarEarly()
                        static_cast<int>(Algo::Astar),
                        /*warn_id=*/410,
                        RouteProfile::kBalanced);
+}
+
+NetRouteMap NewgrEngine::runRudyClassic()
+{
+  // Stable DetPart+A* RUDY ordering with ultra-direct capacity profile.
+  return runWithConfig(/*max_maze_round=*/140,
+                       static_cast<int>(Algo::DetPart_Astar_RUDY),
+                       /*warn_id=*/417,
+                       RouteProfile::kUltraDirectWirelength);
+}
+
+NetRouteMap NewgrEngine::runPinDensityClassic()
+{
+  // Pin-density biased variant using data-driven DetPart+A*.
+  return runWithConfig(/*max_maze_round=*/180,
+                       static_cast<int>(Algo::DetPart_Astar_Data),
+                       /*warn_id=*/418,
+                       RouteProfile::kPinDensityFocused);
 }
 
 NetRouteMap NewgrEngine::runDetPartClassic()

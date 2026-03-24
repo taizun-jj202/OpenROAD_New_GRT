@@ -497,6 +497,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   NetRouteMap smallnet_routes = engine_->runSmallNetAware();
   NetRouteMap astar_routes = engine_->runAstarClassic();
   NetRouteMap rudy_routes = engine_->runRudyDriven();
+  NetRouteMap rudy_classic_routes = engine_->runRudyClassic();
+  NetRouteMap pin_density_routes = engine_->runPinDensityClassic();
   NetRouteMap astar_early_routes = engine_->runAstarEarly();
   NetRouteMap detpart_routes = engine_->runDetPartClassic();
   NetRouteMap nondet_routes = engine_->runNonDetHybrid();
@@ -782,11 +784,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
              RouteSource::kNewgrSmallNet,
              aggressive_min_wl_drop,
              true);
+    consider(pin_density_routes,
+             RouteSource::kNewgrDataWirelength,
+             aggressive_min_wl_drop,
+             true);
     consider(astar_routes,
              RouteSource::kNewgrAstar,
              aggressive_min_wl_drop,
              true);
     consider(rudy_routes, RouteSource::kNewgrRudy, aggressive_min_wl_drop, true);
+    consider(rudy_classic_routes,
+             RouteSource::kNewgrRudy,
+             aggressive_min_wl_drop,
+             true);
     consider(astar_early_routes,
              RouteSource::kNewgrAstarEarly,
              aggressive_min_wl_drop,
@@ -858,8 +868,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     maybeUpdateChampion(regular_region_routes, RouteSource::kNewgrRegularRegion);
     maybeUpdateChampion(finegrain_routes, RouteSource::kNewgrFineGrain);
     maybeUpdateChampion(smallnet_routes, RouteSource::kNewgrSmallNet);
+    maybeUpdateChampion(pin_density_routes, RouteSource::kNewgrDataWirelength);
     maybeUpdateChampion(astar_routes, RouteSource::kNewgrAstar);
     maybeUpdateChampion(rudy_routes, RouteSource::kNewgrRudy);
+    maybeUpdateChampion(rudy_classic_routes, RouteSource::kNewgrRudy);
     maybeUpdateChampion(astar_early_routes, RouteSource::kNewgrAstarEarly);
     maybeUpdateChampion(detpart_routes, RouteSource::kNewgrDetPartClassic);
     maybeUpdateChampion(nondet_routes, RouteSource::kNewgrNonDetHybrid);
@@ -1138,12 +1150,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider_refine(balanced_routes);
     consider_refine(wirelength_routes);
     consider_refine(data_wirelength_routes);
+    consider_refine(pin_density_routes);
     consider_refine(region_aware_routes);
     consider_refine(regular_region_routes);
     consider_refine(finegrain_routes);
     consider_refine(smallnet_routes);
     consider_refine(astar_routes);
     consider_refine(rudy_routes);
+    consider_refine(rudy_classic_routes);
     consider_refine(astar_early_routes);
     consider_refine(detpart_routes);
     consider_refine(nondet_routes);
@@ -1253,12 +1267,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider_rescue(balanced_routes);
     consider_rescue(wirelength_routes);
     consider_rescue(data_wirelength_routes);
+    consider_rescue(pin_density_routes);
     consider_rescue(region_aware_routes);
     consider_rescue(regular_region_routes);
     consider_rescue(finegrain_routes);
     consider_rescue(smallnet_routes);
     consider_rescue(astar_routes);
     consider_rescue(rudy_routes);
+    consider_rescue(rudy_classic_routes);
     consider_rescue(astar_early_routes);
     consider_rescue(detpart_routes);
     consider_rescue(nondet_routes);
@@ -1376,12 +1392,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider_polish(balanced_routes);
     consider_polish(wirelength_routes);
     consider_polish(data_wirelength_routes);
+    consider_polish(pin_density_routes);
     consider_polish(region_aware_routes);
     consider_polish(regular_region_routes);
     consider_polish(finegrain_routes);
     consider_polish(smallnet_routes);
     consider_polish(astar_routes);
     consider_polish(rudy_routes);
+    consider_polish(rudy_classic_routes);
     consider_polish(astar_early_routes);
     consider_polish(detpart_routes);
     consider_polish(nondet_routes);
@@ -1416,7 +1434,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int64_t wl_crush_via_delta = 0;
   int wl_crush_rank = 0;
   const int wl_crush_nets = std::max<int>(
-      1, static_cast<int>(ordered_nets.size() * 3 / 5));
+      1, static_cast<int>(ordered_nets.size() * 5 / 6));
   for (const OrderedNet& ordered_net : ordered_nets) {
     if (wl_crush_rank >= wl_crush_nets) {
       break;
@@ -1436,6 +1454,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = std::max<int64_t>(0, current_score.vias - baseline_score.vias);
 
     removeRouteFromUsage(route, origin_x, origin_y, tile_size, selected_usage);
+    const int64_t current_congestion_cost
+        = routeCongestionPenalty(route,
+                                 grid,
+                                 origin_x,
+                                 origin_y,
+                                 tile_size,
+                                 selected_usage,
+                                 soft_capacities);
 
     const GRoute* best_crush_route = &route;
     RouteScore best_crush_score = current_score;
@@ -1473,6 +1499,30 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         return;
       }
 
+      const int64_t candidate_congestion_cost
+          = routeCongestionPenalty(candidate_it->second,
+                                   grid,
+                                   origin_x,
+                                   origin_y,
+                                   tile_size,
+                                   selected_usage,
+                                   soft_capacities);
+      const int64_t congestion_delta
+          = candidate_congestion_cost - current_congestion_cost;
+      const int64_t allowed_congestion_delta
+          = policy.long_net ? std::max<int64_t>(42, current_congestion_cost * 2 + 16)
+                            : (policy.medium_net
+                                   ? std::max<int64_t>(28,
+                                                       current_congestion_cost * 3 / 2 + 12)
+                                   : std::max<int64_t>(16, current_congestion_cost + 8));
+      const int64_t force_wl_gain
+          = policy.long_net ? std::max<int64_t>(2, tile_size / 7)
+                            : std::max<int64_t>(2, tile_size / 6);
+      if (congestion_delta > allowed_congestion_delta
+          && wl_drop_vs_best < force_wl_gain) {
+        return;
+      }
+
       best_crush_route = &candidate_it->second;
       best_crush_score = candidate_score;
     };
@@ -1480,12 +1530,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider_crush(balanced_routes);
     consider_crush(wirelength_routes);
     consider_crush(data_wirelength_routes);
+    consider_crush(pin_density_routes);
     consider_crush(region_aware_routes);
     consider_crush(regular_region_routes);
     consider_crush(finegrain_routes);
     consider_crush(smallnet_routes);
     consider_crush(astar_routes);
     consider_crush(rudy_routes);
+    consider_crush(rudy_classic_routes);
     consider_crush(astar_early_routes);
     consider_crush(detpart_routes);
     consider_crush(nondet_routes);
@@ -1531,6 +1583,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       inserted_from_data_wl++;
     }
   }
+  for (const auto& [db_net, route] : pin_density_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_data_wl++;
+    }
+  }
   for (const auto& [db_net, route] : region_aware_routes) {
     if (routes.find(db_net) == routes.end()) {
       routes.emplace(db_net, route);
@@ -1562,6 +1620,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
   for (const auto& [db_net, route] : rudy_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_rudy++;
+    }
+  }
+  for (const auto& [db_net, route] : rudy_classic_routes) {
     if (routes.find(db_net) == routes.end()) {
       routes.emplace(db_net, route);
       inserted_from_rudy++;
