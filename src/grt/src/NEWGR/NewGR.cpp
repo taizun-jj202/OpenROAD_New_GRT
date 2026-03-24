@@ -2569,10 +2569,10 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
         return lhs.severity > rhs.severity;
       });
 
-  const int edge_budget = 112;
-  const int sources_per_edge = 2;
-  const int patches_per_net = 7;
-  const int total_patch_budget = 1500;
+  const int edge_budget = 220;
+  const int sources_per_edge = 3;
+  const int patches_per_net = 12;
+  const int total_patch_budget = 3200;
 
   int patched_edges = 0;
   int added_segments = 0;
@@ -2689,10 +2689,10 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
 
   // Add long-segment alternatives only when there are enough severe hotspots
   // to justify extra guide flexibility.
-  const bool enable_long_seg_patching = patched_edges >= (edge_budget / 4);
-  const int long_seg_threshold = 3 * tile_size;
-  const int long_seg_patches_per_net = 4;
-  const int long_seg_segment_budget = 520;
+  const bool enable_long_seg_patching = patched_edges >= (edge_budget / 6);
+  const int long_seg_threshold = 2 * tile_size;
+  const int long_seg_patches_per_net = 8;
+  const int long_seg_segment_budget = 1200;
   int long_seg_added_segments = 0;
   std::map<odb::dbNet*, int> long_seg_patch_count;
 
@@ -2779,8 +2779,8 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
   const int y_grids = grouter->grid()->getYGrids();
   const int x_max = x_min + tile_size * std::max(x_grids - 1, 0);
   const int y_max = y_min + tile_size * std::max(y_grids - 1, 0);
-  const int junction_segment_budget = 320;
-  const int junction_patches_per_net = 3;
+  const int junction_segment_budget = 1100;
+  const int junction_patches_per_net = 8;
   int junction_added_segments = 0;
   std::map<odb::dbNet*, int> junction_patch_count;
 
