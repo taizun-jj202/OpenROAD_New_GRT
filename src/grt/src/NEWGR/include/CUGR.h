@@ -32,9 +32,9 @@ struct Constants
   // Wirelength-first weighting to counter NEWGR's CUGR-like over-detour
   // behavior on large designs.
   double weight_wire_length = 1.0;
-  // Bias NEWGR toward shorter routes by lowering via aversion. Later stages
-  // can then legally trade vias for substantial wirelength wins.
-  double weight_via_number = 2.1;
+  // Slightly lower via aversion than legacy NEWGR to permit targeted
+  // wirelength tightening without opening a broad via explosion.
+  double weight_via_number = 2.6;
   double weight_short_area = 500.0;
 
   int min_routing_layer = 1;
