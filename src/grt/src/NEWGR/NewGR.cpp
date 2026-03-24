@@ -4634,7 +4634,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             80L,
             static_cast<long>(std::ceil(
                 static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00030)));
-        const long min_via_gain = std::max<long>(120L, grouter_->grid_->getTileSize() * 4L);
+        const long min_via_gain
+            = std::max<long>(120L, grouter_->grid_->getTileSize() * 4L);
         if (wl_gain < min_wl_gain || via_gain < min_via_gain) {
           return false;
         }
@@ -4701,9 +4702,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = static_cast<long>(via_floor_ptr->metrics.via_count)
             - static_cast<long>(wl_anchor->metrics.via_count);
       const long max_via_rise = std::max<long>(
-          160L,
+          240L,
           static_cast<long>(std::ceil(
-              static_cast<double>(wl_anchor->metrics.via_count) * 0.0018)));
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.0032)));
       const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
       const long detour_guard = std::max<long>(tile_size * 14L, 7000L);
       const long high_layer_guard = std::max<long>(
@@ -4760,38 +4761,96 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         }
       }
     }
-    if (wl_anchor != nullptr && absolute_wl_ptr != nullptr) {
-      const long wl_gain
-          = wl_anchor->metrics.wirelength_dbu - absolute_wl_ptr->metrics.wirelength_dbu;
-      const long via_gain = wl_anchor->metrics.via_count - absolute_wl_ptr->metrics.via_count;
-      const long via_elasticity_cap = std::max<long>(
-          900L,
-          static_cast<long>(std::ceil(
-              static_cast<double>(wl_anchor->metrics.via_count) * 0.0105)));
+    if (wl_anchor != nullptr) {
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
       const long min_wl_gain = std::max<long>(
-          60L,
+          40L,
           static_cast<long>(std::ceil(
-              static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00022)));
-      const long min_via_gain = std::max<long>(140L, grouter_->grid_->getTileSize() * 5L);
-      const bool overflow_ok = absolute_wl_ptr->metrics.overflow_edges
-                               <= wl_anchor->metrics.overflow_edges;
-      // Preserve a minimum via elasticity window (SPRoute-style soft reservation
-      // intuition): very deep via drops can remove layer-switch freedom and
-      // increase detailed-route detours even when guide WL improves.
-      const bool via_elasticity_ok = via_gain <= via_elasticity_cap;
-      if (overflow_ok && via_elasticity_ok && wl_gain >= min_wl_gain
-          && via_gain >= min_via_gain) {
+              static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00016)));
+      const long via_rise_cap = std::max<long>(
+          300L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.0032)));
+      const long via_drop_cap = std::max<long>(
+          600L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.0060)));
+      const long detour_guard = std::max<long>(tile_size * 22L, 11000L);
+      const long high_layer_guard = std::max<long>(
+          tile_size * 36L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.11)));
+      const int hotspot_guard = std::max<int>(8, wl_anchor->metrics.near_capacity_edges / 4);
+      const double anchor_proxy = estimateDetailedRouteProxyCost(wl_anchor->metrics);
+
+      const ScenarioResult* elastic_wl_ptr = nullptr;
+      auto consider_elastic_wl = [&](const ScenarioResult* candidate) {
+        if (candidate == nullptr || candidate == wl_anchor) {
+          return;
+        }
+        if (candidate->metrics.overflow_edges > wl_anchor->metrics.overflow_edges) {
+          return;
+        }
+
+        const long wl_gain
+            = wl_anchor->metrics.wirelength_dbu - candidate->metrics.wirelength_dbu;
+        if (wl_gain < min_wl_gain) {
+          return;
+        }
+
+        const long via_delta
+            = static_cast<long>(candidate->metrics.via_count)
+              - static_cast<long>(wl_anchor->metrics.via_count);
+        if (via_delta > via_rise_cap || via_delta < -via_drop_cap) {
+          return;
+        }
+
+        const bool structural_guard
+            = candidate->metrics.detour_dbu
+                   <= wl_anchor->metrics.detour_dbu + detour_guard
+              && candidate->metrics.high_layer_dbu
+                     <= wl_anchor->metrics.high_layer_dbu + high_layer_guard
+              && candidate->metrics.near_capacity_edges
+                     <= wl_anchor->metrics.near_capacity_edges + hotspot_guard;
+        if (!structural_guard) {
+          return;
+        }
+
+        const double candidate_proxy
+            = estimateDetailedRouteProxyCost(candidate->metrics);
+        // Via-drop candidates are allowed a looser proxy cap only when they
+        // deliver larger WL gains; via-rise candidates stay stricter.
+        const double proxy_cap
+            = via_delta < 0 ? (wl_gain >= min_wl_gain * 2L ? 1.024 : 1.018) : 1.012;
+        if (candidate_proxy + 1e-3 >= anchor_proxy * proxy_cap) {
+          return;
+        }
+
+        if (elastic_wl_ptr == nullptr
+            || wirelength_with_dr_proxy_tie_better(*candidate, *elastic_wl_ptr)) {
+          elastic_wl_ptr = candidate;
+        }
+      };
+
+      consider_elastic_wl(via_floor_ptr);
+      consider_elastic_wl(length_adaptive_ptr);
+
+      if (elastic_wl_ptr != nullptr
+          && (forced_wl_ptr == nullptr
+              || wirelength_with_dr_proxy_tie_better(*elastic_wl_ptr, *forced_wl_ptr))) {
         logger_->info(
             GNR,
             6036,
-            "NEWGR forcing absolute WL champion '{}' over anchor '{}' "
-            "(wl gain {}, via gain {}, via elasticity cap {}).",
-            absolute_wl_ptr->name,
+            "NEWGR elastic WL promotion selecting '{}' over anchor '{}' "
+            "(wl gain {}, via delta {}, detour delta {}, high-layer delta {}).",
+            elastic_wl_ptr->name,
             wl_anchor->name,
-            wl_gain,
-            via_gain,
-            via_elasticity_cap);
-        forced_wl_ptr = absolute_wl_ptr;
+            wl_anchor->metrics.wirelength_dbu - elastic_wl_ptr->metrics.wirelength_dbu,
+            elastic_wl_ptr->metrics.via_count - wl_anchor->metrics.via_count,
+            elastic_wl_ptr->metrics.detour_dbu - wl_anchor->metrics.detour_dbu,
+            elastic_wl_ptr->metrics.high_layer_dbu
+                - wl_anchor->metrics.high_layer_dbu);
+        forced_wl_ptr = elastic_wl_ptr;
       }
     }
   }
