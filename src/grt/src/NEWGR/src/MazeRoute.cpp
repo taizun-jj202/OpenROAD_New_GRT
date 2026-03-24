@@ -275,22 +275,38 @@ void MazeRoute::run()
   int pin_max_x = 0;
   int pin_min_y = 0;
   int pin_max_y = 0;
+  std::vector<int> pin_xs;
+  std::vector<int> pin_ys;
+  pin_xs.reserve(std::max(0, num_pseudo_pins));
+  pin_ys.reserve(std::max(0, num_pseudo_pins));
   if (num_pseudo_pins > 0) {
     const PointT first_pin = graph_.getPseudoPin(0).point;
     pin_min_x = pin_max_x = first_pin.x();
     pin_min_y = pin_max_y = first_pin.y();
+    pin_xs.push_back(first_pin.x());
+    pin_ys.push_back(first_pin.y());
     for (int pin_index = 1; pin_index < num_pseudo_pins; pin_index++) {
       const PointT pin = graph_.getPseudoPin(pin_index).point;
       pin_min_x = std::min(pin_min_x, pin.x());
       pin_max_x = std::max(pin_max_x, pin.x());
       pin_min_y = std::min(pin_min_y, pin.y());
       pin_max_y = std::max(pin_max_y, pin.y());
+      pin_xs.push_back(pin.x());
+      pin_ys.push_back(pin.y());
     }
   }
 
   const int pin_span_x = std::max(0, pin_max_x - pin_min_x);
   const int pin_span_y = std::max(0, pin_max_y - pin_min_y);
   const int pin_span_hpwl = pin_span_x + pin_span_y;
+  int pin_median_x = pin_min_x;
+  int pin_median_y = pin_min_y;
+  if (!pin_xs.empty()) {
+    std::sort(pin_xs.begin(), pin_xs.end());
+    std::sort(pin_ys.begin(), pin_ys.end());
+    pin_median_x = pin_xs[pin_xs.size() / 2];
+    pin_median_y = pin_ys[pin_ys.size() / 2];
+  }
   int corridor_margin = std::clamp(2 + pin_span_hpwl / 40, 2, 10);
   if (num_pseudo_pins >= 24) {
     corridor_margin += 1;
@@ -307,6 +323,13 @@ void MazeRoute::run()
   const CostT corridor_weight = num_pseudo_pins <= 16 ? 1.20
                                : (num_pseudo_pins <= 48 ? 1.05 : 0.90);
   const CostT corridor_growth_weight = num_pseudo_pins <= 16 ? 1.80 : 1.45;
+  const bool use_trunk_bias = num_pseudo_pins >= 4 && pin_span_hpwl >= 20;
+  const CostT trunk_weight = use_trunk_bias
+                                 ? (num_pseudo_pins <= 20 ? 0.38 : 0.28)
+                                 : 0.0;
+  const CostT trunk_growth_weight = use_trunk_bias
+                                        ? (num_pseudo_pins <= 20 ? 0.62 : 0.44)
+                                        : 0.0;
 
   auto corridorDistance = [&](const GRPoint& point) -> int {
     const int x = point.x();
@@ -316,6 +339,14 @@ void MazeRoute::run()
     const int dy = y < corridor_ly ? corridor_ly - y
                   : (y > corridor_hy ? y - corridor_hy : 0);
     return dx + dy;
+  };
+  auto trunkDistance = [&](const GRPoint& point) -> int {
+    if (!use_trunk_bias) {
+      return 0;
+    }
+    const int dx = std::abs(point.x() - pin_median_x);
+    const int dy = std::abs(point.y() - pin_median_y);
+    return std::min(dx, dy);
   };
 
   // FastRoute-style route-guide box control mixed with CUGR costing:
@@ -331,7 +362,7 @@ void MazeRoute::run()
     const auto next = graph_.getPoint(next_vertex);
     const int current_outside = corridorDistance(current);
     const int next_outside = corridorDistance(next);
-    if (current_outside == 0 && next_outside == 0) {
+    if (current_outside == 0 && next_outside == 0 && !use_trunk_bias) {
       return 0;
     }
     const int growth = std::max(0, next_outside - current_outside);
@@ -340,6 +371,15 @@ void MazeRoute::run()
     CostT penalty = static_cast<CostT>(next_outside) * unit * corridor_weight;
     if (growth > 0) {
       penalty += static_cast<CostT>(growth) * unit * corridor_growth_weight;
+    }
+    if (use_trunk_bias) {
+      const int current_trunk = trunkDistance(current);
+      const int next_trunk = trunkDistance(next);
+      penalty += static_cast<CostT>(next_trunk) * unit * trunk_weight;
+      const int trunk_growth = std::max(0, next_trunk - current_trunk);
+      if (trunk_growth > 0) {
+        penalty += static_cast<CostT>(trunk_growth) * unit * trunk_growth_weight;
+      }
     }
     return penalty;
   };

@@ -746,6 +746,20 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
 
       std::unordered_set<int> selected_set;
       selected_set.reserve(keep * 2);
+      // FastRoute-style critical-net preference:
+      // preserve the top wirelength-inflated candidates before
+      // SPRoute-style spatial round-robin diversification.
+      const int elite_keep = std::min(
+          keep,
+          std::max(3, static_cast<int>(std::ceil(keep * 0.35))));
+      for (int i = 0;
+           i < elite_keep && i < static_cast<int>(candidates.size());
+           i++) {
+        const auto& elite = candidates[i];
+        if (selected_set.emplace(elite.index).second) {
+          selected_candidates.push_back(elite);
+        }
+      }
       for (const auto& batch : batches) {
         for (const auto& candidate : batch) {
           if (static_cast<int>(selected_candidates.size()) >= keep) {
@@ -1011,14 +1025,23 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         // FastRoute-inspired critical-net intensification:
         // for the highest-HPWL candidates, run a full-grid maze search with
         // wirelength-only costs to aggressively shorten trunks/branches.
+        const int full_grid_budget
+            = std::max(1, constants_.recovery_full_grid_top_n);
+        const int broad_full_grid_budget
+            = std::max(full_grid_budget,
+                       std::max(2, static_cast<int>(std::ceil(keep * 0.45))));
+        const bool high_value_candidate
+            = candidateIndex < full_grid_budget
+              || (candidate.excess_wirelength > 0
+                  && candidateIndex < broad_full_grid_budget);
+        const double full_grid_stretch_threshold
+            = std::max(1.0,
+                       constants_.recovery_min_stretch - (deep_search ? 0.03 : 0.0));
         const bool enable_full_grid_maze
             = constants_.recovery_use_full_grid_maze
-              && deep_search
-              && candidateIndex < std::max(1, constants_.recovery_full_grid_top_n)
-              && candidate.hpwl
-                     >= constants_.recovery_full_grid_hpwl_threshold
-              && candidate.stretch
-                     >= constants_.recovery_min_stretch;
+              && high_value_candidate
+              && candidate.hpwl >= constants_.recovery_full_grid_hpwl_threshold
+              && candidate.stretch >= full_grid_stretch_threshold;
         if (enable_full_grid_maze) {
           GridGraphView<CostT> fullGridWlOnlyView;
           grid_graph_->extractWireLengthCostView(fullGridWlOnlyView);
@@ -1239,6 +1262,19 @@ std::vector<int> CUGR::selectCriticalNets(
 
     std::unordered_set<int> selected_set;
     selected_set.reserve(keep * 2);
+    // Keep the highest-priority critical nets guaranteed in the refinement
+    // set, then use spatial batches for diversity and livelock resistance.
+    const int elite_keep = std::min(
+        keep,
+        std::max(4, static_cast<int>(std::ceil(keep * 0.30))));
+    for (int i = 0;
+         i < elite_keep && i < static_cast<int>(scored.size());
+         i++) {
+      const int net_index = scored[i].index;
+      if (selected_set.emplace(net_index).second) {
+        selected.push_back(net_index);
+      }
+    }
     bool progress = true;
     while (selected.size() < static_cast<size_t>(keep) && progress) {
       progress = false;
