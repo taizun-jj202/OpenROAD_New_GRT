@@ -3985,6 +3985,31 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
 
+  if (ScenarioResult* consensus = find_scenario_result("consensus-collapse-fusion")) {
+    long dbu_per_micron = 1;
+    if (grouter_->db_ != nullptr && grouter_->db_->getTech() != nullptr) {
+      dbu_per_micron
+          = std::max<long>(grouter_->db_->getTech()->getDbUnitsPerMicron(), 1);
+    }
+    // In repeated runs, consensus-collapse tends to be slightly longer in GR
+    // but improves detailed routing by reducing via churn.
+    const long wl_relax = 12L * dbu_per_micron;
+    const bool near_tie_wl
+        = consensus->metrics.wirelength_dbu
+          <= (final_result.metrics.wirelength_dbu + wl_relax);
+    const bool fewer_vias
+        = consensus->metrics.via_count < final_result.metrics.via_count;
+    if (near_tie_wl && fewer_vias && consensus->name != final_result.name) {
+      final_result = *consensus;
+      logger_->info(GNR,
+                    6029,
+                    "NEWGR consensus override '{}': wirelength {:.0f} um, vias {}",
+                    final_result.name,
+                    final_result.metrics.wirelength_um,
+                    final_result.metrics.via_count);
+    }
+  }
+
   logger_->info(GNR,
                 6007,
                 "NEWGR best scenario '{}': wirelength {:.0f} um, vias {}",
