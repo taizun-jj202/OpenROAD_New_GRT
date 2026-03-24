@@ -857,7 +857,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         // wirelength-only costs to aggressively shorten trunks/branches.
         const bool high_stretch_candidate
             = candidates[candidateIndex].stretch
-              >= constants_.recovery_min_stretch + 0.10;
+              >= constants_.recovery_min_stretch + 0.06;
         const bool enable_full_grid_maze
             = constants_.recovery_use_full_grid_maze
               && deep_search
@@ -867,7 +867,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
                   || high_stretch_candidate)
               && candidates[candidateIndex].stretch
                      >= constants_.recovery_min_stretch
-              && net->getNumPins() <= 40;
+              && net->getNumPins() <= 48;
         if (enable_full_grid_maze) {
           GridGraphView<CostT> fullGridWlOnlyView;
           grid_graph_->extractWireLengthCostView(fullGridWlOnlyView);
@@ -881,7 +881,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
           }
           if (high_stretch_candidate
               && candidates[candidateIndex].stretch
-                     >= constants_.recovery_min_stretch + 0.20) {
+                     >= constants_.recovery_min_stretch + 0.12) {
             via_scales.push_back(0.0);
           }
           std::sort(via_scales.begin(), via_scales.end());
