@@ -895,6 +895,65 @@ void MazeRoute::run()
       }
     }
   }
+  std::vector<std::pair<int, int>> extra_pair_candidates;
+  if (num_pins <= 96) {
+    struct PairCandidate
+    {
+      int lhs;
+      int rhs;
+      int dist;
+      int diag_span;
+      int center_span;
+    };
+    std::vector<PairCandidate> scored_pairs;
+    scored_pairs.reserve(num_pins * (num_pins - 1) / 2);
+    for (int lhs = 0; lhs < num_pins; lhs++) {
+      const PointT lhs_point = graph_.getPseudoPin(lhs).point;
+      for (int rhs = lhs + 1; rhs < num_pins; rhs++) {
+        const PointT rhs_point = graph_.getPseudoPin(rhs).point;
+        const int dist = std::abs(lhs_point.x() - rhs_point.x())
+                         + std::abs(lhs_point.y() - rhs_point.y());
+        const int lhs_sum = lhs_point.x() + lhs_point.y();
+        const int rhs_sum = rhs_point.x() + rhs_point.y();
+        const int lhs_diff = lhs_point.x() - lhs_point.y();
+        const int rhs_diff = rhs_point.x() - rhs_point.y();
+        const int diag_span
+            = std::abs(lhs_sum - rhs_sum) + std::abs(lhs_diff - rhs_diff);
+        const int lhs_center_dist
+            = std::abs(lhs_point.x() - center.x())
+              + std::abs(lhs_point.y() - center.y());
+        const int rhs_center_dist
+            = std::abs(rhs_point.x() - center.x())
+              + std::abs(rhs_point.y() - center.y());
+        scored_pairs.push_back(
+            {lhs, rhs, dist, diag_span, lhs_center_dist + rhs_center_dist});
+      }
+    }
+    std::sort(scored_pairs.begin(),
+              scored_pairs.end(),
+              [](const PairCandidate& lhs, const PairCandidate& rhs) {
+                if (lhs.dist != rhs.dist) {
+                  return lhs.dist > rhs.dist;
+                }
+                if (lhs.diag_span != rhs.diag_span) {
+                  return lhs.diag_span > rhs.diag_span;
+                }
+                if (lhs.center_span != rhs.center_span) {
+                  return lhs.center_span > rhs.center_span;
+                }
+                if (lhs.lhs != rhs.lhs) {
+                  return lhs.lhs < rhs.lhs;
+                }
+                return lhs.rhs < rhs.rhs;
+              });
+
+    const int pair_budget = num_pins <= 20 ? 14 : (num_pins <= 40 ? 10 : 7);
+    const int keep = std::min(pair_budget, static_cast<int>(scored_pairs.size()));
+    extra_pair_candidates.reserve(keep);
+    for (int i = 0; i < keep; i++) {
+      extra_pair_candidates.emplace_back(scored_pairs[i].lhs, scored_pairs[i].rhs);
+    }
+  }
 
   std::vector<int> seeds;
   seeds.reserve(6);
@@ -952,14 +1011,32 @@ void MazeRoute::run()
   } else {
     max_seeds = 10;
   }
+  if (wirelength_heavy_mode) {
+    if (num_pins <= 32) {
+      max_seeds = std::min(num_pins, max_seeds + 6);
+    } else if (num_pins <= 64) {
+      max_seeds = std::min(num_pins, max_seeds + 4);
+    } else {
+      max_seeds = std::min(num_pins, max_seeds + 2);
+    }
+  }
   if (max_seeds < static_cast<int>(seeds.size())) {
     seeds.resize(max_seeds);
   }
 
   RunResult best_result = runMetricClosureMst();
 
+  robin_hood::unordered_set<uint64_t> explored_pairs;
+  explored_pairs.reserve(32);
   auto runPairCandidate = [&](const int lhs, const int rhs) {
     if (lhs < 0 || rhs < 0 || lhs >= num_pins || rhs >= num_pins || lhs == rhs) {
+      return;
+    }
+    const int a = std::min(lhs, rhs);
+    const int b = std::max(lhs, rhs);
+    const uint64_t key
+        = (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
+    if (!explored_pairs.emplace(key).second) {
       return;
     }
     RunResult pair_result = runFromPinPair(lhs, rhs);
@@ -975,6 +1052,9 @@ void MazeRoute::run()
   runPairCandidate(min_diff_seed, max_diff_seed);
   runPairCandidate(min_x_seed, max_y_seed);
   runPairCandidate(max_x_seed, min_y_seed);
+  for (const auto& [lhs, rhs] : extra_pair_candidates) {
+    runPairCandidate(lhs, rhs);
+  }
 
   for (const int seed : seeds) {
     RunResult candidate = runFromSeed(seed);

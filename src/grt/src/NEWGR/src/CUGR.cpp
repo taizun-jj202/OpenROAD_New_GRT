@@ -72,9 +72,10 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
                              const double allowed_overflow_increase_for_wl_gain)
 {
   constexpr double kOverflowEpsilon = 1e-6;
-  constexpr double kStrongOverflowDropThreshold = 20.0;
-  constexpr int64_t kStrongWireGain = 12;
-  constexpr int64_t kMaxWirelengthTradeoff = 24;
+  constexpr double kStrongOverflowDropThreshold = 36.0;
+  constexpr int64_t kStrongWireGain = 8;
+  constexpr int64_t kModerateWireGain = 3;
+  constexpr int64_t kMaxWirelengthTradeoff = 10;
 
   // Wirelength-first objective:
   // keep shorter candidates as long as they don't cause a large overflow jump.
@@ -82,35 +83,57 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
     return candidate.total_overflow
            <= current_best.total_overflow + allowed_overflow_increase_for_wl_gain;
   }
-  if (candidate.wirelength < current_best.wirelength
+  if (candidate.wirelength + kModerateWireGain < current_best.wirelength
       && candidate.total_overflow
              <= current_best.total_overflow
                     + allowed_overflow_increase_for_wl_gain * 0.6
+      && candidate.vias <= current_best.vias + 4) {
+    return true;
+  }
+  if (candidate.wirelength < current_best.wirelength
+      && candidate.total_overflow
+             <= current_best.total_overflow
+                    + allowed_overflow_increase_for_wl_gain * 0.45
       && candidate.vias <= current_best.vias + 2) {
+    return true;
+  }
+  if (candidate.wirelength == current_best.wirelength
+      && candidate.total_overflow
+             <= current_best.total_overflow
+                    + allowed_overflow_increase_for_wl_gain * 0.2
+      && candidate.vias < current_best.vias) {
     return true;
   }
 
   const double overflow_drop
       = current_best.total_overflow - candidate.total_overflow;
-  if (overflow_drop > kStrongOverflowDropThreshold) {
+  if (baseline_overflow > 0 && overflow_drop > kStrongOverflowDropThreshold) {
     // Accept a large overflow reduction even without immediate WL gain.
     if (candidate.wirelength
         > current_best.wirelength + kMaxWirelengthTradeoff) {
       return false;
     }
-    if (candidate.vias != current_best.vias) {
-      return candidate.vias < current_best.vias;
+    if (candidate.vias > current_best.vias + 6) {
+      return false;
     }
     return true;
   }
 
-  if (std::abs(overflow_drop) > kOverflowEpsilon) {
-    if (baseline_overflow > 0) {
-      return overflow_drop > 0.0;
+  if (std::abs(overflow_drop) > kOverflowEpsilon && baseline_overflow > 0) {
+    if (overflow_drop > 0.0
+        && candidate.wirelength <= current_best.wirelength + 2
+        && candidate.vias <= current_best.vias + 1) {
+      return true;
     }
-    return overflow_drop > 0.0 && candidate.wirelength <= current_best.wirelength;
+    return false;
   }
 
+  if (candidate.wirelength < current_best.wirelength) {
+    return true;
+  }
+  if (candidate.wirelength > current_best.wirelength) {
+    return false;
+  }
   if (candidate.vias != current_best.vias) {
     return candidate.vias < current_best.vias;
   }
@@ -867,17 +890,23 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
                   || high_stretch_candidate)
               && candidates[candidateIndex].stretch
                      >= constants_.recovery_min_stretch
-              && net->getNumPins() <= 48;
+              && net->getNumPins() <= 72;
         if (enable_full_grid_maze) {
           GridGraphView<CostT> fullGridWlOnlyView;
           grid_graph_->extractWireLengthCostView(fullGridWlOnlyView);
           std::vector<double> via_scales;
-          via_scales.reserve(3);
+          via_scales.reserve(5);
           const double base_via_scale
               = std::clamp(constants_.recovery_full_grid_via_cost_scale, 0.0, 1.0);
           via_scales.push_back(base_via_scale);
+          via_scales.push_back(std::min(1.0, base_via_scale + 0.08));
           if (high_stretch_candidate && base_via_scale > 0.0) {
             via_scales.push_back(base_via_scale * 0.4);
+          }
+          if (high_stretch_candidate
+              && candidates[candidateIndex].stretch
+                     >= constants_.recovery_min_stretch + 0.08) {
+            via_scales.push_back(0.12);
           }
           if (high_stretch_candidate
               && candidates[candidateIndex].stretch
