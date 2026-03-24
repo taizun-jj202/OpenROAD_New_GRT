@@ -572,7 +572,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     GRoute& route = route_it->second;
     const RouteScore baseline_score = ordered_net.baseline_score;
     const SelectionPolicy policy = buildSelectionPolicy(baseline_score, tile_size);
-    const int64_t congestion_tradeoff = (policy.long_net || policy.medium_net) ? 0 : 1;
+    const int64_t congestion_tradeoff = policy.long_net ? 0 : (policy.medium_net ? 1 : 2);
 
     RouteScore best_score = baseline_score;
     int64_t best_congestion_cost
@@ -786,24 +786,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const int64_t congestion_delta
           = wl_champion_congestion_cost - best_congestion_cost;
       const int64_t allowed_congestion_delta
-          = policy.long_net ? std::max<int64_t>(24, best_congestion_cost / 2)
+          = policy.long_net ? std::max<int64_t>(14, best_congestion_cost / 4)
                             : (policy.medium_net
-                                   ? std::max<int64_t>(16, best_congestion_cost / 3)
-                                   : std::max<int64_t>(8, best_congestion_cost / 5));
+                                   ? std::max<int64_t>(10, best_congestion_cost / 5)
+                                   : std::max<int64_t>(6, best_congestion_cost / 8));
       const int64_t champion_min_wl_gain
-          = policy.long_net ? std::max<int64_t>(1, tile_size / 12)
+          = policy.long_net ? std::max<int64_t>(1, tile_size / 8)
                             : (policy.medium_net
-                                   ? std::max<int64_t>(1, tile_size / 9)
-                                   : std::max<int64_t>(1, tile_size / 6));
+                                   ? std::max<int64_t>(1, tile_size / 6)
+                                   : std::max<int64_t>(1, tile_size / 5));
       const int64_t champion_force_gain
-          = policy.long_net ? std::max<int64_t>(1, tile_size / 5)
-                            : std::max<int64_t>(1, tile_size / 3);
+          = policy.long_net ? std::max<int64_t>(2, tile_size / 3)
+                            : std::max<int64_t>(2, tile_size / 2);
       const double best_congestion_density
           = congestionRiskDensity(best_score, best_congestion_cost, tile_size);
       const double champion_congestion_density
           = congestionRiskDensity(
               wl_champion_score, wl_champion_congestion_cost, tile_size);
-      const double allowed_density_ratio = policy.long_net ? 1.40 : 1.30;
+      const double allowed_density_ratio = policy.long_net ? 1.18 : 1.24;
       const bool hotspot_density_safe
           = champion_congestion_density
                 <= best_congestion_density * allowed_density_ratio
@@ -828,23 +828,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
       // Long trunk override: for high-WL nets, prioritize shorter trunks even
       // when congestion/via projections worsen moderately.
-      const int64_t long_override_gain = std::max<int64_t>(1, tile_size / 14);
-      const int64_t trunk_override_gain = std::max<int64_t>(1, tile_size / 10);
+      const int64_t long_override_gain = std::max<int64_t>(1, tile_size / 8);
+      const int64_t trunk_override_gain = std::max<int64_t>(1, tile_size / 4);
       const int64_t champion_via_cap
-          = policy.hard_via_guard * 3 + (policy.long_net ? 80 : 48);
+          = policy.hard_via_guard * 2 + (policy.long_net ? 48 : 24);
       const bool long_wl_override
           = policy.long_net && wl_drop_vs_best >= long_override_gain
             && champion_net_extra_vias <= champion_via_cap;
       const bool medium_trunk_override
           = policy.medium_net && wl_drop_vs_best >= trunk_override_gain
-            && champion_net_extra_vias <= champion_via_cap;
+            && champion_net_extra_vias <= champion_via_cap
+            && congestion_delta <= allowed_congestion_delta;
 
       if ((wl_drop_vs_best >= champion_min_wl_gain
           && (congestion_delta <= allowed_congestion_delta
               || wl_drop_vs_best >= champion_force_gain)
           && hotspot_density_safe
           && (prospective_total_extra_vias
-                  <= global_via_budget + policy.via_guard * 2
+                  <= global_via_budget + policy.via_guard
               || wl_drop_vs_best >= champion_force_gain))
           || long_wl_override || medium_trunk_override) {
         best_score = wl_champion_score;
