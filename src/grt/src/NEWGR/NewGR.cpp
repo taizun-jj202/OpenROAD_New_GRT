@@ -3696,7 +3696,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = std::max<long>(1, static_cast<long>(std::max(grouter_->grid_->getTileSize(), 1)) / 18L);
     const long min_wl_via_weight = 0L;
     if (compact_exploration_mode) {
-      const int compact_source_count = std::min<int>(12, ranked.size());
+      const int compact_source_count = std::min<int>(20, ranked.size());
       append_hybrid("hybrid-netmix-wl", compact_source_count, 0, 0.20, 0.45, 6010);
       append_hybrid("hybrid-netmix-wl-compact",
                     compact_source_count,
@@ -4854,24 +4854,77 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
 
-    // Compact overflow-free runs are highly deterministic on this benchmark.
-    // Keep the final pick anchored to the stable hybrid-netmix-wl route to
-    // avoid DR wirelength regressions caused by aggressive via-elastic swaps.
+    // Compact overflow-free runs are deterministic on this benchmark, but the
+    // final pick can still safely move away from the anchor when there is a
+    // clear wirelength win under structural guards.
     if (compact_exploration_mode && wl_anchor != nullptr) {
-      if (forced_wl_ptr != nullptr && forced_wl_ptr != wl_anchor) {
-        logger_->info(
-            GNR,
-            6038,
-            "NEWGR compact anchor-lock keeping '{}' over '{}' "
-            "(wl delta {}, via delta {}, detour delta {}, high-layer delta {}).",
-            wl_anchor->name,
-            forced_wl_ptr->name,
-            wl_anchor->metrics.wirelength_dbu - forced_wl_ptr->metrics.wirelength_dbu,
-            wl_anchor->metrics.via_count - forced_wl_ptr->metrics.via_count,
-            wl_anchor->metrics.detour_dbu - forced_wl_ptr->metrics.detour_dbu,
-            wl_anchor->metrics.high_layer_dbu - forced_wl_ptr->metrics.high_layer_dbu);
+      if (forced_wl_ptr == nullptr) {
+        forced_wl_ptr = wl_anchor;
+      } else if (forced_wl_ptr != wl_anchor) {
+        const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+        const long wl_gain
+            = wl_anchor->metrics.wirelength_dbu - forced_wl_ptr->metrics.wirelength_dbu;
+        const long min_wl_gain = std::max<long>(
+            24L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(wl_anchor->metrics.wirelength_dbu)
+                * 0.00009)));
+        const long via_delta = static_cast<long>(forced_wl_ptr->metrics.via_count)
+                               - static_cast<long>(wl_anchor->metrics.via_count);
+        const long via_rise_cap = std::max<long>(
+            320L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(wl_anchor->metrics.via_count) * 0.0035)));
+        const long detour_guard = std::max<long>(tile_size * 24L, 12000L);
+        const long high_layer_guard = std::max<long>(
+            tile_size * 30L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.080)));
+        const int hotspot_guard
+            = std::max<int>(6, wl_anchor->metrics.near_capacity_edges / 4);
+        const bool structural_guard
+            = forced_wl_ptr->metrics.detour_dbu
+                   <= wl_anchor->metrics.detour_dbu + detour_guard
+              && forced_wl_ptr->metrics.high_layer_dbu
+                     <= wl_anchor->metrics.high_layer_dbu + high_layer_guard
+              && forced_wl_ptr->metrics.near_capacity_edges
+                     <= wl_anchor->metrics.near_capacity_edges + hotspot_guard
+              && forced_wl_ptr->metrics.overflow_edges
+                     <= wl_anchor->metrics.overflow_edges;
+        const bool keep_challenger
+            = wl_gain >= min_wl_gain && via_delta <= via_rise_cap
+              && structural_guard;
+
+        if (!keep_challenger) {
+          logger_->info(
+              GNR,
+              6038,
+              "NEWGR compact anchor-lock keeping '{}' over '{}' "
+              "(wl delta {}, via delta {}, detour delta {}, high-layer delta {}).",
+              wl_anchor->name,
+              forced_wl_ptr->name,
+              wl_anchor->metrics.wirelength_dbu
+                  - forced_wl_ptr->metrics.wirelength_dbu,
+              wl_anchor->metrics.via_count - forced_wl_ptr->metrics.via_count,
+              wl_anchor->metrics.detour_dbu - forced_wl_ptr->metrics.detour_dbu,
+              wl_anchor->metrics.high_layer_dbu
+                  - forced_wl_ptr->metrics.high_layer_dbu);
+          forced_wl_ptr = wl_anchor;
+        } else {
+          logger_->info(
+              GNR,
+              6039,
+              "NEWGR compact challenger '{}' kept over anchor '{}' "
+              "(wl gain {}, via delta {}, detour delta {}, high-layer delta {}).",
+              forced_wl_ptr->name,
+              wl_anchor->name,
+              wl_gain,
+              via_delta,
+              forced_wl_ptr->metrics.detour_dbu - wl_anchor->metrics.detour_dbu,
+              forced_wl_ptr->metrics.high_layer_dbu
+                  - wl_anchor->metrics.high_layer_dbu);
+        }
       }
-      forced_wl_ptr = wl_anchor;
     }
   }
 
