@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "NEWGR/src/NewgrEngine.h"
+#include "CUGR.h"
 #include "Net.h"
 #include "Pin.h"
 #include "fastroute/include/FastRoute.h"
@@ -4478,6 +4479,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   if (!disable_fastroute_graft && grouter_->fastroute() != nullptr) {
     NetRouteMap fastroute_routes = grouter_->fastroute()->run();
     const int fastroute_overflow = grouter_->fastroute()->totalOverflow();
+    const bool disable_cugr_donor
+        = std::getenv("NEWGR_DISABLE_CUGR_DONOR") != nullptr;
+    NetRouteMap cugr_routes;
+    RouteScore cugr_score{};
+    uint64_t cugr_low_layer_wl = 0;
+    bool has_cugr_donor = false;
+    if (!disable_cugr_donor && cugr_ != nullptr) {
+      cugr_->init(min_routing_layer, max_routing_layer);
+      cugr_->route();
+      cugr_routes = cugr_->getRoutes();
+      cugr_score = computeRouteScore(cugr_routes);
+      cugr_low_layer_wl = computeLowLayerWirelength(cugr_routes);
+      has_cugr_donor = !cugr_routes.empty() && cugr_score.segments > 0;
+    }
     const RouteScore newgr_score = computeRouteScore(routes);
     const RouteScore fastroute_score = computeRouteScore(fastroute_routes);
     const uint64_t newgr_low_layer_wl = computeLowLayerWirelength(routes);
@@ -4559,6 +4574,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &wirelength_sweep_hybrid,
         &extreme_sweep_hybrid,
         &radical_refine_hybrid};
+    if (has_cugr_donor) {
+      envelope_donors.push_back(&cugr_routes);
+    }
     NetRouteMap envelope_hybrid = buildRadicalEnvelopeHybrid(
         radical_refine_hybrid,
         envelope_donors,
@@ -4592,6 +4610,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &extreme_sweep_hybrid,
         &radical_refine_hybrid,
         &envelope_hybrid};
+    if (has_cugr_donor) {
+      wirelength_oracle_donors.push_back(&cugr_routes);
+    }
     // Late-stage optimization is consensus-locked to stable route families.
     // Alternate profile banks are intentionally excluded here because they can
     // improve global WL while regressing detailed-route WL due to guide churn.
@@ -4618,6 +4639,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &radical_refine_hybrid,
         &envelope_hybrid,
         &wirelength_oracle_hybrid};
+    if (has_cugr_donor) {
+      closure_donors.push_back(&cugr_routes);
+    }
     NetRouteMap wirelength_closure_hybrid = buildWirelengthClosureHybrid(
         wirelength_oracle_hybrid,
         closure_donors,
@@ -4642,6 +4666,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &envelope_hybrid,
         &wirelength_oracle_hybrid,
         &wirelength_closure_hybrid};
+    if (has_cugr_donor) {
+      fusion_donors.push_back(&cugr_routes);
+    }
     // Radical mix stage:
     // bring back alternate profile banks only in the final fusion pass, where
     // geometric guards keep unstable guide churn in check.
@@ -4659,10 +4686,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = computeRouteScore(wirelength_fusion_hybrid);
     const uint64_t wirelength_fusion_low_layer_wl
         = computeLowLayerWirelength(wirelength_fusion_hybrid);
+    WirelengthFusionStats crossrouter_fusion_stats;
+    std::vector<const NetRouteMap*> crossrouter_fusion_donors = fusion_donors;
+    if (has_cugr_donor) {
+      crossrouter_fusion_donors.push_back(&wirelength_fusion_hybrid);
+      crossrouter_fusion_donors.push_back(&cugr_routes);
+    }
+    NetRouteMap crossrouter_fusion_hybrid = buildWirelengthFusionHybrid(
+        wirelength_fusion_hybrid,
+        crossrouter_fusion_donors,
+        grouter_->db_net_map_,
+        wirelength_fusion_score.vias,
+        wirelength_fusion_low_layer_wl,
+        crossrouter_fusion_stats);
+    const RouteScore crossrouter_fusion_score
+        = computeRouteScore(crossrouter_fusion_hybrid);
+    const uint64_t crossrouter_fusion_low_layer_wl
+        = computeLowLayerWirelength(crossrouter_fusion_hybrid);
     InterleavedHybridStats tempered_fusion_stats;
     NetRouteMap tempered_fusion_hybrid = buildInterleavedBackboneHybrid(
         wirelength_oracle_hybrid,
-        wirelength_fusion_hybrid,
+        crossrouter_fusion_hybrid,
         grouter_->db_net_map_,
         wirelength_oracle_score.vias,
         wirelength_oracle_low_layer_wl,
@@ -4686,7 +4730,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &wirelength_oracle_hybrid,
         &wirelength_closure_hybrid,
         &wirelength_fusion_hybrid,
+        &crossrouter_fusion_hybrid,
         &tempered_fusion_hybrid};
+    if (has_cugr_donor) {
+      mosaic_donors.push_back(&cugr_routes);
+    }
     for (size_t alt_idx = 0; alt_idx < newgr_alternate_routes.size(); ++alt_idx) {
       mosaic_donors.push_back(&newgr_alternate_routes[alt_idx]);
     }
@@ -4915,6 +4963,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   fusion_stats.skipped_by_budget_guard,
                   fusion_stats.consumed_wl_gain);
     logger_->info(utl::GRT,
+                  6022,
+                  "NEWGR crossrouter fusion summary: "
+                  "CROSS_FUSION(wl={}, vias={}, low_wl={}, nets={}, donor_swap={}, "
+                  "add={}, cand={}, via_guard_skip={}, layer_guard_skip={}, "
+                  "budget_skip={}, wl_gain={})",
+                  crossrouter_fusion_score.wirelength,
+                  crossrouter_fusion_score.vias,
+                  crossrouter_fusion_low_layer_wl,
+                  crossrouter_fusion_score.routed_nets,
+                  crossrouter_fusion_stats.replaced_with_donor,
+                  crossrouter_fusion_stats.added_missing_nets,
+                  crossrouter_fusion_stats.candidate_pool_size,
+                  crossrouter_fusion_stats.skipped_by_via_guard,
+                  crossrouter_fusion_stats.skipped_by_layer_guard,
+                  crossrouter_fusion_stats.skipped_by_budget_guard,
+                  crossrouter_fusion_stats.consumed_wl_gain);
+    logger_->info(utl::GRT,
                   6020,
                   "NEWGR tempered fusion summary: "
                   "TEMPERED_FUSION(wl={}, vias={}, low_wl={}, nets={}, donor_swap={}, "
@@ -4949,6 +5014,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   mosaic_stats.skipped_by_layer_guard,
                   mosaic_stats.skipped_by_budget_guard,
                   mosaic_stats.consumed_wl_gain);
+    if (has_cugr_donor) {
+      logger_->info(utl::GRT,
+                    6023,
+                    "NEWGR CUGR donor summary: CUGR_DONOR(wl={}, vias={}, low_wl={}, nets={})",
+                    cugr_score.wirelength,
+                    cugr_score.vias,
+                    cugr_low_layer_wl,
+                    cugr_score.routed_nets);
+    }
 
     // Wirelength champion tournament:
     // evaluate every mixed candidate (FastRoute, NEWGR, and all hybrids) with
@@ -5040,10 +5114,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = closure_swapped + fusion_stats.replaced_with_donor;
     const uint64_t fusion_added
         = closure_added + fusion_stats.added_missing_nets;
+    const uint64_t crossrouter_fusion_swapped
+        = fusion_swapped + crossrouter_fusion_stats.replaced_with_donor;
+    const uint64_t crossrouter_fusion_added
+        = fusion_added + crossrouter_fusion_stats.added_missing_nets;
     const uint64_t tempered_swapped
-        = fusion_swapped + tempered_fusion_stats.replaced_with_donor;
+        = crossrouter_fusion_swapped + tempered_fusion_stats.replaced_with_donor;
     const uint64_t tempered_added
-        = fusion_added + tempered_fusion_stats.added_missing_nets;
+        = crossrouter_fusion_added + tempered_fusion_stats.added_missing_nets;
     const uint64_t mosaic_swapped
         = tempered_swapped + mosaic_stats.replaced_with_donor;
     const uint64_t mosaic_added
@@ -5157,6 +5235,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                       true,
                       fusion_swapped,
                       fusion_added);
+    consider_champion("FastRoute+NEWGR crossrouter-fusion",
+                      crossrouter_fusion_hybrid,
+                      crossrouter_fusion_score,
+                      crossrouter_fusion_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      true,
+                      crossrouter_fusion_swapped,
+                      crossrouter_fusion_added);
     consider_champion("FastRoute+NEWGR tempered-fusion",
                       tempered_fusion_hybrid,
                       tempered_fusion_score,
@@ -5335,6 +5422,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const uint64_t oracle_min_gain = 600;
     const uint64_t closure_min_gain = 500;
     const uint64_t fusion_min_gain = 350;
+    const uint64_t crossrouter_min_gain = 260;
     const uint64_t tempered_min_gain = 300;
     const uint64_t mosaic_min_gain = 250;
 
@@ -5432,6 +5520,26 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                            best_score,
                                            best_low_layer_wl,
                                            last_total_overflow_,
+                                           crossrouter_fusion_score,
+                                           crossrouter_fusion_low_layer_wl)
+        && best_score.wirelength > crossrouter_fusion_score.wirelength
+        && best_score.wirelength - crossrouter_fusion_score.wirelength
+               >= crossrouter_min_gain) {
+      routes = std::move(crossrouter_fusion_hybrid);
+      best_score = crossrouter_fusion_score;
+      best_overflow = last_total_overflow_;
+      best_low_layer_wl = crossrouter_fusion_low_layer_wl;
+      selected_label = "FastRoute+NEWGR crossrouter-fusion";
+      selected_hybrid = true;
+      selected_swapped_nets = crossrouter_fusion_swapped;
+      selected_added_nets = crossrouter_fusion_added;
+      used_fastroute_last_run_ = false;
+    }
+
+    if (shouldPreferWirelengthFusionHybrid(best_overflow,
+                                           best_score,
+                                           best_low_layer_wl,
+                                           last_total_overflow_,
                                            tempered_fusion_score,
                                            tempered_fusion_low_layer_wl)
         && best_score.wirelength > tempered_fusion_score.wirelength
@@ -5463,10 +5571,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       best_low_layer_wl = wirelength_mosaic_low_layer_wl;
       selected_label = "FastRoute+NEWGR wirelength-mosaic";
       selected_hybrid = true;
-      selected_swapped_nets = fusion_swapped + tempered_fusion_stats.replaced_with_donor
-                              + mosaic_stats.replaced_with_donor;
-      selected_added_nets = fusion_added + tempered_fusion_stats.added_missing_nets
-                            + mosaic_stats.added_missing_nets;
+      selected_swapped_nets = tempered_swapped + mosaic_stats.replaced_with_donor;
+      selected_added_nets = tempered_added + mosaic_stats.added_missing_nets;
       used_fastroute_last_run_ = false;
     }
 
@@ -5548,6 +5654,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                             + wirelength_oracle_stats.added_missing_nets
                             + closure_stats.added_missing_nets
                             + fusion_stats.added_missing_nets;
+      used_fastroute_last_run_ = false;
+    }
+    if (shouldPreferWirelengthChampion(best_overflow,
+                                       best_score,
+                                       best_low_layer_wl,
+                                       last_total_overflow_,
+                                       crossrouter_fusion_score,
+                                       crossrouter_fusion_low_layer_wl)) {
+      routes = std::move(crossrouter_fusion_hybrid);
+      best_score = crossrouter_fusion_score;
+      best_overflow = last_total_overflow_;
+      best_low_layer_wl = crossrouter_fusion_low_layer_wl;
+      selected_label = "FastRoute+NEWGR wl-champion-crossrouter";
+      selected_hybrid = true;
+      selected_swapped_nets = crossrouter_fusion_swapped;
+      selected_added_nets = crossrouter_fusion_added;
       used_fastroute_last_run_ = false;
     }
     if (shouldPreferWirelengthChampion(best_overflow,
