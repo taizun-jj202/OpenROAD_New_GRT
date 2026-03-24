@@ -154,14 +154,41 @@ RouteMetrics computeRouteMetrics(const SprouteGridData& grid,
 
 uint64_t selectionCost(const RouteMetrics& metrics)
 {
-  // Wirelength-first ranking with only a very light risk guard.
-  return metrics.wirelength + metrics.vias * 8 + metrics.congestion_risk / 3000;
+  // Wirelength-dominant ranking. Congestion risk is retained only as a
+  // tie-break proxy rather than the primary driver.
+  return metrics.wirelength + metrics.vias * 6 + metrics.congestion_risk / 18000;
+}
+
+bool hasAcceptableWirelengthTradeoff(const RouteMetrics& candidate,
+                                     const RouteMetrics& incumbent)
+{
+  if (candidate.wirelength >= incumbent.wirelength) {
+    return false;
+  }
+  const int64_t via_increase = static_cast<int64_t>(candidate.vias)
+                               - static_cast<int64_t>(incumbent.vias);
+  if (via_increase > 1800) {
+    return false;
+  }
+  const uint64_t risk_budget = std::max<uint64_t>(
+      250000000ULL, incumbent.congestion_risk / 2);
+  return candidate.congestion_risk <= incumbent.congestion_risk + risk_budget;
 }
 
 bool isBetterCandidate(const CandidateResult& lhs, const CandidateResult& rhs)
 {
   if (lhs.overflow != rhs.overflow) {
     return lhs.overflow < rhs.overflow;
+  }
+
+  // SPRoute-style multi-profile routing with CUGR-like congestion guard:
+  // when overflow is matched, prefer shorter global wirelength and only
+  // reject candidates with excessive via/risk increase.
+  if (hasAcceptableWirelengthTradeoff(lhs.metrics, rhs.metrics)) {
+    return true;
+  }
+  if (hasAcceptableWirelengthTradeoff(rhs.metrics, lhs.metrics)) {
+    return false;
   }
 
   const uint64_t lhs_cost = selectionCost(lhs.metrics);
