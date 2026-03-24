@@ -22,8 +22,7 @@
 namespace grt::newgr {
 
 void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
-                       const SparseGrid& grid,
-                       const MazeBuildOptions& options)
+                       const SparseGrid& grid)
 {
   pseudo_pins_.clear();
   xs_.clear();
@@ -57,23 +56,17 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   const auto& box = net_->getBoundingBox();
   const int pins = std::max(2, net_->getNumPins());
   const int hp = std::max(1, box.hp());
-  const int corridorShrink = std::max(0, options.corridor_shrink);
   const bool shortestTopologyMode
-      = options.force_shortest_topology || hp >= 110 || pins >= 7
+      = hp >= 120 || pins >= 8
         || std::max(grid.interval.x(), grid.interval.y()) <= 3;
   // Keep only nearby old-tree anchors so maze reroute can aggressively compact
   // long detours instead of preserving the previous expanded topology.
   int anchorMargin = shortestTopologyMode
-                         ? std::clamp(hp / (pins >= 12 ? 20 : 18), 0, 8)
-                         : std::clamp(hp / (pins >= 12 ? 11 : 10), 2, 18);
+                         ? std::clamp(hp / (pins >= 12 ? 16 : 14), 1, 10)
+                         : std::clamp(hp / (pins >= 12 ? 10 : 9), 3, 22);
   if (hp >= 220 || pins >= 18) {
-    anchorMargin = shortestTopologyMode ? std::min(anchorMargin + 1, 9)
-                                        : std::min(anchorMargin + 2, 20);
-  }
-  if (!options.preserve_existing_topology) {
-    anchorMargin = 0;
-  } else if (corridorShrink > 0) {
-    anchorMargin = std::max(0, anchorMargin - (corridorShrink + 1) / 2);
+    anchorMargin = shortestTopologyMode ? std::min(anchorMargin + 1, 12)
+                                        : std::min(anchorMargin + 2, 24);
   }
   const int anchorXLow = std::max(0, box.lx() - anchorMargin);
   const int anchorXHigh = std::min(xSize - 1, box.hx() + anchorMargin);
@@ -101,8 +94,8 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   // CUGR-style coarse-to-fine corridor search: bound sparse-graph expansion to
   // each net neighborhood to suppress long global detours.
   int margin = shortestTopologyMode
-                   ? std::clamp(hp / (pins >= 12 ? 14 : 13), 3, 30)
-                   : std::clamp(hp / (pins >= 12 ? 9 : 8), 5, 44);
+                   ? std::clamp(hp / (pins >= 12 ? 11 : 10), 4, 38)
+                   : std::clamp(hp / (pins >= 12 ? 8 : 7), 5, 52);
   if (pins <= 3) {
     margin = std::max(margin, 8);
   }
@@ -110,22 +103,11 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
     margin += shortestTopologyMode ? std::max(1, hp / 90)
                                    : std::max(2, hp / 65);
   }
-  if (shortestTopologyMode && (hp >= 150 || pins >= 10)) {
-    margin = std::max(3, margin - 2);
-  }
   if (shortestTopologyMode
       && std::max(grid.interval.x(), grid.interval.y()) <= 3) {
-    margin = std::max(3, margin - 3);
+    margin = std::max(4, margin - 2);
   }
-  if (corridorShrink > 0) {
-    margin = std::max(2, margin - corridorShrink);
-  }
-  if (!options.preserve_existing_topology) {
-    // SPRoute-style reset move for compaction: avoid topology lock-in by
-    // tightening the local search corridor once overflow is already clean.
-    margin = std::max(2, margin - (shortestTopologyMode ? 4 : 3));
-  }
-  margin += std::max(1, std::max(grid.interval.x(), grid.interval.y()) / 3);
+  margin += std::max(1, std::max(grid.interval.x(), grid.interval.y()) / 2);
   int xLow = std::max(0, box.lx() - margin);
   int xHigh = std::min(xSize - 1, box.hx() + margin);
   int yLow = std::max(0, box.ly() - margin);
@@ -348,12 +330,7 @@ void MazeRoute::run()
     addStartCandidate(startCandidates, farthestFromCenter);
   }
 
-  int maxStartCandidates = numPseudoPins >= 8 ? 3 : 2;
-  if (options_.max_start_candidates > 0) {
-    maxStartCandidates
-        = std::min(maxStartCandidates, options_.max_start_candidates);
-  }
-  maxStartCandidates = std::max(1, maxStartCandidates);
+  const int maxStartCandidates = numPseudoPins >= 8 ? 3 : 2;
   if (startCandidates.size() > static_cast<size_t>(maxStartCandidates)) {
     startCandidates.resize(maxStartCandidates);
   }

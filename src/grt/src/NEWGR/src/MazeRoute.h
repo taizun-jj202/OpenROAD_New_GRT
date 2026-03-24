@@ -37,14 +37,6 @@ struct SparseGrid
   PointT offset;
 };
 
-struct MazeBuildOptions
-{
-  bool preserve_existing_topology = true;
-  bool force_shortest_topology = false;
-  int corridor_shrink = 0;
-  int max_start_candidates = -1;
-};
-
 class SparseGraph
 {
  public:
@@ -53,9 +45,7 @@ class SparseGraph
   {
   }
 
-  void init(const GridGraphView<CostT>& wire_cost_view,
-            const SparseGrid& grid,
-            const MazeBuildOptions& options);
+  void init(const GridGraphView<CostT>& wire_cost_view, const SparseGrid& grid);
   int getNumVertices() const { return vertices_.size(); }
   int getNumPseudoPins() const { return pseudo_pins_.size(); }
   AccessPoint getPseudoPin(int pin_index) const
@@ -124,11 +114,10 @@ class MazeRoute
   }
 
   void run();
-  void setBuildOptions(const MazeBuildOptions& options) { options_ = options; }
   void constructSparsifiedGraph(const GridGraphView<CostT>& wire_cost_view,
                                 const SparseGrid& grid)
   {
-    graph_.init(wire_cost_view, grid, options_);
+    graph_.init(wire_cost_view, grid);
   }
   std::shared_ptr<SteinerTreeNode> getSteinerTree() const;
 
@@ -136,7 +125,6 @@ class MazeRoute
   const GRNet* net_;
   const GridGraph* grid_graph_;
   SparseGraph graph_;
-  MazeBuildOptions options_;
   utl::Logger* logger_;
 
   std::vector<std::shared_ptr<Solution>> solutions_;

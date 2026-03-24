@@ -32,7 +32,7 @@ struct Constants
   // Wirelength-first weighting to counter NEWGR's CUGR-like over-detour
   // behavior on large designs.
   double weight_wire_length = 0.9;
-  double weight_via_number = 2.3;
+  double weight_via_number = 2.8;
   double weight_short_area = 500.0;
 
   int min_routing_layer = 1;
@@ -87,7 +87,7 @@ class CUGR
   void wirelengthRecovery();
   void finalPatternTighten();
   void globalCompaction();
-  void strictWirelengthCompaction(bool use_x_axis_wavefront = true);
+  void strictWirelengthCompaction();
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
@@ -105,7 +105,6 @@ class CUGR
 
   int area_of_pin_patches_ = 0;
   int area_of_wire_patches_ = 0;
-  int late_stage_overflow_nets_ = 0;
 };
 
 }  // namespace grt::newgr
