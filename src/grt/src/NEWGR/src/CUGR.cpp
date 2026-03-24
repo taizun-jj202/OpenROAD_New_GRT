@@ -855,31 +855,53 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         // FastRoute-inspired critical-net intensification:
         // for the highest-HPWL candidates, run a full-grid maze search with
         // wirelength-only costs to aggressively shorten trunks/branches.
+        const bool high_stretch_candidate
+            = candidates[candidateIndex].stretch
+              >= constants_.recovery_min_stretch + 0.10;
         const bool enable_full_grid_maze
             = constants_.recovery_use_full_grid_maze
               && deep_search
-              && candidateIndex < std::max(1, constants_.recovery_full_grid_top_n)
               && candidates[candidateIndex].hpwl
                      >= constants_.recovery_full_grid_hpwl_threshold
+              && (candidateIndex < std::max(1, constants_.recovery_full_grid_top_n)
+                  || high_stretch_candidate)
               && candidates[candidateIndex].stretch
-                     >= constants_.recovery_min_stretch;
+                     >= constants_.recovery_min_stretch
+              && net->getNumPins() <= 40;
         if (enable_full_grid_maze) {
           GridGraphView<CostT> fullGridWlOnlyView;
           grid_graph_->extractWireLengthCostView(fullGridWlOnlyView);
-          const double full_grid_via_scale
+          std::vector<double> via_scales;
+          via_scales.reserve(3);
+          const double base_via_scale
               = std::clamp(constants_.recovery_full_grid_via_cost_scale, 0.0, 1.0);
-          MazeRoute fullGridMaze(net, grid_graph_.get(), logger_);
-          fullGridMaze.constructSparsifiedGraph(
-              fullGridWlOnlyView, SparseGrid(1, 1, 0, 0), full_grid_via_scale);
-          fullGridMaze.run();
-          if (const std::shared_ptr<SteinerTreeNode> full_grid_tree
-              = fullGridMaze.getSteinerTree()) {
-            PatternRoute fullGridPatternRoute(
-                net, grid_graph_.get(), stt_builder_, constants_, logger_);
-            fullGridPatternRoute.setSteinerTree(full_grid_tree);
-            fullGridPatternRoute.constructRoutingDAG();
-            fullGridPatternRoute.run();
-            considerCandidate(net->getRoutingTree());
+          via_scales.push_back(base_via_scale);
+          if (high_stretch_candidate && base_via_scale > 0.0) {
+            via_scales.push_back(base_via_scale * 0.4);
+          }
+          if (high_stretch_candidate
+              && candidates[candidateIndex].stretch
+                     >= constants_.recovery_min_stretch + 0.20) {
+            via_scales.push_back(0.0);
+          }
+          std::sort(via_scales.begin(), via_scales.end());
+          via_scales.erase(std::unique(via_scales.begin(), via_scales.end()),
+                           via_scales.end());
+
+          for (const double via_scale : via_scales) {
+            MazeRoute fullGridMaze(net, grid_graph_.get(), logger_);
+            fullGridMaze.constructSparsifiedGraph(
+                fullGridWlOnlyView, SparseGrid(1, 1, 0, 0), via_scale);
+            fullGridMaze.run();
+            if (const std::shared_ptr<SteinerTreeNode> full_grid_tree
+                = fullGridMaze.getSteinerTree()) {
+              PatternRoute fullGridPatternRoute(
+                  net, grid_graph_.get(), stt_builder_, constants_, logger_);
+              fullGridPatternRoute.setSteinerTree(full_grid_tree);
+              fullGridPatternRoute.constructRoutingDAG();
+              fullGridPatternRoute.run();
+              considerCandidate(net->getRoutingTree());
+            }
           }
         }
       }

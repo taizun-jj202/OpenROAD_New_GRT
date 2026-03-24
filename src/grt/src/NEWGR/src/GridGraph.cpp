@@ -914,6 +914,153 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     }
   }
 
+  // Bounded combinational search:
+  // for small nets, enumerate a compact option set per pin to escape
+  // pairwise local minima and recover shorter global topologies.
+  if (pin_access_points.size() >= 3 && pin_access_points.size() <= 10) {
+    struct RankedOption
+    {
+      int index;
+      int accessibility;
+      int center_dist;
+    };
+
+    std::vector<int> variable_pins;
+    std::vector<std::vector<int>> candidate_indices;
+    std::vector<std::vector<int>> candidate_access;
+    variable_pins.reserve(pin_access_points.size());
+    candidate_indices.reserve(pin_access_points.size());
+    candidate_access.reserve(pin_access_points.size());
+
+    uint64_t combinations = 1;
+    constexpr int kMaxVariablePins = 7;
+    constexpr int kMaxCandidatesPerPin = 3;
+    constexpr uint64_t kMaxCombinationBudget = 4096;
+
+    for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
+      if (selected_indices[pin_index] < 0 || pin_access_points[pin_index].size() <= 1) {
+        continue;
+      }
+
+      std::vector<RankedOption> ranked;
+      ranked.reserve(pin_access_points[pin_index].size());
+      for (int index = 0; index < pin_access_points[pin_index].size(); index++) {
+        const auto& point = pin_access_points[pin_index][index];
+        const int accessibility = getAccessibility(point);
+        if (accessibility < min_allowed_accessibility[pin_index]) {
+          continue;
+        }
+        const int center_dist
+            = std::abs(net_center.x() - point.x()) + std::abs(net_center.y() - point.y());
+        ranked.push_back({index, accessibility, center_dist});
+      }
+      if (ranked.empty()) {
+        continue;
+      }
+      std::sort(ranked.begin(),
+                ranked.end(),
+                [](const RankedOption& lhs, const RankedOption& rhs) {
+                  if (lhs.accessibility != rhs.accessibility) {
+                    return lhs.accessibility > rhs.accessibility;
+                  }
+                  if (lhs.center_dist != rhs.center_dist) {
+                    return lhs.center_dist < rhs.center_dist;
+                  }
+                  return lhs.index < rhs.index;
+                });
+
+      std::vector<int> indices;
+      std::vector<int> accesses;
+      indices.reserve(kMaxCandidatesPerPin + 1);
+      accesses.reserve(kMaxCandidatesPerPin + 1);
+      for (int i = 0;
+           i < static_cast<int>(ranked.size()) && i < kMaxCandidatesPerPin;
+           i++) {
+        indices.push_back(ranked[i].index);
+        accesses.push_back(ranked[i].accessibility);
+      }
+
+      const int selected_index = selected_indices[pin_index];
+      if (selected_index >= 0
+          && std::find(indices.begin(), indices.end(), selected_index)
+                 == indices.end()) {
+        indices.push_back(selected_index);
+        const auto& selected_point = pin_access_points[pin_index][selected_index];
+        accesses.push_back(getAccessibility(selected_point));
+      }
+
+      if (indices.size() <= 1) {
+        continue;
+      }
+      variable_pins.push_back(pin_index);
+      candidate_indices.push_back(std::move(indices));
+      candidate_access.push_back(std::move(accesses));
+      combinations *= candidate_indices.back().size();
+      if (variable_pins.size() > kMaxVariablePins
+          || combinations > kMaxCombinationBudget) {
+        variable_pins.clear();
+        break;
+      }
+    }
+
+    if (!variable_pins.empty() && combinations <= kMaxCombinationBudget) {
+      std::vector<int> best_indices = selected_indices;
+      std::vector<int> trial_indices = selected_indices;
+      std::vector<PointT> best_points = selected_points;
+      std::vector<PointT> trial_points = selected_points;
+      const int64_t baseline_score = computeGlobalShapeScore(selected_points);
+      int64_t best_score = baseline_score;
+      int best_access_sum = std::numeric_limits<int>::min();
+
+      std::function<void(int, int)> enumerate = [&](const int option_pos,
+                                                    const int access_sum) {
+        if (option_pos == static_cast<int>(variable_pins.size())) {
+          const int64_t score = computeGlobalShapeScore(trial_points);
+          if (score < best_score
+              || (score == best_score && access_sum > best_access_sum)) {
+            best_score = score;
+            best_access_sum = access_sum;
+            best_indices = trial_indices;
+            best_points = trial_points;
+          }
+          return;
+        }
+
+        const int pin_index = variable_pins[option_pos];
+        const int original_index = trial_indices[pin_index];
+        const PointT original_point = trial_points[pin_index];
+        for (int i = 0;
+             i < static_cast<int>(candidate_indices[option_pos].size());
+             i++) {
+          const int option_index = candidate_indices[option_pos][i];
+          const auto& point = pin_access_points[pin_index][option_index];
+          trial_indices[pin_index] = option_index;
+          trial_points[pin_index] = {point.x(), point.y()};
+          enumerate(option_pos + 1, access_sum + candidate_access[option_pos][i]);
+        }
+        trial_indices[pin_index] = original_index;
+        trial_points[pin_index] = original_point;
+      };
+
+      enumerate(0, 0);
+      if (best_score <= baseline_score) {
+        bool changed = false;
+        for (const int pin_index : variable_pins) {
+          if (best_indices[pin_index] != selected_indices[pin_index]) {
+            changed = true;
+            break;
+          }
+        }
+        if (changed) {
+          for (const int pin_index : variable_pins) {
+            selected_indices[pin_index] = best_indices[pin_index];
+            selected_points[pin_index] = best_points[pin_index];
+          }
+        }
+      }
+    }
+  }
+
   for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
     const auto& access_points = pin_access_points[pin_index];
     const int selected_index = selected_indices[pin_index];
