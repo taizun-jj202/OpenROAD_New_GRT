@@ -5439,27 +5439,37 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   // Bounded DR-proxy override:
-  // Permit a small GR WL uplift to avoid large DR detours when proxy and via
-  // improvements are both strong.
+  // Permit a bounded GR WL uplift to avoid large DR detours when proxy and via
+  // improvements are both strong. The uplift budget is deliberately wider than
+  // a near-tie so SPRoute/CUGR-inspired low-detour candidates can win when
+  // they materially improve the DR proxy.
   if (dr_proxy_choice != nullptr && dr_proxy_choice->name != final_result.name) {
     const long wl_soft_uplift = std::max<long>(
-        std::max<long>(24L * dbu_per_micron, 5L * proxy_tile_size),
-        static_cast<long>(std::ceil(0.0004 * static_cast<double>(best_wirelength))));
+        std::max<long>(160L * dbu_per_micron, 8L * proxy_tile_size),
+        static_cast<long>(std::ceil(0.0025 * static_cast<double>(best_wirelength))));
     const long wl_uplift
         = dr_proxy_choice->metrics.wirelength_dbu - final_result.metrics.wirelength_dbu;
     const long via_gain
         = final_result.metrics.via_count - dr_proxy_choice->metrics.via_count;
-    const long via_gain_needed
-        = std::max<long>(220L, baseline_vias / 320L);
+    const long base_via_gain_needed = std::max<long>(220L, baseline_vias / 320L);
+    const long uplift_scaled_via_gain_needed
+        = base_via_gain_needed
+          + std::max<long>(0L, wl_uplift / std::max<long>(4L * dbu_per_micron, 1L));
     const double final_proxy_score = compute_detailed_route_proxy(final_result.routes);
     const double proxy_choice_score
         = compute_detailed_route_proxy(dr_proxy_choice->routes);
+    const double uplift_factor
+        = std::max(
+            0.0,
+            static_cast<double>(std::max(0L, wl_uplift))
+                / static_cast<double>(std::max<long>(dbu_per_micron, 1L)));
     const double proxy_gain_needed
-        = 10.0 * static_cast<double>(proxy_tile_size);
+        = (8.0 + (uplift_factor / 160.0))
+          * static_cast<double>(proxy_tile_size);
     const bool proxy_materially_better
         = proxy_choice_score + proxy_gain_needed < final_proxy_score;
     const bool wl_guarded = wl_uplift <= wl_soft_uplift;
-    const bool via_materially_better = via_gain >= via_gain_needed;
+    const bool via_materially_better = via_gain >= uplift_scaled_via_gain_needed;
     if (wl_uplift <= 0 || (wl_guarded && via_materially_better && proxy_materially_better)) {
       final_result = *dr_proxy_choice;
       logger_->info(GNR,
