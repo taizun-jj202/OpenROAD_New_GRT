@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
-#include <unordered_set>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -1693,6 +1692,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     RouteScore score;
     RouteSource source{RouteSource::kFastRoute};
     uint64_t fingerprint{0};
+    int support{1};
   };
   using CandidateList = std::vector<PortfolioCandidate>;
 
@@ -1713,19 +1713,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     CandidateList candidates;
     candidates.reserve(24);
-    std::unordered_set<uint64_t> seen_fingerprints;
-    seen_fingerprints.reserve(32);
+    std::unordered_map<uint64_t, size_t> fingerprint_to_index;
+    fingerprint_to_index.reserve(32);
 
     auto append_candidate = [&](const GRoute* candidate_route, RouteSource source) {
       if (candidate_route == nullptr) {
         return;
       }
       const uint64_t fingerprint = routeFingerprint(*candidate_route);
-      if (!seen_fingerprints.insert(fingerprint).second) {
+      const auto seen_it = fingerprint_to_index.find(fingerprint);
+      if (seen_it != fingerprint_to_index.end()) {
+        candidates[seen_it->second].support++;
         return;
       }
       candidates.push_back(
-          PortfolioCandidate{candidate_route, scoreRoute(*candidate_route), source, fingerprint});
+          PortfolioCandidate{
+              candidate_route, scoreRoute(*candidate_route), source, fingerprint, 1});
+      fingerprint_to_index.emplace(fingerprint, candidates.size() - 1);
     };
 
     auto append_from_map = [&](const NetRouteMap& candidate_routes, RouteSource source) {
@@ -1769,11 +1773,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 if (lhs.score.bends != rhs.score.bends) {
                   return lhs.score.bends < rhs.score.bends;
                 }
+                if (lhs.support != rhs.support) {
+                  return lhs.support > rhs.support;
+                }
                 return static_cast<int>(lhs.source) < static_cast<int>(rhs.source);
               });
 
     // Keep a compact portfolio for speed while preserving the shortest options.
-    constexpr size_t kMaxPortfolioPerNet = 10;
+    constexpr size_t kMaxPortfolioPerNet = 12;
     if (candidates.size() > kMaxPortfolioPerNet) {
       candidates.resize(kMaxPortfolioPerNet);
     }
@@ -1792,8 +1799,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       selected_usage, grid, soft_capacities);
   EdgeHistoryMap edge_history;
   edge_history.reserve(std::max<size_t>(selected_usage.size(), 4096));
-  double congestion_weight = 0.34;
-  double history_weight = 0.24;
+  double congestion_weight = 0.12;
+  double history_weight = 0.08;
   constexpr int kNegotiationRounds = 3;
 
   for (int round = 0; round < kNegotiationRounds; round++) {
@@ -1826,40 +1833,43 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const GRoute* best_route = &route;
       RouteScore best_score = current_score;
       RouteSource best_source = RouteSource::kFastRoute;
+      int best_support = 1;
       const int64_t current_extra_vias
           = std::max<int64_t>(0, current_score.vias - baseline_score.vias);
-      const double via_weight = trunk_priority ? 0.14 : (policy.long_net ? 0.20 : 0.28);
-      const double bend_weight = trunk_priority ? 0.02 : 0.05;
-      const double long_bonus = trunk_priority ? 0.25 : 0.0;
+      const int64_t best_congestion_cost_initial
+          = routeCongestionPenalty(route,
+                                   grid,
+                                   origin_x,
+                                   origin_y,
+                                   tile_size,
+                                   selected_usage,
+                                   soft_capacities);
+      int64_t best_congestion_cost = best_congestion_cost_initial;
+      const double best_history_cost_initial = routeHistoryPenalty(route,
+                                                                   origin_x,
+                                                                   origin_y,
+                                                                   tile_size,
+                                                                   edge_history);
+      double best_history_cost = best_history_cost_initial;
+      const double via_weight = trunk_priority ? 0.08 : (policy.long_net ? 0.12 : 0.16);
+      const double bend_weight = trunk_priority ? 0.02 : 0.04;
 
-      auto objective = [&](const GRoute& candidate_route,
-                           const RouteScore& candidate_score) {
+      auto objective = [&](const RouteScore& candidate_score,
+                           int64_t candidate_congestion_cost,
+                           double candidate_history_cost,
+                           int candidate_support) {
         const int64_t candidate_extra_vias
             = std::max<int64_t>(0, candidate_score.vias - baseline_score.vias);
-        const int64_t congestion_cost
-            = routeCongestionPenalty(candidate_route,
-                                     grid,
-                                     origin_x,
-                                     origin_y,
-                                     tile_size,
-                                     selected_usage,
-                                     soft_capacities);
-        const double history_cost = routeHistoryPenalty(candidate_route,
-                                                        origin_x,
-                                                        origin_y,
-                                                        tile_size,
-                                                        edge_history);
-        return static_cast<double>(candidate_score.wirelength)
-               + static_cast<double>(candidate_extra_vias) * via_weight
+        const double support_bonus = trunk_priority ? 2.0 : 1.2;
+        return static_cast<double>(candidate_extra_vias) * via_weight
                + static_cast<double>(candidate_score.bends) * bend_weight
-               + static_cast<double>(congestion_cost) * congestion_weight
-               + history_cost * history_weight
-               - static_cast<double>(std::max<int64_t>(
-                     0, baseline_score.wirelength - candidate_score.wirelength))
-                     * long_bonus;
+               + static_cast<double>(candidate_congestion_cost) * congestion_weight
+               + candidate_history_cost * history_weight
+               - static_cast<double>(candidate_support) * support_bonus;
       };
 
-      double best_objective = objective(route, current_score);
+      double best_objective = objective(
+          current_score, best_congestion_cost, best_history_cost, best_support);
       for (const PortfolioCandidate& candidate : portfolio_it->second) {
         if (candidate.route == nullptr) {
           continue;
@@ -1870,6 +1880,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         const int64_t via_cap = policy.hard_via_guard * 7
                                 + (trunk_priority ? 320 : (policy.long_net ? 240 : 160));
         if (candidate_extra_vias > via_cap) {
+          continue;
+        }
+        if (candidate.score.wirelength > best_score.wirelength) {
           continue;
         }
 
@@ -1883,18 +1896,81 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           continue;
         }
 
-        const double candidate_objective
-            = objective(*candidate.route, candidate.score);
-        if (candidate_objective < best_objective
-            || (std::abs(candidate_objective - best_objective) <= 1e-9
-                && candidate.score.wirelength < best_score.wirelength)
-            || (std::abs(candidate_objective - best_objective) <= 1e-9
-                && candidate.score.wirelength == best_score.wirelength
-                && candidate.score.vias < best_score.vias)) {
+        const int64_t candidate_congestion_cost
+            = routeCongestionPenalty(*candidate.route,
+                                     grid,
+                                     origin_x,
+                                     origin_y,
+                                     tile_size,
+                                     selected_usage,
+                                     soft_capacities);
+        const double candidate_history_cost = routeHistoryPenalty(*candidate.route,
+                                                                  origin_x,
+                                                                  origin_y,
+                                                                  tile_size,
+                                                                  edge_history);
+
+        const int64_t wl_gain_vs_best = std::max<int64_t>(
+            0, best_score.wirelength - candidate.score.wirelength);
+        const int64_t congestion_delta_vs_best
+            = candidate_congestion_cost - best_congestion_cost;
+        if (wl_gain_vs_best > 0) {
+          const int64_t allowed_congestion_delta
+              = trunk_priority
+                    ? std::max<int64_t>(48,
+                                        best_congestion_cost * 2 + wl_gain_vs_best / 2)
+                : policy.long_net
+                    ? std::max<int64_t>(28,
+                                        best_congestion_cost + wl_gain_vs_best / 3)
+                    : std::max<int64_t>(16,
+                                        best_congestion_cost / 2 + wl_gain_vs_best / 4);
+          const int64_t force_wl_gain = trunk_priority
+                                            ? std::max<int64_t>(1, tile_size / 22)
+                                        : policy.long_net
+                                            ? std::max<int64_t>(1, tile_size / 18)
+                                            : std::max<int64_t>(1, tile_size / 14);
+          if (congestion_delta_vs_best > allowed_congestion_delta
+              && wl_gain_vs_best < force_wl_gain) {
+            continue;
+          }
+        } else {
+          const int64_t allowed_tie_congestion_delta
+              = std::max<int64_t>(10, best_congestion_cost / 3);
+          if (candidate_congestion_cost
+                  > best_congestion_cost + allowed_tie_congestion_delta
+              && candidate.support <= best_support) {
+            continue;
+          }
+        }
+
+        const double candidate_objective = objective(candidate.score,
+                                                     candidate_congestion_cost,
+                                                     candidate_history_cost,
+                                                     candidate.support);
+
+        bool take_candidate = false;
+        if (candidate.score.wirelength < best_score.wirelength) {
+          take_candidate = true;
+        } else if (candidate.support != best_support) {
+          take_candidate = candidate.support > best_support;
+        } else if (std::abs(candidate_objective - best_objective) > 1e-9) {
+          take_candidate = candidate_objective < best_objective;
+        } else if (candidate.score.vias != best_score.vias) {
+          take_candidate = candidate.score.vias < best_score.vias;
+        } else if (candidate_congestion_cost != best_congestion_cost) {
+          take_candidate = candidate_congestion_cost < best_congestion_cost;
+        } else if (candidate.score.bends != best_score.bends) {
+          take_candidate = candidate.score.bends < best_score.bends;
+        }
+
+        if (take_candidate) {
           best_objective = candidate_objective;
           best_route = candidate.route;
           best_score = candidate.score;
           best_source = candidate.source;
+          best_support = candidate.support;
+          best_congestion_cost = candidate_congestion_cost;
+          best_history_cost = candidate_history_cost;
         }
       }
 
@@ -1994,11 +2070,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     negotiated_final_overflow = round_overflow;
 
     if (round_overflow > 0) {
-      congestion_weight = std::min(2.20, congestion_weight * 1.25 + 0.04);
-      history_weight = std::min(2.00, history_weight * 1.18 + 0.05);
+      congestion_weight = std::min(0.72, congestion_weight * 1.12 + 0.02);
+      history_weight = std::min(0.56, history_weight * 1.10 + 0.015);
     } else {
-      congestion_weight = std::max(0.22, congestion_weight * 0.92);
-      history_weight = std::max(0.12, history_weight * 0.90);
+      congestion_weight = std::max(0.08, congestion_weight * 0.95);
+      history_weight = std::max(0.05, history_weight * 0.93);
     }
 
     if (round_swaps == 0) {
