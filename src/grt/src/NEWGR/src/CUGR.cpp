@@ -941,15 +941,19 @@ void CUGR::route()
   std::vector<int> netIndices = allNetIndices;
   patternRoute(netIndices);
 
-  std::vector<int> detourIndices = netIndices;
+  const std::vector<int> overflow_after_pattern = netIndices;
+  std::vector<int> detourIndices = overflow_after_pattern;
   if (constants_.wirelength_first_refinement) {
+    // FastRoute-inspired critical-net reroute on the full netlist:
+    // include long/high-stretch nets even when they are overflow-free.
     detourIndices
-        = selectCriticalNets(netIndices, constants_.detour_refine_ratio);
+        = selectCriticalNets(allNetIndices, constants_.detour_refine_ratio);
   }
   patternRouteWithDetours(detourIndices);
 
   std::vector<int> mazeIndices = detourIndices;
   if (constants_.wirelength_first_refinement) {
+    // Further narrow to high-impact candidates for expensive maze reroute.
     mazeIndices
         = selectCriticalNets(detourIndices, constants_.maze_refine_ratio);
   }

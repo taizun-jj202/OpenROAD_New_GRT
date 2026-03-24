@@ -217,6 +217,7 @@ void MazeRoute::run()
   };
 
   constexpr CostT kCostEpsilon = static_cast<CostT>(1e-6);
+  const bool wirelength_heavy_mode = graph_.getViaCostScale() <= 0.30;
   auto computeRouteGeometry
       = [&](const std::vector<std::shared_ptr<Solution>>& solutions) {
           uint64_t wirelength = 0;
@@ -262,6 +263,33 @@ void MazeRoute::run()
     if (!current_best.valid) {
       return true;
     }
+    if (wirelength_heavy_mode) {
+      // Wirelength-only mazes are explicitly used as a shortening oracle.
+      // Keep meaningful WL gains even if congestion proxy cost is somewhat higher.
+      if (candidate.unique_wirelength + 2 < current_best.unique_wirelength
+          && candidate.total_cost <= current_best.total_cost * 1.38
+          && candidate.unique_vias <= current_best.unique_vias + 12) {
+        return true;
+      }
+      if (candidate.unique_wirelength < current_best.unique_wirelength
+          && candidate.total_cost <= current_best.total_cost * 1.25
+          && candidate.unique_vias <= current_best.unique_vias + 8) {
+        return true;
+      }
+      if (candidate.unique_wirelength == current_best.unique_wirelength
+          && candidate.unique_vias < current_best.unique_vias) {
+        return true;
+      }
+      if (candidate.unique_wirelength == current_best.unique_wirelength
+          && candidate.total_cost + kCostEpsilon < current_best.total_cost) {
+        return true;
+      }
+      if (candidate.total_cost + kCostEpsilon < current_best.total_cost * 0.82
+          && candidate.unique_wirelength <= current_best.unique_wirelength + 18) {
+        return true;
+      }
+    }
+
     // Wirelength-first tie breaking with bounded congestion-cost regression.
     constexpr uint64_t kStrongWireGain = 20;
     constexpr uint64_t kModerateWireGain = 8;
@@ -795,10 +823,18 @@ void MazeRoute::run()
   int max_x_seed = 0;
   int min_y_seed = 0;
   int max_y_seed = 0;
+  int min_sum_seed = 0;
+  int max_sum_seed = 0;
+  int min_diff_seed = 0;
+  int max_diff_seed = 0;
   int far_pair_lhs = -1;
   int far_pair_rhs = -1;
   int best_center_dist = std::numeric_limits<int>::max();
   int best_far_dist = std::numeric_limits<int>::min();
+  int min_sum = std::numeric_limits<int>::max();
+  int max_sum = std::numeric_limits<int>::min();
+  int min_diff = std::numeric_limits<int>::max();
+  int max_diff = std::numeric_limits<int>::min();
   for (int pin_index = 0; pin_index < num_pins; pin_index++) {
     const PointT point = graph_.getPseudoPin(pin_index).point;
     const int center_dist
@@ -822,6 +858,24 @@ void MazeRoute::run()
     }
     if (point.y() > graph_.getPseudoPin(max_y_seed).point.y()) {
       max_y_seed = pin_index;
+    }
+    const int sum = point.x() + point.y();
+    const int diff = point.x() - point.y();
+    if (sum < min_sum) {
+      min_sum = sum;
+      min_sum_seed = pin_index;
+    }
+    if (sum > max_sum) {
+      max_sum = sum;
+      max_sum_seed = pin_index;
+    }
+    if (diff < min_diff) {
+      min_diff = diff;
+      min_diff_seed = pin_index;
+    }
+    if (diff > max_diff) {
+      max_diff = diff;
+      max_diff_seed = pin_index;
     }
   }
   // Track one globally farthest pair to reinforce long trunk candidates.
@@ -917,6 +971,10 @@ void MazeRoute::run()
   runPairCandidate(min_y_seed, max_y_seed);
   runPairCandidate(center_seed, far_seed);
   runPairCandidate(far_pair_lhs, far_pair_rhs);
+  runPairCandidate(min_sum_seed, max_sum_seed);
+  runPairCandidate(min_diff_seed, max_diff_seed);
+  runPairCandidate(min_x_seed, max_y_seed);
+  runPairCandidate(max_x_seed, min_y_seed);
 
   for (const int seed : seeds) {
     RunResult candidate = runFromSeed(seed);

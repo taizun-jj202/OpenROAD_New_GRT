@@ -71,6 +71,7 @@ class SparseGraph
   {
     return costs_[vertex][edge_index];
   }
+  double getViaCostScale() const { return via_cost_scale_; }
 
   GRPoint getPoint(const int vertex) const { return vertices_[vertex]; }
 

@@ -68,11 +68,11 @@ struct Constants
   // FastRoute-style critical-net refinement schedule
   bool wirelength_first_refinement = true;
   int refinement_overflow_threshold = 1;
-  int refinement_hpwl_threshold = 80;
-  double refinement_stretch_threshold = 1.08;
-  int refinement_max_selected_nets = 0;
-  double detour_refine_ratio = 0.95;
-  double maze_refine_ratio = 0.88;
+  int refinement_hpwl_threshold = 56;
+  double refinement_stretch_threshold = 1.05;
+  int refinement_max_selected_nets = 1800;
+  double detour_refine_ratio = 0.55;
+  double maze_refine_ratio = 0.35;
 
   // Stage-3 (maze) exploration controls.
   int stage3_dense_sparse_x = 2;
@@ -80,17 +80,17 @@ struct Constants
   bool stage3_try_offset = true;
   bool stage3_full_offset_sweep = false;
   int stage3_full_offset_hpwl_threshold = 180;
-  int stage3_max_maze_configs = 16;
+  int stage3_max_maze_configs = 18;
   bool stage3_use_wirelength_maze = true;
-  int stage3_wl_only_hpwl_threshold = 140;
-  int stage3_wl_config_limit = 8;
-  double stage3_wl_via_cost_scale = 0.35;
+  int stage3_wl_only_hpwl_threshold = 96;
+  int stage3_wl_config_limit = 10;
+  double stage3_wl_via_cost_scale = 0.22;
   bool stage3_use_full_grid_wl_maze = true;
-  int stage3_full_grid_hpwl_threshold = 220;
-  int stage3_full_grid_pin_limit = 24;
+  int stage3_full_grid_hpwl_threshold = 160;
+  int stage3_full_grid_pin_limit = 28;
   int stage3_full_grid_overflow_threshold = 3;
-  double stage3_full_grid_via_cost_scale = 0.02;
-  double stage3_full_grid_min_stretch = 1.22;
+  double stage3_full_grid_via_cost_scale = 0.0;
+  double stage3_full_grid_min_stretch = 1.14;
 
   // FastRoute-style post-processing pass: reroute a subset of long,
   // overflow-free nets and keep only wirelength-improving solutions.
@@ -98,22 +98,22 @@ struct Constants
   bool recovery_use_maze = true;
   bool recovery_use_wirelength_maze = true;
   double recovery_wl_maze_via_cost_scale = 0.18;
-  int recovery_wl_only_hpwl_threshold = 72;
-  int recovery_hpwl_threshold = 40;
-  double recovery_min_stretch = 1.02;
-  int recovery_candidate_cap = 760;
-  int recovery_deep_search_cap = 260;
+  int recovery_wl_only_hpwl_threshold = 56;
+  int recovery_hpwl_threshold = 32;
+  double recovery_min_stretch = 1.01;
+  int recovery_candidate_cap = 920;
+  int recovery_deep_search_cap = 340;
   int recovery_shallow_maze_config_limit = 5;
   int recovery_deep_maze_config_limit = 14;
   int recovery_shallow_wl_config_limit = 4;
   int recovery_deep_wl_config_limit = 10;
-  double recovery_refine_ratio = 0.90;
-  int recovery_max_passes = 4;
+  double recovery_refine_ratio = 0.93;
+  int recovery_max_passes = 5;
   double recovery_pass_decay = 0.88;
   int recovery_maze_sparse_x = 3;
   int recovery_maze_sparse_y = 3;
   double recovery_deep_ratio = 0.72;
-  int recovery_deep_hpwl_threshold = 120;
+  int recovery_deep_hpwl_threshold = 96;
   int recovery_aniso_sparse_long = 7;
   int recovery_aniso_sparse_short = 3;
   bool recovery_try_offset = true;
@@ -121,11 +121,11 @@ struct Constants
   int recovery_full_offset_hpwl_threshold = 220;
   int recovery_dense_sparse_x = 2;
   int recovery_dense_sparse_y = 2;
-  int recovery_max_maze_configs = 18;
+  int recovery_max_maze_configs = 20;
   int recovery_max_via_increase = 10;
   bool recovery_use_full_grid_maze = true;
-  int recovery_full_grid_top_n = 52;
-  int recovery_full_grid_hpwl_threshold = 96;
+  int recovery_full_grid_top_n = 80;
+  int recovery_full_grid_hpwl_threshold = 84;
   double recovery_full_grid_via_cost_scale = 0.0;
 
   double pin_patch_threshold = 1000000.0;
