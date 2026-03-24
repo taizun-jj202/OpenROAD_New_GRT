@@ -1486,7 +1486,13 @@ void FastRouteCore::checkRoute3D()
 
 static bool compareTEL(const OrderTree a, const OrderTree b)
 {
-  return a.xmin > b.xmin;
+  if (a.xmin != b.xmin) {
+    return a.xmin > b.xmin;
+  }
+  if (a.length != b.length) {
+    return a.length > b.length;
+  }
+  return a.treeIndex < b.treeIndex;
 }
 
 void FastRouteCore::StNetOrder()
@@ -1500,11 +1506,14 @@ void FastRouteCore::StNetOrder()
 
     StTree* stree = &(sttrees_[netID]);
     tree_order_cong_[j].xmin = 0;
+    tree_order_cong_[j].length = 0;
     tree_order_cong_[j].treeIndex = netID;
 
     for (int ind = 0; ind < stree->num_edges(); ind++) {
       const auto& treeedges = stree->edges;
       const TreeEdge* treeedge = &(treeedges[ind]);
+      tree_order_cong_[j].length
+          += std::max(treeedge->len, treeedge->route.routelen);
 
       const std::vector<GPoint3D>& grids = treeedge->route.grids;
       for (int i = 0; i < treeedge->route.routelen; i++) {

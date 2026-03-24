@@ -1209,10 +1209,66 @@ NetRouteMap FastRouteCore::run()
   int long_edge_len = 40;
   const int short_edge_len = 12;
   const int soft_ndr_overflow_th = 10000;
+  // CUGR/SPRoute-inspired net scheduling:
+  // prioritize long, high-degree trunks early so later stages are less likely
+  // to detour them around fragmented resources.
+  auto sort_wirelength_priority_nets = [&]() {
+    std::stable_sort(net_ids_.begin(),
+                     net_ids_.end(),
+                     [&](const int lhs_net_id, const int rhs_net_id) {
+                       const FrNet* lhs = nets_[lhs_net_id];
+                       const FrNet* rhs = nets_[rhs_net_id];
+
+                       auto net_priority = [](const FrNet* net) {
+                         const int raw_pin_count = net->getNumPins();
+                         if (raw_pin_count <= 0) {
+                           return 0.0;
+                         }
+                         const int pin_count = raw_pin_count;
+                         int xmin = std::numeric_limits<int>::max();
+                         int ymin = std::numeric_limits<int>::max();
+                         int xmax = std::numeric_limits<int>::min();
+                         int ymax = std::numeric_limits<int>::min();
+                         int lmin = std::numeric_limits<int>::max();
+                         int lmax = std::numeric_limits<int>::min();
+                         for (int pin_idx = 0; pin_idx < pin_count; pin_idx++) {
+                           xmin = std::min(xmin, net->getPinX(pin_idx));
+                           ymin = std::min(ymin, net->getPinY(pin_idx));
+                           xmax = std::max(xmax, net->getPinX(pin_idx));
+                           ymax = std::max(ymax, net->getPinY(pin_idx));
+                           lmin = std::min(lmin, net->getPinL(pin_idx));
+                           lmax = std::max(lmax, net->getPinL(pin_idx));
+                         }
+                         const int hpwl = std::max(0, xmax - xmin)
+                                          + std::max(0, ymax - ymin);
+                         const int layer_span = std::max(0, lmax - lmin);
+                         const double complexity
+                             = std::log1p(static_cast<double>(pin_count));
+                         const double hpwl_weight = static_cast<double>(hpwl)
+                                                    * (1.0 + 0.95 * complexity);
+                         const double layer_weight
+                             = static_cast<double>(layer_span)
+                               * (180.0 + 0.10 * hpwl);
+                         const double clock_bias = net->isClock() ? 1500.0 : 0.0;
+                         return hpwl_weight + layer_weight + clock_bias;
+                       };
+
+                       const double lhs_priority = net_priority(lhs);
+                       const double rhs_priority = net_priority(rhs);
+                       if (lhs_priority != rhs_priority) {
+                         return lhs_priority > rhs_priority;
+                       }
+                       if (lhs->getNumPins() != rhs->getNumPins()) {
+                         return lhs->getNumPins() > rhs->getNumPins();
+                       }
+                       return lhs_net_id < rhs_net_id;
+                     });
+  };
 
   // call FLUTE to generate RSMT and break the nets into segments (2-pin nets)
   via_cost_ = 0;
   gen_brk_RSMT(false, false, false, false, noADJ);
+  sort_wirelength_priority_nets();
   if (logger_->debugCheck(GNR, "grtSteps", 1)) {
     logger_->report("After RSMT");
   }
@@ -1225,12 +1281,14 @@ NetRouteMap FastRouteCore::run()
 
   // Congestion-driven rip-up and reroute L
   gen_brk_RSMT(true, true, true, false, noADJ);
+  sort_wirelength_priority_nets();
   getOverflow2D(&maxOverflow);
   if (logger_->debugCheck(GNR, "grtSteps", 1)) {
     logger_->report("After congestion-driven RSMT");
   }
 
   // New rip-up and reroute L via-guided
+  sort_wirelength_priority_nets();
   newrouteLAll(false, true);
   getOverflow2D(&maxOverflow);
   if (logger_->debugCheck(GNR, "grtSteps", 1)) {
@@ -1238,12 +1296,14 @@ NetRouteMap FastRouteCore::run()
   }
 
   // Rip-up and reroute using spiral route
+  sort_wirelength_priority_nets();
   spiralRouteAll();
   if (logger_->debugCheck(GNR, "grtSteps", 1)) {
     logger_->report("After spiralRouteAll");
   }
 
   // Rip-up a tree edge according to its ripup type and Z-route it
+  sort_wirelength_priority_nets();
   newrouteZAll(10);
   int past_cong = getOverflow2D(&maxOverflow);
 
@@ -1399,7 +1459,7 @@ NetRouteMap FastRouteCore::run()
                   enlarge_,
                   ripup_threshold,
                   mazeedge_threshold_,
-                  !(i % 3),
+                  true,
                   VIA,
                   L,
                   cost_params,
@@ -1438,7 +1498,7 @@ NetRouteMap FastRouteCore::run()
                       enlarge_,
                       ripup_threshold,
                       mazeedge_threshold_,
-                      !(i % 3),
+                      true,
                       VIA,
                       L,
                       cost_params,
@@ -1487,7 +1547,7 @@ NetRouteMap FastRouteCore::run()
                       enlarge_,
                       ripup_threshold,
                       mazeedge_threshold_,
-                      !(i % 3),
+                      true,
                       VIA,
                       L,
                       cost_params,
@@ -1694,17 +1754,21 @@ NetRouteMap FastRouteCore::run()
 
     const int base_enlarge = std::max(5, std::min(enlarge_, x_grid_ / 3));
     const int ultra_tight_enlarge = std::max(3, base_enlarge - 4);
+    const int razor_enlarge = std::max(2, ultra_tight_enlarge - 1);
     const int tight_enlarge = std::max(4, base_enlarge - 2);
+    const int compact_enlarge = std::max(3, tight_enlarge - 1);
     const int wide_enlarge
         = std::min(base_enlarge + 8, std::max(8, x_grid_ / 2));
     const std::vector<WlProbeConfig> probes = {
+        {razor_enlarge, -1, 0, true, 5, 0, CostParams(0.08f, 0.9f, 2)},
+        {compact_enlarge, -1, 0, true, 4, 0, CostParams(0.10f, 1.0f, 2)},
         {ultra_tight_enlarge, -1, 0, true, 4, 0, CostParams(0.12f, 1.2f, 2)},
         {tight_enlarge, -1, 0, true, 3, 0, CostParams(0.18f, 1.5f, 3)},
         {base_enlarge, -1, 0, true, 2, 0, CostParams(0.24f, 2.0f, 4)},
         {std::min(base_enlarge + 3, std::max(7, x_grid_ / 2)),
          -1,
          0,
-         false,
+         true,
          1,
          0,
          CostParams(0.30f, 2.3f, 5)},
@@ -1715,7 +1779,7 @@ NetRouteMap FastRouteCore::run()
          1,
          0,
          CostParams(0.45f, 2.8f, 6)},
-        {wide_enlarge, -1, 1, false, 2, 0, CostParams(0.28f, 2.0f, 4)}};
+        {wide_enlarge, -1, 1, true, 2, 0, CostParams(0.28f, 2.0f, 4)}};
 
     int probe_iter = std::max(1, i);
     for (const WlProbeConfig& probe : probes) {

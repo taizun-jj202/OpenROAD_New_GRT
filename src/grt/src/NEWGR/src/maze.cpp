@@ -1253,20 +1253,22 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
       // ripup the routing for the edge
       const auto [ymin, ymax] = std::minmax(n1y, n2y);
       const auto [xmin, xmax] = std::minmax(n1x, n2x);
+      const bool zero_overflow_mode = total_overflow_ == 0;
       const bool wirelength_focus_mode
-          = total_overflow_ == 0 || iter > overflow_iterations_ / 2;
+          = zero_overflow_mode || iter > overflow_iterations_ / 2;
       edge_bbox_xmin = xmin;
       edge_bbox_xmax = xmax;
       edge_bbox_ymin = ymin;
       edge_bbox_ymax = ymax;
-      edge_bbox_margin = wirelength_focus_mode ? 0 : 1;
-      detour_unit_cost = wirelength_focus_mode ? 0.45 : 0.10;
+      edge_bbox_margin = zero_overflow_mode ? 0 : (wirelength_focus_mode ? 1 : 2);
+      detour_unit_cost
+          = zero_overflow_mode ? 1.55 : (wirelength_focus_mode ? 0.80 : 0.10);
 
       enlarge_ = std::min(origENG, (iter / 6 + 3) * treeedge->route.routelen);
       const int manhattan_len = treeedge->len;
-      const bool zero_overflow_refine = total_overflow_ == 0;
-      const int min_local_expand = zero_overflow_refine ? 2 : 3;
-      const double expand_ratio = zero_overflow_refine ? 0.22 : 0.35;
+      const bool zero_overflow_refine = zero_overflow_mode;
+      const int min_local_expand = zero_overflow_refine ? 1 : 3;
+      const double expand_ratio = zero_overflow_refine ? 0.12 : 0.35;
       const int dynamic_cap
           = min_local_expand
             + static_cast<int>(std::round(manhattan_len * expand_ratio));
