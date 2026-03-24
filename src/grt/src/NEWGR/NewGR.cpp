@@ -4017,21 +4017,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 final_result.metrics.wirelength_um,
                 final_result.metrics.via_count);
 
-  const bool collapse_style_solution = final_result.name == "consensus-collapse-fusion"
-                                       || final_result.name == "longnet-priority-fusion"
-                                       || final_result.name == "hyper-collapse-fusion"
-                                       || final_result.name == "router-donor-minwl-fusion"
-                                       || final_result.name == "ultra-minwl-envelope-fusion"
-                                       || final_result.name == "cross-router-wirelength-fusion"
-                                       || final_result.name == "radical-shortpath-fusion"
-                                       || final_result.name == "extreme-wirelength-stitch"
-                                       || final_result.name == "collapse-router-minwl-fusion"
-                                       || final_result.name == "dr-stable-shortest-fusion";
+  const bool is_hybrid_solution
+      = final_result.name.find("fusion") != std::string::npos
+        || final_result.name.find("stitch") != std::string::npos;
+  // Enable CUGR-style patching for collapse/fusion winners as well.
+  // These mixed-source guides are shortest in GR but can be sparse around
+  // congested hubs; patching adds alternate tracks that reduce DR detours.
   const bool apply_patching
-      = final_result.name == "cugr-softcap-wirelength"
-        || (!collapse_style_solution
-            && (final_result.name.find("fusion") != std::string::npos
-                || final_result.name.find("stitch") != std::string::npos));
+      = final_result.name == "cugr-softcap-wirelength" || is_hybrid_solution;
   if (apply_patching) {
     applyCugrStyleGuidePatching(grouter_,
                                 final_result.routes,
