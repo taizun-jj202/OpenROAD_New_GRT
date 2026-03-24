@@ -2787,7 +2787,7 @@ bool shouldPreferWirelengthChampion(int incumbent_overflow,
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
   const uint64_t min_wl_gain
-      = std::max<uint64_t>(300, incumbent_score.wirelength / 900000);
+      = std::max<uint64_t>(120, incumbent_score.wirelength / 1300000);
   if (wl_gain < min_wl_gain) {
     return false;
   }
@@ -3715,6 +3715,211 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   fusion_stats.skipped_by_budget_guard,
                   fusion_stats.consumed_wl_gain);
 
+    // Wirelength champion tournament:
+    // evaluate every mixed candidate (FastRoute, NEWGR, and all hybrids) with
+    // a uniform gate before running staged selection. This mirrors
+    // CUGR-style risk guards with FastRoute/SPRoute-style multi-candidate
+    // exploration and captures small-but-real WL wins.
+    struct ChampionChoice
+    {
+      const char* label{"FastRoute"};
+      const NetRouteMap* routes{nullptr};
+      RouteScore score{};
+      uint64_t low_layer_wl{0};
+      int overflow{0};
+      bool uses_fastroute{true};
+      bool hybrid{false};
+      uint64_t swapped_nets{0};
+      uint64_t added_nets{0};
+    };
+
+    ChampionChoice champion{
+        "FastRoute",
+        &fastroute_routes,
+        fastroute_score,
+        fastroute_low_layer_wl,
+        fastroute_overflow,
+        true,
+        false,
+        0,
+        0};
+
+    auto consider_champion = [&](const char* label,
+                                 const NetRouteMap& candidate_routes,
+                                 const RouteScore& candidate_score,
+                                 uint64_t candidate_low_layer_wl,
+                                 int candidate_overflow,
+                                 bool uses_fastroute,
+                                 bool hybrid,
+                                 uint64_t swapped_nets,
+                                 uint64_t added_nets) {
+      if (shouldPreferWirelengthChampion(champion.overflow,
+                                         champion.score,
+                                         champion.low_layer_wl,
+                                         candidate_overflow,
+                                         candidate_score,
+                                         candidate_low_layer_wl)) {
+        champion.label = label;
+        champion.routes = &candidate_routes;
+        champion.score = candidate_score;
+        champion.low_layer_wl = candidate_low_layer_wl;
+        champion.overflow = candidate_overflow;
+        champion.uses_fastroute = uses_fastroute;
+        champion.hybrid = hybrid;
+        champion.swapped_nets = swapped_nets;
+        champion.added_nets = added_nets;
+      }
+    };
+
+    const uint64_t sweep_swapped
+        = sweep_stats.replaced_with_donor;
+    const uint64_t sweep_added
+        = sweep_stats.added_missing_nets;
+    const uint64_t extreme_swapped
+        = sweep_stats.replaced_with_donor + extreme_sweep_stats.replaced_with_donor;
+    const uint64_t extreme_added
+        = sweep_stats.added_missing_nets + extreme_sweep_stats.added_missing_nets;
+    const uint64_t radical_swapped
+        = sweep_stats.replaced_with_donor + extreme_sweep_stats.replaced_with_donor
+          + radical_refine_stats.replaced_with_donor;
+    const uint64_t radical_added
+        = sweep_stats.added_missing_nets + extreme_sweep_stats.added_missing_nets
+          + radical_refine_stats.added_missing_nets;
+    const uint64_t envelope_swapped
+        = radical_swapped + envelope_stats.replaced_with_donor;
+    const uint64_t envelope_added
+        = radical_added + envelope_stats.added_missing_nets;
+    const uint64_t envelope_newgr_swapped
+        = envelope_swapped + envelope_newgr_stats.replaced_with_donor;
+    const uint64_t envelope_newgr_added
+        = envelope_added + envelope_newgr_stats.added_missing_nets;
+    const uint64_t oracle_swapped
+        = envelope_swapped + wirelength_oracle_stats.replaced_with_donor;
+    const uint64_t oracle_added
+        = envelope_added + wirelength_oracle_stats.added_missing_nets;
+    const uint64_t closure_swapped
+        = oracle_swapped + closure_stats.replaced_with_donor;
+    const uint64_t closure_added
+        = oracle_added + closure_stats.added_missing_nets;
+    const uint64_t fusion_swapped
+        = closure_swapped + fusion_stats.replaced_with_donor;
+    const uint64_t fusion_added
+        = closure_added + fusion_stats.added_missing_nets;
+
+    consider_champion("NEWGR-core",
+                      routes,
+                      newgr_score,
+                      newgr_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      false,
+                      0,
+                      0);
+    consider_champion("NEWGR+FastRoute net-graft",
+                      newgr_backbone_hybrid,
+                      newgr_backbone_score,
+                      newgr_backbone_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      true,
+                      newgr_backbone_stats.replaced_with_fastroute,
+                      newgr_backbone_stats.added_missing_nets);
+    consider_champion("FastRoute+NEWGR targeted-graft",
+                      fastroute_backbone_hybrid,
+                      fastroute_backbone_score,
+                      fastroute_backbone_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      true,
+                      fastroute_backbone_stats.replaced_with_newgr,
+                      fastroute_backbone_stats.added_missing_nets);
+    consider_champion("FastRoute+NEWGR interleaved-graft",
+                      interleaved_hybrid,
+                      interleaved_score,
+                      interleaved_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      true,
+                      interleaved_stats.replaced_with_donor,
+                      interleaved_stats.added_missing_nets);
+    consider_champion("FastRoute+NEWGR wirelength-sweep",
+                      wirelength_sweep_hybrid,
+                      sweep_score,
+                      sweep_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      true,
+                      sweep_swapped,
+                      sweep_added);
+    consider_champion("FastRoute+NEWGR extreme-sweep",
+                      extreme_sweep_hybrid,
+                      extreme_sweep_score,
+                      extreme_sweep_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      true,
+                      extreme_swapped,
+                      extreme_added);
+    consider_champion("FastRoute+NEWGR radical-refine",
+                      radical_refine_hybrid,
+                      radical_refine_score,
+                      radical_refine_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      true,
+                      radical_swapped,
+                      radical_added);
+    consider_champion("FastRoute+NEWGR multi-router-envelope",
+                      envelope_hybrid,
+                      envelope_score,
+                      envelope_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      true,
+                      envelope_swapped,
+                      envelope_added);
+    consider_champion("FastRoute+NEWGR envelope-newgr-graft",
+                      envelope_newgr_hybrid,
+                      envelope_newgr_score,
+                      envelope_newgr_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      true,
+                      envelope_newgr_swapped,
+                      envelope_newgr_added);
+    consider_champion("FastRoute+NEWGR wirelength-oracle",
+                      wirelength_oracle_hybrid,
+                      wirelength_oracle_score,
+                      wirelength_oracle_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      true,
+                      oracle_swapped,
+                      oracle_added);
+    consider_champion("FastRoute+NEWGR wirelength-closure",
+                      wirelength_closure_hybrid,
+                      wirelength_closure_score,
+                      wirelength_closure_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      true,
+                      closure_swapped,
+                      closure_added);
+    consider_champion("FastRoute+NEWGR wirelength-fusion",
+                      wirelength_fusion_hybrid,
+                      wirelength_fusion_score,
+                      wirelength_fusion_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      true,
+                      fusion_swapped,
+                      fusion_added);
+
+    NetRouteMap champion_routes;
+    if (champion.routes != nullptr) {
+      champion_routes = *champion.routes;
+    }
+
     // Detailed-route QoR has been more stable when FastRoute is used as the
     // default backbone, and NEWGR/hybrid are only used as overflow fallback.
     RouteScore best_score = fastroute_score;
@@ -3866,9 +4071,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       used_fastroute_last_run_ = false;
     }
 
-    const uint64_t oracle_min_gain = 600;
-    const uint64_t closure_min_gain = 600;
-    const uint64_t fusion_min_gain = 600;
+    const uint64_t oracle_min_gain = 120;
+    const uint64_t closure_min_gain = 120;
+    const uint64_t fusion_min_gain = 120;
 
     if (shouldPreferWirelengthOracleHybrid(best_overflow,
                                            best_score,
@@ -4065,6 +4270,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       best_overflow = last_total_overflow_;
       selected_label = "NEWGR-core";
       used_fastroute_last_run_ = false;
+    }
+
+    if (!champion_routes.empty()
+        && shouldPreferWirelengthChampion(best_overflow,
+                                          best_score,
+                                          best_low_layer_wl,
+                                          champion.overflow,
+                                          champion.score,
+                                          champion.low_layer_wl)) {
+      routes = std::move(champion_routes);
+      best_score = champion.score;
+      best_overflow = champion.overflow;
+      best_low_layer_wl = champion.low_layer_wl;
+      selected_label = champion.label;
+      selected_hybrid = champion.hybrid;
+      selected_swapped_nets = champion.swapped_nets;
+      selected_added_nets = champion.added_nets;
+      used_fastroute_last_run_ = champion.uses_fastroute;
     }
 
     last_total_overflow_ = best_overflow;
