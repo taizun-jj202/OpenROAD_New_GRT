@@ -67,6 +67,14 @@ void applyRouteProfile(NewgrEngine::RouteProfile profile)
       NEWGR_RUDY_WEIGHT_SCALE = 0.30f;
       NEWGR_PIN_DENSITY_SCALE = 2.40f;
       break;
+    case NewgrEngine::RouteProfile::kRudyPinHybrid:
+      // Hybrid profile: keep trunks direct, but re-introduce local pressure
+      // from both RUDY and pin density to avoid runaway detours.
+      NEWGR_CAP_MODEL = 4;
+      NEWGR_CAP_SCALE = 1.0f;
+      NEWGR_RUDY_WEIGHT_SCALE = 0.45f;
+      NEWGR_PIN_DENSITY_SCALE = 1.75f;
+      break;
   }
 }
 
@@ -202,6 +210,16 @@ NetRouteMap NewgrEngine::runPinDensityClassic()
                        static_cast<int>(Algo::DetPart_Astar_Data),
                        /*warn_id=*/418,
                        RouteProfile::kPinDensityFocused);
+}
+
+NetRouteMap NewgrEngine::runRudyPinHybrid()
+{
+  // Mix SPRoute RUDY ordering with CUGR-like local density pressure while
+  // preserving direct trunks via the hybrid capacity profile.
+  return runWithConfig(/*max_maze_round=*/130,
+                       static_cast<int>(Algo::DetPart_Astar_RUDY),
+                       /*warn_id=*/419,
+                       RouteProfile::kRudyPinHybrid);
 }
 
 NetRouteMap NewgrEngine::runDetPartClassic()

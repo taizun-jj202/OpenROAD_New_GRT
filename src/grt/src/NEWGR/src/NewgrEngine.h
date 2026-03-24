@@ -45,7 +45,8 @@ class NewgrEngine
     kLegacySqueeze,
     kDirectWirelength,
     kUltraDirectWirelength,
-    kPinDensityFocused
+    kPinDensityFocused,
+    kRudyPinHybrid
   };
 
   explicit NewgrEngine(utl::Logger* logger);
@@ -62,6 +63,7 @@ class NewgrEngine
   NetRouteMap runAstarEarly();
   NetRouteMap runRudyClassic();
   NetRouteMap runPinDensityClassic();
+  NetRouteMap runRudyPinHybrid();
   NetRouteMap runDetPartClassic();
   NetRouteMap runNonDetHybrid();
   NetRouteMap runRudyPartition();

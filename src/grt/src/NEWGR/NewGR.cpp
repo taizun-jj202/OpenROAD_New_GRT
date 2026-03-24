@@ -337,48 +337,48 @@ double congestionRiskDensity(const RouteScore& score,
 
 int64_t viaGuardForNet(const RouteScore& baseline_score, int tile_size)
 {
-  const int64_t long_net_threshold = static_cast<int64_t>(tile_size) * 20;
-  const int64_t medium_net_threshold = static_cast<int64_t>(tile_size) * 10;
+  const int64_t long_net_threshold = static_cast<int64_t>(tile_size) * 12;
+  const int64_t medium_net_threshold = static_cast<int64_t>(tile_size) * 5;
   if (baseline_score.wirelength >= long_net_threshold) {
-    return std::max<int64_t>(12, baseline_score.vias / 2 + 6);
+    return std::max<int64_t>(20, baseline_score.vias / 2 + 14);
   }
   if (baseline_score.wirelength >= medium_net_threshold) {
-    return std::max<int64_t>(5, baseline_score.vias / 3 + 3);
+    return std::max<int64_t>(9, baseline_score.vias / 3 + 7);
   }
-  return std::max<int64_t>(1, baseline_score.vias / 8);
+  return std::max<int64_t>(2, baseline_score.vias / 6 + 2);
 }
 
 SelectionPolicy buildSelectionPolicy(const RouteScore& baseline_score, int tile_size)
 {
   SelectionPolicy policy;
-  policy.via_tradeoff = 1;
-  policy.bend_tradeoff = std::max(1, tile_size / 160);
-  policy.via_guard = viaGuardForNet(baseline_score, tile_size) + 4;
-  policy.hard_via_guard = policy.via_guard * 4 + 8;
+  policy.via_tradeoff = 0;
+  policy.bend_tradeoff = std::max(1, tile_size / 420);
+  policy.via_guard = viaGuardForNet(baseline_score, tile_size) + 10;
+  policy.hard_via_guard = policy.via_guard * 8 + 48;
   policy.min_wl_improve = 1;
-  policy.wl_per_extra_via = 12;
-  policy.aggressive_wl_gain = std::max<int64_t>(4, tile_size / 3);
+  policy.wl_per_extra_via = 4;
+  policy.aggressive_wl_gain = std::max<int64_t>(2, tile_size / 8);
 
-  const int64_t medium_net_threshold = static_cast<int64_t>(tile_size) * 8;
-  const int64_t long_net_threshold = static_cast<int64_t>(tile_size) * 16;
+  const int64_t medium_net_threshold = static_cast<int64_t>(tile_size) * 5;
+  const int64_t long_net_threshold = static_cast<int64_t>(tile_size) * 10;
   if (baseline_score.wirelength >= long_net_threshold) {
     policy.long_net = true;
-    policy.via_tradeoff = 1;
-    policy.bend_tradeoff = std::max(1, tile_size / 220);
-    policy.via_guard = policy.via_guard * 7 + 28;
-    policy.hard_via_guard = policy.via_guard * 2 + 36;
+    policy.via_tradeoff = 0;
+    policy.bend_tradeoff = std::max(1, tile_size / 620);
+    policy.via_guard = policy.via_guard * 10 + 90;
+    policy.hard_via_guard = policy.via_guard * 3 + 160;
     policy.min_wl_improve = 1;
-    policy.wl_per_extra_via = 3;
-    policy.aggressive_wl_gain = std::max<int64_t>(1, tile_size / 5);
+    policy.wl_per_extra_via = 1;
+    policy.aggressive_wl_gain = std::max<int64_t>(1, tile_size / 18);
   } else if (baseline_score.wirelength >= medium_net_threshold) {
     policy.medium_net = true;
-    policy.via_tradeoff = 1;
-    policy.bend_tradeoff = std::max(1, tile_size / 180);
-    policy.via_guard = policy.via_guard * 3 + 16;
-    policy.hard_via_guard = policy.via_guard * 3 + 24;
+    policy.via_tradeoff = 0;
+    policy.bend_tradeoff = std::max(1, tile_size / 520);
+    policy.via_guard = policy.via_guard * 6 + 48;
+    policy.hard_via_guard = policy.via_guard * 4 + 96;
     policy.min_wl_improve = 1;
-    policy.wl_per_extra_via = 6;
-    policy.aggressive_wl_gain = std::max<int64_t>(2, tile_size / 4);
+    policy.wl_per_extra_via = 2;
+    policy.aggressive_wl_gain = std::max<int64_t>(1, tile_size / 14);
   }
 
   return policy;
@@ -499,6 +499,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   NetRouteMap rudy_routes = engine_->runRudyDriven();
   NetRouteMap rudy_classic_routes = engine_->runRudyClassic();
   NetRouteMap pin_density_routes = engine_->runPinDensityClassic();
+  NetRouteMap rudy_pin_hybrid_routes = engine_->runRudyPinHybrid();
   NetRouteMap astar_early_routes = engine_->runAstarEarly();
   NetRouteMap detpart_routes = engine_->runDetPartClassic();
   NetRouteMap nondet_routes = engine_->runNonDetHybrid();
@@ -555,8 +556,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   const int64_t global_base_via_budget
-      = std::max<int64_t>(16, baseline_total_vias / 4000);
-  const int64_t global_wl_to_via_credit = std::max<int64_t>(8, tile_size / 2);
+      = std::max<int64_t>(36, baseline_total_vias / 1800);
+  const int64_t global_wl_to_via_credit = std::max<int64_t>(2, tile_size / 8);
 
   int selected_from_balanced = 0;
   int selected_from_wl = 0;
@@ -597,9 +598,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int64_t cumulative_wl_gain = 0;
   int64_t cumulative_extra_vias = 0;
   const int top_trunk_nets
-      = std::max<int>(1, static_cast<int>(ordered_nets.size() / 3));
-  const int wl_priority_nets
-      = std::max<int>(1, static_cast<int>(ordered_nets.size() * 7 / 10));
+      = std::max<int>(1, static_cast<int>(ordered_nets.size() / 2));
   int net_rank = 0;
 
   for (const OrderedNet& ordered_net : ordered_nets) {
@@ -612,12 +611,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const RouteScore baseline_score = ordered_net.baseline_score;
     const SelectionPolicy policy = buildSelectionPolicy(baseline_score, tile_size);
     const bool ultra_wl_mode = net_rank < top_trunk_nets;
-    const bool wl_priority_mode = net_rank < wl_priority_nets;
     net_rank++;
-    const int64_t congestion_tradeoff
-        = (policy.long_net || policy.medium_net || ultra_wl_mode || wl_priority_mode)
-              ? 0
-              : 1;
+    const int64_t congestion_tradeoff = 0;
 
     RouteScore best_score = baseline_score;
     int64_t best_congestion_cost
@@ -686,7 +681,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                      <= emergency_budget + std::max<int64_t>(policy.via_guard, 16);
         if (ultra_override) {
           // Keep trunk routes short even when projected via usage rises.
-        } else if (wl_drop_vs_best < std::max<int64_t>(tile_size / 2, 1)
+        } else if (wl_drop_vs_best < std::max<int64_t>(tile_size / 20, 1)
                    || prospective_total_extra_vias > emergency_budget) {
           return;
         }
@@ -710,10 +705,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                           ? std::max<int64_t>(10, best_congestion_cost / 7)
                                           : std::max<int64_t>(6, best_congestion_cost / 12);
         const int64_t required_wl_drop = policy.long_net
-                                             ? std::max<int64_t>(1, tile_size / 8)
+                                             ? std::max<int64_t>(1, tile_size / 24)
                                          : ultra_wl_mode
-                                             ? std::max<int64_t>(1, tile_size / 14)
-                                             : std::max<int64_t>(1, tile_size / 5);
+                                             ? std::max<int64_t>(1, tile_size / 42)
+                                             : std::max<int64_t>(1, tile_size / 20);
         if (congestion_delta > allowed_delta && wl_drop_vs_best < required_wl_drop) {
           return;
         }
@@ -738,29 +733,29 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
     int64_t exploratory_min_wl_drop
         = policy.long_net
-              ? std::max<int64_t>(1, tile_size / 14)
-              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 12)
-                                   : std::max<int64_t>(1, tile_size / 8));
+              ? std::max<int64_t>(1, tile_size / 56)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 52)
+                                   : std::max<int64_t>(1, tile_size / 48));
     int64_t aggressive_min_wl_drop
         = policy.long_net
-              ? std::max<int64_t>(1, tile_size / 16)
-              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 14)
-                                   : std::max<int64_t>(1, tile_size / 10));
+              ? std::max<int64_t>(1, tile_size / 68)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 64)
+                                   : std::max<int64_t>(1, tile_size / 60));
     int64_t direct_min_wl_drop
         = policy.long_net
-              ? std::max<int64_t>(1, tile_size / 20)
-              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 18)
-                                   : std::max<int64_t>(1, tile_size / 14));
+              ? std::max<int64_t>(1, tile_size / 96)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 90)
+                                   : std::max<int64_t>(1, tile_size / 84));
     int64_t ultra_direct_min_wl_drop
         = policy.long_net
-              ? std::max<int64_t>(1, tile_size / 24)
-              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 22)
-                                   : std::max<int64_t>(1, tile_size / 18));
+              ? std::max<int64_t>(1, tile_size / 120)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 112)
+                                   : std::max<int64_t>(1, tile_size / 104));
     if (ultra_wl_mode) {
-      exploratory_min_wl_drop = std::max<int64_t>(1, tile_size / 24);
-      aggressive_min_wl_drop = std::max<int64_t>(1, tile_size / 26);
-      direct_min_wl_drop = std::max<int64_t>(1, tile_size / 28);
-      ultra_direct_min_wl_drop = std::max<int64_t>(1, tile_size / 30);
+      exploratory_min_wl_drop = std::max<int64_t>(1, tile_size / 120);
+      aggressive_min_wl_drop = std::max<int64_t>(1, tile_size / 140);
+      direct_min_wl_drop = std::max<int64_t>(1, tile_size / 180);
+      ultra_direct_min_wl_drop = std::max<int64_t>(1, tile_size / 220);
     }
     consider(balanced_routes, RouteSource::kNewgrBalanced, 0, false);
     consider(wirelength_routes, RouteSource::kNewgrWirelength, 0, false);
@@ -796,6 +791,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider(rudy_classic_routes,
              RouteSource::kNewgrRudy,
              aggressive_min_wl_drop,
+             true);
+    consider(rudy_pin_hybrid_routes,
+             RouteSource::kNewgrRudy,
+             direct_min_wl_drop,
              true);
     consider(astar_early_routes,
              RouteSource::kNewgrAstarEarly,
@@ -872,6 +871,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     maybeUpdateChampion(astar_routes, RouteSource::kNewgrAstar);
     maybeUpdateChampion(rudy_routes, RouteSource::kNewgrRudy);
     maybeUpdateChampion(rudy_classic_routes, RouteSource::kNewgrRudy);
+    maybeUpdateChampion(rudy_pin_hybrid_routes, RouteSource::kNewgrRudy);
     maybeUpdateChampion(astar_early_routes, RouteSource::kNewgrAstarEarly);
     maybeUpdateChampion(detpart_routes, RouteSource::kNewgrDetPartClassic);
     maybeUpdateChampion(nondet_routes, RouteSource::kNewgrNonDetHybrid);
@@ -894,14 +894,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                        ? std::max<int64_t>(10, best_congestion_cost / 5)
                                        : std::max<int64_t>(6, best_congestion_cost / 8));
       const int64_t champion_min_wl_gain
-          = policy.long_net ? std::max<int64_t>(1, tile_size / 12)
+          = policy.long_net ? std::max<int64_t>(1, tile_size / 36)
                             : (policy.medium_net
-                                   ? std::max<int64_t>(1, tile_size / 10)
-                                   : std::max<int64_t>(1, tile_size / 8));
+                                   ? std::max<int64_t>(1, tile_size / 44)
+                                   : std::max<int64_t>(1, tile_size / 52));
       const int64_t champion_force_gain
-          = ultra_wl_mode ? std::max<int64_t>(2, tile_size / 4)
-                          : policy.long_net ? std::max<int64_t>(2, tile_size / 3)
-                                            : std::max<int64_t>(2, tile_size / 2);
+          = ultra_wl_mode ? std::max<int64_t>(1, tile_size / 16)
+                          : policy.long_net ? std::max<int64_t>(1, tile_size / 14)
+                                            : std::max<int64_t>(1, tile_size / 12);
       const double best_congestion_density
           = congestionRiskDensity(best_score, best_congestion_cost, tile_size);
       const double champion_congestion_density
@@ -939,7 +939,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const int64_t long_override_gain = std::max<int64_t>(1, tile_size / 8);
       const int64_t trunk_override_gain = std::max<int64_t>(1, tile_size / 4);
       const int64_t champion_via_cap
-          = policy.hard_via_guard * 2 + (policy.long_net ? 48 : 24);
+          = policy.hard_via_guard * 3 + (policy.long_net ? 80 : 36);
       const bool long_wl_override
           = policy.long_net && wl_drop_vs_best >= long_override_gain
             && champion_net_extra_vias <= champion_via_cap;
@@ -949,7 +949,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             && congestion_delta <= allowed_congestion_delta;
       const int64_t ultra_min_gain = std::max<int64_t>(1, tile_size / 12);
       const int64_t ultra_force_gain = std::max<int64_t>(2, tile_size / 5);
-      const int64_t ultra_via_cap = policy.hard_via_guard * 3 + 80;
+      const int64_t ultra_via_cap = policy.hard_via_guard * 4 + 180;
       const bool ultra_trunk_override
           = ultra_wl_mode && wl_drop_vs_best >= ultra_min_gain
             && champion_net_extra_vias <= ultra_via_cap
@@ -958,7 +958,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const bool ultra_direct_override
           = ultra_wl_mode
             && wl_drop_vs_best >= std::max<int64_t>(1, tile_size / 16)
-            && champion_net_extra_vias <= policy.hard_via_guard * 4 + 140
+            && champion_net_extra_vias <= policy.hard_via_guard * 6 + 240
             && (congestion_delta <= std::max<int64_t>(32, best_congestion_cost)
                 || wl_drop_vs_best >= std::max<int64_t>(2, tile_size / 6));
 
@@ -978,6 +978,64 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                           + congestion_tradeoff * wl_champion_congestion_cost;
         selected_route = wl_champion_route;
         selected_source = wl_champion_source;
+      }
+    }
+
+    // Hard WL clamp for high-priority trunks: for long and top-ranked nets,
+    // force-pick the shortest direct-style candidate if it is meaningfully
+    // shorter and within a very loose via cap.
+    if (ultra_wl_mode || policy.long_net || policy.medium_net) {
+      const GRoute* forced_route = selected_route;
+      RouteScore forced_score = best_score;
+      RouteSource forced_source = selected_source;
+
+      auto consider_forced = [&](const NetRouteMap& candidate_routes,
+                                 RouteSource source) {
+        const auto candidate_it = candidate_routes.find(ordered_net.db_net);
+        if (candidate_it == candidate_routes.end()) {
+          return;
+        }
+        const RouteScore candidate_score = scoreRoute(candidate_it->second);
+        if (candidate_score.wirelength >= forced_score.wirelength) {
+          return;
+        }
+        const int64_t candidate_extra_vias
+            = std::max<int64_t>(0, candidate_score.vias - baseline_score.vias);
+        const int64_t forced_via_cap
+            = policy.hard_via_guard * 10 + (ultra_wl_mode ? 560 : 360);
+        if (candidate_extra_vias > forced_via_cap) {
+          return;
+        }
+        forced_route = &candidate_it->second;
+        forced_score = candidate_score;
+        forced_source = source;
+      };
+
+      consider_forced(direct_wl_routes, RouteSource::kNewgrDirectWirelength);
+      consider_forced(ultra_direct_wl_routes,
+                      RouteSource::kNewgrUltraDirectWirelength);
+      consider_forced(rudy_classic_routes, RouteSource::kNewgrRudy);
+      consider_forced(rudy_pin_hybrid_routes, RouteSource::kNewgrRudy);
+
+      const int64_t forced_wl_gain
+          = std::max<int64_t>(0, best_score.wirelength - forced_score.wirelength);
+      const int64_t forced_min_gain
+          = ultra_wl_mode ? std::max<int64_t>(1, tile_size / 280)
+                          : std::max<int64_t>(1, tile_size / 180);
+      if (forced_route != selected_route && forced_wl_gain >= forced_min_gain) {
+        selected_route = forced_route;
+        selected_source = forced_source;
+        best_score = forced_score;
+        best_congestion_cost = routeCongestionPenalty(*forced_route,
+                                                      grid,
+                                                      origin_x,
+                                                      origin_y,
+                                                      tile_size,
+                                                      selected_usage,
+                                                      soft_capacities);
+        best_total_cost = effectiveWirelengthCost(
+                              baseline_score, forced_score, policy)
+                          + congestion_tradeoff * best_congestion_cost;
       }
     }
 
@@ -1099,13 +1157,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
       const int64_t via_delta = candidate_score.vias - current_score.vias;
       const int64_t min_wl_gain
-          = policy.long_net ? std::max<int64_t>(1, tile_size / 9)
+          = policy.long_net ? std::max<int64_t>(1, tile_size / 32)
                             : (policy.medium_net
-                                   ? std::max<int64_t>(1, tile_size / 7)
-                                   : std::max<int64_t>(1, tile_size / 5));
+                                   ? std::max<int64_t>(1, tile_size / 38)
+                                   : std::max<int64_t>(1, tile_size / 44));
       const int64_t force_wl_gain
-          = policy.long_net ? std::max<int64_t>(2, tile_size / 2)
-                            : std::max<int64_t>(2, tile_size / 3);
+          = policy.long_net ? std::max<int64_t>(1, tile_size / 11)
+                            : std::max<int64_t>(1, tile_size / 10);
       const bool via_safe
           = via_delta <= std::max<int64_t>(2, policy.via_guard / 2)
             || wl_drop_vs_current
@@ -1158,6 +1216,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider_refine(astar_routes);
     consider_refine(rudy_routes);
     consider_refine(rudy_classic_routes);
+    consider_refine(rudy_pin_hybrid_routes);
     consider_refine(astar_early_routes);
     consider_refine(detpart_routes);
     consider_refine(nondet_routes);
@@ -1228,7 +1287,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const RouteScore candidate_score = scoreRoute(candidate_it->second);
       const int64_t wl_drop_vs_current = std::max<int64_t>(
           0, current_score.wirelength - candidate_score.wirelength);
-      if (wl_drop_vs_current < std::max<int64_t>(1, tile_size / 14)) {
+      if (wl_drop_vs_current < std::max<int64_t>(1, tile_size / 80)) {
         return;
       }
       if (candidate_score.wirelength >= best_rescue_score.wirelength) {
@@ -1237,7 +1296,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
       const int64_t candidate_extra_vias
           = std::max<int64_t>(0, candidate_score.vias - baseline_score.vias);
-      const int64_t rescue_via_cap = policy.hard_via_guard * 3 + 80;
+      const int64_t rescue_via_cap = policy.hard_via_guard * 5 + 220;
       if (candidate_extra_vias > rescue_via_cap) {
         return;
       }
@@ -1254,7 +1313,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = candidate_congestion_cost - current_congestion_cost;
       const int64_t allowed_congestion_delta
           = std::max<int64_t>(20, current_congestion_cost / 2);
-      const int64_t force_wl_gain = std::max<int64_t>(2, tile_size / 5);
+      const int64_t force_wl_gain = std::max<int64_t>(1, tile_size / 16);
       if (congestion_delta > allowed_congestion_delta
           && wl_drop_vs_current < force_wl_gain) {
         return;
@@ -1275,6 +1334,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider_rescue(astar_routes);
     consider_rescue(rudy_routes);
     consider_rescue(rudy_classic_routes);
+    consider_rescue(rudy_pin_hybrid_routes);
     consider_rescue(astar_early_routes);
     consider_rescue(detpart_routes);
     consider_rescue(nondet_routes);
@@ -1373,7 +1433,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const int64_t allowed_congestion_delta
           = std::max<int64_t>(30, current_congestion_cost * 2 + 12);
       if (congestion_delta > allowed_congestion_delta
-          && wl_drop_vs_current < std::max<int64_t>(2, tile_size / 9)) {
+          && wl_drop_vs_current < std::max<int64_t>(1, tile_size / 22)) {
         return;
       }
 
@@ -1400,6 +1460,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider_polish(astar_routes);
     consider_polish(rudy_routes);
     consider_polish(rudy_classic_routes);
+    consider_polish(rudy_pin_hybrid_routes);
     consider_polish(astar_early_routes);
     consider_polish(detpart_routes);
     consider_polish(nondet_routes);
@@ -1434,7 +1495,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int64_t wl_crush_via_delta = 0;
   int wl_crush_rank = 0;
   const int wl_crush_nets = std::max<int>(
-      1, static_cast<int>(ordered_nets.size() * 5 / 6));
+      1, static_cast<int>(ordered_nets.size()));
   for (const OrderedNet& ordered_net : ordered_nets) {
     if (wl_crush_rank >= wl_crush_nets) {
       break;
@@ -1495,7 +1556,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = std::max<int64_t>(0, candidate_score.vias - best_crush_score.vias);
       if (extra_vias_vs_best > 0
           && wl_drop_vs_best
-                 < std::max<int64_t>(1, extra_vias_vs_best / 2)) {
+                 < std::max<int64_t>(1, extra_vias_vs_best / 4)) {
         return;
       }
 
@@ -1516,8 +1577,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                                        current_congestion_cost * 3 / 2 + 12)
                                    : std::max<int64_t>(16, current_congestion_cost + 8));
       const int64_t force_wl_gain
-          = policy.long_net ? std::max<int64_t>(2, tile_size / 7)
-                            : std::max<int64_t>(2, tile_size / 6);
+          = policy.long_net ? std::max<int64_t>(1, tile_size / 18)
+                            : std::max<int64_t>(1, tile_size / 20);
       if (congestion_delta > allowed_congestion_delta
           && wl_drop_vs_best < force_wl_gain) {
         return;
@@ -1538,6 +1599,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider_crush(astar_routes);
     consider_crush(rudy_routes);
     consider_crush(rudy_classic_routes);
+    consider_crush(rudy_pin_hybrid_routes);
     consider_crush(astar_early_routes);
     consider_crush(detpart_routes);
     consider_crush(nondet_routes);
@@ -1626,6 +1688,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
   }
   for (const auto& [db_net, route] : rudy_classic_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_rudy++;
+    }
+  }
+  for (const auto& [db_net, route] : rudy_pin_hybrid_routes) {
     if (routes.find(db_net) == routes.end()) {
       routes.emplace(db_net, route);
       inserted_from_rudy++;

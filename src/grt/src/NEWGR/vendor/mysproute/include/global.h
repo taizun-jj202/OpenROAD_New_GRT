@@ -14,7 +14,7 @@ float max_rudy;
 
 // Runtime knobs used by NEWGR to generate diverse route portfolios.
 int NEWGR_CAP_MODEL
-    = 0;  // 0=tuned default, 1=legacy squeeze, 2=direct-WL, 3=ultra-direct.
+    = 0;  // 0=tuned default, 1=legacy squeeze, 2=direct-WL, 3=ultra-direct, 4=hybrid direct+density.
 float NEWGR_CAP_SCALE = 1.0f;
 float NEWGR_RUDY_WEIGHT_SCALE = 1.0f;
 float NEWGR_PIN_DENSITY_SCALE = 1.0f;
@@ -99,6 +99,24 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 				adj = 1.0f;
 			else if (rudy > 12.0f)
 				adj *= 0.92f;
+		} else if (NEWGR_CAP_MODEL == 4) {
+			// Hybrid profile: direct trunks in sparse regions, CUGR-like squeeze
+			// only inside sustained hotspots.
+			if (layerID <= 0)
+				adj = 0.98f;
+			else if (layerID == 1)
+				adj = 0.72f + (1.00f - 0.72f) / (1.0f + exp(1.1f * (rudy - 6.4f)));
+			else if (layerID == 2)
+				adj = 0.74f + (1.00f - 0.74f) / (1.0f + exp(1.1f * (rudy - 6.6f)));
+			else if (layerID >= 3 && layerID <= 4)
+				adj = 0.90f + (1.00f - 0.90f) / (1.0f + exp(0.95f * (rudy - 7.2f)));
+			else if (layerID >= 5)
+				adj = 0.96f;
+
+			if (rudy < 3.2f)
+				adj = (adj + 0.07f > 1.0f) ? 1.0f : (adj + 0.07f);
+			else if (rudy > 10.5f)
+				adj *= 0.88f;
 		} else {
 			if(layerID <= 0) //metal1
 				adj = 0.95f;
