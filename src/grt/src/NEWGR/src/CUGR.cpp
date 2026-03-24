@@ -73,10 +73,10 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
                              const double allowed_overflow_increase_for_wl_gain)
 {
   constexpr double kOverflowEpsilon = 1e-6;
-  constexpr double kStrongOverflowDropThreshold = 20.0;
-  constexpr int64_t kStrongWireGain = 6;
+  constexpr double kStrongOverflowDropThreshold = 28.0;
+  constexpr int64_t kStrongWireGain = 4;
   constexpr int64_t kModerateWireGain = 2;
-  constexpr int64_t kMaxWirelengthTradeoff = 20;
+  constexpr int64_t kMaxWirelengthTradeoff = 10;
 
   // Wirelength-first objective:
   // keep shorter candidates as long as they don't cause a large overflow jump.
@@ -1068,15 +1068,27 @@ void CUGR::route()
 
   std::vector<int> detourIndices = netIndices;
   if (constants_.wirelength_first_refinement) {
-    detourIndices
-        = selectCriticalNets(netIndices, constants_.detour_refine_ratio);
+    double detour_ratio = constants_.detour_refine_ratio;
+    if (netIndices.size() > 512) {
+      detour_ratio = std::min(detour_ratio, 0.30);
+    } else if (netIndices.size() > 256) {
+      detour_ratio = std::min(detour_ratio, 0.36);
+    }
+    detourIndices = selectCriticalNets(netIndices, detour_ratio);
   }
   patternRouteWithDetours(detourIndices);
 
   std::vector<int> mazeIndices = detourIndices;
   if (constants_.wirelength_first_refinement) {
-    mazeIndices
-        = selectCriticalNets(detourIndices, constants_.maze_refine_ratio);
+    double maze_ratio = constants_.maze_refine_ratio;
+    if (detourIndices.size() > 160) {
+      maze_ratio = std::min(maze_ratio, 0.08);
+    } else if (detourIndices.size() > 80) {
+      maze_ratio = std::min(maze_ratio, 0.10);
+    } else if (detourIndices.size() > 40) {
+      maze_ratio = std::min(maze_ratio, 0.12);
+    }
+    mazeIndices = selectCriticalNets(detourIndices, maze_ratio);
   }
   mazeRoute(mazeIndices);
   wirelengthRecovery(allNetIndices);
@@ -1102,6 +1114,9 @@ std::vector<int> CUGR::selectCriticalNets(
     int hpwl;
     double stretch;
     bool critical;
+    uint64_t excess_wirelength;
+    int cx;
+    int cy;
   };
 
   std::vector<ScoredNet> scored;
@@ -1110,12 +1125,16 @@ std::vector<int> CUGR::selectCriticalNets(
   for (const int netIndex : candidates) {
     const auto& net = gr_nets_[netIndex];
     const int overflow = grid_graph_->checkOverflow(net->getRoutingTree());
-    const int hpwl = net->getBoundingBox().hp();
+    const BoxT& bbox = net->getBoundingBox();
+    const int hpwl = bbox.hp();
     const RouteStats stats
         = measureRouteStats(grid_graph_.get(), net->getRoutingTree());
     const uint64_t approx_hpwl_dbu
         = static_cast<uint64_t>(std::max(1, hpwl))
           * static_cast<uint64_t>(gcell_span);
+    const uint64_t excess_wirelength
+        = stats.wirelength > approx_hpwl_dbu ? stats.wirelength - approx_hpwl_dbu
+                                              : 0;
     const double stretch = approx_hpwl_dbu > 0
                                ? static_cast<double>(stats.wirelength)
                                      / static_cast<double>(approx_hpwl_dbu)
@@ -1124,7 +1143,14 @@ std::vector<int> CUGR::selectCriticalNets(
         = overflow >= constants_.refinement_overflow_threshold
           || (hpwl >= constants_.refinement_hpwl_threshold
               && stretch >= constants_.refinement_stretch_threshold);
-    scored.push_back({netIndex, overflow, hpwl, stretch, critical});
+    scored.push_back({netIndex,
+                      overflow,
+                      hpwl,
+                      stretch,
+                      critical,
+                      excess_wirelength,
+                      bbox.cx(),
+                      bbox.cy()});
   }
 
   std::sort(scored.begin(),
@@ -1136,6 +1162,9 @@ std::vector<int> CUGR::selectCriticalNets(
               if (lhs.overflow != rhs.overflow) {
                 return lhs.overflow > rhs.overflow;
               }
+              if (lhs.excess_wirelength != rhs.excess_wirelength) {
+                return lhs.excess_wirelength > rhs.excess_wirelength;
+              }
               if (std::abs(lhs.stretch - rhs.stretch) > 1e-4) {
                 return lhs.stretch > rhs.stretch;
               }
@@ -1145,24 +1174,95 @@ std::vector<int> CUGR::selectCriticalNets(
   int keep = static_cast<int>(std::ceil(scored.size() * reroute_ratio));
   keep = std::max(1, std::min(keep, static_cast<int>(scored.size())));
 
-  // Always keep all critical nets to avoid starvation.
+  // Keep a wider critical-net budget without letting very large overflow sets
+  // explode runtime.
   int critical_count = 0;
   while (critical_count < static_cast<int>(scored.size())
          && scored[critical_count].critical) {
     critical_count++;
   }
-  keep = std::max(keep, critical_count);
+  const int critical_keep_budget
+      = std::min(critical_count,
+                 std::max(keep, std::max(8, keep * 2)));
+  keep = std::max(keep, critical_keep_budget);
   if (constants_.refinement_max_selected_nets > 0) {
-    keep = std::min(keep,
-                    std::max(critical_count,
-                             constants_.refinement_max_selected_nets));
+    keep = std::min(keep, constants_.refinement_max_selected_nets);
   }
+  keep = std::max(1, std::min(keep, static_cast<int>(scored.size())));
 
   std::vector<int> selected;
   selected.reserve(keep);
-  for (int i = 0; i < keep; i++) {
-    selected.push_back(scored[i].index);
+  if (keep >= 8 && keep < static_cast<int>(scored.size())) {
+    const int pool_multiplier = 2;
+    const int pool_size = std::min(static_cast<int>(scored.size()),
+                                   std::max(keep, keep * pool_multiplier));
+    std::vector<ScoredNet> pool(scored.begin(), scored.begin() + pool_size);
+    const bool sort_by_x = candidates.size() % 2 == 0;
+    std::sort(pool.begin(),
+              pool.end(),
+              [sort_by_x](const ScoredNet& lhs, const ScoredNet& rhs) {
+                const int lhs_coord = sort_by_x ? lhs.cx : lhs.cy;
+                const int rhs_coord = sort_by_x ? rhs.cx : rhs.cy;
+                if (lhs_coord != rhs_coord) {
+                  return lhs_coord < rhs_coord;
+                }
+                if (lhs.critical != rhs.critical) {
+                  return lhs.critical > rhs.critical;
+                }
+                if (lhs.overflow != rhs.overflow) {
+                  return lhs.overflow > rhs.overflow;
+                }
+                if (lhs.excess_wirelength != rhs.excess_wirelength) {
+                  return lhs.excess_wirelength > rhs.excess_wirelength;
+                }
+                if (std::abs(lhs.stretch - rhs.stretch) > 1e-4) {
+                  return lhs.stretch > rhs.stretch;
+                }
+                return lhs.hpwl > rhs.hpwl;
+              });
+
+    const int batch_count = std::clamp(8, 2, std::max(2, keep));
+    std::vector<std::vector<int>> batches(batch_count);
+    for (int i = 0; i < pool_size; i++) {
+      batches[i % batch_count].push_back(i);
+    }
+
+    std::unordered_set<int> selected_set;
+    selected_set.reserve(keep * 2);
+    bool progress = true;
+    while (selected.size() < static_cast<size_t>(keep) && progress) {
+      progress = false;
+      for (auto& batch : batches) {
+        if (batch.empty()) {
+          continue;
+        }
+        const int idx = batch.back();
+        batch.pop_back();
+        const int net_index = pool[idx].index;
+        if (selected_set.emplace(net_index).second) {
+          selected.push_back(net_index);
+          progress = true;
+          if (selected.size() >= static_cast<size_t>(keep)) {
+            break;
+          }
+        }
+      }
+    }
+
+    for (int i = 0; i < static_cast<int>(scored.size())
+                    && selected.size() < static_cast<size_t>(keep);
+         i++) {
+      const int net_index = scored[i].index;
+      if (selected_set.emplace(net_index).second) {
+        selected.push_back(net_index);
+      }
+    }
+  } else {
+    for (int i = 0; i < keep; i++) {
+      selected.push_back(scored[i].index);
+    }
   }
+
   logger_->report("wirelength-first refinement: {} -> {} nets",
                   candidates.size(),
                   selected.size());
