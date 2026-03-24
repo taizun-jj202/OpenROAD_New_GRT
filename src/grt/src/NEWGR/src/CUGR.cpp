@@ -1092,11 +1092,11 @@ void CUGR::route()
   if (constants_.wirelength_first_refinement) {
     double maze_ratio = constants_.maze_refine_ratio;
     if (detourIndices.size() > 160) {
-      maze_ratio = std::min(maze_ratio, 0.20);
+      maze_ratio = std::min(maze_ratio, 0.16);
     } else if (detourIndices.size() > 80) {
-      maze_ratio = std::min(maze_ratio, 0.22);
+      maze_ratio = std::min(maze_ratio, 0.18);
     } else if (detourIndices.size() > 40) {
-      maze_ratio = std::min(maze_ratio, 0.24);
+      maze_ratio = std::min(maze_ratio, 0.20);
     }
     mazeIndices = selectCriticalNets(detourIndices, maze_ratio);
   }
