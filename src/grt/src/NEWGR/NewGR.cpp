@@ -3860,6 +3860,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                                       0,
                                                       0.12);
 
+    fused_swaps += applyRouterDonorMinWirelengthFusion(polish.routes,
+                                                       polish_donors,
+                                                       tile_size,
+                                                       x_min,
+                                                       y_min,
+                                                       x_grids,
+                                                       y_grids,
+                                                       hotspot_map,
+                                                       1,
+                                                       0.0,
+                                                       0,
+                                                       4,
+                                                       0.10,
+                                                       0.55,
+                                                       1.00,
+                                                       1.08);
+
     polish.metrics = compute_metrics(polish.routes);
     logger_->info(
         GNR,
@@ -3870,6 +3887,102 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         polish.metrics.via_count,
         fused_swaps);
     scenario_results.push_back(std::move(polish));
+  }
+
+  if (has_best_wirelength) {
+    // WL-locked via-stable fusion:
+    // 1) Seed from the shortest known envelope.
+    // 2) Borrow low-via alternatives where WL impact is tiny.
+    // 3) Re-tighten long/xlong nets to recover Manhattan length.
+    ScenarioResult wl_locked;
+    wl_locked.name = "wl-locked-via-stable-fusion";
+    if (ScenarioResult* donor = find_scenario_result("ultra-minwl-envelope-fusion")) {
+      wl_locked.routes = donor->routes;
+    } else if (ScenarioResult* donor = find_scenario_result("router-donor-minwl-fusion")) {
+      wl_locked.routes = donor->routes;
+    } else if (ScenarioResult* donor = find_scenario_result("hyper-collapse-fusion")) {
+      wl_locked.routes = donor->routes;
+    } else {
+      wl_locked.routes = best_wirelength_routes;
+    }
+
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+
+    std::vector<const NetRouteMap*> lock_donors;
+    lock_donors.reserve(16);
+    for (const char* donor_name : {"consensus-via-capped-polish",
+                                   "consensus-collapse-fusion",
+                                   "ultra-minwl-envelope-fusion",
+                                   "router-donor-minwl-fusion",
+                                   "hyper-collapse-fusion",
+                                   "longnet-priority-fusion",
+                                   "dr-stable-shortest-fusion",
+                                   "collapse-router-minwl-fusion",
+                                   "router-spine-balance-fusion",
+                                   "stabilized-dr-fusion",
+                                   "cross-router-wirelength-fusion",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting",
+                                   "cugr-router-donor",
+                                   "sproute-router-donor",
+                                   "sporder-shortest"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        lock_donors.push_back(&donor->routes);
+      }
+    }
+
+    int fused_swaps = applyViaAwareStabilizationFusion(wl_locked.routes,
+                                                       lock_donors,
+                                                       tile_size,
+                                                       x_min,
+                                                       y_min,
+                                                       x_grids,
+                                                       y_grids,
+                                                       hotspot_map);
+
+    fused_swaps += applyDrStableShortestFusion(wl_locked.routes,
+                                               lock_donors,
+                                               tile_size,
+                                               x_min,
+                                               y_min,
+                                               x_grids,
+                                               y_grids,
+                                               hotspot_map,
+                                               1,
+                                               0.0,
+                                               1,
+                                               4,
+                                               0.10,
+                                               0.55,
+                                               1.03,
+                                               1.28);
+
+    fused_swaps += applyLongNetPriorityFusion(wl_locked.routes,
+                                              lock_donors,
+                                              tile_size,
+                                              x_min,
+                                              y_min,
+                                              x_grids,
+                                              y_grids,
+                                              hotspot_map,
+                                              1,
+                                              36,
+                                              5.40);
+
+    wl_locked.metrics = compute_metrics(wl_locked.routes);
+    logger_->info(
+        GNR,
+        6031,
+        "NEWGR scenario {} [wl-locked]: wirelength {:.0f} um, vias {}, fused nets {}",
+        wl_locked.name,
+        wl_locked.metrics.wirelength_um,
+        wl_locked.metrics.via_count,
+        fused_swaps);
+    scenario_results.push_back(std::move(wl_locked));
   }
 
   const long baseline_vias = baseline.metrics.via_count;
@@ -4090,6 +4203,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           = polish->metrics.via_count < consensus->metrics.via_count;
       if (polish_near_consensus && polish_via_better) {
         consensus_like = polish;
+      }
+    }
+    if (ScenarioResult* wl_locked
+        = find_scenario_result("wl-locked-via-stable-fusion")) {
+      const bool wl_locked_near_consensus
+          = wl_locked->metrics.wirelength_dbu
+            <= (consensus_like->metrics.wirelength_dbu + wl_relax);
+      const bool wl_locked_preferred
+          = wl_locked->metrics.via_count < consensus_like->metrics.via_count
+            || (wl_locked->metrics.via_count == consensus_like->metrics.via_count
+                && wl_locked->metrics.wirelength_dbu
+                       < consensus_like->metrics.wirelength_dbu);
+      if (wl_locked_near_consensus && wl_locked_preferred) {
+        consensus_like = wl_locked;
       }
     }
 
