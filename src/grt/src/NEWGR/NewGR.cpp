@@ -4168,23 +4168,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                                       0,
                                                       0.12);
 
-    fused_swaps += applyRouterDonorMinWirelengthFusion(polish.routes,
-                                                       polish_donors,
-                                                       tile_size,
-                                                       x_min,
-                                                       y_min,
-                                                       x_grids,
-                                                       y_grids,
-                                                       hotspot_map,
-                                                       1,
-                                                       0.0,
-                                                       0,
-                                                       4,
-                                                       0.10,
-                                                       0.55,
-                                                       1.00,
-                                                       1.08);
-
     polish.metrics = compute_metrics(polish.routes);
     logger_->info(
         GNR,
@@ -4490,13 +4473,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   const long baseline_vias = baseline.metrics.via_count;
-  auto better_result = [](const ScenarioResult& lhs,
-                          const ScenarioResult& rhs) {
+  long dbu_per_micron = 1;
+  if (grouter_->db_ != nullptr && grouter_->db_->getTech() != nullptr) {
+    dbu_per_micron
+        = std::max<long>(grouter_->db_->getTech()->getDbUnitsPerMicron(), 1);
+  }
+  const long wl_near_tie_window = 10L * dbu_per_micron;
+
+  auto better_result = [wl_near_tie_window](const ScenarioResult& lhs,
+                                            const ScenarioResult& rhs) {
     const long lhs_wl = lhs.metrics.wirelength_dbu;
     const long rhs_wl = rhs.metrics.wirelength_dbu;
-    // Wirelength-first arbitration with a narrow via tie window.
-    const long wl_tie_window
-        = std::max<long>(220, std::max(lhs_wl, rhs_wl) / 600000);
+    // Wirelength-first arbitration with a practical near-tie window.
+    const long wl_tie_window = std::max<long>(
+        220L,
+        std::max<long>(wl_near_tie_window, std::max(lhs_wl, rhs_wl) / 600000));
     const long wl_delta = lhs_wl > rhs_wl ? lhs_wl - rhs_wl : rhs_wl - lhs_wl;
     if (wl_delta > wl_tie_window) {
       return lhs_wl < rhs_wl;
@@ -4572,9 +4563,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             })
             ->metrics.wirelength_dbu;
   const long dr_window_tight
-      = std::max<long>(24L * proxy_tile_size, best_wirelength / 95L);
+      = std::max<long>(wl_near_tie_window, 12L * proxy_tile_size);
   const long dr_window_relaxed
-      = std::max<long>(38L * proxy_tile_size, best_wirelength / 72L);
+      = std::max<long>(2L * wl_near_tie_window, 20L * proxy_tile_size);
   const long dr_via_guard_tight = baseline_vias > 0
                                       ? static_cast<long>(std::ceil(1.10 * baseline_vias))
                                       : std::numeric_limits<long>::max();
@@ -4648,11 +4639,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Apply DR-aware decision after replay/fallback logic so it is not
   // accidentally overwritten by scenario re-execution.
   if (dr_aware_choice != nullptr && dr_aware_choice->name != final_result.name) {
+    const long dr_wl_soft_guard = wl_near_tie_window;
+    const long dr_via_gain_needed = std::max<long>(40L, baseline_vias / 7000L);
+    const double dr_proxy_improvement_needed
+        = static_cast<double>(2 * proxy_tile_size);
+    const double final_proxy_score = compute_detailed_route_proxy(final_result.routes);
+    const double dr_proxy_score
+        = compute_detailed_route_proxy(dr_aware_choice->routes);
     const bool wl_not_worse = dr_aware_choice->metrics.wirelength_dbu
                               <= final_result.metrics.wirelength_dbu;
+    const bool wl_near_tie
+        = dr_aware_choice->metrics.wirelength_dbu
+          <= (final_result.metrics.wirelength_dbu + dr_wl_soft_guard);
     const bool via_better
         = dr_aware_choice->metrics.via_count < final_result.metrics.via_count;
-    if (wl_not_worse && via_better) {
+    const long via_gain
+        = final_result.metrics.via_count - dr_aware_choice->metrics.via_count;
+    const bool via_materially_better = via_gain >= dr_via_gain_needed;
+    const bool proxy_materially_better
+        = dr_proxy_score + dr_proxy_improvement_needed < final_proxy_score;
+    if ((wl_not_worse && via_better)
+        || (wl_near_tie && via_materially_better && proxy_materially_better)) {
       final_result = *dr_aware_choice;
       logger_->info(GNR,
                     6025,
@@ -4664,13 +4671,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   }
 
   if (ScenarioResult* consensus = find_scenario_result("consensus-collapse-fusion")) {
-    long dbu_per_micron = 1;
-    if (grouter_->db_ != nullptr && grouter_->db_->getTech() != nullptr) {
-      dbu_per_micron
-          = std::max<long>(grouter_->db_->getTech()->getDbUnitsPerMicron(), 1);
-    }
     const long wl_relax = 12L * dbu_per_micron;
-    const long via_gain_needed = std::max<long>(200, baseline_vias / 700);
+    const long via_gain_needed = std::max<long>(40L, baseline_vias / 7000L);
+    const double proxy_improvement_needed
+        = static_cast<double>(2 * proxy_tile_size);
     ScenarioResult* consensus_like = consensus;
     if (ScenarioResult* polish
         = find_scenario_result("consensus-via-capped-polish")) {
@@ -4699,12 +4703,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const bool near_tie_wl
         = consensus_like->metrics.wirelength_dbu
           <= (final_result.metrics.wirelength_dbu + wl_relax);
-    const bool wl_not_worse
-        = consensus_like->metrics.wirelength_dbu <= final_result.metrics.wirelength_dbu;
     const long via_gain
         = final_result.metrics.via_count - consensus_like->metrics.via_count;
     const bool via_materially_better = via_gain >= via_gain_needed;
-    if (near_tie_wl && wl_not_worse && via_materially_better
+    const double consensus_proxy
+        = compute_detailed_route_proxy(consensus_like->routes);
+    const double final_proxy = compute_detailed_route_proxy(final_result.routes);
+    const bool proxy_materially_better
+        = consensus_proxy + proxy_improvement_needed < final_proxy;
+    if (near_tie_wl && via_materially_better && proxy_materially_better
         && consensus_like->name != final_result.name) {
       final_result = *consensus_like;
       logger_->info(GNR,
