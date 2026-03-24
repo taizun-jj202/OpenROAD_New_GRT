@@ -3661,9 +3661,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &wirelength_sweep_hybrid,
         &extreme_sweep_hybrid,
         &radical_refine_hybrid};
-    for (size_t alt_idx = 0; alt_idx < newgr_alternate_routes.size(); ++alt_idx) {
-      envelope_donors.push_back(&newgr_alternate_routes[alt_idx]);
-    }
     NetRouteMap envelope_hybrid = buildRadicalEnvelopeHybrid(
         radical_refine_hybrid,
         envelope_donors,
@@ -3697,9 +3694,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &extreme_sweep_hybrid,
         &radical_refine_hybrid,
         &envelope_hybrid};
-    for (size_t alt_idx = 0; alt_idx < newgr_alternate_routes.size(); ++alt_idx) {
-      wirelength_oracle_donors.push_back(&newgr_alternate_routes[alt_idx]);
-    }
+    // Late-stage optimization is consensus-locked to stable route families.
+    // Alternate profile banks are intentionally excluded here because they can
+    // improve global WL while regressing detailed-route WL due to guide churn.
     NetRouteMap wirelength_oracle_hybrid = buildWirelengthOracleHybrid(
         envelope_hybrid,
         wirelength_oracle_donors,
@@ -3723,9 +3720,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &radical_refine_hybrid,
         &envelope_hybrid,
         &wirelength_oracle_hybrid};
-    for (size_t alt_idx = 0; alt_idx < newgr_alternate_routes.size(); ++alt_idx) {
-      closure_donors.push_back(&newgr_alternate_routes[alt_idx]);
-    }
     NetRouteMap wirelength_closure_hybrid = buildWirelengthClosureHybrid(
         wirelength_oracle_hybrid,
         closure_donors,
@@ -3750,9 +3744,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &envelope_hybrid,
         &wirelength_oracle_hybrid,
         &wirelength_closure_hybrid};
-    for (size_t alt_idx = 0; alt_idx < newgr_alternate_routes.size(); ++alt_idx) {
-      fusion_donors.push_back(&newgr_alternate_routes[alt_idx]);
-    }
     NetRouteMap wirelength_fusion_hybrid = buildWirelengthFusionHybrid(
         wirelength_closure_hybrid,
         fusion_donors,
