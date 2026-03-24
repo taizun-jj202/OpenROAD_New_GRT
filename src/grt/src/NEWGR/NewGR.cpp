@@ -5709,6 +5709,36 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
 
       if (radical_candidate != nullptr) {
+        if (preferred_wl_ptr == wl_layerbudget_ptr && wl_layerbudget_ptr != nullptr
+            && radical_candidate != wl_layerbudget_ptr) {
+          const long layerbudget_wl_gain
+              = wl_anchor->metrics.wirelength_dbu
+                - wl_layerbudget_ptr->metrics.wirelength_dbu;
+          const long layerbudget_via_rise
+              = static_cast<long>(wl_layerbudget_ptr->metrics.via_count)
+                - static_cast<long>(wl_anchor->metrics.via_count);
+          const long layerbudget_via_rise_cap = std::max<long>(
+              42L,
+              static_cast<long>(std::ceil(
+                  static_cast<double>(wl_anchor->metrics.via_count) * 0.00042)));
+          const long layerbudget_detour_guard = std::max<long>(tile_size * 4L, 2200L);
+          const long layerbudget_high_layer_floor = std::max<long>(
+              tile_size * 14L,
+              static_cast<long>(std::ceil(
+                  static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.985)));
+          const bool preserve_layerbudget_mix
+              = layerbudget_wl_gain >= min_wl_gain / 2L && layerbudget_via_rise >= 0
+                && layerbudget_via_rise <= layerbudget_via_rise_cap
+                && wl_layerbudget_ptr->metrics.detour_dbu
+                       <= wl_anchor->metrics.detour_dbu + layerbudget_detour_guard
+                && wl_layerbudget_ptr->metrics.high_layer_dbu
+                       >= layerbudget_high_layer_floor
+                && wl_layerbudget_ptr->metrics.overflow_edges
+                       <= wl_anchor->metrics.overflow_edges;
+          if (preserve_layerbudget_mix) {
+            radical_candidate = wl_layerbudget_ptr;
+          }
+        }
         preferred_wl_ptr = radical_candidate;
         logger_->info(
             GNR,
@@ -6535,19 +6565,52 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       if (elastic_wl_ptr != nullptr
           && (forced_wl_ptr == nullptr
               || wirelength_with_dr_proxy_tie_better(*elastic_wl_ptr, *forced_wl_ptr))) {
-        logger_->info(
-            GNR,
-            6036,
-            "NEWGR elastic WL promotion selecting '{}' over anchor '{}' "
-            "(wl gain {}, via delta {}, detour delta {}, high-layer delta {}).",
-            elastic_wl_ptr->name,
-            wl_anchor->name,
-            wl_anchor->metrics.wirelength_dbu - elastic_wl_ptr->metrics.wirelength_dbu,
-            elastic_wl_ptr->metrics.via_count - wl_anchor->metrics.via_count,
-            elastic_wl_ptr->metrics.detour_dbu - wl_anchor->metrics.detour_dbu,
-            elastic_wl_ptr->metrics.high_layer_dbu
-                - wl_anchor->metrics.high_layer_dbu);
-        forced_wl_ptr = elastic_wl_ptr;
+        bool preserve_layerbudget_mix = false;
+        if (forced_wl_ptr == wl_layerbudget_ptr && wl_layerbudget_ptr != nullptr
+            && elastic_wl_ptr != wl_layerbudget_ptr && wl_anchor != nullptr) {
+          const long extra_vias
+              = static_cast<long>(elastic_wl_ptr->metrics.via_count)
+                - static_cast<long>(wl_layerbudget_ptr->metrics.via_count);
+          const long extra_wl_gain
+              = wl_layerbudget_ptr->metrics.wirelength_dbu
+                - elastic_wl_ptr->metrics.wirelength_dbu;
+          const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+          const long via_to_wl_exchange = std::max<long>(tile_size, 400L);
+          preserve_layerbudget_mix
+              = extra_vias > 0
+                && extra_wl_gain <= extra_vias * via_to_wl_exchange
+                && wl_layerbudget_ptr->metrics.high_layer_dbu
+                       >= wl_anchor->metrics.high_layer_dbu;
+        }
+
+        if (!preserve_layerbudget_mix) {
+          logger_->info(
+              GNR,
+              6036,
+              "NEWGR elastic WL promotion selecting '{}' over anchor '{}' "
+              "(wl gain {}, via delta {}, detour delta {}, high-layer delta {}).",
+              elastic_wl_ptr->name,
+              wl_anchor->name,
+              wl_anchor->metrics.wirelength_dbu - elastic_wl_ptr->metrics.wirelength_dbu,
+              elastic_wl_ptr->metrics.via_count - wl_anchor->metrics.via_count,
+              elastic_wl_ptr->metrics.detour_dbu - wl_anchor->metrics.detour_dbu,
+              elastic_wl_ptr->metrics.high_layer_dbu
+                  - wl_anchor->metrics.high_layer_dbu);
+          forced_wl_ptr = elastic_wl_ptr;
+        } else {
+          logger_->info(
+              GNR,
+              7347,
+              "NEWGR preserving layer-budget '{}' over elastic '{}' "
+              "(extra vias {}, extra wl gain {}, exchange threshold {}).",
+              wl_layerbudget_ptr->name,
+              elastic_wl_ptr->name,
+              static_cast<long>(elastic_wl_ptr->metrics.via_count)
+                  - static_cast<long>(wl_layerbudget_ptr->metrics.via_count),
+              wl_layerbudget_ptr->metrics.wirelength_dbu
+                  - elastic_wl_ptr->metrics.wirelength_dbu,
+              std::max<long>(std::max(grouter_->grid_->getTileSize(), 1), 400L));
+        }
       }
     }
 
@@ -6655,7 +6718,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                || drt_elastic_unlock || budgeted_lift_unlock
                || layerbudget_unlock)
               && structural_guard && layer_guard_ok && proxy_guard;
-        const bool keep_challenger = conservative_keep || radical_wl_unlock;
+        const bool layerbudget_dominance_unlock
+            = forced_wl_ptr == wl_layerbudget_ptr && wl_gain >= min_wl_gain
+              && forced_wl_ptr->metrics.via_count
+                     <= wl_anchor->metrics.via_count + layerbudget_via_rise_guard
+              && forced_wl_ptr->metrics.detour_dbu
+                     <= wl_anchor->metrics.detour_dbu + detour_guard
+              && forced_wl_ptr->metrics.high_layer_dbu >= high_layer_floor
+              && forced_wl_ptr->metrics.near_capacity_edges
+                     <= wl_anchor->metrics.near_capacity_edges + hotspot_guard
+              && forced_wl_ptr->metrics.overflow_edges
+                     <= wl_anchor->metrics.overflow_edges;
+        const bool keep_challenger
+            = conservative_keep || radical_wl_unlock
+              || layerbudget_dominance_unlock;
         if (keep_challenger) {
           logger_->info(
               GNR,
@@ -6663,7 +6739,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               "NEWGR compact dominance unlock keeping '{}' over anchor '{}' "
               "(wl gain {}, via gain {}, detour delta {}, high-layer delta {}, "
               "high-layer floor {}, radical floor {}, proxy ratio {:.3f}, "
-              "radical unlock {}).",
+              "radical unlock {}, layerbudget unlock {}).",
               forced_wl_ptr->name,
               wl_anchor->name,
               wl_gain,
@@ -6674,7 +6750,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               high_layer_floor,
               radical_high_layer_floor,
               anchor_proxy > 1e-9 ? challenger_proxy / anchor_proxy : 1.0,
-              radical_wl_unlock ? "yes" : "no");
+              radical_wl_unlock ? "yes" : "no",
+              layerbudget_dominance_unlock ? "yes" : "no");
         } else {
           logger_->info(
               GNR,
