@@ -367,8 +367,48 @@ void MazeRoute::run()
     addStartCandidate(startCandidates, maxYPin);
   }
 
-  const int maxStartCandidates
+  const int hp = box.hp();
+  const bool exhaustiveStartSweep
+      = numPseudoPins >= 10 || (numPseudoPins >= 6 && hp >= 95);
+  if (exhaustiveStartSweep) {
+    std::vector<int> orderedPins;
+    orderedPins.reserve(numPseudoPins);
+    for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
+      orderedPins.push_back(pinIndex);
+    }
+    std::stable_sort(
+        orderedPins.begin(),
+        orderedPins.end(),
+        [&](const int lhs, const int rhs) {
+          if (centerDistances[lhs] != centerDistances[rhs]) {
+            return centerDistances[lhs] < centerDistances[rhs];
+          }
+          return lhs < rhs;
+        });
+    int left = 0;
+    int right = static_cast<int>(orderedPins.size()) - 1;
+    bool pickFar = false;
+    while (left <= right) {
+      if (!pickFar) {
+        addStartCandidate(startCandidates, orderedPins[left++]);
+      } else {
+        addStartCandidate(startCandidates, orderedPins[right--]);
+      }
+      pickFar = !pickFar;
+    }
+  }
+
+  int maxStartCandidates
       = numPseudoPins >= 14 ? 8 : (numPseudoPins >= 8 ? 5 : 2);
+  if (exhaustiveStartSweep) {
+    if (numPseudoPins >= 18) {
+      maxStartCandidates = 14;
+    } else if (numPseudoPins >= 12) {
+      maxStartCandidates = 12;
+    } else {
+      maxStartCandidates = std::min(numPseudoPins, 10);
+    }
+  }
   if (startCandidates.size() > static_cast<size_t>(maxStartCandidates)) {
     startCandidates.resize(maxStartCandidates);
   }

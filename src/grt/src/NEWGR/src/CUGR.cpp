@@ -349,8 +349,8 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
   const bool extremeLongNet = (pins >= 12 || hp >= 180) && rank < 1536;
   std::vector<int> intervals{
       base_interval,
-      std::max(2, base_interval - 1),
-      std::max(2, base_interval - 2),
+      std::max(1, base_interval - 1),
+      std::max(1, base_interval - 2),
       std::min(12, base_interval + 1)};
   if (compactLongNet) {
     intervals.emplace_back(2);
@@ -360,11 +360,15 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
     // shorter reconnection opportunities without applying the runtime hit to
     // all nets.
     intervals.emplace_back(2);
+    if (pins >= 10 || hp >= 145) {
+      intervals.emplace_back(1);
+    }
   }
   if (pins >= 12 || hp >= 160) {
     intervals.emplace_back(3);
   }
   if (extremeLongNet) {
+    intervals.emplace_back(1);
     intervals.emplace_back(2);
     intervals.emplace_back(3);
     intervals.emplace_back(4);
@@ -376,7 +380,7 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
   std::vector<SparseGrid> grids;
   grids.reserve(max_candidates);
   auto addGrid = [&](int interval, int x_offset, int y_offset) {
-    interval = std::clamp(interval, 2, 12);
+    interval = std::clamp(interval, 1, 12);
     x_offset = ((x_offset % interval) + interval) % interval;
     y_offset = ((y_offset % interval) + interval) % interval;
     for (const auto& grid : grids) {
@@ -1605,6 +1609,12 @@ void CUGR::route()
   strictWirelengthCompaction();
   grid_graph_->setStageCostScales(0.0, 0.0, 0.68);
   strictWirelengthCompaction();
+  // Final ultra-polish: combine CUGR's probabilistic edge costs with a
+  // FastRoute-like willingness to use vias if it collapses detours.
+  grid_graph_->setStageCostScales(0.0, 0.0, 0.62);
+  ultraWirelengthPolish();
+  grid_graph_->setStageCostScales(0.0, 0.0, 0.56);
+  ultraWirelengthPolish();
 
   printStatistics();
   if (constants_.write_heatmap) {
