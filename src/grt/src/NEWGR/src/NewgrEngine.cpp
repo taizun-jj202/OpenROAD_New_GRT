@@ -128,6 +128,15 @@ NetRouteMap NewgrEngine::runAstarClassic()
                        /*warn_id=*/409);
 }
 
+NetRouteMap NewgrEngine::runAstarEarly()
+{
+  // Short-horizon A* keeps more direct trunks before heavy congestion-driven
+  // detours, providing a wirelength-focused alternative for portfolio merge.
+  return runWithConfig(/*max_maze_round=*/120,
+                       static_cast<int>(Algo::Astar),
+                       /*warn_id=*/410);
+}
+
 NetRouteMap NewgrEngine::runRudyDriven()
 {
   return runWithConfig(/*max_maze_round=*/200,

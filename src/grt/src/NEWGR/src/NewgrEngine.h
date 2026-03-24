@@ -50,6 +50,7 @@ class NewgrEngine
   NetRouteMap runFineGrainRefine();
   NetRouteMap runSmallNetAware();
   NetRouteMap runAstarClassic();
+  NetRouteMap runAstarEarly();
   NetRouteMap runRudyDriven();
 
   const NewgrInput& getInput() const { return input_; }
