@@ -1627,6 +1627,172 @@ int applyRouterDonorMinWirelengthFusion(
   return replaced_nets;
 }
 
+int applyDrStableShortestFusion(
+    NetRouteMap& base_routes,
+    const std::vector<const NetRouteMap*>& donor_route_sets,
+    int tile_size,
+    int x_min,
+    int y_min,
+    int x_grids,
+    int y_grids,
+    const std::map<std::int64_t, float>& hotspot_map,
+    long min_wl_gain,
+    double min_gain_ratio,
+    int short_via_slack,
+    int long_via_slack,
+    double short_hotspot_slack,
+    double long_hotspot_slack,
+    double max_short_via_ratio,
+    double max_long_via_ratio)
+{
+  int replaced_nets = 0;
+  if (base_routes.empty()) {
+    return replaced_nets;
+  }
+
+  tile_size = std::max(tile_size, 1);
+  min_wl_gain = std::max(min_wl_gain, 1L);
+  min_gain_ratio = std::clamp(min_gain_ratio, 0.0, 0.45);
+  short_via_slack = std::max(short_via_slack, 0);
+  long_via_slack = std::max(long_via_slack, short_via_slack);
+  short_hotspot_slack = std::max(short_hotspot_slack, 0.0);
+  long_hotspot_slack = std::max(long_hotspot_slack, short_hotspot_slack);
+  max_short_via_ratio = std::max(max_short_via_ratio, 1.0);
+  max_long_via_ratio = std::max(max_long_via_ratio, max_short_via_ratio);
+
+  std::vector<long> route_lengths;
+  route_lengths.reserve(base_routes.size());
+  for (const auto& [db_net, route] : base_routes) {
+    static_cast<void>(db_net);
+    const NetRouteCost cost = computeNetRouteCost(route,
+                                                  tile_size,
+                                                  x_min,
+                                                  y_min,
+                                                  x_grids,
+                                                  y_grids,
+                                                  hotspot_map);
+    route_lengths.push_back(std::max(cost.wirelength_dbu, 0L));
+  }
+  std::sort(route_lengths.begin(), route_lengths.end());
+  const auto percentile_value = [&route_lengths](double q) {
+    q = std::clamp(q, 0.0, 1.0);
+    const size_t idx = static_cast<size_t>(
+        std::floor(q * static_cast<double>(route_lengths.size() - 1)));
+    return route_lengths[idx];
+  };
+
+  const long long_threshold = percentile_value(0.66);
+  const long xlong_threshold = percentile_value(0.90);
+
+  for (auto& [db_net, base_route] : base_routes) {
+    static_cast<void>(db_net);
+    const NetRouteCost base_cost = computeNetRouteCost(base_route,
+                                                       tile_size,
+                                                       x_min,
+                                                       y_min,
+                                                       x_grids,
+                                                       y_grids,
+                                                       hotspot_map);
+    const bool is_xlong = base_cost.wirelength_dbu >= xlong_threshold;
+    const bool is_long = is_xlong || base_cost.wirelength_dbu >= long_threshold;
+
+    const GRoute* chosen_route = &base_route;
+    NetRouteCost chosen_cost = base_cost;
+
+    for (const NetRouteMap* donor_routes : donor_route_sets) {
+      if (donor_routes == nullptr) {
+        continue;
+      }
+      const auto donor_it = donor_routes->find(db_net);
+      if (donor_it == donor_routes->end()) {
+        continue;
+      }
+      if (donor_it->second.empty()) {
+        continue;
+      }
+
+      const NetRouteCost donor_cost = computeNetRouteCost(donor_it->second,
+                                                          tile_size,
+                                                          x_min,
+                                                          y_min,
+                                                          x_grids,
+                                                          y_grids,
+                                                          hotspot_map);
+      const long wl_gain = base_cost.wirelength_dbu - donor_cost.wirelength_dbu;
+      if (wl_gain <= 0) {
+        continue;
+      }
+
+      const double wl_gain_ratio
+          = static_cast<double>(wl_gain)
+            / static_cast<double>(std::max(base_cost.wirelength_dbu, 1L));
+      const long tier_min_gain = is_xlong ? std::max(1L, min_wl_gain / 3)
+                               : is_long ? std::max(1L, min_wl_gain / 2)
+                                         : min_wl_gain;
+      const double tier_min_ratio = is_xlong ? (0.60 * min_gain_ratio)
+                                   : is_long ? (0.80 * min_gain_ratio)
+                                             : min_gain_ratio;
+      if (wl_gain < tier_min_gain && wl_gain_ratio < tier_min_ratio) {
+        continue;
+      }
+
+      const int via_scale = is_xlong ? 2 : (is_long ? 3 : 4);
+      const int wl_bonus_vias
+          = static_cast<int>(wl_gain / std::max(via_scale * tile_size, 1));
+      const int via_slack = is_long ? long_via_slack : short_via_slack;
+      const int via_tier_bonus = is_xlong ? 6 : (is_long ? 3 : 1);
+      const int allowed_vias_abs
+          = base_cost.via_count + via_slack + via_tier_bonus + wl_bonus_vias;
+      const double via_ratio = is_long ? max_long_via_ratio : max_short_via_ratio;
+      const int allowed_vias_ratio = static_cast<int>(std::ceil(
+          via_ratio * static_cast<double>(std::max(base_cost.via_count, 1L))));
+      const int allowed_vias = std::min(allowed_vias_abs, allowed_vias_ratio);
+      if (donor_cost.via_count > allowed_vias) {
+        continue;
+      }
+
+      const int hotspot_scale = is_xlong ? 8 : (is_long ? 10 : 12);
+      const double wl_bonus_hotspot
+          = static_cast<double>(wl_gain)
+            / static_cast<double>(std::max(hotspot_scale * tile_size, 1));
+      const double hotspot_slack = is_long ? long_hotspot_slack : short_hotspot_slack;
+      const double allowed_hotspot
+          = base_cost.hotspot_exposure + hotspot_slack + wl_bonus_hotspot;
+      if (donor_cost.hotspot_exposure > allowed_hotspot) {
+        continue;
+      }
+
+      const long wl_gain_vs_chosen
+          = chosen_cost.wirelength_dbu - donor_cost.wirelength_dbu;
+      if (wl_gain_vs_chosen > 0 && wl_gain_vs_chosen < std::max<long>(1, tile_size / 2)
+          && donor_cost.via_count > chosen_cost.via_count
+          && donor_cost.hotspot_exposure >= chosen_cost.hotspot_exposure) {
+        continue;
+      }
+
+      const bool better = donor_cost.wirelength_dbu < chosen_cost.wirelength_dbu
+                          || (donor_cost.wirelength_dbu == chosen_cost.wirelength_dbu
+                              && donor_cost.via_count < chosen_cost.via_count)
+                          || (donor_cost.wirelength_dbu == chosen_cost.wirelength_dbu
+                              && donor_cost.via_count == chosen_cost.via_count
+                              && donor_cost.hotspot_exposure < chosen_cost.hotspot_exposure);
+      if (!better) {
+        continue;
+      }
+
+      chosen_route = &donor_it->second;
+      chosen_cost = donor_cost;
+    }
+
+    if (chosen_route != &base_route) {
+      base_route = *chosen_route;
+      replaced_nets++;
+    }
+  }
+
+  return replaced_nets;
+}
+
 int applyViaAwareStabilizationFusion(
     NetRouteMap& base_routes,
     const std::vector<const NetRouteMap*>& donor_route_sets,
@@ -3168,6 +3334,106 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(collapse_router_minwl));
   }
 
+  if (has_best_wirelength) {
+    ScenarioResult dr_stable_minwl;
+    dr_stable_minwl.name = "dr-stable-shortest-fusion";
+    if (ScenarioResult* collapse_router
+        = find_scenario_result("collapse-router-minwl-fusion")) {
+      dr_stable_minwl.routes = collapse_router->routes;
+    } else if (ScenarioResult* spine = find_scenario_result("router-spine-balance-fusion")) {
+      dr_stable_minwl.routes = spine->routes;
+    } else if (ScenarioResult* stabilized = find_scenario_result("stabilized-dr-fusion")) {
+      dr_stable_minwl.routes = stabilized->routes;
+    } else if (ScenarioResult* cross = find_scenario_result("cross-router-wirelength-fusion")) {
+      dr_stable_minwl.routes = cross->routes;
+    } else {
+      dr_stable_minwl.routes = best_wirelength_routes;
+    }
+
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+
+    std::vector<const NetRouteMap*> donor_routes;
+    donor_routes.reserve(14);
+    for (const char* donor_name : {"multi-router-wirelength-fusion",
+                                   "cross-router-wirelength-fusion",
+                                   "router-spine-balance-fusion",
+                                   "stabilized-dr-fusion",
+                                   "collapse-router-minwl-fusion",
+                                   "consensus-collapse-fusion",
+                                   "extreme-wirelength-stitch",
+                                   "radical-shortpath-fusion",
+                                   "spatial-wirelength-grafting",
+                                   "wl-direct-focused",
+                                   "cugr-router-donor",
+                                   "sproute-router-donor",
+                                   "sporder-shortest",
+                                   "baseline"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        donor_routes.push_back(&donor->routes);
+      }
+    }
+
+    int fused_swaps = applyDrStableShortestFusion(dr_stable_minwl.routes,
+                                                  donor_routes,
+                                                  tile_size,
+                                                  x_min,
+                                                  y_min,
+                                                  x_grids,
+                                                  y_grids,
+                                                  hotspot_map,
+                                                  std::max(tile_size / 6, 1),
+                                                  0.002,
+                                                  1,
+                                                  6,
+                                                  0.10,
+                                                  0.65,
+                                                  1.05,
+                                                  1.18);
+
+    std::vector<const NetRouteMap*> stabilization_donors;
+    stabilization_donors.reserve(10);
+    for (const char* donor_name : {"stabilized-dr-fusion",
+                                   "router-spine-balance-fusion",
+                                   "cross-router-wirelength-fusion",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting",
+                                   "cugr-router-donor",
+                                   "sproute-router-donor",
+                                   "sporder-shortest",
+                                   "ultra-compact-bsp",
+                                   "baseline"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        stabilization_donors.push_back(&donor->routes);
+      }
+    }
+
+    const int stabilized_swaps = applyViaAwareStabilizationFusion(
+        dr_stable_minwl.routes,
+        stabilization_donors,
+        tile_size,
+        x_min,
+        y_min,
+        x_grids,
+        y_grids,
+        hotspot_map);
+    fused_swaps += stabilized_swaps;
+
+    dr_stable_minwl.metrics = compute_metrics(dr_stable_minwl.routes);
+    logger_->info(
+        GNR,
+        6027,
+        "NEWGR scenario {} [dr-stable]: wirelength {:.0f} um, vias {}, adjusted nets {}",
+        dr_stable_minwl.name,
+        dr_stable_minwl.metrics.wirelength_um,
+        dr_stable_minwl.metrics.via_count,
+        fused_swaps);
+    scenario_results.push_back(std::move(dr_stable_minwl));
+  }
+
   if (false && has_best_wirelength) {
     ScenarioResult longnet_fusion;
     longnet_fusion.name = "longnet-priority-fusion";
@@ -3498,11 +3764,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     // 1) FastRoute-like WL dominance.
     // 2) SPRoute-like stability by suppressing via-heavy oscillatory guides.
     // 3) CUGR-like hotspot pressure to avoid late detailed-route detours.
-    const double via_weight = static_cast<double>(proxy_tile_size) * 2.35;
-    const double hotspot_weight = static_cast<double>(proxy_tile_size) * 6.90;
-    return static_cast<double>(total_wl)
-           + via_weight * static_cast<double>(total_vias)
-           + hotspot_weight * total_hotspot;
+    const double via_weight = static_cast<double>(proxy_tile_size) * 3.40;
+    const double hotspot_weight = static_cast<double>(proxy_tile_size) * 8.30;
+    double proxy = static_cast<double>(total_wl)
+                   + via_weight * static_cast<double>(total_vias)
+                   + hotspot_weight * total_hotspot;
+    if (baseline_vias > 0) {
+      const long soft_via_guard = static_cast<long>(std::ceil(1.08 * baseline_vias));
+      const long extra_vias = std::max(0L, total_vias - soft_via_guard);
+      proxy += static_cast<double>(extra_vias)
+               * (1.70 * static_cast<double>(proxy_tile_size));
+    }
+    return proxy;
   };
 
   const long best_wirelength
@@ -3513,28 +3786,48 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
             })
             ->metrics.wirelength_dbu;
-  const long dr_window = std::max<long>(18L * proxy_tile_size, best_wirelength / 110L);
-  const long dr_via_guard = baseline_vias > 0
-                                ? static_cast<long>(std::ceil(1.03 * baseline_vias))
-                                : std::numeric_limits<long>::max();
+  const long dr_window_tight
+      = std::max<long>(24L * proxy_tile_size, best_wirelength / 95L);
+  const long dr_window_relaxed
+      = std::max<long>(38L * proxy_tile_size, best_wirelength / 72L);
+  const long dr_via_guard_tight = baseline_vias > 0
+                                      ? static_cast<long>(std::ceil(1.10 * baseline_vias))
+                                      : std::numeric_limits<long>::max();
+  const long dr_via_guard_relaxed = baseline_vias > 0
+                                        ? static_cast<long>(std::ceil(1.24 * baseline_vias))
+                                        : std::numeric_limits<long>::max();
 
   ScenarioResult* dr_aware_choice = nullptr;
-  double best_dr_proxy = std::numeric_limits<double>::max();
-  for (ScenarioResult& candidate : scenario_results) {
-    if (candidate.metrics.wirelength_dbu > best_wirelength + dr_window) {
-      continue;
+  const auto choose_dr_aware = [&](long wl_window, long via_guard, bool enforce_via_guard) {
+    ScenarioResult* choice = nullptr;
+    double choice_proxy = std::numeric_limits<double>::max();
+    for (ScenarioResult& candidate : scenario_results) {
+      if (candidate.metrics.wirelength_dbu > best_wirelength + wl_window) {
+        continue;
+      }
+      // Keep via growth bounded in the DR-aware tie band. This avoids selecting
+      // guide sets that look short in GR but force detailed-route inflation.
+      if (enforce_via_guard && candidate.metrics.via_count > via_guard) {
+        continue;
+      }
+      const double proxy_score = compute_detailed_route_proxy(candidate.routes);
+      if (proxy_score < choice_proxy) {
+        choice_proxy = proxy_score;
+        choice = &candidate;
+      }
     }
-    // Keep via growth bounded in the DR-aware tie band. This avoids selecting
-    // guide sets that look short in GR but force detailed-route inflation.
-    if (candidate.metrics.via_count > dr_via_guard) {
-      continue;
-    }
+    return std::pair<ScenarioResult*, double>{choice, choice_proxy};
+  };
 
-    const double proxy_score = compute_detailed_route_proxy(candidate.routes);
-    if (proxy_score < best_dr_proxy) {
-      best_dr_proxy = proxy_score;
-      dr_aware_choice = &candidate;
-    }
+  auto dr_pick = choose_dr_aware(dr_window_tight, dr_via_guard_tight, true);
+  dr_aware_choice = dr_pick.first;
+  if (dr_aware_choice == nullptr) {
+    dr_pick = choose_dr_aware(dr_window_relaxed, dr_via_guard_relaxed, true);
+    dr_aware_choice = dr_pick.first;
+  }
+  if (dr_aware_choice == nullptr) {
+    dr_pick = choose_dr_aware(dr_window_relaxed, 0, false);
+    dr_aware_choice = dr_pick.first;
   }
 
   const ScenarioDefinition* replay_def = nullptr;
@@ -3587,7 +3880,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   const bool collapse_style_solution = final_result.name == "consensus-collapse-fusion"
                                        || final_result.name == "longnet-priority-fusion"
-                                       || final_result.name == "collapse-router-minwl-fusion";
+                                       || final_result.name == "collapse-router-minwl-fusion"
+                                       || final_result.name == "dr-stable-shortest-fusion";
   const bool apply_patching
       = final_result.name == "cugr-softcap-wirelength"
         || (!collapse_style_solution
