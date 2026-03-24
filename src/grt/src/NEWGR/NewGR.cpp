@@ -4391,12 +4391,25 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Apply DR-aware decision after replay/fallback logic so it is not
   // accidentally overwritten by scenario re-execution.
   if (dr_aware_choice != nullptr && dr_aware_choice->name != final_result.name) {
+    long dbu_per_micron = 1;
+    if (grouter_->db_ != nullptr && grouter_->db_->getTech() != nullptr) {
+      dbu_per_micron
+          = std::max<long>(grouter_->db_->getTech()->getDbUnitsPerMicron(), 1);
+    }
+    const long wl_soft_guard = 12L * dbu_per_micron;
+    const long via_gain_needed = std::max<long>(200, baseline_vias / 700);
     const bool wl_not_worse = dr_aware_choice->metrics.wirelength_dbu
                               <= final_result.metrics.wirelength_dbu;
     const bool via_better
         = dr_aware_choice->metrics.via_count < final_result.metrics.via_count;
+    const bool wl_near_tie
+        = dr_aware_choice->metrics.wirelength_dbu
+          <= (final_result.metrics.wirelength_dbu + wl_soft_guard);
+    const long via_gain
+        = final_result.metrics.via_count - dr_aware_choice->metrics.via_count;
+    const bool via_materially_better = via_gain >= via_gain_needed;
 
-    if (wl_not_worse && via_better) {
+    if ((wl_not_worse && via_better) || (wl_near_tie && via_materially_better)) {
       final_result = *dr_aware_choice;
       logger_->info(GNR,
                     6025,
@@ -4413,7 +4426,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       dbu_per_micron
           = std::max<long>(grouter_->db_->getTech()->getDbUnitsPerMicron(), 1);
     }
-    const long wl_relax = 2L * dbu_per_micron;
+    const long wl_relax = 12L * dbu_per_micron;
+    const long via_gain_needed = std::max<long>(200, baseline_vias / 700);
     ScenarioResult* consensus_like = consensus;
     if (ScenarioResult* polish
         = find_scenario_result("consensus-via-capped-polish")) {
@@ -4442,11 +4456,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const bool near_tie_wl
         = consensus_like->metrics.wirelength_dbu
           <= (final_result.metrics.wirelength_dbu + wl_relax);
-    const bool wl_not_worse
-        = consensus_like->metrics.wirelength_dbu <= final_result.metrics.wirelength_dbu;
-    const bool fewer_vias
-        = consensus_like->metrics.via_count < final_result.metrics.via_count;
-    if (near_tie_wl && wl_not_worse && fewer_vias
+    const long via_gain
+        = final_result.metrics.via_count - consensus_like->metrics.via_count;
+    const bool via_materially_better = via_gain >= via_gain_needed;
+    if (near_tie_wl && via_materially_better
         && consensus_like->name != final_result.name) {
       final_result = *consensus_like;
       logger_->info(GNR,
