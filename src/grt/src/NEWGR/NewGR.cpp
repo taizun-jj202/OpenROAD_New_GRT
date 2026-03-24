@@ -5603,6 +5603,192 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       if (radical_imported_nets > 0) {
         scenario_results.push_back(std::move(radical_fusion_result));
       }
+
+      // SPRoute-style absolute WL base with FastRoute/CUGR structural recovery:
+      // start from the absolute minimum-WL hybrid, then selectively recover
+      // vias / detour / high-layer structure from alternate mixes under a
+      // tight total wirelength giveback budget.
+      const ScenarioResult* wl_layerbudget_hybrid
+          = find_scenario("hybrid-netmix-wl-layerbudget");
+      const ScenarioResult* radical_wl_hybrid
+          = find_scenario("hybrid-netmix-radical-wl-fusion");
+      ScenarioResult absolute_via_recover_result;
+      absolute_via_recover_result.name = "hybrid-netmix-absolute-via-recover";
+      absolute_via_recover_result.routes = absolute_wl_hybrid->routes;
+
+      const long recover_wl_backoff_guard = std::max<long>(tile_size * 3L, 1800L);
+      const long recover_detour_gain_guard = std::max<long>(tile_size * 2L, 1200L);
+      const long recover_high_layer_gain_guard
+          = std::max<long>(tile_size * 2L, 900L);
+      const long recover_total_wl_backoff_budget = std::max<long>(
+          tile_size * 12000L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(absolute_wl_hybrid->metrics.wirelength_dbu)
+              * 0.0010)));
+      const long recover_via_gain_target = std::max<long>(
+          1200L,
+          static_cast<long>(std::ceil(
+              std::max(
+                  0.0,
+                  static_cast<double>(wl_hybrid->metrics.via_count
+                                      - absolute_wl_hybrid->metrics.via_count))
+              * 0.55)));
+
+      long recover_total_wl_backoff = 0L;
+      long recover_total_via_gain = 0L;
+      long recover_detour_gain_sum = 0L;
+      long recover_high_layer_gain_sum = 0L;
+      int recover_swapped_nets = 0;
+      int recover_layerbudget_imports = 0;
+      int recover_anchor_imports = 0;
+      int recover_budgeted_imports = 0;
+      int recover_radical_imports = 0;
+      int recover_balance_imports = 0;
+
+      for (auto& [db_net, selected_route] : absolute_via_recover_result.routes) {
+        if (db_net == nullptr) {
+          continue;
+        }
+        const RouteEdgeStats absolute_stats
+            = collectRouteEdgeStats(selected_route, grouter_->grid_);
+
+        const GRoute* best_route = nullptr;
+        RouteEdgeStats best_stats = absolute_stats;
+        long best_wl_backoff = 0L;
+        long best_via_gain = 0L;
+        long best_detour_gain = 0L;
+        long best_high_layer_gain = 0L;
+        double best_recover_score = 0.0;
+        int best_donor = 0;
+
+        auto consider_recover_donor = [&](const ScenarioResult* donor, int donor_id) {
+          if (donor == nullptr) {
+            return;
+          }
+          const auto donor_it = donor->routes.find(db_net);
+          if (donor_it == donor->routes.end()) {
+            return;
+          }
+          const RouteEdgeStats donor_stats
+              = collectRouteEdgeStats(donor_it->second, grouter_->grid_);
+          const long wl_backoff
+              = donor_stats.wirelength_dbu - absolute_stats.wirelength_dbu;
+          if (wl_backoff > recover_wl_backoff_guard) {
+            return;
+          }
+
+          const long via_gain
+              = static_cast<long>(donor_stats.via_count)
+                - static_cast<long>(absolute_stats.via_count);
+          const long detour_gain
+              = std::max(0L, absolute_stats.wirelength_dbu - getRouteBBoxHpwl(selected_route))
+                - std::max(0L, donor_stats.wirelength_dbu
+                                 - getRouteBBoxHpwl(donor_it->second));
+          const long high_layer_gain
+              = std::max(0L, donor_stats.high_layer_dbu - absolute_stats.high_layer_dbu);
+
+          const bool has_recovery_signal
+              = via_gain >= 2 || detour_gain >= recover_detour_gain_guard
+                || high_layer_gain >= recover_high_layer_gain_guard;
+          if (!has_recovery_signal) {
+            return;
+          }
+
+          if (via_gain <= 0 && wl_backoff > 0
+              && detour_gain < recover_detour_gain_guard * 2L
+              && high_layer_gain < recover_high_layer_gain_guard * 2L) {
+            return;
+          }
+
+          const double recover_score = static_cast<double>(detour_gain)
+                                       + static_cast<double>(high_layer_gain) * 0.40
+                                       + static_cast<double>(via_gain) * 480.0
+                                       - static_cast<double>(std::max(0L, wl_backoff))
+                                             * 1.60;
+          const bool better_score
+              = best_route == nullptr || recover_score > best_recover_score + 1e-3;
+          const bool tie_break_wl
+              = std::abs(recover_score - best_recover_score) <= 1e-3
+                && donor_stats.wirelength_dbu < best_stats.wirelength_dbu;
+          const bool tie_break_via
+              = std::abs(recover_score - best_recover_score) <= 1e-3
+                && donor_stats.wirelength_dbu == best_stats.wirelength_dbu
+                && donor_stats.via_count > best_stats.via_count;
+          if (!(better_score || tie_break_wl || tie_break_via)) {
+            return;
+          }
+
+          best_route = &donor_it->second;
+          best_stats = donor_stats;
+          best_wl_backoff = std::max(0L, wl_backoff);
+          best_via_gain = via_gain;
+          best_detour_gain = detour_gain;
+          best_high_layer_gain = high_layer_gain;
+          best_recover_score = recover_score;
+          best_donor = donor_id;
+        };
+
+        consider_recover_donor(wl_layerbudget_hybrid, 1);
+        consider_recover_donor(wl_hybrid, 2);
+        consider_recover_donor(budgeted_lift_wl_hybrid, 3);
+        consider_recover_donor(radical_wl_hybrid, 4);
+        consider_recover_donor(cugr_sp_balance_hybrid, 5);
+
+        if (best_route != nullptr) {
+          const bool within_wl_budget
+              = recover_total_wl_backoff + best_wl_backoff
+                    <= recover_total_wl_backoff_budget;
+          const bool must_take_recovery
+              = recover_total_via_gain < recover_via_gain_target && best_via_gain >= 4;
+          if (!within_wl_budget && !must_take_recovery) {
+            continue;
+          }
+          selected_route = *best_route;
+          recover_total_wl_backoff += best_wl_backoff;
+          recover_total_via_gain += best_via_gain;
+          recover_detour_gain_sum += best_detour_gain;
+          recover_high_layer_gain_sum += best_high_layer_gain;
+          recover_swapped_nets++;
+          if (best_donor == 1) {
+            recover_layerbudget_imports++;
+          } else if (best_donor == 2) {
+            recover_anchor_imports++;
+          } else if (best_donor == 3) {
+            recover_budgeted_imports++;
+          } else if (best_donor == 4) {
+            recover_radical_imports++;
+          } else if (best_donor == 5) {
+            recover_balance_imports++;
+          }
+        }
+      }
+
+      if (recover_swapped_nets > 0) {
+        absolute_via_recover_result.metrics
+            = compute_metrics(absolute_via_recover_result.routes);
+        apply_routability_proxy(absolute_via_recover_result.metrics);
+        logger_->info(
+            GNR,
+            7357,
+            "NEWGR hybrid-netmix-absolute-via-recover imported "
+            "layerbudget/anchor/budgeted/radical/balance nets {}/{}/{}/{}/{}, "
+            "wirelength {:.0f} um, vias {}, wl backoff {}/{}, via gain target "
+            "{}/{}, detour gain sum {}, high-layer gain sum {}",
+            recover_layerbudget_imports,
+            recover_anchor_imports,
+            recover_budgeted_imports,
+            recover_radical_imports,
+            recover_balance_imports,
+            absolute_via_recover_result.metrics.wirelength_um,
+            absolute_via_recover_result.metrics.via_count,
+            recover_total_wl_backoff,
+            recover_total_wl_backoff_budget,
+            recover_total_via_gain,
+            recover_via_gain_target,
+            recover_detour_gain_sum,
+            recover_high_layer_gain_sum);
+        scenario_results.push_back(std::move(absolute_via_recover_result));
+      }
     }
 
     // Rebind pointers after appending synthetic scenarios.
@@ -5816,6 +6002,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = find_scenario_by_name("hybrid-netmix-wl-layerbudget");
     const ScenarioResult* radical_wl_fusion_ptr
         = find_scenario_by_name("hybrid-netmix-radical-wl-fusion");
+    const ScenarioResult* absolute_via_recover_ptr
+        = find_scenario_by_name("hybrid-netmix-absolute-via-recover");
     const ScenarioResult* preferred_wl_ptr = nullptr;
 
     if (wl_anchor != nullptr && wl_layerbudget_ptr != nullptr) {
@@ -5893,9 +6081,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
       const ScenarioResult* radical_candidate = nullptr;
       for (const ScenarioResult* candidate :
-           std::array<const ScenarioResult*, 8>{budgeted_lift_ptr,
+           std::array<const ScenarioResult*, 9>{budgeted_lift_ptr,
                                                 layer_floor_wl_ptr,
                                                 layer_lift_wl_ptr,
+                                                absolute_via_recover_ptr,
                                                 absolute_wl_ptr,
                                                 min_wl_wide_ptr,
                                                 cugr_sp_balance_ptr,
@@ -5964,8 +6153,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                        >= layerbudget_high_layer_floor
                 && wl_layerbudget_ptr->metrics.overflow_edges
                        <= wl_anchor->metrics.overflow_edges;
-          if (preserve_layerbudget_mix) {
+          const long radical_wl_advantage
+              = wl_layerbudget_ptr->metrics.wirelength_dbu
+                - radical_candidate->metrics.wirelength_dbu;
+          const bool radical_minwl_dominates
+              = radical_wl_advantage >= std::max<long>(tile_size * 8L, 18000L);
+          if (preserve_layerbudget_mix && !radical_minwl_dominates) {
             radical_candidate = wl_layerbudget_ptr;
+          } else if (preserve_layerbudget_mix && radical_minwl_dominates) {
+            logger_->info(
+                GNR,
+                7358,
+                "NEWGR bypassing layer-budget preserve in favor of '{}' "
+                "(WL advantage over layer-budget {}, threshold {}).",
+                radical_candidate->name,
+                radical_wl_advantage,
+                std::max<long>(tile_size * 8L, 18000L));
           }
         }
         preferred_wl_ptr = radical_candidate;
@@ -6296,8 +6499,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
 
     std::vector<const ScenarioResult*> wl_champion_pool;
-    wl_champion_pool.reserve(22);
-    for (const char* name : std::array<const char*, 22>{
+    wl_champion_pool.reserve(23);
+    for (const char* name : std::array<const char*, 23>{
              "hybrid-netmix-anchor-wl-deep",
              "hybrid-netmix-anchor-wl-layerfloor",
              "hybrid-netmix-drt-elastic-wl",
@@ -6313,6 +6516,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
              "hybrid-netmix-smooth-wl",
              "hybrid-netmix-ultra-wl",
              "hybrid-netmix-min-wl-wide",
+             "hybrid-netmix-absolute-via-recover",
              "hybrid-netmix-absolute-wl",
              "hybrid-netmix-cugr-sp-balance-wl",
              "hybrid-netmix-wl-compact",
@@ -6336,10 +6540,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
     if (compact_exploration_mode) {
       const ScenarioResult* aggressive_wl_ptr = forced_wl_ptr;
-      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 8>{
+      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 9>{
                budgeted_lift_ptr,
                layer_floor_wl_ptr,
                layer_lift_wl_ptr,
+               absolute_via_recover_ptr,
                absolute_wl_ptr,
                min_wl_wide_ptr,
                cugr_sp_balance_ptr,
@@ -6606,10 +6811,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       };
 
       const ScenarioResult* strong_wl_upgrade = nullptr;
-      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 7>{
+      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 8>{
                budgeted_lift_ptr,
                layer_floor_wl_ptr,
                layer_lift_wl_ptr,
+               absolute_via_recover_ptr,
                absolute_wl_ptr,
                min_wl_wide_ptr,
                cugr_sp_balance_ptr,
@@ -6794,6 +7000,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       consider_elastic_wl(cugr_sp_balance_ptr);
       consider_elastic_wl(wl_layerbudget_ptr);
       consider_elastic_wl(radical_wl_fusion_ptr);
+      consider_elastic_wl(absolute_via_recover_ptr);
 
       if (elastic_wl_ptr != nullptr
           && (forced_wl_ptr == nullptr
@@ -6926,6 +7133,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                      <= wl_anchor->metrics.via_count + layerbudget_via_rise_guard;
         const bool radical_wl_mix_candidate
             = forced_wl_ptr == absolute_wl_ptr
+              || forced_wl_ptr == absolute_via_recover_ptr
               || forced_wl_ptr == min_wl_wide_ptr
               || forced_wl_ptr == cugr_sp_balance_ptr
               || forced_wl_ptr == wl_layerbudget_ptr
@@ -7025,11 +7233,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           static_cast<long>(std::ceil(
               static_cast<double>(wl_anchor->metrics.via_count) * 0.0014)));
       const long via_drop_cap = std::max<long>(
-          900L,
+          2600L,
           static_cast<long>(std::ceil(
-              static_cast<double>(wl_anchor->metrics.via_count) * 0.0090)));
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.0250)));
       const long via_trade_wl_factor = std::max<long>(40L, tile_size * 2L);
-      const long via_drop_trade_wl_factor = std::max<long>(65L, tile_size * 3L);
+      const long via_drop_trade_wl_factor = std::max<long>(18L, tile_size / 2L);
 
       const ScenarioResult* wl_locked_ptr = forced_wl_ptr;
       for (const ScenarioResult& candidate : scenario_results) {
@@ -7042,10 +7250,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                               - static_cast<long>(wl_anchor->metrics.via_count);
         const long via_drop = static_cast<long>(wl_anchor->metrics.via_count)
                               - static_cast<long>(candidate.metrics.via_count);
+        const bool minwl_extreme_candidate
+            = candidate.name == "hybrid-netmix-absolute-wl"
+              || candidate.name == "hybrid-netmix-min-wl-wide"
+              || candidate.name == "hybrid-netmix-cugr-sp-balance-wl"
+              || candidate.name == "hybrid-netmix-absolute-via-recover";
         if (via_rise > via_rise_cap && wl_gain < via_rise * via_trade_wl_factor) {
           continue;
         }
-        if (via_drop > via_drop_cap
+        if (!minwl_extreme_candidate && via_drop > via_drop_cap
             && wl_gain < via_drop * via_drop_trade_wl_factor) {
           continue;
         }
@@ -7074,7 +7287,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               static_cast<long>(std::ceil(
                   static_cast<double>(wl_locked_ptr->metrics.via_count) * 0.0007)));
           const long via_rise_trade_wl_factor
-              = std::max<long>(1800L, tile_size / 2L);
+              = std::max<long>(420L, tile_size / 3L);
           if (via_rise_over_locked > via_rise_guard
               && wl_gain_over_locked
                      < via_rise_over_locked * via_rise_trade_wl_factor) {
