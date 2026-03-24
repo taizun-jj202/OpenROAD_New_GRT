@@ -3210,9 +3210,7 @@ bool shouldPreferWirelengthFusionHybrid(int incumbent_overflow,
   const uint64_t wl_gain = incumbent_score.wirelength - candidate_score.wirelength;
   const int64_t via_increase = static_cast<int64_t>(candidate_score.vias)
                                - static_cast<int64_t>(incumbent_score.vias);
-  if (via_increase > 0) {
-    return false;
-  }
+  const int64_t via_growth = std::max<int64_t>(0, via_increase);
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
   const uint64_t low_layer_release_credit = static_cast<uint64_t>(
@@ -3225,27 +3223,37 @@ bool shouldPreferWirelengthFusionHybrid(int incumbent_overflow,
   }
 
   const int64_t via_increase_budget
-      = std::max<int64_t>(620, static_cast<int64_t>(incumbent_score.vias / 150));
-  if (via_increase > via_increase_budget
+      = std::max<int64_t>(520, static_cast<int64_t>(incumbent_score.vias / 220));
+  if (via_growth > via_increase_budget
       && effective_wl_gain
-             < static_cast<uint64_t>(via_increase * 260 + static_cast<int64_t>(50000))) {
+             < static_cast<uint64_t>(via_growth * 240 + static_cast<int64_t>(60000))) {
     return false;
   }
-  if (via_increase > 0
+  if (via_growth > 0
       && effective_wl_gain
              < std::max<uint64_t>(
-                 static_cast<uint64_t>(via_increase * 200
-                                       + static_cast<int64_t>(40000)),
-                 static_cast<uint64_t>(60000))) {
+                 static_cast<uint64_t>(
+                     via_growth * 170
+                     + std::max<int64_t>(0, low_layer_delta) / 4
+                     + static_cast<int64_t>(40000)),
+                 static_cast<uint64_t>(70000))) {
     return false;
   }
 
   const int64_t low_layer_budget = std::max<int64_t>(
-      1600000, static_cast<int64_t>(incumbent_low_layer_wl / 120));
+      1300000, static_cast<int64_t>(incumbent_low_layer_wl / 130));
   if (low_layer_delta > low_layer_budget
       && effective_wl_gain
              < static_cast<uint64_t>(low_layer_delta / 3
+                                     + via_growth * 180
                                      + static_cast<int64_t>(80000))) {
+    return false;
+  }
+  if (via_growth > 0 && low_layer_delta > 0
+      && effective_wl_gain
+             < static_cast<uint64_t>(via_growth * 210
+                                     + low_layer_delta / 3
+                                     + static_cast<int64_t>(90000))) {
     return false;
   }
   return true;
@@ -3379,6 +3387,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const RouteScore envelope_score = computeRouteScore(envelope_hybrid);
     const uint64_t envelope_low_layer_wl
         = computeLowLayerWirelength(envelope_hybrid);
+    InterleavedHybridStats envelope_newgr_stats;
+    NetRouteMap envelope_newgr_hybrid = buildInterleavedBackboneHybrid(
+        envelope_hybrid,
+        newgr_backbone_hybrid,
+        grouter_->db_net_map_,
+        envelope_score.vias,
+        envelope_low_layer_wl,
+        envelope_newgr_stats);
+    const RouteScore envelope_newgr_score
+        = computeRouteScore(envelope_newgr_hybrid);
+    const uint64_t envelope_newgr_low_layer_wl
+        = computeLowLayerWirelength(envelope_newgr_hybrid);
     WirelengthOracleStats wirelength_oracle_stats;
     std::vector<const NetRouteMap*> wirelength_oracle_donors{
         &fastroute_routes,
@@ -3575,6 +3595,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   envelope_stats.skipped_by_budget_guard,
                   envelope_stats.consumed_wl_gain);
     logger_->info(utl::GRT,
+                  6018,
+                  "NEWGR envelope+newgr graft summary: "
+                  "ENVELOPE_NEWGR(wl={}, vias={}, low_wl={}, nets={}, donor_swap={}, "
+                  "add={}, cand={}, via_guard_skip={}, layer_guard_skip={}, "
+                  "budget_skip={}, wl_gain={})",
+                  envelope_newgr_score.wirelength,
+                  envelope_newgr_score.vias,
+                  envelope_newgr_low_layer_wl,
+                  envelope_newgr_score.routed_nets,
+                  envelope_newgr_stats.replaced_with_donor,
+                  envelope_newgr_stats.added_missing_nets,
+                  envelope_newgr_stats.candidate_pool_size,
+                  envelope_newgr_stats.skipped_by_via_guard,
+                  envelope_newgr_stats.skipped_by_layer_guard,
+                  envelope_newgr_stats.skipped_by_budget_guard,
+                  envelope_newgr_stats.consumed_wl_gain);
+    logger_->info(utl::GRT,
                   6015,
                   "NEWGR wirelength oracle summary: "
                   "WL_ORACLE(wl={}, vias={}, low_wl={}, nets={}, donor_swap={}, "
@@ -3749,6 +3786,31 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                             + extreme_sweep_stats.added_missing_nets
                             + radical_refine_stats.added_missing_nets
                             + envelope_stats.added_missing_nets;
+      used_fastroute_last_run_ = false;
+    }
+
+    if (shouldPreferInterleavedHybrid(best_overflow,
+                                      best_score,
+                                      best_low_layer_wl,
+                                      last_total_overflow_,
+                                      envelope_newgr_score,
+                                      envelope_newgr_low_layer_wl)) {
+      routes = std::move(envelope_newgr_hybrid);
+      best_score = envelope_newgr_score;
+      best_overflow = last_total_overflow_;
+      best_low_layer_wl = envelope_newgr_low_layer_wl;
+      selected_label = "FastRoute+NEWGR envelope-newgr-graft";
+      selected_hybrid = true;
+      selected_swapped_nets = sweep_stats.replaced_with_donor
+                              + extreme_sweep_stats.replaced_with_donor
+                              + radical_refine_stats.replaced_with_donor
+                              + envelope_stats.replaced_with_donor
+                              + envelope_newgr_stats.replaced_with_donor;
+      selected_added_nets = sweep_stats.added_missing_nets
+                            + extreme_sweep_stats.added_missing_nets
+                            + radical_refine_stats.added_missing_nets
+                            + envelope_stats.added_missing_nets
+                            + envelope_newgr_stats.added_missing_nets;
       used_fastroute_last_run_ = false;
     }
 
