@@ -723,25 +723,24 @@ void CUGR::wirelengthRecovery()
   grid_graph_->extractWireCostView(wireCostView);
 
   const int totalNets = static_cast<int>(netIndices.size());
-  // SPRoute-style adaptive throttling:
-  // when overflow remains high, prioritize runtime and keep only a small
-  // detour cleanup wavefront. As overflow reduces, expand quality recovery.
-  int recoveryDivisor = 420;
-  int recoveryMinBudget = 128;
+  // Wirelength-priority recovery: expand late-stage optimization coverage so
+  // more long nets receive at least one focused reroute attempt.
+  int recoveryDivisor = 220;
+  int recoveryMinBudget = 320;
   if (late_stage_overflow_nets_ > 900) {
-    recoveryDivisor = 1200;
-    recoveryMinBudget = 48;
+    recoveryDivisor = 700;
+    recoveryMinBudget = 128;
   } else if (late_stage_overflow_nets_ > 600) {
-    recoveryDivisor = 850;
-    recoveryMinBudget = 72;
+    recoveryDivisor = 520;
+    recoveryMinBudget = 192;
   } else if (late_stage_overflow_nets_ > 300) {
-    recoveryDivisor = 650;
-    recoveryMinBudget = 96;
+    recoveryDivisor = 360;
+    recoveryMinBudget = 256;
   }
   const int recoveryBudget
       = std::min(totalNets, std::max(recoveryMinBudget, totalNets / recoveryDivisor));
-  const int mazeCandidateBudget = std::max(32, recoveryBudget / 5);
-  const int denseMazeBudget = std::max(8, recoveryBudget / 10);
+  const int mazeCandidateBudget = std::max(64, recoveryBudget / 3);
+  const int denseMazeBudget = std::max(16, recoveryBudget / 6);
   const int longNetRank
       = std::min(recoveryBudget - 1, std::max(0, recoveryBudget / 5));
   const uint64_t longWireThreshold
@@ -1255,21 +1254,21 @@ void CUGR::strictWirelengthCompaction()
   });
 
   const int totalNets = static_cast<int>(netIndices.size());
-  // Single strict wavefront pass: dynamically shrink late-stage effort when
-  // overflow is still large to keep end-to-end runtime near SPRoute levels.
+  // Strict late-stage compaction: allocate a larger optimization wavefront to
+  // aggressively collapse residual detours.
   const bool useXAxisWavefront = true;
   const bool firstStrictPass = true;
-  int strictDivisor = 700;
-  int strictMinBudget = 128;
+  int strictDivisor = 260;
+  int strictMinBudget = 320;
   if (late_stage_overflow_nets_ > 900) {
-    strictDivisor = 2400;
-    strictMinBudget = 32;
+    strictDivisor = 700;
+    strictMinBudget = 96;
   } else if (late_stage_overflow_nets_ > 600) {
-    strictDivisor = 1400;
-    strictMinBudget = 48;
+    strictDivisor = 520;
+    strictMinBudget = 128;
   } else if (late_stage_overflow_nets_ > 300) {
-    strictDivisor = 1000;
-    strictMinBudget = 64;
+    strictDivisor = 380;
+    strictMinBudget = 192;
   }
   const int compactionBudget
       = std::min(totalNets, std::max(strictMinBudget, totalNets / strictDivisor));
@@ -1285,7 +1284,7 @@ void CUGR::strictWirelengthCompaction()
       = std::min(compactionBudget - 1, std::max(0, compactionBudget / 5));
   const double detourRatioThreshold = detourRatios[netIndices[detourRank]];
   const int denseMazeBudget
-      = std::min(compactionBudget, std::max(16, compactionBudget / 8));
+      = std::min(compactionBudget, std::max(24, compactionBudget / 6));
   std::vector<int> scheduledNetIndices = buildSpatialCompactionOrder(
       netIndices, gr_nets_, compactionBudget, useXAxisWavefront);
   if (scheduledNetIndices.empty()) {
@@ -1344,7 +1343,7 @@ void CUGR::strictWirelengthCompaction()
         = oldScore.overflow_edges > 0
           || rank < denseMazeBudget
           || oldDetourRatio
-                 >= detourRatioThreshold * (firstStrictPass ? 1.12 : 1.05)
+                 >= detourRatioThreshold * (firstStrictPass ? 1.08 : 1.05)
           || (oldScore.wire_length >= longWireThreshold
               && rank < std::max(8, compactionBudget / 5));
     if (runMazeCandidate) {
@@ -1359,19 +1358,19 @@ void CUGR::strictWirelengthCompaction()
           /*strict_mode*/ true);
       MazeBuildOptions tunedMazeOptions = mazeOptions;
       if (rank < denseMazeBudget / 6 || oldScore.overflow_edges > 0
-                 || oldDetourRatio >= detourRatioThreshold * 1.06) {
+                 || oldDetourRatio >= detourRatioThreshold * 1.04) {
         tunedMazeOptions.max_start_candidates = 2;
       } else {
         tunedMazeOptions.max_start_candidates = 1;
       }
       const bool resetTopologyMode
           = !tunedMazeOptions.preserve_existing_topology;
-      int interval = firstStrictPass ? 5 : 3;
+      int interval = firstStrictPass ? 4 : 3;
       if (rank < denseMazeBudget / 2 || oldScore.overflow_edges > 0) {
         interval = 3;
       }
-      if (!firstStrictPass || rank < denseMazeBudget / 4
-          || (oldDetourRatio >= detourRatioThreshold * 1.07 && pins >= 6)) {
+      if (!firstStrictPass || rank < denseMazeBudget / 3
+          || (oldDetourRatio >= detourRatioThreshold * 1.05 && pins >= 6)) {
         interval = 2;
       } else if (pins <= 3 && hp <= 80) {
         interval = 5;
@@ -1380,7 +1379,7 @@ void CUGR::strictWirelengthCompaction()
         interval = std::max(2, interval - 1);
       }
       const int maxMazeCandidates = firstStrictPass
-                                        ? (rank < denseMazeBudget / 3 ? 2 : 1)
+                                        ? (rank < denseMazeBudget / 2 ? 2 : 1)
                                         : (rank < denseMazeBudget / 2 ? 2 : 1);
       const auto candidateGrids
           = buildMazeCandidateGrids(interval,
@@ -1442,40 +1441,44 @@ void CUGR::route()
   grid_graph_->setSoftCapacityEnabled(false);
 
   // FastRoute-style wirelength-first initialization.
-  grid_graph_->setStageCostScales(0.72, 0.74, 1.15);
+  grid_graph_->setStageCostScales(0.70, 0.72, 1.12);
   patternRoute(netIndices);
 
   // SPRoute-inspired shortest-topology repair with sparse maze candidates.
-  grid_graph_->setStageCostScales(1.08, 1.10, 1.08);
+  grid_graph_->setStageCostScales(1.06, 1.08, 1.04);
   mazeRoute(netIndices);
 
-  // Run detour routing only when overflow remains materially high.
-  if (netIndices.size() > 240) {
-    grid_graph_->setStageCostScales(1.16, 1.18, 1.00);
-    patternRouteWithDetours(netIndices);
-  } else if (!netIndices.empty()) {
-    logger_->report("stage 2 detour skipped: overflow-net count {} is below "
-                    "threshold 240.",
-                    netIndices.size());
-  }
+  // CUGR-style detour handling after the first maze pass to repair difficult
+  // hotspots before entering wirelength compaction waves.
+  grid_graph_->setStageCostScales(1.18, 1.20, 0.98);
+  patternRouteWithDetours(netIndices);
 
-  // One extra shortest-path cleanup for heavy-overflow states only.
-  if (netIndices.size() > 1500) {
-    grid_graph_->setStageCostScales(1.24, 1.26, 1.02);
+  // FastRoute-like iterative cleanup: run additional maze sweeps to retract
+  // detour inflation after hotspot repair.
+  if (!netIndices.empty()) {
+    grid_graph_->setStageCostScales(1.26, 1.28, 1.00);
     mazeRoute(netIndices);
-  } else if (!netIndices.empty()) {
-    logger_->report("stage 3 repeat skipped: overflow-net count {} is below "
-                    "threshold 1500.",
-                    netIndices.size());
+  }
+  if (netIndices.size() > 300) {
+    grid_graph_->setStageCostScales(1.30, 1.32, 1.00);
+    mazeRoute(netIndices);
   }
 
   late_stage_overflow_nets_ = static_cast<int>(netIndices.size());
-  // FastRoute-like selective late-stage improvement: compact only the
-  // highest-impact detours, then run one strict SPRoute-style wavefront pass.
-  grid_graph_->setStageCostScales(0.18, 0.20, 0.98);
+  // Mixed FastRoute/CUGR/SPRoute compaction stack with progressively more
+  // wirelength-centric costs.
+  grid_graph_->setStageCostScales(0.42, 0.46, 1.10);
   wirelengthRecovery();
+  grid_graph_->setStageCostScales(0.28, 0.30, 1.02);
+  finalPatternTighten();
+  grid_graph_->setStageCostScales(0.12, 0.14, 0.96);
+  globalCompaction();
   grid_graph_->setSoftCapacityEnabled(false);
-  grid_graph_->setStageCostScales(0.10, 0.12, 0.94);
+  grid_graph_->setStageCostScales(0.05, 0.06, 0.93);
+  strictWirelengthCompaction();
+  grid_graph_->setStageCostScales(0.02, 0.03, 0.90);
+  strictWirelengthCompaction();
+  grid_graph_->setStageCostScales(0.00, 0.01, 0.88);
   strictWirelengthCompaction();
   updateOverflowNets(netIndices);
 
