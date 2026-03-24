@@ -2990,6 +2990,12 @@ NetRouteMap buildWirelengthFusionHybrid(
   // Re-scan all donor families and pick per-net winners under a stricter
   // low-layer-growth guard. This keeps the pass wirelength-focused while
   // avoiding the detailed-route regressions seen with unconstrained closure.
+  //
+  // Temporarily disabled: despite global WL wins, this pass increased
+  // low-layer usage and regressed detailed-route WL on ibex in iteration 94.
+  stats.consumed_wl_gain = consumed_wl_gain;
+  return hybrid_routes;
+
   struct FinalClosureCandidate
   {
     odb::dbNet* db_net{nullptr};
@@ -3272,10 +3278,16 @@ bool shouldPreferWirelengthChampion(int incumbent_overflow,
     return false;
   }
   const int64_t low_layer_budget = std::max<int64_t>(
-      5200000, static_cast<int64_t>(incumbent_low_layer_wl / 28));
+      600000, static_cast<int64_t>(incumbent_low_layer_wl / 520));
   if (low_layer_delta > low_layer_budget
       && wl_gain
              < static_cast<uint64_t>(low_layer_delta / 2 + static_cast<int64_t>(28000))) {
+    return false;
+  }
+  if (low_layer_delta > 0
+      && wl_gain
+             < static_cast<uint64_t>(low_layer_delta / 2
+                                     + static_cast<int64_t>(120000))) {
     return false;
   }
   return true;
