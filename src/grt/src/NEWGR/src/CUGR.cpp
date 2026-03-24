@@ -73,16 +73,23 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
                              const double allowed_overflow_increase_for_wl_gain)
 {
   constexpr double kOverflowEpsilon = 1e-6;
-  constexpr double kStrongOverflowDropThreshold = 28.0;
-  constexpr int64_t kStrongWireGain = 4;
-  constexpr int64_t kModerateWireGain = 2;
-  constexpr int64_t kMaxWirelengthTradeoff = 10;
+  constexpr double kStrongOverflowDropThreshold = 36.0;
+  constexpr int64_t kStrongWireGain = 2;
+  constexpr int64_t kModerateWireGain = 1;
+  constexpr int64_t kMaxWirelengthTradeoff = 6;
 
   // Wirelength-first objective:
   // keep shorter candidates as long as they don't cause a large overflow jump.
   if (candidate.wirelength + kStrongWireGain < current_best.wirelength) {
     return candidate.total_overflow
            <= current_best.total_overflow + allowed_overflow_increase_for_wl_gain;
+  }
+  if (candidate.wirelength + 1 < current_best.wirelength
+      && candidate.total_overflow
+             <= current_best.total_overflow
+                    + allowed_overflow_increase_for_wl_gain * 0.45
+      && candidate.vias <= current_best.vias + 6) {
+    return true;
   }
   if (candidate.wirelength + kModerateWireGain < current_best.wirelength
       && candidate.total_overflow
