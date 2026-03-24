@@ -801,7 +801,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         if (!tree) {
           return;
         }
-        constexpr int kRecoveryOverflowSlack = 0;
+        constexpr int kRecoveryOverflowSlack = 1;
         // Evaluate overflow after adding the candidate tree back to the live
         // graph. This avoids selecting routes that appear legal in rip-up mode
         // but create new overflows once committed.

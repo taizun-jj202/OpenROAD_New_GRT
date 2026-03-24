@@ -95,13 +95,13 @@ struct Constants
   int recovery_wl_only_hpwl_threshold = 112;
   int recovery_hpwl_threshold = 88;
   double recovery_min_stretch = 1.05;
-  int recovery_candidate_cap = 56;
-  int recovery_deep_search_cap = 16;
-  int recovery_shallow_maze_config_limit = 2;
-  int recovery_deep_maze_config_limit = 3;
-  int recovery_shallow_wl_config_limit = 1;
-  int recovery_deep_wl_config_limit = 2;
-  double recovery_refine_ratio = 0.38;
+  int recovery_candidate_cap = 88;
+  int recovery_deep_search_cap = 24;
+  int recovery_shallow_maze_config_limit = 3;
+  int recovery_deep_maze_config_limit = 5;
+  int recovery_shallow_wl_config_limit = 2;
+  int recovery_deep_wl_config_limit = 3;
+  double recovery_refine_ratio = 0.52;
   int recovery_max_passes = 1;
   double recovery_pass_decay = 0.80;
   double recovery_late_pass_refine_scale = 0.40;
@@ -126,7 +126,7 @@ struct Constants
   int recovery_spatial_batches = 6;
   int recovery_spatial_pool_multiplier = 2;
   bool recovery_use_full_grid_maze = true;
-  int recovery_full_grid_top_n = 3;
+  int recovery_full_grid_top_n = 6;
   int recovery_full_grid_hpwl_threshold = 180;
   double recovery_full_grid_via_cost_scale = 0.02;
 
