@@ -259,6 +259,34 @@ uint64_t minClosureWirelengthGain(int pin_count)
   return 92;
 }
 
+uint64_t minMosaicWirelengthGain(int pin_count)
+{
+  if (pin_count <= 4) {
+    return 16;
+  }
+  if (pin_count <= 12) {
+    return 44;
+  }
+  if (pin_count <= 24) {
+    return 120;
+  }
+  return 320;
+}
+
+int64_t maxMosaicViaIncrease(int pin_count)
+{
+  if (pin_count <= 4) {
+    return 1;
+  }
+  if (pin_count <= 12) {
+    return 2;
+  }
+  if (pin_count <= 24) {
+    return 3;
+  }
+  return 5;
+}
+
 int64_t maxInterleavedViaIncrease(int pin_count)
 {
   if (pin_count <= 4) {
@@ -869,6 +897,18 @@ struct InterleavedHybridStats
   uint64_t consumed_wl_gain{0};
 };
 
+struct MosaicHybridStats
+{
+  uint64_t replaced_with_donor{0};
+  uint64_t added_missing_nets{0};
+  uint64_t candidate_pool_size{0};
+  uint64_t skipped_by_wl_guard{0};
+  uint64_t skipped_by_via_guard{0};
+  uint64_t skipped_by_layer_guard{0};
+  uint64_t skipped_by_budget_guard{0};
+  uint64_t consumed_wl_gain{0};
+};
+
 NetRouteMap buildInterleavedBackboneHybrid(
     const NetRouteMap& base_routes,
     const NetRouteMap& donor_routes,
@@ -1193,6 +1233,165 @@ NetRouteMap buildInterleavedBackboneHybrid(
     ++stats.replaced_with_donor;
     ++closure_swaps;
     if (closure_wl_gain >= closure_wl_gain_target && closure_swaps >= 24) {
+      break;
+    }
+  }
+
+  stats.consumed_wl_gain = consumed_wl_gain;
+  return hybrid_routes;
+}
+
+NetRouteMap buildWirelengthMosaicHybrid(
+    const NetRouteMap& seed_routes,
+    const std::vector<const NetRouteMap*>& donor_route_sets,
+    const std::map<odb::dbNet*, Net*>& db_net_map,
+    uint64_t seed_total_vias,
+    uint64_t seed_low_layer_wl,
+    MosaicHybridStats& stats)
+{
+  NetRouteMap hybrid_routes = seed_routes;
+  const uint64_t seed_wirelength = computeRouteScore(seed_routes).wirelength;
+  const int64_t total_via_increase_budget
+      = std::max<int64_t>(900, static_cast<int64_t>(seed_total_vias / 110));
+  const int64_t total_low_layer_growth_budget
+      = std::max<int64_t>(1600000, static_cast<int64_t>(seed_low_layer_wl / 18));
+  const uint64_t wl_gain_target
+      = std::max<uint64_t>(7000000, seed_wirelength / 42);
+  const size_t swap_limit = std::min<size_t>(
+      static_cast<size_t>(18000),
+      std::max<size_t>(static_cast<size_t>(3000), seed_routes.size() / 2));
+
+  int64_t consumed_via_increase = 0;
+  int64_t consumed_low_layer_growth = 0;
+  uint64_t consumed_wl_gain = 0;
+
+  for (auto& [db_net, base_route] : hybrid_routes) {
+    const auto net_it = db_net_map.find(db_net);
+    if (net_it == db_net_map.end() || net_it->second == nullptr) {
+      continue;
+    }
+
+    const int pin_count = std::max(1, net_it->second->getNumPins());
+    const RouteScore base_score = computeRouteScore(base_route);
+    const RouteLayerUsage base_usage = analyzeRouteLayerUsage(base_route);
+    const uint64_t min_gain = minMosaicWirelengthGain(pin_count);
+    const int64_t via_limit = maxMosaicViaIncrease(pin_count);
+
+    const GRoute* best_donor_route = nullptr;
+    int64_t best_effective_gain = 0;
+    int64_t best_wl_gain = 0;
+    int64_t best_via_increase = 0;
+    int64_t best_via_drop = 0;
+    int64_t best_low_layer_growth = 0;
+
+    for (const NetRouteMap* donor_routes : donor_route_sets) {
+      if (donor_routes == nullptr) {
+        continue;
+      }
+      const auto donor_it = donor_routes->find(db_net);
+      if (donor_it == donor_routes->end() || donor_it->second.empty()) {
+        continue;
+      }
+      ++stats.candidate_pool_size;
+
+      const RouteScore donor_score = computeRouteScore(donor_it->second);
+      if (donor_score.segments == 0) {
+        continue;
+      }
+      if (base_score.segments > 0 && donor_score.wirelength >= base_score.wirelength) {
+        continue;
+      }
+
+      const int64_t wl_gain
+          = static_cast<int64_t>(base_score.wirelength)
+            - static_cast<int64_t>(donor_score.wirelength);
+      if (base_score.segments > 0 && wl_gain <= 0) {
+        continue;
+      }
+      if (base_score.segments > 0
+          && static_cast<uint64_t>(wl_gain) < min_gain) {
+        ++stats.skipped_by_wl_guard;
+        continue;
+      }
+
+      const RouteLayerUsage donor_usage = analyzeRouteLayerUsage(donor_it->second);
+      const int64_t via_increase = std::max<int64_t>(
+          0,
+          static_cast<int64_t>(donor_score.vias)
+              - static_cast<int64_t>(base_score.vias));
+      const int64_t via_drop = std::max<int64_t>(
+          0,
+          static_cast<int64_t>(base_score.vias)
+              - static_cast<int64_t>(donor_score.vias));
+      const int64_t low_layer_growth = std::max<int64_t>(
+          0,
+          static_cast<int64_t>(donor_usage.low_layer_wl)
+              - static_cast<int64_t>(base_usage.low_layer_wl));
+      const int64_t low_layer_release = std::max<int64_t>(
+          0,
+          static_cast<int64_t>(base_usage.low_layer_wl)
+              - static_cast<int64_t>(donor_usage.low_layer_wl));
+
+      if (via_increase > via_limit
+          && wl_gain
+                 < via_increase * 120 + low_layer_growth / 8
+                       + static_cast<int64_t>(min_gain)) {
+        ++stats.skipped_by_via_guard;
+        continue;
+      }
+
+      if (low_layer_growth > std::max<int64_t>(
+                                 120,
+                                 wl_gain / 2
+                                     + static_cast<int64_t>(pin_count) * 8)
+          && wl_gain
+                 < low_layer_growth / 4 + via_increase * 90
+                       + static_cast<int64_t>(min_gain * 2)) {
+        ++stats.skipped_by_layer_guard;
+        continue;
+      }
+
+      const int64_t effective_gain = wl_gain * 7 + via_drop * 24
+                                     + low_layer_release - via_increase * 54
+                                     - low_layer_growth * 3;
+      if (best_donor_route == nullptr
+          || std::make_tuple(effective_gain,
+                             wl_gain,
+                             via_drop,
+                             -via_increase,
+                             -low_layer_growth)
+                 > std::make_tuple(best_effective_gain,
+                                   best_wl_gain,
+                                   best_via_drop,
+                                   -best_via_increase,
+                                   -best_low_layer_growth)) {
+        best_donor_route = &donor_it->second;
+        best_effective_gain = effective_gain;
+        best_wl_gain = wl_gain;
+        best_via_increase = via_increase;
+        best_via_drop = via_drop;
+        best_low_layer_growth = low_layer_growth;
+      }
+    }
+
+    if (best_donor_route == nullptr) {
+      continue;
+    }
+    if (consumed_via_increase + best_via_increase > total_via_increase_budget
+        || consumed_low_layer_growth + best_low_layer_growth
+               > total_low_layer_growth_budget) {
+      ++stats.skipped_by_budget_guard;
+      continue;
+    }
+
+    base_route = *best_donor_route;
+    consumed_via_increase += best_via_increase;
+    consumed_low_layer_growth += best_low_layer_growth;
+    consumed_wl_gain += static_cast<uint64_t>(std::max<int64_t>(0, best_wl_gain));
+    ++stats.replaced_with_donor;
+
+    if (stats.replaced_with_donor >= swap_limit
+        || (consumed_wl_gain >= wl_gain_target && stats.replaced_with_donor >= 64)) {
       break;
     }
   }
@@ -3266,29 +3465,29 @@ bool shouldPreferWirelengthChampion(int incumbent_overflow,
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
   const uint64_t min_wl_gain
-      = std::max<uint64_t>(40000, incumbent_score.wirelength / 15000);
+      = std::max<uint64_t>(1200, incumbent_score.wirelength / 260000);
   if (wl_gain < min_wl_gain) {
     return false;
   }
   const int64_t via_increase_budget
-      = std::max<int64_t>(4200, static_cast<int64_t>(incumbent_score.vias / 24));
+      = std::max<int64_t>(2600, static_cast<int64_t>(incumbent_score.vias / 40));
   if (via_increase > via_increase_budget
       && wl_gain
-             < static_cast<uint64_t>(via_increase * 70 + static_cast<int64_t>(24000))) {
+             < static_cast<uint64_t>(via_increase * 160 + static_cast<int64_t>(12000))) {
     return false;
   }
   const int64_t low_layer_budget = std::max<int64_t>(
-      1800000, static_cast<int64_t>(incumbent_low_layer_wl / 180));
+      1200000, static_cast<int64_t>(incumbent_low_layer_wl / 280));
   if (low_layer_delta > low_layer_budget
       && wl_gain
-             < static_cast<uint64_t>(low_layer_delta / 6 + static_cast<int64_t>(42000))) {
+             < static_cast<uint64_t>(low_layer_delta / 3 + static_cast<int64_t>(18000))) {
     return false;
   }
   if (low_layer_delta > 0 && via_increase > 0
       && wl_gain
-             < static_cast<uint64_t>(low_layer_delta / 10
-                                     + via_increase * 52
-                                     + static_cast<int64_t>(32000))) {
+             < static_cast<uint64_t>(low_layer_delta / 5
+                                     + via_increase * 140
+                                     + static_cast<int64_t>(12000))) {
     return false;
   }
   return true;
@@ -4049,6 +4248,36 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = computeRouteScore(tempered_fusion_hybrid);
     const uint64_t tempered_fusion_low_layer_wl
         = computeLowLayerWirelength(tempered_fusion_hybrid);
+    MosaicHybridStats mosaic_stats;
+    std::vector<const NetRouteMap*> mosaic_donors{
+        &fastroute_routes,
+        &routes,
+        &newgr_backbone_hybrid,
+        &fastroute_backbone_hybrid,
+        &interleaved_hybrid,
+        &wirelength_sweep_hybrid,
+        &extreme_sweep_hybrid,
+        &radical_refine_hybrid,
+        &envelope_hybrid,
+        &envelope_newgr_hybrid,
+        &wirelength_oracle_hybrid,
+        &wirelength_closure_hybrid,
+        &wirelength_fusion_hybrid,
+        &tempered_fusion_hybrid};
+    for (size_t alt_idx = 0; alt_idx < newgr_alternate_routes.size(); ++alt_idx) {
+      mosaic_donors.push_back(&newgr_alternate_routes[alt_idx]);
+    }
+    NetRouteMap wirelength_mosaic_hybrid = buildWirelengthMosaicHybrid(
+        tempered_fusion_hybrid,
+        mosaic_donors,
+        grouter_->db_net_map_,
+        tempered_fusion_score.vias,
+        tempered_fusion_low_layer_wl,
+        mosaic_stats);
+    const RouteScore wirelength_mosaic_score
+        = computeRouteScore(wirelength_mosaic_hybrid);
+    const uint64_t wirelength_mosaic_low_layer_wl
+        = computeLowLayerWirelength(wirelength_mosaic_hybrid);
 
     logger_->info(utl::GRT,
                   6006,
@@ -4279,6 +4508,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   tempered_fusion_stats.skipped_by_layer_guard,
                   tempered_fusion_stats.skipped_by_budget_guard,
                   tempered_fusion_stats.consumed_wl_gain);
+    logger_->info(utl::GRT,
+                  6021,
+                  "NEWGR wirelength mosaic summary: "
+                  "WL_MOSAIC(wl={}, vias={}, low_wl={}, nets={}, donor_swap={}, "
+                  "add={}, cand={}, wl_guard_skip={}, via_guard_skip={}, "
+                  "layer_guard_skip={}, budget_skip={}, wl_gain={})",
+                  wirelength_mosaic_score.wirelength,
+                  wirelength_mosaic_score.vias,
+                  wirelength_mosaic_low_layer_wl,
+                  wirelength_mosaic_score.routed_nets,
+                  mosaic_stats.replaced_with_donor,
+                  mosaic_stats.added_missing_nets,
+                  mosaic_stats.candidate_pool_size,
+                  mosaic_stats.skipped_by_wl_guard,
+                  mosaic_stats.skipped_by_via_guard,
+                  mosaic_stats.skipped_by_layer_guard,
+                  mosaic_stats.skipped_by_budget_guard,
+                  mosaic_stats.consumed_wl_gain);
 
     // Wirelength champion tournament:
     // evaluate every mixed candidate (FastRoute, NEWGR, and all hybrids) with
@@ -4370,6 +4617,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = closure_swapped + fusion_stats.replaced_with_donor;
     const uint64_t fusion_added
         = closure_added + fusion_stats.added_missing_nets;
+    const uint64_t mosaic_swapped
+        = fusion_swapped + tempered_fusion_stats.replaced_with_donor
+          + mosaic_stats.replaced_with_donor;
+    const uint64_t mosaic_added
+        = fusion_added + tempered_fusion_stats.added_missing_nets
+          + mosaic_stats.added_missing_nets;
 
     consider_champion("NEWGR-core",
                       routes,
@@ -4479,6 +4732,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                       true,
                       fusion_swapped,
                       fusion_added);
+    consider_champion("FastRoute+NEWGR wirelength-mosaic",
+                      wirelength_mosaic_hybrid,
+                      wirelength_mosaic_score,
+                      wirelength_mosaic_low_layer_wl,
+                      last_total_overflow_,
+                      false,
+                      true,
+                      mosaic_swapped,
+                      mosaic_added);
 
     NetRouteMap champion_routes;
     if (champion.routes != nullptr) {
@@ -4636,9 +4898,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       used_fastroute_last_run_ = false;
     }
 
-    const uint64_t oracle_min_gain = 40000;
-    const uint64_t closure_min_gain = 40000;
-    const uint64_t fusion_min_gain = 40000;
+    const uint64_t oracle_min_gain = 2000;
+    const uint64_t closure_min_gain = 2000;
+    const uint64_t fusion_min_gain = 2000;
+    const uint64_t mosaic_min_gain = 2000;
 
     if (shouldPreferWirelengthOracleHybrid(best_overflow,
                                            best_score,
@@ -4727,6 +4990,28 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                             + wirelength_oracle_stats.added_missing_nets
                             + closure_stats.added_missing_nets
                             + fusion_stats.added_missing_nets;
+      used_fastroute_last_run_ = false;
+    }
+
+    if (shouldPreferWirelengthFusionHybrid(best_overflow,
+                                           best_score,
+                                           best_low_layer_wl,
+                                           last_total_overflow_,
+                                           wirelength_mosaic_score,
+                                           wirelength_mosaic_low_layer_wl)
+        && best_score.wirelength > wirelength_mosaic_score.wirelength
+        && best_score.wirelength - wirelength_mosaic_score.wirelength
+               >= mosaic_min_gain) {
+      routes = std::move(wirelength_mosaic_hybrid);
+      best_score = wirelength_mosaic_score;
+      best_overflow = last_total_overflow_;
+      best_low_layer_wl = wirelength_mosaic_low_layer_wl;
+      selected_label = "FastRoute+NEWGR wirelength-mosaic";
+      selected_hybrid = true;
+      selected_swapped_nets = fusion_swapped + tempered_fusion_stats.replaced_with_donor
+                              + mosaic_stats.replaced_with_donor;
+      selected_added_nets = fusion_added + tempered_fusion_stats.added_missing_nets
+                            + mosaic_stats.added_missing_nets;
       used_fastroute_last_run_ = false;
     }
 
