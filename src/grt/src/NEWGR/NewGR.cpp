@@ -2986,6 +2986,224 @@ NetRouteMap buildWirelengthFusionHybrid(
     }
   }
 
+  // Third pass: deterministic shortest-net closure.
+  // Re-scan all donor families and pick the shortest legal per-net route under
+  // relaxed soft-cap budgets. This is intentionally wirelength-dominant and
+  // captures many small independent gains that staged passes can miss.
+  struct FinalClosureCandidate
+  {
+    odb::dbNet* db_net{nullptr};
+    const GRoute* donor_route{nullptr};
+    int pin_count{0};
+    int64_t wl_gain{0};
+    int64_t via_increase{0};
+    int64_t via_drop{0};
+    int64_t low_layer_delta{0};
+    int64_t priority{0};
+  };
+
+  std::vector<FinalClosureCandidate> final_candidates;
+  final_candidates.reserve(db_net_map.size());
+
+  for (const auto& [db_net, net] : db_net_map) {
+    if (db_net == nullptr || net == nullptr) {
+      continue;
+    }
+    auto base_it = hybrid_routes.find(db_net);
+    if (base_it == hybrid_routes.end() || base_it->second.empty()) {
+      continue;
+    }
+
+    const int pin_count = std::max(1, net->getNumPins());
+    const RouteScore base_score = computeRouteScore(base_it->second);
+    if (base_score.segments == 0) {
+      continue;
+    }
+    const RouteLayerUsage base_usage = analyzeRouteLayerUsage(base_it->second);
+
+    const GRoute* best_donor = nullptr;
+    RouteScore best_score;
+    RouteLayerUsage best_usage;
+
+    for (const NetRouteMap* donor_set : donor_route_sets) {
+      if (donor_set == nullptr) {
+        continue;
+      }
+      const GRoute* donor_route = findNetRoute(*donor_set, db_net);
+      if (donor_route == nullptr) {
+        continue;
+      }
+      ++stats.candidate_pool_size;
+      const RouteScore donor_score = computeRouteScore(*donor_route);
+      if (donor_score.segments == 0 || donor_score.wirelength >= base_score.wirelength) {
+        continue;
+      }
+      const RouteLayerUsage donor_usage = analyzeRouteLayerUsage(*donor_route);
+      const int64_t wl_gain = static_cast<int64_t>(base_score.wirelength)
+                              - static_cast<int64_t>(donor_score.wirelength);
+      const int64_t via_increase = static_cast<int64_t>(donor_score.vias)
+                                   - static_cast<int64_t>(base_score.vias);
+      const int64_t low_layer_delta
+          = static_cast<int64_t>(donor_usage.low_layer_wl)
+            - static_cast<int64_t>(base_usage.low_layer_wl);
+      const int64_t low_layer_growth = std::max<int64_t>(0, low_layer_delta);
+      const int64_t via_soft_limit
+          = maxInterleavedViaIncrease(pin_count)
+            + ((pin_count <= 12) ? 12 : ((pin_count <= 32) ? 16 : 22));
+      if (via_increase > via_soft_limit
+          && wl_gain
+                 < via_increase * 34 + low_layer_growth / 18
+                       + static_cast<int64_t>(8)) {
+        continue;
+      }
+      if (low_layer_growth > 0
+          && (low_layer_growth > std::max<int64_t>(140, wl_gain / 2)
+              || wl_gain
+                     < low_layer_growth * 3
+                           + std::max<int64_t>(0, via_increase) * 18
+                           + static_cast<int64_t>(40))) {
+        continue;
+      }
+
+      if (best_donor == nullptr
+          || std::make_tuple(donor_score.wirelength,
+                             donor_score.vias,
+                             donor_usage.low_layer_wl)
+                 < std::make_tuple(best_score.wirelength,
+                                   best_score.vias,
+                                   best_usage.low_layer_wl)) {
+        best_donor = donor_route;
+        best_score = donor_score;
+        best_usage = donor_usage;
+      }
+    }
+
+    if (best_donor == nullptr) {
+      continue;
+    }
+
+    const int64_t wl_gain = static_cast<int64_t>(base_score.wirelength)
+                            - static_cast<int64_t>(best_score.wirelength);
+    const int64_t via_increase = static_cast<int64_t>(best_score.vias)
+                                 - static_cast<int64_t>(base_score.vias);
+    const int64_t via_drop = static_cast<int64_t>(base_score.vias)
+                             - static_cast<int64_t>(best_score.vias);
+    const int64_t low_layer_delta
+        = static_cast<int64_t>(best_usage.low_layer_wl)
+          - static_cast<int64_t>(base_usage.low_layer_wl);
+    const int64_t low_layer_release = std::max<int64_t>(0, -low_layer_delta);
+    const int64_t low_layer_growth = std::max<int64_t>(0, low_layer_delta);
+    const int64_t priority
+        = wl_gain * 8 + std::max<int64_t>(0, via_drop) * 12 + low_layer_release / 3
+          - std::max<int64_t>(0, via_increase) * 20 - low_layer_growth;
+    final_candidates.push_back({db_net,
+                                best_donor,
+                                pin_count,
+                                wl_gain,
+                                via_increase,
+                                via_drop,
+                                low_layer_delta,
+                                priority});
+  }
+
+  std::sort(final_candidates.begin(),
+            final_candidates.end(),
+            [](const FinalClosureCandidate& lhs, const FinalClosureCandidate& rhs) {
+              return std::make_tuple(lhs.priority,
+                                     lhs.wl_gain,
+                                     std::max<int64_t>(0, lhs.via_drop),
+                                     -std::max<int64_t>(0, lhs.via_increase),
+                                     -std::max<int64_t>(0, lhs.low_layer_delta))
+                     > std::make_tuple(rhs.priority,
+                                       rhs.wl_gain,
+                                       std::max<int64_t>(0, rhs.via_drop),
+                                       -std::max<int64_t>(0, rhs.via_increase),
+                                       -std::max<int64_t>(0, rhs.low_layer_delta));
+            });
+
+  const size_t final_swap_limit = std::min<size_t>(
+      3800, std::max<size_t>(420, db_net_map.size() / 6));
+  const int64_t final_via_budget = std::max<int64_t>(
+      1400, static_cast<int64_t>(seed_total_vias / 64));
+  const int64_t final_low_layer_budget = std::max<int64_t>(
+      240000, static_cast<int64_t>(seed_low_layer_wl / 420));
+  const int64_t final_total_via_budget = total_via_budget + final_via_budget;
+  const int64_t final_total_low_layer_budget
+      = total_low_layer_budget + final_low_layer_budget;
+  const uint64_t final_wl_target = std::max<uint64_t>(220000, seed_total_wirelength / 3200);
+  const size_t final_min_swaps = std::max<size_t>(80, final_swap_limit / 10);
+
+  uint64_t final_wl_gain = 0;
+  size_t final_swaps = 0;
+  for (const FinalClosureCandidate& candidate : final_candidates) {
+    if (final_swaps >= final_swap_limit) {
+      break;
+    }
+    auto base_it = hybrid_routes.find(candidate.db_net);
+    if (base_it == hybrid_routes.end() || base_it->second.empty()) {
+      continue;
+    }
+    const RouteScore live_base_score = computeRouteScore(base_it->second);
+    if (live_base_score.segments == 0) {
+      continue;
+    }
+    const RouteScore donor_score = computeRouteScore(*candidate.donor_route);
+    if (donor_score.segments == 0 || donor_score.wirelength >= live_base_score.wirelength) {
+      continue;
+    }
+
+    const RouteLayerUsage live_base_usage = analyzeRouteLayerUsage(base_it->second);
+    const RouteLayerUsage donor_usage = analyzeRouteLayerUsage(*candidate.donor_route);
+    const int64_t wl_gain = static_cast<int64_t>(live_base_score.wirelength)
+                            - static_cast<int64_t>(donor_score.wirelength);
+    const int64_t via_increase = std::max<int64_t>(
+        0, static_cast<int64_t>(donor_score.vias) - static_cast<int64_t>(live_base_score.vias));
+    const int64_t low_layer_growth = std::max<int64_t>(
+        0,
+        static_cast<int64_t>(donor_usage.low_layer_wl)
+            - static_cast<int64_t>(live_base_usage.low_layer_wl));
+    const int64_t low_layer_release = std::max<int64_t>(
+        0,
+        static_cast<int64_t>(live_base_usage.low_layer_wl)
+            - static_cast<int64_t>(donor_usage.low_layer_wl));
+    const int64_t effective_gain
+        = wl_gain * 4 + low_layer_release / 2 - via_increase * 22
+          - low_layer_growth;
+
+    if (via_increase > 0
+        && effective_gain
+               < via_increase * 36 + low_layer_growth / 18
+                     + static_cast<int64_t>(12)) {
+      ++stats.skipped_by_via_guard;
+      continue;
+    }
+    if (low_layer_growth > 0
+        && (effective_gain
+                < low_layer_growth * 2 + via_increase * 18 + static_cast<int64_t>(80)
+            || low_layer_growth
+                   > wl_gain + static_cast<int64_t>(candidate.pin_count) * 18)) {
+      ++stats.skipped_by_layer_guard;
+      continue;
+    }
+    if (consumed_via_increase + via_increase > final_total_via_budget
+        || consumed_low_layer_growth + low_layer_growth > final_total_low_layer_budget) {
+      ++stats.skipped_by_budget_guard;
+      continue;
+    }
+
+    base_it->second = *candidate.donor_route;
+    consumed_via_increase += via_increase;
+    consumed_low_layer_growth += low_layer_growth;
+    const uint64_t net_wl_gain = static_cast<uint64_t>(std::max<int64_t>(0, wl_gain));
+    consumed_wl_gain += net_wl_gain;
+    final_wl_gain += net_wl_gain;
+    ++stats.replaced_with_donor;
+    ++final_swaps;
+    if (final_wl_gain >= final_wl_target && final_swaps >= final_min_swaps) {
+      break;
+    }
+  }
+
   stats.consumed_wl_gain = consumed_wl_gain;
   return hybrid_routes;
 }
@@ -3548,6 +3766,13 @@ bool shouldPreferWirelengthFusionHybrid(int incumbent_overflow,
              < static_cast<uint64_t>(low_layer_delta / 7
                                      + via_growth * 90
                                      + static_cast<int64_t>(18000))) {
+    return false;
+  }
+  if (low_layer_delta > 0
+      && effective_wl_gain
+             < static_cast<uint64_t>(low_layer_delta
+                                     + via_growth * 120
+                                     + static_cast<int64_t>(90000))) {
     return false;
   }
   if (via_growth > 0 && low_layer_delta > 0
