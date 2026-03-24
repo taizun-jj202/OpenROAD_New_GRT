@@ -75,21 +75,21 @@ void NewgrEngine::init(const SprouteGridData& grid,
 
 NetRouteMap NewgrEngine::run()
 {
-  return runWithConfig(/*max_maze_round=*/150,
-                       static_cast<int>(Algo::DetPart_Astar_Region),
+  return runWithConfig(/*max_maze_round=*/340,
+                       static_cast<int>(Algo::DetPart_Astar_Local),
                        /*warn_id=*/401);
 }
 
 NetRouteMap NewgrEngine::runWirelengthFirst()
 {
-  return runWithConfig(/*max_maze_round=*/130,
+  return runWithConfig(/*max_maze_round=*/280,
                        static_cast<int>(Algo::DetPart_Astar),
                        /*warn_id=*/402);
 }
 
 NetRouteMap NewgrEngine::runDataDrivenWirelength()
 {
-  return runWithConfig(/*max_maze_round=*/220,
+  return runWithConfig(/*max_maze_round=*/320,
                        static_cast<int>(Algo::DetPart_Astar_Data),
                        /*warn_id=*/406);
 }
@@ -102,7 +102,7 @@ NetRouteMap NewgrEngine::runCriticalWirelengthRefine()
   }
 
   buildInput(critical_nets);
-  NetRouteMap routes = runWithConfig(/*max_maze_round=*/130,
+  NetRouteMap routes = runWithConfig(/*max_maze_round=*/260,
                                      static_cast<int>(Algo::DetPart_Astar_Data),
                                      /*warn_id=*/411);
   buildInput();
@@ -117,7 +117,7 @@ NetRouteMap NewgrEngine::runCriticalTopologyRefine()
   }
 
   buildInput(critical_nets);
-  NetRouteMap routes = runWithConfig(/*max_maze_round=*/110,
+  NetRouteMap routes = runWithConfig(/*max_maze_round=*/220,
                                      static_cast<int>(Algo::Astar),
                                      /*warn_id=*/412);
   buildInput();
@@ -126,49 +126,49 @@ NetRouteMap NewgrEngine::runCriticalTopologyRefine()
 
 NetRouteMap NewgrEngine::runRegionAware()
 {
-  return runWithConfig(/*max_maze_round=*/220,
+  return runWithConfig(/*max_maze_round=*/260,
                        static_cast<int>(Algo::DetPart_Astar_Region),
                        /*warn_id=*/403);
 }
 
 NetRouteMap NewgrEngine::runRegularRegionAware()
 {
-  return runWithConfig(/*max_maze_round=*/220,
+  return runWithConfig(/*max_maze_round=*/260,
                        static_cast<int>(Algo::DetPart_Astar_Regular_Region),
                        /*warn_id=*/405);
 }
 
 NetRouteMap NewgrEngine::runFineGrainRefine()
 {
-  return runWithConfig(/*max_maze_round=*/180,
+  return runWithConfig(/*max_maze_round=*/220,
                        static_cast<int>(Algo::FineGrain),
                        /*warn_id=*/404);
 }
 
 NetRouteMap NewgrEngine::runSmallNetAware()
 {
-  return runWithConfig(/*max_maze_round=*/200,
+  return runWithConfig(/*max_maze_round=*/240,
                        static_cast<int>(Algo::DetPart_Astar_Small),
                        /*warn_id=*/408);
 }
 
 NetRouteMap NewgrEngine::runAstarClassic()
 {
-  return runWithConfig(/*max_maze_round=*/220,
+  return runWithConfig(/*max_maze_round=*/260,
                        static_cast<int>(Algo::Astar),
                        /*warn_id=*/409);
 }
 
 NetRouteMap NewgrEngine::runRudyDriven()
 {
-  return runWithConfig(/*max_maze_round=*/200,
+  return runWithConfig(/*max_maze_round=*/240,
                        static_cast<int>(Algo::DetPart_Astar_RUDY),
                        /*warn_id=*/407);
 }
 
 NetRouteMap NewgrEngine::runLocalPolish()
 {
-  return runWithConfig(/*max_maze_round=*/170,
+  return runWithConfig(/*max_maze_round=*/280,
                        static_cast<int>(Algo::DetPart_Astar_Local),
                        /*warn_id=*/410);
 }
@@ -346,14 +346,14 @@ std::vector<int> NewgrEngine::selectCriticalNetIndices() const
 
   // Mix SPRoute-style data-driven refinement and classic A* over a broad
   // critical subset so NEWGR can apply more aggressive WL improvements.
-  const size_t min_budget = 160;
-  const size_t max_budget = 512;
-  size_t budget = ranked.size() / 12;
+  const size_t min_budget = 512;
+  const size_t max_budget = 3072;
+  size_t budget = ranked.size() / 6;
   budget = std::max(budget, min_budget);
   budget = std::min(budget, max_budget);
   budget = std::min(budget, ranked.size());
 
-  const int64_t min_hpwl = 12;
+  const int64_t min_hpwl = 8;
   std::vector<int> selected;
   selected.reserve(budget);
   for (const RankedNet& ranked_net : ranked) {
@@ -367,7 +367,7 @@ std::vector<int> NewgrEngine::selectCriticalNetIndices() const
   }
 
   if (selected.empty()) {
-    const size_t fallback = std::min<size_t>(160, ranked.size());
+    const size_t fallback = std::min<size_t>(512, ranked.size());
     selected.reserve(fallback);
     for (size_t i = 0; i < fallback; ++i) {
       selected.push_back(ranked[i].index);
