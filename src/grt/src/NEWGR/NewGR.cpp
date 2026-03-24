@@ -5600,6 +5600,48 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = find_scenario_by_name("hybrid-netmix-wl-layerbudget");
     const ScenarioResult* preferred_wl_ptr = nullptr;
 
+    if (wl_anchor != nullptr && wl_layerbudget_ptr != nullptr) {
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      const long wl_gain
+          = wl_anchor->metrics.wirelength_dbu - wl_layerbudget_ptr->metrics.wirelength_dbu;
+      const long min_wl_gain = std::max<long>(
+          22L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00008)));
+      const long via_rise = static_cast<long>(wl_layerbudget_ptr->metrics.via_count)
+                            - static_cast<long>(wl_anchor->metrics.via_count);
+      const long via_rise_cap = std::max<long>(
+          42L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.00042)));
+      const long detour_guard = std::max<long>(tile_size * 4L, 2200L);
+      const long high_layer_floor = std::max<long>(
+          tile_size * 14L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.985)));
+      const bool compact_guard
+          = wl_gain >= min_wl_gain && via_rise >= 0 && via_rise <= via_rise_cap
+            && wl_layerbudget_ptr->metrics.detour_dbu
+                   <= wl_anchor->metrics.detour_dbu + detour_guard
+            && wl_layerbudget_ptr->metrics.high_layer_dbu >= high_layer_floor
+            && wl_layerbudget_ptr->metrics.overflow_edges
+                   <= wl_anchor->metrics.overflow_edges;
+      if (compact_guard) {
+        preferred_wl_ptr = wl_layerbudget_ptr;
+        logger_->info(
+            GNR,
+            7346,
+            "NEWGR pre-selecting layer-budget '{}': wl gain {}, via rise {}, "
+            "detour delta {}, high-layer delta {}.",
+            preferred_wl_ptr->name,
+            wl_gain,
+            via_rise,
+            preferred_wl_ptr->metrics.detour_dbu - wl_anchor->metrics.detour_dbu,
+            preferred_wl_ptr->metrics.high_layer_dbu
+                - wl_anchor->metrics.high_layer_dbu);
+      }
+    }
+
     // Radical WL-first override:
     // if an extreme min-WL hybrid is a strict WL+via improvement over the
     // anchor while staying overflow-safe, lock it in as the preferred
@@ -6578,6 +6620,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             = forced_wl_ptr == budgeted_lift_ptr && wl_gain >= min_wl_gain
               && forced_wl_ptr->metrics.via_count
                      <= wl_anchor->metrics.via_count + budgeted_via_rise_guard;
+        const long layerbudget_via_rise_guard = std::max<long>(
+            60L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(wl_anchor->metrics.via_count) * 0.00060)));
+        const bool layerbudget_unlock
+            = forced_wl_ptr == wl_layerbudget_ptr && wl_gain >= min_wl_gain
+              && forced_wl_ptr->metrics.via_count
+                     <= wl_anchor->metrics.via_count + layerbudget_via_rise_guard;
         const bool radical_wl_mix_candidate
             = forced_wl_ptr == absolute_wl_ptr
               || forced_wl_ptr == min_wl_wide_ptr
@@ -6602,7 +6652,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                          >= relaxed_high_layer_floor);
         const bool conservative_keep
             = (strict_wl_via_improvement || layer_floor_unlock
-               || drt_elastic_unlock || budgeted_lift_unlock)
+               || drt_elastic_unlock || budgeted_lift_unlock
+               || layerbudget_unlock)
               && structural_guard && layer_guard_ok && proxy_guard;
         const bool keep_challenger = conservative_keep || radical_wl_unlock;
         if (keep_challenger) {
