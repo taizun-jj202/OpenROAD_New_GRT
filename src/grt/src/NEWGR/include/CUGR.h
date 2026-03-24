@@ -32,9 +32,7 @@ struct Constants
   // Wirelength-first weighting to counter NEWGR's CUGR-like over-detour
   // behavior on large designs.
   double weight_wire_length = 1.0;
-  // Slightly lower via aversion than legacy NEWGR to permit targeted
-  // wirelength tightening without opening a broad via explosion.
-  double weight_via_number = 2.6;
+  double weight_via_number = 2.8;
   double weight_short_area = 500.0;
 
   int min_routing_layer = 1;
@@ -90,7 +88,6 @@ class CUGR
   void finalPatternTighten();
   void globalCompaction();
   void strictWirelengthCompaction();
-  void ultraWirelengthPolish();
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
