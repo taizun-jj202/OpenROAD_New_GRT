@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "NEWGR/src/NewgrEngine.h"
+#include "FastRoute.h"
 #include "Net.h"
 #include "Pin.h"
 #include "utl/Logger.h"
@@ -450,20 +451,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     engine_ = std::make_unique<NewgrEngine>(logger_);
   }
 
+  NetRouteMap routes = grouter_->fastroute()->run();
+
   engine_->init(grouter_->sproute_grid_data_, grouter_->sproute_nets_);
-  NetRouteMap routes = engine_->run();
-  NetRouteMap balanced_routes;
+  NetRouteMap balanced_routes = engine_->run();
   NetRouteMap critical_wirelength_routes = engine_->runCriticalWirelengthRefine();
   NetRouteMap critical_topology_routes = engine_->runCriticalTopologyRefine();
-  NetRouteMap wirelength_routes;
-  NetRouteMap data_wirelength_routes;
-  NetRouteMap region_aware_routes;
-  NetRouteMap regular_region_routes;
-  NetRouteMap finegrain_routes;
-  NetRouteMap smallnet_routes;
-  NetRouteMap astar_routes;
-  NetRouteMap rudy_routes;
-  NetRouteMap local_polish_routes;
+  NetRouteMap wirelength_routes = engine_->runWirelengthFirst();
+  NetRouteMap data_wirelength_routes = engine_->runDataDrivenWirelength();
+  NetRouteMap region_aware_routes = engine_->runRegionAware();
+  NetRouteMap regular_region_routes = engine_->runRegularRegionAware();
+  NetRouteMap finegrain_routes = engine_->runFineGrainRefine();
+  NetRouteMap smallnet_routes = engine_->runSmallNetAware();
+  NetRouteMap astar_routes = engine_->runAstarClassic();
+  NetRouteMap rudy_routes = engine_->runRudyDriven();
+  NetRouteMap local_polish_routes = engine_->runLocalPolish();
 
   const SprouteGridData& grid = grouter_->sproute_grid_data_;
   const int origin_x = grid.origin.x();

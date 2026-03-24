@@ -346,9 +346,9 @@ std::vector<int> NewgrEngine::selectCriticalNetIndices() const
 
   // Mix SPRoute-style data-driven refinement and classic A* over a broad
   // critical subset so NEWGR can apply more aggressive WL improvements.
-  const size_t min_budget = 96;
-  const size_t max_budget = 320;
-  size_t budget = ranked.size() / 18;
+  const size_t min_budget = 160;
+  const size_t max_budget = 512;
+  size_t budget = ranked.size() / 12;
   budget = std::max(budget, min_budget);
   budget = std::min(budget, max_budget);
   budget = std::min(budget, ranked.size());
@@ -367,7 +367,7 @@ std::vector<int> NewgrEngine::selectCriticalNetIndices() const
   }
 
   if (selected.empty()) {
-    const size_t fallback = std::min<size_t>(96, ranked.size());
+    const size_t fallback = std::min<size_t>(160, ranked.size());
     selected.reserve(fallback);
     for (size_t i = 0; i < fallback; ++i) {
       selected.push_back(ranked[i].index);
