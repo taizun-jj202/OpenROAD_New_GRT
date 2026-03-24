@@ -61,7 +61,7 @@ struct Constants
   // Wirelength-first view with light congestion awareness so WL-only mazes
   // avoid obviously overused resources.
   bool use_soft_wirelength_cost = true;
-  double soft_wirelength_short_cost_scale = 0.22;
+  double soft_wirelength_short_cost_scale = 0.08;
   double soft_wirelength_logistic_slope = 0.24;
   double soft_wirelength_penalty_cap = 1.25;
 
@@ -80,17 +80,17 @@ struct Constants
   bool stage3_try_offset = true;
   bool stage3_full_offset_sweep = false;
   int stage3_full_offset_hpwl_threshold = 180;
-  int stage3_max_maze_configs = 4;
+  int stage3_max_maze_configs = 8;
   bool stage3_use_wirelength_maze = true;
   int stage3_wl_only_hpwl_threshold = 140;
-  int stage3_wl_config_limit = 3;
+  int stage3_wl_config_limit = 4;
   double stage3_wl_via_cost_scale = 0.10;
   bool stage3_use_full_grid_wl_maze = true;
   int stage3_full_grid_hpwl_threshold = 180;
-  int stage3_full_grid_pin_limit = 16;
-  int stage3_full_grid_overflow_threshold = 1;
+  int stage3_full_grid_pin_limit = 24;
+  int stage3_full_grid_overflow_threshold = 3;
   double stage3_full_grid_via_cost_scale = 0.01;
-  double stage3_full_grid_min_stretch = 1.12;
+  double stage3_full_grid_min_stretch = 1.04;
 
   // FastRoute-style post-processing pass: reroute a subset of long,
   // overflow-free nets and keep only wirelength-improving solutions.
@@ -101,12 +101,12 @@ struct Constants
   int recovery_wl_only_hpwl_threshold = 112;
   int recovery_hpwl_threshold = 88;
   double recovery_min_stretch = 1.03;
-  int recovery_candidate_cap = 24;
-  int recovery_deep_search_cap = 8;
+  int recovery_candidate_cap = 32;
+  int recovery_deep_search_cap = 10;
   int recovery_shallow_maze_config_limit = 2;
   int recovery_deep_maze_config_limit = 3;
   int recovery_shallow_wl_config_limit = 2;
-  int recovery_deep_wl_config_limit = 2;
+  int recovery_deep_wl_config_limit = 3;
   double recovery_refine_ratio = 0.45;
   int recovery_overflow_slack = 2;
   int recovery_max_passes = 1;

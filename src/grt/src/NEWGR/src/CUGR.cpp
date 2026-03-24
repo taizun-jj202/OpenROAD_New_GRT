@@ -494,12 +494,14 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         && hpwl >= constants_.stage3_full_grid_hpwl_threshold
         && net->getNumPins() >= 3
         && net->getNumPins() <= constants_.stage3_full_grid_pin_limit
-        && baseline_overflow <= constants_.stage3_full_grid_overflow_threshold
-        && (overflow_driven || very_high_stretch)
+        && baseline_overflow
+               <= (constants_.stage3_full_grid_overflow_threshold
+                   + (aggressive_wirelength_mode ? 1 : 0))
+        && (overflow_driven || very_high_stretch || aggressive_wirelength_mode)
         && baseline_stretch
                >= (aggressive_wirelength_mode
-                       ? std::max(1.05,
-                                  constants_.stage3_full_grid_min_stretch - 0.08)
+                       ? std::max(1.02,
+                                  constants_.stage3_full_grid_min_stretch - 0.10)
                        : constants_.stage3_full_grid_min_stretch)) {
       const double full_grid_via_scale = std::clamp(
           constants_.stage3_full_grid_via_cost_scale, 0.0, 1.0);
@@ -1090,11 +1092,11 @@ void CUGR::route()
   if (constants_.wirelength_first_refinement) {
     double maze_ratio = constants_.maze_refine_ratio;
     if (detourIndices.size() > 160) {
-      maze_ratio = std::min(maze_ratio, 0.12);
+      maze_ratio = std::min(maze_ratio, 0.20);
     } else if (detourIndices.size() > 80) {
-      maze_ratio = std::min(maze_ratio, 0.14);
+      maze_ratio = std::min(maze_ratio, 0.22);
     } else if (detourIndices.size() > 40) {
-      maze_ratio = std::min(maze_ratio, 0.16);
+      maze_ratio = std::min(maze_ratio, 0.24);
     }
     mazeIndices = selectCriticalNets(detourIndices, maze_ratio);
   }

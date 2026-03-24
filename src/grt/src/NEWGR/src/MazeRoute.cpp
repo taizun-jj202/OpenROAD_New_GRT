@@ -323,8 +323,8 @@ void MazeRoute::run()
     // Wirelength-first tie breaking with bounded congestion-cost regression.
     constexpr uint64_t kStrongWireGain = 4;
     constexpr uint64_t kModerateWireGain = 1;
-    constexpr double kCostSlackForWireGain = 1.36;
-    constexpr double kCostSlackForModerateWireGain = 1.45;
+    constexpr double kCostSlackForWireGain = 1.56;
+    constexpr double kCostSlackForModerateWireGain = 1.72;
     const uint64_t kCostDrivenWireSlack = std::max<uint64_t>(1, net_hpwl / 70);
     const uint64_t kMaxCostDrivenWireRegression
         = std::max<uint64_t>(2, net_hpwl / 30);
@@ -339,14 +339,14 @@ void MazeRoute::run()
     if (candidate.unique_wirelength + kStrongWireGain
             < current_best.unique_wirelength
         && candidate.total_cost <= current_best.total_cost * kCostSlackForWireGain
-        && candidate.unique_vias <= current_best.unique_vias + 4) {
+        && candidate.unique_vias <= current_best.unique_vias + 6) {
       return true;
     }
     if (candidate.unique_wirelength + kModerateWireGain
             < current_best.unique_wirelength
         && candidate.total_cost
                <= current_best.total_cost * kCostSlackForModerateWireGain
-        && candidate.unique_vias <= current_best.unique_vias + 3) {
+        && candidate.unique_vias <= current_best.unique_vias + 5) {
       return true;
     }
     if (best_stretch >= 1.10
@@ -1134,6 +1134,13 @@ void MazeRoute::run()
     }
   }
 
+  const int span_x = max_x - min_x;
+  const int span_y = max_y - min_y;
+  const int hpwl_span = span_x + span_y;
+  const bool long_span_net = hpwl_span >= 120 || std::max(span_x, span_y) >= 84;
+  const bool very_wide = span_x >= span_y * 2;
+  const bool very_tall = span_y >= span_x * 2;
+
   int max_seeds = 2;
   if (num_pins <= 8) {
     max_seeds = num_pins;
@@ -1143,6 +1150,9 @@ void MazeRoute::run()
     max_seeds = 6;
   } else if (num_pins <= 64) {
     max_seeds = 5;
+  }
+  if (long_span_net && num_pins <= 48) {
+    max_seeds = std::min(max_seeds + 2, std::min(num_pins, 9));
   }
 
   if (max_seeds < static_cast<int>(seeds.size())) {
@@ -1171,6 +1181,8 @@ void MazeRoute::run()
   if (num_pins <= 24) {
     tryCandidate(runGeometricMstEmbedding(min_x_seed));
     tryCandidate(runGeometricMstEmbedding(max_x_seed));
+    tryCandidate(runGeometricMstEmbedding(min_y_seed));
+    tryCandidate(runGeometricMstEmbedding(max_y_seed));
   }
 
   auto tryPairCandidate = [&](const int lhs, const int rhs) {
@@ -1248,10 +1260,6 @@ void MazeRoute::run()
       }
     }
   }
-  const int span_x = max_x - min_x;
-  const int span_y = max_y - min_y;
-  const bool very_wide = span_x >= span_y * 2;
-  const bool very_tall = span_y >= span_x * 2;
   if (num_pins <= 48) {
     int pair_budget = 4;
     if (num_pins <= 16) {
@@ -1261,6 +1269,9 @@ void MazeRoute::run()
     }
     if (very_wide || very_tall) {
       pair_budget++;
+    }
+    if (long_span_net) {
+      pair_budget += 2;
     }
     pair_budget = std::min(pair_budget, static_cast<int>(pair_candidates.size()));
     for (int pair_index = 0; pair_index < pair_budget; pair_index++) {
