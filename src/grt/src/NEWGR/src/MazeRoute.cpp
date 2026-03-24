@@ -635,7 +635,7 @@ void MazeRoute::run()
 
     // Runtime guardrail: use the metric closure only for small/medium nets.
     const int max_metric_closure_pins
-        = wirelength_heavy_mode ? 72 : 56;
+        = wirelength_heavy_mode ? 96 : 56;
     if (num_pins > max_metric_closure_pins) {
       return result;
     }
@@ -948,14 +948,97 @@ void MazeRoute::run()
                 return lhs.rhs < rhs.rhs;
               });
 
-    int pair_budget = num_pins <= 20 ? 14 : (num_pins <= 40 ? 10 : 7);
+    int pair_budget = num_pins <= 20 ? 16 : (num_pins <= 40 ? 12 : 8);
     if (wirelength_heavy_mode) {
-      pair_budget += (num_pins <= 24 ? 10 : (num_pins <= 48 ? 6 : 4));
+      pair_budget += (num_pins <= 24 ? 12 : (num_pins <= 48 ? 8 : 6));
     }
     const int keep = std::min(pair_budget, static_cast<int>(scored_pairs.size()));
     extra_pair_candidates.reserve(keep);
     for (int i = 0; i < keep; i++) {
       extra_pair_candidates.emplace_back(scored_pairs[i].lhs, scored_pairs[i].rhs);
+    }
+
+    // SPRoute-style local-structure awareness:
+    // add pin pairs from a Manhattan MST so candidate trunks also cover
+    // local cluster connectors instead of only farthest-pair trunks.
+    struct MstEdge
+    {
+      int lhs;
+      int rhs;
+      int dist;
+      int center_span;
+    };
+    std::vector<int> prim_best(num_pins, std::numeric_limits<int>::max());
+    std::vector<int> prim_parent(num_pins, -1);
+    std::vector<bool> prim_used(num_pins, false);
+    std::vector<MstEdge> mst_edges;
+    mst_edges.reserve(num_pins > 0 ? num_pins - 1 : 0);
+    prim_best[0] = 0;
+    for (int iter = 0; iter < num_pins; iter++) {
+      int v = -1;
+      int best_cost = std::numeric_limits<int>::max();
+      for (int pin = 0; pin < num_pins; pin++) {
+        if (!prim_used[pin] && prim_best[pin] < best_cost) {
+          best_cost = prim_best[pin];
+          v = pin;
+        }
+      }
+      if (v < 0) {
+        break;
+      }
+      prim_used[v] = true;
+      if (prim_parent[v] >= 0) {
+        const PointT lhs_point = graph_.getPseudoPin(prim_parent[v]).point;
+        const PointT rhs_point = graph_.getPseudoPin(v).point;
+        const int lhs_center_dist
+            = std::abs(lhs_point.x() - center.x())
+              + std::abs(lhs_point.y() - center.y());
+        const int rhs_center_dist
+            = std::abs(rhs_point.x() - center.x())
+              + std::abs(rhs_point.y() - center.y());
+        mst_edges.push_back(
+            {prim_parent[v], v, prim_best[v], lhs_center_dist + rhs_center_dist});
+      }
+      const PointT v_point = graph_.getPseudoPin(v).point;
+      for (int u = 0; u < num_pins; u++) {
+        if (prim_used[u]) {
+          continue;
+        }
+        const PointT u_point = graph_.getPseudoPin(u).point;
+        const int dist = std::abs(v_point.x() - u_point.x())
+                         + std::abs(v_point.y() - u_point.y());
+        if (dist < prim_best[u]
+            || (dist == prim_best[u]
+                && (prim_parent[u] < 0 || v < prim_parent[u]))) {
+          prim_best[u] = dist;
+          prim_parent[u] = v;
+        }
+      }
+    }
+    std::sort(mst_edges.begin(),
+              mst_edges.end(),
+              [](const MstEdge& lhs, const MstEdge& rhs) {
+                if (lhs.dist != rhs.dist) {
+                  return lhs.dist > rhs.dist;
+                }
+                if (lhs.center_span != rhs.center_span) {
+                  return lhs.center_span > rhs.center_span;
+                }
+                if (lhs.lhs != rhs.lhs) {
+                  return lhs.lhs < rhs.lhs;
+                }
+                return lhs.rhs < rhs.rhs;
+              });
+
+    const int mst_pair_budget = wirelength_heavy_mode
+                                    ? (num_pins <= 32 ? 18 : 14)
+                                    : (num_pins <= 32 ? 12 : 8);
+    const int mst_keep
+        = std::min(mst_pair_budget, static_cast<int>(mst_edges.size()));
+    for (int i = 0; i < mst_keep; i++) {
+      const int lhs = std::min(mst_edges[i].lhs, mst_edges[i].rhs);
+      const int rhs = std::max(mst_edges[i].lhs, mst_edges[i].rhs);
+      extra_pair_candidates.emplace_back(lhs, rhs);
     }
   }
 
@@ -1017,11 +1100,11 @@ void MazeRoute::run()
   }
   if (wirelength_heavy_mode) {
     if (num_pins <= 32) {
-      max_seeds = std::min(num_pins, max_seeds + 6);
+      max_seeds = std::min(num_pins, max_seeds + 8);
     } else if (num_pins <= 64) {
-      max_seeds = std::min(num_pins, max_seeds + 4);
+      max_seeds = std::min(num_pins, max_seeds + 6);
     } else {
-      max_seeds = std::min(num_pins, max_seeds + 2);
+      max_seeds = std::min(num_pins, max_seeds + 3);
     }
   }
   if (max_seeds < static_cast<int>(seeds.size())) {

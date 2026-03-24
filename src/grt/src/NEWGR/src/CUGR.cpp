@@ -329,9 +329,9 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
           && net->getNumPins() <= constants_.stage3_full_grid_pin_limit + 4
           && baseline_overflow
                  <= constants_.stage3_full_grid_overflow_threshold + 2
-          && baseline_stretch >= 1.08;
+          && baseline_stretch >= 1.04;
     const double stage3_wl_overflow_slack
-        = aggressive_wirelength_mode ? 11.5 : 7.0;
+        = aggressive_wirelength_mode ? 14.0 : 7.0;
     const bool wide_bbox = bbox.width() >= bbox.height();
     const int base_sparse = std::clamp(hpwl >= 240 ? 8 : (hpwl >= 120 ? 7 : 6),
                                        4,
@@ -470,8 +470,8 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     }
 
     // FastRoute-style critical-net intensification with CUGR wirelength
-    // objective: run one full-grid wirelength-only maze for high-stretch
-    // long nets where sparse sampling often misses shorter trunks.
+    // objective: run full-grid wirelength-only mazes with multiple via scales
+    // so both low-via and shortest-trunk solutions can be evaluated.
     if (constants_.stage3_use_full_grid_wl_maze
         && hpwl >= constants_.stage3_full_grid_hpwl_threshold
         && net->getNumPins() >= 3
@@ -482,15 +482,34 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
                        ? std::max(1.05,
                                   constants_.stage3_full_grid_min_stretch - 0.08)
                        : constants_.stage3_full_grid_min_stretch)) {
-      const double full_grid_via_scale = std::clamp(
+      std::vector<double> full_grid_via_scales;
+      full_grid_via_scales.reserve(5);
+      const double base_via_scale = std::clamp(
           constants_.stage3_full_grid_via_cost_scale, 0.0, 1.0);
-      MazeRoute fullGridWlMaze(net, grid_graph_.get(), logger_);
-      fullGridWlMaze.constructSparsifiedGraph(
-          wireLengthCostView, SparseGrid(1, 1, 0, 0), full_grid_via_scale);
-      fullGridWlMaze.run();
-      const std::shared_ptr<SteinerTreeNode> full_grid_tree
-          = fullGridWlMaze.getSteinerTree();
-      if (full_grid_tree) {
+      full_grid_via_scales.push_back(base_via_scale);
+      if (aggressive_wirelength_mode) {
+        full_grid_via_scales.push_back(base_via_scale * 0.5);
+        full_grid_via_scales.push_back(0.08);
+        full_grid_via_scales.push_back(0.16);
+      }
+      if (baseline_stretch >= constants_.stage3_full_grid_min_stretch + 0.08) {
+        full_grid_via_scales.push_back(0.0);
+      }
+      std::sort(full_grid_via_scales.begin(), full_grid_via_scales.end());
+      full_grid_via_scales.erase(
+          std::unique(full_grid_via_scales.begin(), full_grid_via_scales.end()),
+          full_grid_via_scales.end());
+
+      for (const double via_scale : full_grid_via_scales) {
+        MazeRoute fullGridWlMaze(net, grid_graph_.get(), logger_);
+        fullGridWlMaze.constructSparsifiedGraph(
+            wireLengthCostView, SparseGrid(1, 1, 0, 0), via_scale);
+        fullGridWlMaze.run();
+        const std::shared_ptr<SteinerTreeNode> full_grid_tree
+            = fullGridWlMaze.getSteinerTree();
+        if (!full_grid_tree) {
+          continue;
+        }
         PatternRoute fullGridPatternRoute(
             net, grid_graph_.get(), stt_builder_, constants_, logger_);
         fullGridPatternRoute.setSteinerTree(full_grid_tree);
@@ -881,31 +900,38 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         const bool high_stretch_candidate
             = candidates[candidateIndex].stretch
               >= constants_.recovery_min_stretch + 0.06;
+        const bool allow_full_grid_candidate
+            = deep_search || high_stretch_candidate
+              || candidateIndex < std::max(1, keep / 3);
         const bool enable_full_grid_maze
             = constants_.recovery_use_full_grid_maze
-              && deep_search
+              && allow_full_grid_candidate
               && candidates[candidateIndex].hpwl
                      >= constants_.recovery_full_grid_hpwl_threshold
               && (candidateIndex < std::max(1, constants_.recovery_full_grid_top_n)
                   || high_stretch_candidate)
               && candidates[candidateIndex].stretch
                      >= constants_.recovery_min_stretch
-              && net->getNumPins() <= 64;
+              && net->getNumPins() <= (deep_search ? 72 : 52);
         if (enable_full_grid_maze) {
           GridGraphView<CostT> fullGridWlOnlyView;
           grid_graph_->extractWireLengthCostView(fullGridWlOnlyView);
           std::vector<double> via_scales;
-          via_scales.reserve(4);
+          via_scales.reserve(7);
           const double base_via_scale
               = std::clamp(constants_.recovery_full_grid_via_cost_scale, 0.0, 1.0);
           via_scales.push_back(base_via_scale);
-          if (high_stretch_candidate && base_via_scale > 0.0) {
+          if (base_via_scale > 0.0) {
             via_scales.push_back(base_via_scale * 0.4);
+          }
+          if (!deep_search) {
+            via_scales.push_back(0.20);
           }
           if (high_stretch_candidate
               && candidates[candidateIndex].stretch
                      >= constants_.recovery_min_stretch + 0.08) {
             via_scales.push_back(0.12);
+            via_scales.push_back(0.06);
           }
           if (high_stretch_candidate
               && candidates[candidateIndex].stretch
