@@ -50,7 +50,6 @@ enum class RouteSource
   kNewgrFineGrain,
   kNewgrSmallNet,
   kNewgrAstar,
-  kNewgrAstarEarly,
   kNewgrRudy
 };
 
@@ -263,26 +262,6 @@ void addRouteToUsage(const GRoute& route,
       });
 }
 
-void removeRouteFromUsage(const GRoute& route,
-                          int origin_x,
-                          int origin_y,
-                          int tile_size,
-                          EdgeUsageMap& usage)
-{
-  forEachUnitPlanarEdge(
-      route, origin_x, origin_y, tile_size, [&](const RouteEdgeKey& edge) {
-        auto usage_it = usage.find(edge);
-        if (usage_it == usage.end()) {
-          return;
-        }
-        if (usage_it->second <= 1) {
-          usage.erase(usage_it);
-        } else {
-          usage_it->second--;
-        }
-      });
-}
-
 int64_t routeCongestionPenalty(const GRoute& route,
                                const SprouteGridData& grid,
                                int origin_x,
@@ -317,6 +296,16 @@ int64_t routeCongestionPenalty(const GRoute& route,
         }
       });
   return static_cast<int64_t>(std::llround(penalty));
+}
+
+double congestionRiskDensity(const RouteScore& score,
+                             int64_t congestion_penalty,
+                             int tile_size)
+{
+  const double norm = static_cast<double>(std::max(1, tile_size));
+  const double wl_units
+      = static_cast<double>(std::max<int64_t>(1, score.wirelength)) / norm;
+  return static_cast<double>(congestion_penalty) / std::max(1.0, wl_units);
 }
 
 int64_t viaGuardForNet(const RouteScore& baseline_score, int tile_size)
@@ -480,7 +469,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   NetRouteMap finegrain_routes = engine_->runFineGrainRefine();
   NetRouteMap smallnet_routes = engine_->runSmallNetAware();
   NetRouteMap astar_routes = engine_->runAstarClassic();
-  NetRouteMap astar_early_routes = engine_->runAstarEarly();
   NetRouteMap rudy_routes = engine_->runRudyDriven();
 
   const SprouteGridData& grid = grouter_->sproute_grid_data_;
@@ -542,7 +530,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int selected_from_finegrain = 0;
   int selected_from_smallnet = 0;
   int selected_from_astar = 0;
-  int selected_from_astar_early = 0;
   int selected_from_rudy = 0;
   int kept_fastroute = 0;
   int inserted_from_balanced = 0;
@@ -553,7 +540,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int inserted_from_finegrain = 0;
   int inserted_from_smallnet = 0;
   int inserted_from_astar = 0;
-  int inserted_from_astar_early = 0;
   int inserted_from_rudy = 0;
 
   EdgeUsageMap selected_usage;
@@ -603,13 +589,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
       if (!betterCandidate(
               baseline_score, best_score, candidate_score, policy)) {
-        return;
-      }
-      const bool quality_improves
-          = candidate_score.wirelength < best_score.wirelength
-            || (candidate_score.wirelength == best_score.wirelength
-                && candidate_score.vias < best_score.vias);
-      if (!quality_improves) {
         return;
       }
 
@@ -692,11 +671,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               ? std::max<int64_t>(1, tile_size / 12)
               : (policy.medium_net ? std::max<int64_t>(1, tile_size / 10)
                                    : std::max<int64_t>(1, tile_size / 7));
-    const int64_t astar_early_min_wl_drop
-        = policy.long_net
-              ? std::max<int64_t>(1, tile_size / 10)
-              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 5)
-                                   : std::max<int64_t>(1, tile_size / 4));
     consider(balanced_routes, RouteSource::kNewgrBalanced, 0, false);
     consider(wirelength_routes, RouteSource::kNewgrWirelength, 0, false);
     consider(data_wirelength_routes,
@@ -722,10 +696,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider(astar_routes,
              RouteSource::kNewgrAstar,
              aggressive_min_wl_drop,
-             true);
-    consider(astar_early_routes,
-             RouteSource::kNewgrAstarEarly,
-             astar_early_min_wl_drop,
              true);
     consider(rudy_routes, RouteSource::kNewgrRudy, aggressive_min_wl_drop, true);
 
@@ -772,7 +742,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     maybeUpdateChampion(finegrain_routes, RouteSource::kNewgrFineGrain);
     maybeUpdateChampion(smallnet_routes, RouteSource::kNewgrSmallNet);
     maybeUpdateChampion(astar_routes, RouteSource::kNewgrAstar);
-    maybeUpdateChampion(astar_early_routes, RouteSource::kNewgrAstarEarly);
     maybeUpdateChampion(rudy_routes, RouteSource::kNewgrRudy);
 
     if (wl_champion_route != selected_route) {
@@ -793,6 +762,16 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const int64_t champion_force_gain
           = policy.long_net ? std::max<int64_t>(2, tile_size / 3)
                             : std::max<int64_t>(2, tile_size / 2);
+      const double best_congestion_density
+          = congestionRiskDensity(best_score, best_congestion_cost, tile_size);
+      const double champion_congestion_density
+          = congestionRiskDensity(
+              wl_champion_score, wl_champion_congestion_cost, tile_size);
+      const double allowed_density_ratio = policy.long_net ? 1.10 : 1.20;
+      const bool hotspot_density_safe
+          = champion_congestion_density
+                <= best_congestion_density * allowed_density_ratio
+            || wl_drop_vs_best >= champion_force_gain;
 
       const int64_t current_net_extra_vias
           = std::max<int64_t>(0, best_score.vias - baseline_score.vias);
@@ -814,6 +793,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       if (wl_drop_vs_best >= champion_min_wl_gain
           && (congestion_delta <= allowed_congestion_delta
               || wl_drop_vs_best >= champion_force_gain)
+          && hotspot_density_safe
           && (prospective_total_extra_vias <= global_via_budget + policy.via_guard
               || wl_drop_vs_best >= champion_force_gain)) {
         best_score = wl_champion_score;
@@ -863,306 +843,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       case RouteSource::kNewgrAstar:
         selected_from_astar++;
         break;
-      case RouteSource::kNewgrAstarEarly:
-        selected_from_astar_early++;
-        break;
       case RouteSource::kNewgrRudy:
         selected_from_rudy++;
         break;
     }
-  }
-
-  int refined_nets = 0;
-  int refined_with_wl_gain = 0;
-  for (auto ordered_it = ordered_nets.rbegin(); ordered_it != ordered_nets.rend();
-       ++ordered_it) {
-    const OrderedNet& ordered_net = *ordered_it;
-    auto route_it = routes.find(ordered_net.db_net);
-    if (route_it == routes.end()) {
-      continue;
-    }
-
-    GRoute& route = route_it->second;
-    const RouteScore baseline_score = ordered_net.baseline_score;
-    const SelectionPolicy policy = buildSelectionPolicy(baseline_score, tile_size);
-    const int64_t refinement_congestion_tradeoff = policy.long_net ? 0 : 1;
-
-    const RouteScore current_score = scoreRoute(route);
-    const int64_t current_net_wl_gain
-        = std::max<int64_t>(0, baseline_score.wirelength - current_score.wirelength);
-    const int64_t current_net_extra_vias
-        = std::max<int64_t>(0, current_score.vias - baseline_score.vias);
-    cumulative_wl_gain = std::max<int64_t>(0, cumulative_wl_gain - current_net_wl_gain);
-    cumulative_extra_vias
-        = std::max<int64_t>(0, cumulative_extra_vias - current_net_extra_vias);
-    removeRouteFromUsage(route, origin_x, origin_y, tile_size, selected_usage);
-
-    RouteScore best_score = current_score;
-    int64_t best_congestion_cost
-        = routeCongestionPenalty(route,
-                                 grid,
-                                 origin_x,
-                                 origin_y,
-                                 tile_size,
-                                 selected_usage,
-                                 soft_capacities);
-    int64_t best_total_cost = effectiveWirelengthCost(
-                                  baseline_score, best_score, policy)
-                              + refinement_congestion_tradeoff * best_congestion_cost;
-    const GRoute* selected_route = &route;
-    RouteSource selected_source = RouteSource::kFastRoute;
-
-    auto considerRefine = [&](const NetRouteMap& candidate_routes,
-                              RouteSource source,
-                              int64_t min_wl_drop_required,
-                              bool exploratory_mode) {
-      auto candidate_it = candidate_routes.find(ordered_net.db_net);
-      if (candidate_it == candidate_routes.end()) {
-        return;
-      }
-      const RouteScore candidate_score = scoreRoute(candidate_it->second);
-      if (min_wl_drop_required > 0
-          && candidate_score.wirelength + min_wl_drop_required
-                 > best_score.wirelength) {
-        return;
-      }
-      if (!betterCandidate(
-              baseline_score, best_score, candidate_score, policy)) {
-        return;
-      }
-
-      const int64_t current_best_extra_vias
-          = std::max<int64_t>(0, best_score.vias - baseline_score.vias);
-      const int64_t candidate_extra_vias
-          = std::max<int64_t>(0, candidate_score.vias - baseline_score.vias);
-      const int64_t current_best_wl_gain
-          = std::max<int64_t>(0, baseline_score.wirelength - best_score.wirelength);
-      const int64_t candidate_wl_gain
-          = std::max<int64_t>(0, baseline_score.wirelength - candidate_score.wirelength);
-
-      const int64_t prospective_total_extra_vias
-          = cumulative_extra_vias - current_best_extra_vias + candidate_extra_vias;
-      const int64_t prospective_total_wl_gain
-          = cumulative_wl_gain - current_best_wl_gain + candidate_wl_gain;
-      int64_t global_via_budget = global_base_via_budget;
-      if (prospective_total_wl_gain > 0) {
-        global_via_budget += prospective_total_wl_gain / global_wl_to_via_credit;
-      }
-      if (prospective_total_extra_vias > global_via_budget
-          && candidate_extra_vias > current_best_extra_vias) {
-        const int64_t wl_drop_vs_best = std::max<int64_t>(
-            0, best_score.wirelength - candidate_score.wirelength);
-        const int64_t emergency_budget = global_via_budget + policy.via_guard / 2;
-        if (wl_drop_vs_best < std::max<int64_t>(1, tile_size / 8)
-            || prospective_total_extra_vias > emergency_budget) {
-          return;
-        }
-      }
-
-      const int64_t candidate_congestion_cost
-          = routeCongestionPenalty(candidate_it->second,
-                                   grid,
-                                   origin_x,
-                                   origin_y,
-                                   tile_size,
-                                   selected_usage,
-                                   soft_capacities);
-      if (exploratory_mode && candidate_congestion_cost > best_congestion_cost) {
-        const int64_t wl_drop_vs_best
-            = std::max<int64_t>(0, best_score.wirelength - candidate_score.wirelength);
-        const int64_t congestion_delta = candidate_congestion_cost - best_congestion_cost;
-        const int64_t allowed_delta = policy.long_net
-                                          ? std::max<int64_t>(10, best_congestion_cost / 4)
-                                          : std::max<int64_t>(6, best_congestion_cost / 8);
-        const int64_t required_wl_drop = policy.long_net
-                                             ? std::max<int64_t>(1, tile_size / 10)
-                                             : std::max<int64_t>(1, tile_size / 8);
-        if (congestion_delta > allowed_delta && wl_drop_vs_best < required_wl_drop) {
-          return;
-        }
-      }
-
-      const int64_t candidate_total_cost
-          = effectiveWirelengthCost(baseline_score, candidate_score, policy)
-            + refinement_congestion_tradeoff * candidate_congestion_cost;
-      if (candidate_total_cost < best_total_cost
-          || (candidate_total_cost == best_total_cost
-              && candidate_score.wirelength < best_score.wirelength)
-          || (candidate_total_cost == best_total_cost
-              && candidate_score.wirelength == best_score.wirelength
-              && candidate_score.vias < best_score.vias)) {
-        best_score = candidate_score;
-        best_congestion_cost = candidate_congestion_cost;
-        best_total_cost = candidate_total_cost;
-        selected_route = &candidate_it->second;
-        selected_source = source;
-      }
-    };
-
-    const int64_t exploratory_min_wl_drop = policy.long_net
-                                                ? std::max<int64_t>(1, tile_size / 14)
-                                                : std::max<int64_t>(1, tile_size / 12);
-    const int64_t astar_early_refine_min_wl_drop
-        = std::max<int64_t>(exploratory_min_wl_drop, tile_size / 4);
-    considerRefine(balanced_routes, RouteSource::kNewgrBalanced, 0, false);
-    considerRefine(wirelength_routes, RouteSource::kNewgrWirelength, 0, false);
-    considerRefine(data_wirelength_routes,
-                   RouteSource::kNewgrDataWirelength,
-                   exploratory_min_wl_drop,
-                   true);
-    considerRefine(region_aware_routes,
-                   RouteSource::kNewgrRegionAware,
-                   exploratory_min_wl_drop,
-                   true);
-    considerRefine(regular_region_routes,
-                   RouteSource::kNewgrRegularRegion,
-                   exploratory_min_wl_drop,
-                   true);
-    considerRefine(finegrain_routes,
-                   RouteSource::kNewgrFineGrain,
-                   exploratory_min_wl_drop,
-                   true);
-    considerRefine(smallnet_routes,
-                   RouteSource::kNewgrSmallNet,
-                   exploratory_min_wl_drop,
-                   true);
-    considerRefine(astar_routes,
-                   RouteSource::kNewgrAstar,
-                   exploratory_min_wl_drop,
-                   true);
-    considerRefine(astar_early_routes,
-                   RouteSource::kNewgrAstarEarly,
-                   astar_early_refine_min_wl_drop,
-                   true);
-    considerRefine(rudy_routes,
-                   RouteSource::kNewgrRudy,
-                   exploratory_min_wl_drop,
-                   true);
-
-    const GRoute* wl_champion_route = selected_route;
-    RouteScore wl_champion_score = best_score;
-    int64_t wl_champion_congestion_cost = best_congestion_cost;
-    RouteSource wl_champion_source = selected_source;
-    auto maybeUpdateChampion = [&](const NetRouteMap& candidate_routes,
-                                   RouteSource source) {
-      const auto candidate_it = candidate_routes.find(ordered_net.db_net);
-      if (candidate_it == candidate_routes.end()) {
-        return;
-      }
-      const RouteScore candidate_score = scoreRoute(candidate_it->second);
-      if (candidate_score.wirelength >= wl_champion_score.wirelength) {
-        return;
-      }
-      const int64_t candidate_extra_vias
-          = std::max<int64_t>(0, candidate_score.vias - baseline_score.vias);
-      if (candidate_extra_vias > policy.hard_via_guard * 2 + 24) {
-        return;
-      }
-      const int64_t candidate_congestion_cost
-          = routeCongestionPenalty(candidate_it->second,
-                                   grid,
-                                   origin_x,
-                                   origin_y,
-                                   tile_size,
-                                   selected_usage,
-                                   soft_capacities);
-      wl_champion_route = &candidate_it->second;
-      wl_champion_score = candidate_score;
-      wl_champion_congestion_cost = candidate_congestion_cost;
-      wl_champion_source = source;
-    };
-
-    maybeUpdateChampion(balanced_routes, RouteSource::kNewgrBalanced);
-    maybeUpdateChampion(wirelength_routes, RouteSource::kNewgrWirelength);
-    maybeUpdateChampion(data_wirelength_routes, RouteSource::kNewgrDataWirelength);
-    maybeUpdateChampion(region_aware_routes, RouteSource::kNewgrRegionAware);
-    maybeUpdateChampion(regular_region_routes, RouteSource::kNewgrRegularRegion);
-    maybeUpdateChampion(finegrain_routes, RouteSource::kNewgrFineGrain);
-    maybeUpdateChampion(smallnet_routes, RouteSource::kNewgrSmallNet);
-    maybeUpdateChampion(astar_routes, RouteSource::kNewgrAstar);
-    maybeUpdateChampion(astar_early_routes, RouteSource::kNewgrAstarEarly);
-    maybeUpdateChampion(rudy_routes, RouteSource::kNewgrRudy);
-
-    if (wl_champion_route != selected_route) {
-      const int64_t wl_drop_vs_best
-          = std::max<int64_t>(0, best_score.wirelength - wl_champion_score.wirelength);
-      const int64_t congestion_delta
-          = wl_champion_congestion_cost - best_congestion_cost;
-      const int64_t allowed_congestion_delta
-          = policy.long_net ? std::max<int64_t>(10, best_congestion_cost / 3)
-                            : std::max<int64_t>(6, best_congestion_cost / 5);
-      const int64_t champion_min_wl_gain
-          = policy.long_net ? std::max<int64_t>(1, tile_size / 8)
-                            : std::max<int64_t>(1, tile_size / 6);
-      const int64_t champion_force_gain
-          = policy.long_net ? std::max<int64_t>(2, tile_size / 2)
-                            : std::max<int64_t>(2, tile_size / 3);
-
-      if (wl_drop_vs_best >= champion_min_wl_gain
-          && (congestion_delta <= allowed_congestion_delta
-              || wl_drop_vs_best >= champion_force_gain)) {
-        best_score = wl_champion_score;
-        best_congestion_cost = wl_champion_congestion_cost;
-        best_total_cost = effectiveWirelengthCost(
-                              baseline_score, wl_champion_score, policy)
-                          + refinement_congestion_tradeoff * wl_champion_congestion_cost;
-        selected_route = wl_champion_route;
-        selected_source = wl_champion_source;
-      }
-    }
-
-    const bool route_quality_improves
-        = best_score.wirelength < current_score.wirelength
-          || (best_score.wirelength == current_score.wirelength
-              && best_score.vias < current_score.vias);
-    if (selected_route != &route && route_quality_improves) {
-      if (best_score.wirelength < current_score.wirelength) {
-        refined_with_wl_gain++;
-      }
-      refined_nets++;
-      route = *selected_route;
-      switch (selected_source) {
-        case RouteSource::kNewgrBalanced:
-          selected_from_balanced++;
-          break;
-        case RouteSource::kNewgrWirelength:
-          selected_from_wl++;
-          break;
-        case RouteSource::kNewgrDataWirelength:
-          selected_from_data_wl++;
-          break;
-        case RouteSource::kNewgrRegionAware:
-          selected_from_region++;
-          break;
-        case RouteSource::kNewgrRegularRegion:
-          selected_from_regular_region++;
-          break;
-        case RouteSource::kNewgrFineGrain:
-          selected_from_finegrain++;
-          break;
-        case RouteSource::kNewgrSmallNet:
-          selected_from_smallnet++;
-          break;
-        case RouteSource::kNewgrAstar:
-          selected_from_astar++;
-          break;
-        case RouteSource::kNewgrAstarEarly:
-          selected_from_astar_early++;
-          break;
-        case RouteSource::kNewgrRudy:
-          selected_from_rudy++;
-          break;
-        case RouteSource::kFastRoute:
-          kept_fastroute++;
-          break;
-      }
-    }
-
-    addRouteToUsage(route, origin_x, origin_y, tile_size, selected_usage);
-    cumulative_wl_gain += std::max<int64_t>(
-        0, baseline_score.wirelength - best_score.wirelength);
-    cumulative_extra_vias += std::max<int64_t>(
-        0, best_score.vias - baseline_score.vias);
   }
 
   for (const auto& [db_net, route] : balanced_routes) {
@@ -1213,12 +897,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       inserted_from_astar++;
     }
   }
-  for (const auto& [db_net, route] : astar_early_routes) {
-    if (routes.find(db_net) == routes.end()) {
-      routes.emplace(db_net, route);
-      inserted_from_astar_early++;
-    }
-  }
   for (const auto& [db_net, route] : rudy_routes) {
     if (routes.find(db_net) == routes.end()) {
       routes.emplace(db_net, route);
@@ -1229,12 +907,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   logger_->info(utl::GRT,
                 6004,
                 "NEWGR WL-priority hybrid selected balanced={} wl={} data={} "
-                "region={} regular={} fine={} small={} astar={} astarEarly={} "
-                "rudy={} "
+                "region={} regular={} fine={} small={} astar={} rudy={} "
                 "(kept FR={}; +balanced={} "
                 "+wl={} +data={} +region={} +regular={} +fine={} +small={} "
-                "+astar={} +astarEarly={} +rudy={}; refine={} "
-                "refine_wl_gain={}). Global WL gain={} "
+                "+astar={} +rudy={}). "
+                "Global WL gain={} "
                 "extra-vias={} (base via budget={} + gain/{}) out of {} total.",
                 selected_from_balanced,
                 selected_from_wl,
@@ -1244,7 +921,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 selected_from_finegrain,
                 selected_from_smallnet,
                 selected_from_astar,
-                selected_from_astar_early,
                 selected_from_rudy,
                 kept_fastroute,
                 inserted_from_balanced,
@@ -1255,10 +931,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 inserted_from_finegrain,
                 inserted_from_smallnet,
                 inserted_from_astar,
-                inserted_from_astar_early,
                 inserted_from_rudy,
-                refined_nets,
-                refined_with_wl_gain,
                 cumulative_wl_gain,
                 cumulative_extra_vias,
                 global_base_via_budget,
