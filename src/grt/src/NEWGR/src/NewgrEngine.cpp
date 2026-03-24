@@ -137,6 +137,15 @@ NetRouteMap NewgrEngine::runAstarEarly()
                        /*warn_id=*/410);
 }
 
+NetRouteMap NewgrEngine::runRudyPartition()
+{
+  // Hybrid SPRoute mode: deterministic partitioning with RUDY ordering can
+  // expose shorter alternatives than pure local-A* in some congested regions.
+  return runWithConfig(/*max_maze_round=*/220,
+                       static_cast<int>(Algo::DetPart_Astar_RUDY),
+                       /*warn_id=*/411);
+}
+
 NetRouteMap NewgrEngine::runRudyDriven()
 {
   return runWithConfig(/*max_maze_round=*/200,
