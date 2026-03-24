@@ -471,7 +471,9 @@ GuidePatchStats applyCugrGuidePatches(
     const std::vector<Hotspot>& hotspots,
     Grid* grid,
     int min_layer,
-    int max_layer)
+    int max_layer,
+    int max_endpoint_patches_per_net = 6,
+    int max_long_patches_per_net = 2)
 {
   GuidePatchStats stats;
   if (grid == nullptr || base_routes.empty()) {
@@ -495,7 +497,8 @@ GuidePatchStats applyCugrGuidePatches(
     int long_patch_added_for_net = 0;
 
     auto add_endpoint_relief = [&](const NetRouteMap* alt_routes) {
-      if (alt_routes == nullptr || endpoint_added_for_net >= 6) {
+      if (alt_routes == nullptr
+          || endpoint_added_for_net >= max_endpoint_patches_per_net) {
         return;
       }
       const auto alt_it = alt_routes->find(db_net);
@@ -503,7 +506,7 @@ GuidePatchStats applyCugrGuidePatches(
         return;
       }
       for (const GSegment& candidate : alt_it->second) {
-        if (endpoint_added_for_net >= 6) {
+        if (endpoint_added_for_net >= max_endpoint_patches_per_net) {
           break;
         }
         if (candidate.isVia() || candidate.init_layer != candidate.final_layer) {
@@ -543,7 +546,7 @@ GuidePatchStats applyCugrGuidePatches(
     // CUGR long-segment patching:
     // add short adjacent-layer guides over hotspot-crossing trunks.
     for (const GSegment& segment : base_snapshot) {
-      if (long_patch_added_for_net >= 2) {
+      if (long_patch_added_for_net >= max_long_patches_per_net) {
         break;
       }
       if (segment.isVia() || segment.init_layer != segment.final_layer) {
@@ -3695,6 +3698,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (compact_exploration_mode) {
       const int compact_source_count = std::min<int>(12, ranked.size());
       append_hybrid("hybrid-netmix-wl", compact_source_count, 0, 0.20, 0.45, 6010);
+      append_hybrid("hybrid-netmix-wl-compact",
+                    compact_source_count,
+                    0,
+                    0.24,
+                    0.62,
+                    7324,
+                    0.018,
+                    0.40,
+                    1.20);
       append_length_adaptive_hybrid("hybrid-netmix-length-adaptive",
                                     compact_source_count,
                                     length_adaptive_via_weight,
@@ -3743,6 +3755,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                    6023);
     } else {
       append_hybrid("hybrid-netmix-wl", wl_source_count, 0, 0.24, 0.50, 6010);
+      append_hybrid("hybrid-netmix-wl-compact",
+                    wl_source_count,
+                    0,
+                    0.26,
+                    0.64,
+                    7324,
+                    0.022,
+                    0.45,
+                    1.30);
       append_hybrid(
           "hybrid-netmix-ultra-wl", ultra_wl_source_count, 0, 0.40, 0.95, 6013);
       append_length_adaptive_hybrid("hybrid-netmix-length-adaptive",
@@ -4067,6 +4088,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
 
     const ScenarioResult* wl_anchor = find_scenario_by_name("hybrid-netmix-wl");
+    const ScenarioResult* wl_compact_ptr
+        = find_scenario_by_name("hybrid-netmix-wl-compact");
     const ScenarioResult* patched_ptr
         = find_scenario_by_name("hybrid-netmix-cugr-patched");
     const ScenarioResult* wl_feedback_ptr
@@ -4082,6 +4105,53 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const ScenarioResult* absolute_wl_ptr
         = find_scenario_by_name("hybrid-netmix-absolute-wl");
     const ScenarioResult* preferred_wl_ptr = nullptr;
+
+    if (wl_anchor != nullptr && wl_compact_ptr != nullptr) {
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      const long wl_guard = std::max<long>(
+          64L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00028)));
+      const long via_guard = std::max<long>(
+          140L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.0014)));
+      const long detour_guard = std::max<long>(5500L, tile_size * 8L);
+      const long high_layer_guard = std::max<long>(
+          tile_size * 18L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.050)));
+      const bool within_structural_guard
+          = wl_compact_ptr->metrics.wirelength_dbu
+                 <= wl_anchor->metrics.wirelength_dbu + wl_guard
+            && wl_compact_ptr->metrics.via_count
+                   <= wl_anchor->metrics.via_count + via_guard
+            && wl_compact_ptr->metrics.detour_dbu
+                   <= wl_anchor->metrics.detour_dbu + detour_guard
+            && wl_compact_ptr->metrics.high_layer_dbu
+                   <= wl_anchor->metrics.high_layer_dbu + high_layer_guard;
+      const double anchor_proxy = estimateDetailedRouteProxyCost(wl_anchor->metrics);
+      const double compact_proxy
+          = estimateDetailedRouteProxyCost(wl_compact_ptr->metrics);
+      const bool proxy_win = compact_proxy + 1e-3 < anchor_proxy * 0.994;
+      if (within_structural_guard && proxy_win) {
+        logger_->info(
+            GNR,
+            7325,
+            "NEWGR compact-layer anchor '{}' replacing '{}' "
+            "(wl delta {}, via delta {}, detour delta {}, high-layer delta {}, "
+            "proxy ratio {:.3f}).",
+            wl_compact_ptr->name,
+            wl_anchor->name,
+            wl_compact_ptr->metrics.wirelength_dbu - wl_anchor->metrics.wirelength_dbu,
+            wl_compact_ptr->metrics.via_count - wl_anchor->metrics.via_count,
+            wl_compact_ptr->metrics.detour_dbu - wl_anchor->metrics.detour_dbu,
+            wl_compact_ptr->metrics.high_layer_dbu - wl_anchor->metrics.high_layer_dbu,
+            anchor_proxy > 1e-9 ? compact_proxy / anchor_proxy : 1.0);
+        wl_anchor = wl_compact_ptr;
+      }
+    }
+
     const long via_drop_guard = wl_anchor != nullptr
                                     ? std::max<long>(
                                           360L,
@@ -4305,8 +4375,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
 
     std::vector<const ScenarioResult*> wl_champion_pool;
-    wl_champion_pool.reserve(14);
-    for (const char* name : std::array<const char*, 14>{
+    wl_champion_pool.reserve(15);
+    for (const char* name : std::array<const char*, 15>{
              "hybrid-netmix-anchor-wl-deep",
              "hybrid-netmix-anchor-wl",
              "hybrid-netmix-length-adaptive",
@@ -4317,6 +4387,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
              "hybrid-netmix-ultra-wl",
              "hybrid-netmix-min-wl-wide",
              "hybrid-netmix-absolute-wl",
+             "hybrid-netmix-wl-compact",
              "hybrid-netmix-wl-safe",
              "hybrid-netmix-dr-stable",
              "hybrid-netmix-hpwl-lock",
