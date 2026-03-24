@@ -407,22 +407,10 @@ NetRouteMap NewgrEngine::run()
   };
 
   // Multi-profile NEWGR bank:
-  // keep several profile outputs (including 3D-short) so later fusion can
-  // mix routes per-net across FastRoute/SPRoute/CUGR-inspired styles.
+  // keep a compact high-signal bank (A* + DetPart + FineGrain) to avoid
+  // excessive guide churn from low-quality alternates.
   std::vector<CandidateResult> candidates;
-  candidates.reserve(12);
-  candidates.push_back(run_candidate(Algo::Astar,
-                                     520,
-                                     NEWGR_CAP_PROFILE_WL_FOCUSED,
-                                     "Astar_WLFocused"));
-  candidates.push_back(run_candidate(Algo::Astar,
-                                     380,
-                                     NEWGR_CAP_PROFILE_BALANCED,
-                                     "Astar_Balanced"));
-  candidates.push_back(run_candidate(Algo::Astar,
-                                     420,
-                                     NEWGR_CAP_PROFILE_RADICAL_MIX,
-                                     "Astar_RadicalMix"));
+  candidates.reserve(5);
   candidates.push_back(run_candidate(Algo::Astar,
                                      460,
                                      NEWGR_CAP_PROFILE_RADICAL_WL,
@@ -439,18 +427,10 @@ NetRouteMap NewgrEngine::run()
                                      520,
                                      NEWGR_CAP_PROFILE_RADICAL_WL,
                                      "DetPart_RadicalWL"));
-  candidates.push_back(run_candidate(Algo::DetPart_Astar_Local,
-                                     580,
-                                     NEWGR_CAP_PROFILE_ULTRA_WL,
-                                     "DetPart_UltraWL"));
   candidates.push_back(run_candidate(Algo::FineGrain,
                                      520,
                                      NEWGR_CAP_PROFILE_RADICAL_MIX,
                                      "FineGrain_RadicalMix"));
-  candidates.push_back(run_candidate(Algo::FineGrain,
-                                     600,
-                                     NEWGR_CAP_PROFILE_3D_SHORT,
-                                     "FineGrain_3DShort"));
 
   int best_idx = 0;
   for (int idx = 1; idx < static_cast<int>(candidates.size()); ++idx) {

@@ -2986,6 +2986,11 @@ NetRouteMap buildWirelengthFusionHybrid(
     }
   }
 
+  // Disable the final closure sweep: it aggressively optimizes global WL but
+  // has repeatedly regressed detailed-route WL on this benchmark.
+  stats.consumed_wl_gain = consumed_wl_gain;
+  return hybrid_routes;
+
   // Third pass: deterministic shortest-net closure.
   // Re-scan all donor families and pick the shortest legal per-net route under
   // relaxed soft-cap budgets. This is intentionally wirelength-dominant and
