@@ -4169,6 +4169,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                            0.0,
                            0.0,
                            7105);
+      // CUGR/SPRoute-inspired blend: keep aggressive WL pressure but penalize
+      // route fragmentation and layer collapse to stay DR-friendly.
+      append_min_wl_hybrid("hybrid-netmix-cugr-sp-balance-wl",
+                           compact_source_count,
+                           0L,
+                           0.10,
+                           0.012,
+                           0.24,
+                           7107,
+                           0.45,
+                           3.20);
       append_pareto_softcap_hybrid("hybrid-netmix-pareto-softcap",
                                    compact_source_count,
                                    pareto_softcap_via_weight,
@@ -4539,6 +4550,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = find_scenario_by_name("hybrid-netmix-min-wl-wide");
     const ScenarioResult* absolute_wl_ptr
         = find_scenario_by_name("hybrid-netmix-absolute-wl");
+    const ScenarioResult* cugr_sp_balance_ptr
+        = find_scenario_by_name("hybrid-netmix-cugr-sp-balance-wl");
     const ScenarioResult* preferred_wl_ptr = nullptr;
 
     // Radical WL-first override:
@@ -4566,9 +4579,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
       const ScenarioResult* radical_candidate = nullptr;
       for (const ScenarioResult* candidate :
-           std::array<const ScenarioResult*, 3>{layer_lift_wl_ptr,
+           std::array<const ScenarioResult*, 4>{layer_lift_wl_ptr,
                                                 absolute_wl_ptr,
-                                                min_wl_wide_ptr}) {
+                                                min_wl_wide_ptr,
+                                                cugr_sp_balance_ptr}) {
         if (candidate == nullptr) {
           continue;
         }
@@ -4932,8 +4946,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
 
     std::vector<const ScenarioResult*> wl_champion_pool;
-    wl_champion_pool.reserve(17);
-    for (const char* name : std::array<const char*, 17>{
+    wl_champion_pool.reserve(18);
+    for (const char* name : std::array<const char*, 18>{
              "hybrid-netmix-anchor-wl-deep",
              "hybrid-netmix-anchor-wl",
              "hybrid-netmix-wl-corridor",
@@ -4946,6 +4960,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
              "hybrid-netmix-ultra-wl",
              "hybrid-netmix-min-wl-wide",
              "hybrid-netmix-absolute-wl",
+             "hybrid-netmix-cugr-sp-balance-wl",
              "hybrid-netmix-wl-compact",
              "hybrid-netmix-wl-safe",
              "hybrid-netmix-dr-stable",
@@ -4967,8 +4982,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
     if (compact_exploration_mode) {
       const ScenarioResult* aggressive_wl_ptr = forced_wl_ptr;
-      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 3>{
-               layer_lift_wl_ptr, absolute_wl_ptr, min_wl_wide_ptr}) {
+      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 4>{
+               layer_lift_wl_ptr,
+               absolute_wl_ptr,
+               min_wl_wide_ptr,
+               cugr_sp_balance_ptr}) {
         if (candidate == nullptr) {
           continue;
         }
@@ -5230,8 +5248,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       };
 
       const ScenarioResult* strong_wl_upgrade = nullptr;
-      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 3>{
-               layer_lift_wl_ptr, absolute_wl_ptr, min_wl_wide_ptr}) {
+      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 4>{
+               layer_lift_wl_ptr,
+               absolute_wl_ptr,
+               min_wl_wide_ptr,
+               cugr_sp_balance_ptr}) {
         if (!candidate_is_viable_wl_upgrade(candidate)) {
           continue;
         }
@@ -5406,6 +5427,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       consider_elastic_wl(length_adaptive_ptr);
       consider_elastic_wl(layer_lift_wl_ptr);
       consider_elastic_wl(wl_corridor_ptr);
+      consider_elastic_wl(cugr_sp_balance_ptr);
 
       if (elastic_wl_ptr != nullptr
           && (forced_wl_ptr == nullptr
@@ -5449,6 +5471,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             tile_size * 40L,
             static_cast<long>(std::ceil(
                 static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.16)));
+        const long high_layer_floor = std::max<long>(
+            tile_size * 16L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.90)));
         const int hotspot_guard
             = std::max<int>(6, wl_anchor->metrics.near_capacity_edges / 5);
         const bool strict_wl_via_improvement
@@ -5462,19 +5488,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                      <= wl_anchor->metrics.high_layer_dbu + high_layer_guard
               && forced_wl_ptr->metrics.near_capacity_edges
                      <= wl_anchor->metrics.near_capacity_edges + hotspot_guard;
+        const bool layer_balance_guard
+            = forced_wl_ptr->metrics.high_layer_dbu >= high_layer_floor;
         const double anchor_proxy = estimateDetailedRouteProxyCost(wl_anchor->metrics);
         const double challenger_proxy
             = estimateDetailedRouteProxyCost(forced_wl_ptr->metrics);
         const bool proxy_guard = challenger_proxy + 1e-3 < anchor_proxy * 1.015;
         const bool keep_challenger
-            = strict_wl_via_improvement && structural_guard && proxy_guard;
+            = strict_wl_via_improvement && structural_guard && layer_balance_guard
+              && proxy_guard;
         if (keep_challenger) {
           logger_->info(
               GNR,
               6040,
               "NEWGR compact dominance unlock keeping '{}' over anchor '{}' "
               "(wl gain {}, via gain {}, detour delta {}, high-layer delta {}, "
-              "proxy ratio {:.3f}).",
+              "high-layer floor {}, proxy ratio {:.3f}).",
               forced_wl_ptr->name,
               wl_anchor->name,
               wl_gain,
@@ -5482,6 +5511,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               forced_wl_ptr->metrics.detour_dbu - wl_anchor->metrics.detour_dbu,
               forced_wl_ptr->metrics.high_layer_dbu
                   - wl_anchor->metrics.high_layer_dbu,
+              high_layer_floor,
               anchor_proxy > 1e-9 ? challenger_proxy / anchor_proxy : 1.0);
         } else {
           logger_->info(
