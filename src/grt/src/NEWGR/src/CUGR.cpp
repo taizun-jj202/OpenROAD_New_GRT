@@ -72,10 +72,10 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
                              const double allowed_overflow_increase_for_wl_gain)
 {
   constexpr double kOverflowEpsilon = 1e-6;
-  constexpr double kStrongOverflowDropThreshold = 36.0;
+  constexpr double kStrongOverflowDropThreshold = 28.0;
   constexpr int64_t kStrongWireGain = 8;
   constexpr int64_t kModerateWireGain = 3;
-  constexpr int64_t kMaxWirelengthTradeoff = 10;
+  constexpr int64_t kMaxWirelengthTradeoff = 14;
 
   // Wirelength-first objective:
   // keep shorter candidates as long as they don't cause a large overflow jump.
@@ -86,14 +86,14 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
   if (candidate.wirelength + kModerateWireGain < current_best.wirelength
       && candidate.total_overflow
              <= current_best.total_overflow
-                    + allowed_overflow_increase_for_wl_gain * 0.6
+                    + allowed_overflow_increase_for_wl_gain * 0.65
       && candidate.vias <= current_best.vias + 4) {
     return true;
   }
   if (candidate.wirelength < current_best.wirelength
       && candidate.total_overflow
              <= current_best.total_overflow
-                    + allowed_overflow_increase_for_wl_gain * 0.45
+                    + allowed_overflow_increase_for_wl_gain * 0.50
       && candidate.vias <= current_best.vias + 2) {
     return true;
   }
@@ -121,8 +121,8 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
 
   if (std::abs(overflow_drop) > kOverflowEpsilon && baseline_overflow > 0) {
     if (overflow_drop > 0.0
-        && candidate.wirelength <= current_best.wirelength + 2
-        && candidate.vias <= current_best.vias + 1) {
+        && candidate.wirelength <= current_best.wirelength + 4
+        && candidate.vias <= current_best.vias + 3) {
       return true;
     }
     return false;
@@ -890,16 +890,15 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
                   || high_stretch_candidate)
               && candidates[candidateIndex].stretch
                      >= constants_.recovery_min_stretch
-              && net->getNumPins() <= 72;
+              && net->getNumPins() <= 64;
         if (enable_full_grid_maze) {
           GridGraphView<CostT> fullGridWlOnlyView;
           grid_graph_->extractWireLengthCostView(fullGridWlOnlyView);
           std::vector<double> via_scales;
-          via_scales.reserve(5);
+          via_scales.reserve(4);
           const double base_via_scale
               = std::clamp(constants_.recovery_full_grid_via_cost_scale, 0.0, 1.0);
           via_scales.push_back(base_via_scale);
-          via_scales.push_back(std::min(1.0, base_via_scale + 0.08));
           if (high_stretch_candidate && base_via_scale > 0.0) {
             via_scales.push_back(base_via_scale * 0.4);
           }
