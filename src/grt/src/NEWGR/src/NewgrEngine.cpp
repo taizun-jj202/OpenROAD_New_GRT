@@ -72,6 +72,7 @@ struct RouteMetrics
 {
   uint64_t wirelength{0};
   uint64_t vias{0};
+  uint64_t low_layer_wl{0};
   uint64_t congestion_risk{0};
   uint64_t proxy_cost{0};
 };
@@ -141,22 +142,26 @@ RouteMetrics computeRouteMetrics(const SprouteGridData& grid,
       if (segment.isVia()) {
         metrics.vias += static_cast<uint64_t>(
             std::abs(segment.final_layer - segment.init_layer));
+      } else if (std::min(segment.init_layer, segment.final_layer) <= 4) {
+        metrics.low_layer_wl += static_cast<uint64_t>(segment.length());
       }
     }
   }
   metrics.congestion_risk = computeCongestionRisk(grid);
-  // Proxy is intentionally risk-heavy because detailed-route wirelength
-  // regresses when global-route hotspots are left unresolved.
+  // Low-layer and congestion terms intentionally bias against candidates that
+  // push too much routing into pin-access-sensitive layers.
   metrics.proxy_cost = metrics.wirelength + metrics.vias * 12
+                       + metrics.low_layer_wl / 24
                        + metrics.congestion_risk / 24;
   return metrics;
 }
 
 uint64_t selectionCost(const RouteMetrics& metrics)
 {
-  // Wirelength-dominant ranking. Congestion risk is retained only as a
-  // tie-break proxy rather than the primary driver.
-  return metrics.wirelength + metrics.vias * 6 + metrics.congestion_risk / 18000;
+  // Wirelength-dominant ranking with a soft SPRoute/CUGR-style low-layer
+  // reserve to preserve detailed-route quality.
+  return metrics.wirelength + metrics.vias * 6 + metrics.low_layer_wl / 72
+         + metrics.congestion_risk / 18000;
 }
 
 bool hasAcceptableWirelengthTradeoff(const RouteMetrics& candidate,
@@ -168,6 +173,13 @@ bool hasAcceptableWirelengthTradeoff(const RouteMetrics& candidate,
   const int64_t via_increase = static_cast<int64_t>(candidate.vias)
                                - static_cast<int64_t>(incumbent.vias);
   if (via_increase > 1800) {
+    return false;
+  }
+  const int64_t low_layer_delta = static_cast<int64_t>(candidate.low_layer_wl)
+                                  - static_cast<int64_t>(incumbent.low_layer_wl);
+  const int64_t low_layer_budget = std::max<int64_t>(
+      1200000, static_cast<int64_t>(incumbent.low_layer_wl / 60));
+  if (low_layer_delta > low_layer_budget) {
     return false;
   }
   const uint64_t risk_budget = std::max<uint64_t>(
@@ -201,6 +213,9 @@ bool isBetterCandidate(const CandidateResult& lhs, const CandidateResult& rhs)
   }
   if (lhs.metrics.vias != rhs.metrics.vias) {
     return lhs.metrics.vias < rhs.metrics.vias;
+  }
+  if (lhs.metrics.low_layer_wl != rhs.metrics.low_layer_wl) {
+    return lhs.metrics.low_layer_wl < rhs.metrics.low_layer_wl;
   }
   if (lhs.metrics.congestion_risk != rhs.metrics.congestion_risk) {
     return lhs.metrics.congestion_risk < rhs.metrics.congestion_risk;
@@ -395,12 +410,13 @@ NetRouteMap NewgrEngine::run()
     logger_->info(utl::GRT,
                   402,
                   "NEWGR candidate {} [{}]: overflow={}, route_wl={}, "
-                  "route_vias={}, cong_risk={}, proxy_cost={}",
+                  "route_vias={}, low_wl={}, cong_risk={}, proxy_cost={}",
                   candidateName(candidate),
                   capacityProfileName(candidate.capacity_profile),
                   candidate.overflow,
                   candidate.metrics.wirelength,
                   candidate.metrics.vias,
+                  candidate.metrics.low_layer_wl,
                   candidate.metrics.congestion_risk,
                   candidate.metrics.proxy_cost);
     return candidate;
@@ -442,6 +458,27 @@ NetRouteMap NewgrEngine::run()
       best_idx = idx;
     }
   }
+  const int min_overflow = candidates[best_idx].overflow;
+  auto reserve_cost = [](const CandidateResult& candidate) {
+    // Soft-cap reserve: prioritize low-layer conservation when overflow is
+    // tied, so detailed-route pin-access pressure does not spike.
+    return candidate.metrics.wirelength * 2 + candidate.metrics.vias * 40
+           + candidate.metrics.low_layer_wl
+           + candidate.metrics.congestion_risk / 6000;
+  };
+  for (int idx = 0; idx < static_cast<int>(candidates.size()); ++idx) {
+    if (candidates[idx].overflow != min_overflow) {
+      continue;
+    }
+    if (reserve_cost(candidates[idx]) < reserve_cost(candidates[best_idx])) {
+      best_idx = idx;
+      continue;
+    }
+    if (reserve_cost(candidates[idx]) == reserve_cost(candidates[best_idx])
+        && isBetterCandidate(candidates[idx], candidates[best_idx])) {
+      best_idx = idx;
+    }
+  }
 
   if (candidates[best_idx].overflow > 0) {
     candidates.push_back(run_candidate(Algo::DetPart_Astar_Local,
@@ -472,12 +509,14 @@ NetRouteMap NewgrEngine::run()
   logger_->info(utl::GRT,
                 404,
                 "NEWGR selected candidate {} [{}]: overflow={}, route_wl={}, "
-                "route_vias={}, cong_risk={}, proxy_cost={}, alternates={}",
+                "route_vias={}, low_wl={}, cong_risk={}, proxy_cost={}, "
+                "alternates={}",
                 candidateName(best),
                 capacityProfileName(best.capacity_profile),
                 best.overflow,
                 best.metrics.wirelength,
                 best.metrics.vias,
+                best.metrics.low_layer_wl,
                 best.metrics.congestion_risk,
                 best.metrics.proxy_cost,
                 alternate_routes_.size());

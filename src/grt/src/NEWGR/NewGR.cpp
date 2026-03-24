@@ -4036,6 +4036,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = computeRouteScore(wirelength_fusion_hybrid);
     const uint64_t wirelength_fusion_low_layer_wl
         = computeLowLayerWirelength(wirelength_fusion_hybrid);
+    InterleavedHybridStats tempered_fusion_stats;
+    NetRouteMap tempered_fusion_hybrid = buildInterleavedBackboneHybrid(
+        wirelength_oracle_hybrid,
+        wirelength_fusion_hybrid,
+        grouter_->db_net_map_,
+        wirelength_oracle_score.vias,
+        wirelength_oracle_low_layer_wl,
+        tempered_fusion_stats);
+    const RouteScore tempered_fusion_score
+        = computeRouteScore(tempered_fusion_hybrid);
+    const uint64_t tempered_fusion_low_layer_wl
+        = computeLowLayerWirelength(tempered_fusion_hybrid);
 
     logger_->info(utl::GRT,
                   6006,
@@ -4249,6 +4261,23 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   fusion_stats.skipped_by_layer_guard,
                   fusion_stats.skipped_by_budget_guard,
                   fusion_stats.consumed_wl_gain);
+    logger_->info(utl::GRT,
+                  6020,
+                  "NEWGR tempered fusion summary: "
+                  "TEMPERED_FUSION(wl={}, vias={}, low_wl={}, nets={}, donor_swap={}, "
+                  "add={}, cand={}, via_guard_skip={}, layer_guard_skip={}, "
+                  "budget_skip={}, wl_gain={})",
+                  tempered_fusion_score.wirelength,
+                  tempered_fusion_score.vias,
+                  tempered_fusion_low_layer_wl,
+                  tempered_fusion_score.routed_nets,
+                  tempered_fusion_stats.replaced_with_donor,
+                  tempered_fusion_stats.added_missing_nets,
+                  tempered_fusion_stats.candidate_pool_size,
+                  tempered_fusion_stats.skipped_by_via_guard,
+                  tempered_fusion_stats.skipped_by_layer_guard,
+                  tempered_fusion_stats.skipped_by_budget_guard,
+                  tempered_fusion_stats.consumed_wl_gain);
 
     // Wirelength champion tournament:
     // evaluate every mixed candidate (FastRoute, NEWGR, and all hybrids) with
