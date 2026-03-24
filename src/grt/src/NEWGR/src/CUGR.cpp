@@ -1080,9 +1080,9 @@ void CUGR::route()
   if (constants_.wirelength_first_refinement) {
     double detour_ratio = constants_.detour_refine_ratio;
     if (netIndices.size() > 512) {
-      detour_ratio = std::min(detour_ratio, 0.30);
+      detour_ratio = std::min(detour_ratio, 0.45);
     } else if (netIndices.size() > 256) {
-      detour_ratio = std::min(detour_ratio, 0.36);
+      detour_ratio = std::min(detour_ratio, 0.52);
     }
     detourIndices = selectCriticalNets(netIndices, detour_ratio);
   }
@@ -1092,11 +1092,11 @@ void CUGR::route()
   if (constants_.wirelength_first_refinement) {
     double maze_ratio = constants_.maze_refine_ratio;
     if (detourIndices.size() > 160) {
-      maze_ratio = std::min(maze_ratio, 0.16);
+      maze_ratio = std::min(maze_ratio, 0.28);
     } else if (detourIndices.size() > 80) {
-      maze_ratio = std::min(maze_ratio, 0.18);
+      maze_ratio = std::min(maze_ratio, 0.34);
     } else if (detourIndices.size() > 40) {
-      maze_ratio = std::min(maze_ratio, 0.20);
+      maze_ratio = std::min(maze_ratio, 0.38);
     }
     mazeIndices = selectCriticalNets(detourIndices, maze_ratio);
   }

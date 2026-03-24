@@ -71,8 +71,8 @@ struct Constants
   int refinement_hpwl_threshold = 180;
   double refinement_stretch_threshold = 1.14;
   int refinement_max_selected_nets = 192;
-  double detour_refine_ratio = 0.60;
-  double maze_refine_ratio = 0.30;
+  double detour_refine_ratio = 0.75;
+  double maze_refine_ratio = 0.50;
 
   // Stage-3 (maze) exploration controls.
   int stage3_dense_sparse_x = 2;
@@ -82,15 +82,15 @@ struct Constants
   int stage3_full_offset_hpwl_threshold = 180;
   int stage3_max_maze_configs = 8;
   bool stage3_use_wirelength_maze = true;
-  int stage3_wl_only_hpwl_threshold = 140;
-  int stage3_wl_config_limit = 4;
+  int stage3_wl_only_hpwl_threshold = 96;
+  int stage3_wl_config_limit = 6;
   double stage3_wl_via_cost_scale = 0.10;
   bool stage3_use_full_grid_wl_maze = true;
-  int stage3_full_grid_hpwl_threshold = 180;
-  int stage3_full_grid_pin_limit = 24;
-  int stage3_full_grid_overflow_threshold = 2;
-  double stage3_full_grid_via_cost_scale = 0.01;
-  double stage3_full_grid_min_stretch = 1.08;
+  int stage3_full_grid_hpwl_threshold = 120;
+  int stage3_full_grid_pin_limit = 32;
+  int stage3_full_grid_overflow_threshold = 4;
+  double stage3_full_grid_via_cost_scale = 0.0;
+  double stage3_full_grid_min_stretch = 1.04;
 
   // FastRoute-style post-processing pass: reroute a subset of long,
   // overflow-free nets and keep only wirelength-improving solutions.
@@ -101,15 +101,15 @@ struct Constants
   int recovery_wl_only_hpwl_threshold = 112;
   int recovery_hpwl_threshold = 88;
   double recovery_min_stretch = 1.03;
-  int recovery_candidate_cap = 32;
-  int recovery_deep_search_cap = 10;
+  int recovery_candidate_cap = 56;
+  int recovery_deep_search_cap = 16;
   int recovery_shallow_maze_config_limit = 2;
   int recovery_deep_maze_config_limit = 3;
   int recovery_shallow_wl_config_limit = 2;
   int recovery_deep_wl_config_limit = 3;
-  double recovery_refine_ratio = 0.45;
+  double recovery_refine_ratio = 0.60;
   int recovery_overflow_slack = 2;
-  int recovery_max_passes = 1;
+  int recovery_max_passes = 2;
   double recovery_pass_decay = 0.80;
   double recovery_late_pass_refine_scale = 0.40;
   double recovery_late_pass_cap_scale = 0.30;
@@ -133,9 +133,9 @@ struct Constants
   int recovery_spatial_batches = 6;
   int recovery_spatial_pool_multiplier = 2;
   bool recovery_use_full_grid_maze = true;
-  int recovery_full_grid_top_n = 2;
-  int recovery_full_grid_hpwl_threshold = 150;
-  double recovery_full_grid_via_cost_scale = 0.01;
+  int recovery_full_grid_top_n = 6;
+  int recovery_full_grid_hpwl_threshold = 110;
+  double recovery_full_grid_via_cost_scale = 0.0;
 
   double pin_patch_threshold = 1000000.0;
   int pin_patch_padding = 3;

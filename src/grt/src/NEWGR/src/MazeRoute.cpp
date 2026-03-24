@@ -269,6 +269,81 @@ void MazeRoute::run()
   constexpr CostT kCostEpsilon = static_cast<CostT>(1e-6);
   const uint64_t net_hpwl
       = static_cast<uint64_t>(std::max(1, net_->getBoundingBox().hp()));
+  const int num_pseudo_pins = graph_.getNumPseudoPins();
+
+  int pin_min_x = 0;
+  int pin_max_x = 0;
+  int pin_min_y = 0;
+  int pin_max_y = 0;
+  if (num_pseudo_pins > 0) {
+    const PointT first_pin = graph_.getPseudoPin(0).point;
+    pin_min_x = pin_max_x = first_pin.x();
+    pin_min_y = pin_max_y = first_pin.y();
+    for (int pin_index = 1; pin_index < num_pseudo_pins; pin_index++) {
+      const PointT pin = graph_.getPseudoPin(pin_index).point;
+      pin_min_x = std::min(pin_min_x, pin.x());
+      pin_max_x = std::max(pin_max_x, pin.x());
+      pin_min_y = std::min(pin_min_y, pin.y());
+      pin_max_y = std::max(pin_max_y, pin.y());
+    }
+  }
+
+  const int pin_span_x = std::max(0, pin_max_x - pin_min_x);
+  const int pin_span_y = std::max(0, pin_max_y - pin_min_y);
+  const int pin_span_hpwl = pin_span_x + pin_span_y;
+  int corridor_margin = std::clamp(2 + pin_span_hpwl / 40, 2, 10);
+  if (num_pseudo_pins >= 24) {
+    corridor_margin += 1;
+  }
+  if (num_pseudo_pins >= 48) {
+    corridor_margin += 1;
+  }
+  corridor_margin = std::min(corridor_margin, 14);
+  const int corridor_lx = pin_min_x - corridor_margin;
+  const int corridor_hx = pin_max_x + corridor_margin;
+  const int corridor_ly = pin_min_y - corridor_margin;
+  const int corridor_hy = pin_max_y + corridor_margin;
+  const CostT via_unit_cost = std::max<CostT>(1.0, grid_graph_->getUnitViaCost());
+  const CostT corridor_weight = num_pseudo_pins <= 16 ? 1.20
+                               : (num_pseudo_pins <= 48 ? 1.05 : 0.90);
+  const CostT corridor_growth_weight = num_pseudo_pins <= 16 ? 1.80 : 1.45;
+
+  auto corridorDistance = [&](const GRPoint& point) -> int {
+    const int x = point.x();
+    const int y = point.y();
+    const int dx = x < corridor_lx ? corridor_lx - x
+                  : (x > corridor_hx ? x - corridor_hx : 0);
+    const int dy = y < corridor_ly ? corridor_ly - y
+                  : (y > corridor_hy ? y - corridor_hy : 0);
+    return dx + dy;
+  };
+
+  // FastRoute-style route-guide box control mixed with CUGR costing:
+  // penalize moves that drift farther away from the pin bbox corridor so
+  // candidate routes keep compact Manhattan trunks.
+  auto getCorridorPenalty = [&](const int current_vertex,
+                                const int next_vertex,
+                                const CostT edge_cost) -> CostT {
+    if (num_pseudo_pins <= 1) {
+      return 0;
+    }
+    const auto current = graph_.getPoint(current_vertex);
+    const auto next = graph_.getPoint(next_vertex);
+    const int current_outside = corridorDistance(current);
+    const int next_outside = corridorDistance(next);
+    if (current_outside == 0 && next_outside == 0) {
+      return 0;
+    }
+    const int growth = std::max(0, next_outside - current_outside);
+    const CostT unit
+        = std::max<CostT>(1.0, edge_cost + via_unit_cost * static_cast<CostT>(0.08));
+    CostT penalty = static_cast<CostT>(next_outside) * unit * corridor_weight;
+    if (growth > 0) {
+      penalty += static_cast<CostT>(growth) * unit * corridor_growth_weight;
+    }
+    return penalty;
+  };
+
   auto computeRouteGeometry
       = [&](const std::vector<std::shared_ptr<Solution>>& solutions) {
           uint64_t wirelength = 0;
@@ -450,8 +525,11 @@ void MazeRoute::run()
               || (solution->prev && next_vertex == solution->prev->vertex)) {
             continue;
           }
-          const CostT next_cost
-              = solution->cost + graph_.getEdgeCost(solution->vertex, edge_index);
+          const CostT edge_cost
+              = graph_.getEdgeCost(solution->vertex, edge_index);
+          const CostT next_cost = solution->cost + edge_cost
+                                  + getCorridorPenalty(
+                                      solution->vertex, next_vertex, edge_cost);
           if (next_cost + kCostEpsilon < min_costs[next_vertex]) {
             updateSolution(
                 std::make_shared<Solution>(next_cost, next_vertex, solution));
@@ -555,7 +633,9 @@ void MazeRoute::run()
         if (next_vertex < 0) {
           continue;
         }
-        const CostT next_cost = cost + graph_.getEdgeCost(vertex, edge_index);
+        const CostT edge_cost = graph_.getEdgeCost(vertex, edge_index);
+        const CostT next_cost
+            = cost + edge_cost + getCorridorPenalty(vertex, next_vertex, edge_cost);
         if (next_cost + kCostEpsilon < dist[next_vertex]
             || (std::abs(next_cost - dist[next_vertex]) <= kCostEpsilon
                 && (parent[next_vertex] < 0 || vertex < parent[next_vertex]))) {
@@ -642,8 +722,11 @@ void MazeRoute::run()
               || (solution->prev && next_vertex == solution->prev->vertex)) {
             continue;
           }
-          const CostT next_cost
-              = solution->cost + graph_.getEdgeCost(solution->vertex, edge_index);
+          const CostT edge_cost
+              = graph_.getEdgeCost(solution->vertex, edge_index);
+          const CostT next_cost = solution->cost + edge_cost
+                                  + getCorridorPenalty(
+                                      solution->vertex, next_vertex, edge_cost);
           if (next_cost + kCostEpsilon < min_costs[next_vertex]) {
             updateSolution(
                 std::make_shared<Solution>(next_cost, next_vertex, solution));
@@ -730,7 +813,10 @@ void MazeRoute::run()
           if (next_vertex < 0) {
             continue;
           }
-          const CostT next_cost = cost + graph_.getEdgeCost(vertex, edge_index);
+          const CostT edge_cost = graph_.getEdgeCost(vertex, edge_index);
+          const CostT next_cost = cost + edge_cost
+                                  + getCorridorPenalty(
+                                      vertex, next_vertex, edge_cost);
           if (next_cost + kCostEpsilon < dist[next_vertex]
               || (std::abs(next_cost - dist[next_vertex]) <= kCostEpsilon
                   && (parent[next_vertex] < 0 || vertex < parent[next_vertex]))) {
@@ -952,7 +1038,10 @@ void MazeRoute::run()
           if (next_vertex < 0) {
             continue;
           }
-          const CostT next_cost = cost + graph_.getEdgeCost(vertex, edge_index);
+          const CostT edge_cost = graph_.getEdgeCost(vertex, edge_index);
+          const CostT next_cost = cost + edge_cost
+                                  + getCorridorPenalty(
+                                      vertex, next_vertex, edge_cost);
           if (next_cost + kCostEpsilon < cache.dist[next_vertex]
               || (std::abs(next_cost - cache.dist[next_vertex]) <= kCostEpsilon
                   && (cache.parent[next_vertex] < 0
@@ -1288,7 +1377,10 @@ void MazeRoute::run()
   }
 
   if (!best_result.valid) {
-    logger_->error(utl::GRT, 7002, "failed to connect all pins.");
+    logger_->warn(
+        utl::GRT,
+        7012,
+        "maze route failed to connect all pins on sparse graph; skipping candidate.");
     return;
   }
 
@@ -1302,6 +1394,9 @@ std::shared_ptr<SteinerTreeNode> MazeRoute::getSteinerTree() const
     const auto& pseudoPin = graph_.getPseudoPin(0);
     tree = std::make_shared<SteinerTreeNode>(pseudoPin.point, pseudoPin.layers);
     return tree;
+  }
+  if (solutions_.empty()) {
+    return nullptr;
   }
 
   std::vector<bool> visited(net_->getNumPins(), false);
@@ -1337,7 +1432,9 @@ std::shared_ptr<SteinerTreeNode> MazeRoute::getSteinerTree() const
       }
     }
   }
-  assert(tree);
+  if (!tree) {
+    return nullptr;
+  }
 
   // Remove redundant tree nodes
   SteinerTreeNode::preorder(
