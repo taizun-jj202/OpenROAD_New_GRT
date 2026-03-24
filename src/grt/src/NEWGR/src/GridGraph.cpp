@@ -1229,6 +1229,27 @@ void GridGraph::extractWireLengthCostView(GridGraphView<CostT>& view) const
       std::vector<std::vector<CostT>>(
           x_size_,
           std::vector<CostT>(y_size_, std::numeric_limits<CostT>::max())));
+
+  std::vector<std::vector<int>> same_direction_layers(2);
+  std::vector<CostT> unit_length_short_cost(
+      2, std::numeric_limits<CostT>::max());
+  for (int layer_index = constants_.min_routing_layer;
+       layer_index < getNumLayers();
+       layer_index++) {
+    const int direction = getLayerDirection(layer_index);
+    same_direction_layers[direction].emplace_back(layer_index);
+    unit_length_short_cost[direction]
+        = std::min(unit_length_short_cost[direction],
+                   getUnitLengthShortCost(layer_index));
+  }
+
+  const bool use_soft_wirelength_cost = constants_.use_soft_wirelength_cost;
+  const double soft_wl_scale
+      = std::max(0.0, constants_.soft_wirelength_short_cost_scale);
+  const double soft_wl_slope = constants_.soft_wirelength_logistic_slope;
+  const CostT soft_wl_penalty_cap
+      = std::max<CostT>(0.0, constants_.soft_wirelength_penalty_cap);
+
   for (int direction = 0; direction < 2; direction++) {
     for (int x = 0; x < x_size_; x++) {
       for (int y = 0; y < y_size_; y++) {
@@ -1237,7 +1258,27 @@ void GridGraph::extractWireLengthCostView(GridGraphView<CostT>& view) const
           continue;
         }
         const int length = getEdgeLength(direction, edge_index);
-        view[direction][x][y] = length * unit_length_wire_cost_;
+        CostT cost = length * unit_length_wire_cost_;
+
+        if (use_soft_wirelength_cost && soft_wl_scale > 0.0
+            && !same_direction_layers[direction].empty()
+            && unit_length_short_cost[direction]
+                   < std::numeric_limits<CostT>::max()) {
+          CapacityT capacity = 0;
+          CapacityT demand = 0;
+          for (const int layer_index : same_direction_layers[direction]) {
+            const auto& edge = getEdge(layer_index, x, y);
+            capacity += getSoftCapacity(edge);
+            demand += edge.demand;
+          }
+          const CostT penalty = std::min(
+              soft_wl_penalty_cap,
+              getCongestionPenalty(capacity, demand, soft_wl_slope));
+          cost += length * unit_length_short_cost[direction] * soft_wl_scale
+                  * penalty;
+        }
+
+        view[direction][x][y] = cost;
       }
     }
   }

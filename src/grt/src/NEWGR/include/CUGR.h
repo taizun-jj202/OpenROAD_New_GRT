@@ -58,6 +58,12 @@ struct Constants
   double soft_cap_max_ratio = 0.96;
   double soft_cap_mid_util = 0.72;
   double soft_cap_slope = 7.0;
+  // Wirelength-first view with light congestion awareness so WL-only mazes
+  // avoid obviously overused resources.
+  bool use_soft_wirelength_cost = true;
+  double soft_wirelength_short_cost_scale = 0.22;
+  double soft_wirelength_logistic_slope = 0.24;
+  double soft_wirelength_penalty_cap = 1.25;
 
   // FastRoute-style critical-net refinement schedule
   bool wirelength_first_refinement = true;
@@ -77,8 +83,8 @@ struct Constants
   int stage3_max_maze_configs = 4;
   bool stage3_use_wirelength_maze = true;
   int stage3_wl_only_hpwl_threshold = 140;
-  int stage3_wl_config_limit = 2;
-  double stage3_wl_via_cost_scale = 0.14;
+  int stage3_wl_config_limit = 3;
+  double stage3_wl_via_cost_scale = 0.10;
   bool stage3_use_full_grid_wl_maze = true;
   int stage3_full_grid_hpwl_threshold = 180;
   int stage3_full_grid_pin_limit = 16;
@@ -91,17 +97,18 @@ struct Constants
   bool enable_wirelength_recovery = true;
   bool recovery_use_maze = true;
   bool recovery_use_wirelength_maze = true;
-  double recovery_wl_maze_via_cost_scale = 0.15;
+  double recovery_wl_maze_via_cost_scale = 0.12;
   int recovery_wl_only_hpwl_threshold = 112;
   int recovery_hpwl_threshold = 88;
-  double recovery_min_stretch = 1.05;
-  int recovery_candidate_cap = 20;
+  double recovery_min_stretch = 1.03;
+  int recovery_candidate_cap = 24;
   int recovery_deep_search_cap = 8;
   int recovery_shallow_maze_config_limit = 2;
   int recovery_deep_maze_config_limit = 3;
   int recovery_shallow_wl_config_limit = 2;
   int recovery_deep_wl_config_limit = 2;
-  double recovery_refine_ratio = 0.35;
+  double recovery_refine_ratio = 0.45;
+  int recovery_overflow_slack = 2;
   int recovery_max_passes = 1;
   double recovery_pass_decay = 0.80;
   double recovery_late_pass_refine_scale = 0.40;

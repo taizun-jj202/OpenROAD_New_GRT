@@ -808,7 +808,8 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         if (!tree) {
           return;
         }
-        constexpr int kRecoveryOverflowSlack = 1;
+        const int kRecoveryOverflowSlack
+            = std::max(0, constants_.recovery_overflow_slack);
         // Evaluate overflow after adding the candidate tree back to the live
         // graph. This avoids selecting routes that appear legal in rip-up mode
         // but create new overflows once committed.
@@ -1089,11 +1090,11 @@ void CUGR::route()
   if (constants_.wirelength_first_refinement) {
     double maze_ratio = constants_.maze_refine_ratio;
     if (detourIndices.size() > 160) {
-      maze_ratio = std::min(maze_ratio, 0.08);
-    } else if (detourIndices.size() > 80) {
-      maze_ratio = std::min(maze_ratio, 0.10);
-    } else if (detourIndices.size() > 40) {
       maze_ratio = std::min(maze_ratio, 0.12);
+    } else if (detourIndices.size() > 80) {
+      maze_ratio = std::min(maze_ratio, 0.14);
+    } else if (detourIndices.size() > 40) {
+      maze_ratio = std::min(maze_ratio, 0.16);
     }
     mazeIndices = selectCriticalNets(detourIndices, maze_ratio);
   }
