@@ -410,7 +410,11 @@ NetRouteMap NewgrEngine::run()
   // keep a compact high-signal bank (A* + DetPart + FineGrain) to avoid
   // excessive guide churn from low-quality alternates.
   std::vector<CandidateResult> candidates;
-  candidates.reserve(5);
+  candidates.reserve(6);
+  candidates.push_back(run_candidate(Algo::Astar,
+                                     500,
+                                     NEWGR_CAP_PROFILE_WL_FOCUSED,
+                                     "Astar_WLFocused"));
   candidates.push_back(run_candidate(Algo::Astar,
                                      460,
                                      NEWGR_CAP_PROFILE_RADICAL_WL,

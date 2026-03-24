@@ -2986,15 +2986,10 @@ NetRouteMap buildWirelengthFusionHybrid(
     }
   }
 
-  // Disable the final closure sweep: it aggressively optimizes global WL but
-  // has repeatedly regressed detailed-route WL on this benchmark.
-  stats.consumed_wl_gain = consumed_wl_gain;
-  return hybrid_routes;
-
   // Third pass: deterministic shortest-net closure.
-  // Re-scan all donor families and pick the shortest legal per-net route under
-  // relaxed soft-cap budgets. This is intentionally wirelength-dominant and
-  // captures many small independent gains that staged passes can miss.
+  // Re-scan all donor families and pick per-net winners under a stricter
+  // low-layer-growth guard. This keeps the pass wirelength-focused while
+  // avoiding the detailed-route regressions seen with unconstrained closure.
   struct FinalClosureCandidate
   {
     odb::dbNet* db_net{nullptr};
@@ -3054,19 +3049,22 @@ NetRouteMap buildWirelengthFusionHybrid(
       const int64_t low_layer_growth = std::max<int64_t>(0, low_layer_delta);
       const int64_t via_soft_limit
           = maxInterleavedViaIncrease(pin_count)
-            + ((pin_count <= 12) ? 12 : ((pin_count <= 32) ? 16 : 22));
+            + ((pin_count <= 12) ? 10 : ((pin_count <= 32) ? 14 : 18));
       if (via_increase > via_soft_limit
           && wl_gain
-                 < via_increase * 34 + low_layer_growth / 18
-                       + static_cast<int64_t>(8)) {
+                 < via_increase * 42 + low_layer_growth * 2
+                       + static_cast<int64_t>(40)) {
         continue;
       }
       if (low_layer_growth > 0
-          && (low_layer_growth > std::max<int64_t>(140, wl_gain / 2)
+          && (low_layer_growth
+                  > std::max<int64_t>(
+                        96,
+                        wl_gain / 3 + static_cast<int64_t>(pin_count) * 6)
               || wl_gain
-                     < low_layer_growth * 3
-                           + std::max<int64_t>(0, via_increase) * 18
-                           + static_cast<int64_t>(40))) {
+                     < low_layer_growth * 4
+                           + std::max<int64_t>(0, via_increase) * 30
+                           + static_cast<int64_t>(90))) {
         continue;
       }
 
@@ -3099,8 +3097,8 @@ NetRouteMap buildWirelengthFusionHybrid(
     const int64_t low_layer_release = std::max<int64_t>(0, -low_layer_delta);
     const int64_t low_layer_growth = std::max<int64_t>(0, low_layer_delta);
     const int64_t priority
-        = wl_gain * 8 + std::max<int64_t>(0, via_drop) * 12 + low_layer_release / 3
-          - std::max<int64_t>(0, via_increase) * 20 - low_layer_growth;
+        = wl_gain * 8 + std::max<int64_t>(0, via_drop) * 10 + low_layer_release
+          - std::max<int64_t>(0, via_increase) * 26 - low_layer_growth * 3;
     final_candidates.push_back({db_net,
                                 best_donor,
                                 pin_count,
@@ -3127,16 +3125,16 @@ NetRouteMap buildWirelengthFusionHybrid(
             });
 
   const size_t final_swap_limit = std::min<size_t>(
-      3800, std::max<size_t>(420, db_net_map.size() / 6));
+      2600, std::max<size_t>(260, db_net_map.size() / 8));
   const int64_t final_via_budget = std::max<int64_t>(
-      1400, static_cast<int64_t>(seed_total_vias / 64));
+      900, static_cast<int64_t>(seed_total_vias / 95));
   const int64_t final_low_layer_budget = std::max<int64_t>(
-      240000, static_cast<int64_t>(seed_low_layer_wl / 420));
+      90000, static_cast<int64_t>(seed_low_layer_wl / 1200));
   const int64_t final_total_via_budget = total_via_budget + final_via_budget;
   const int64_t final_total_low_layer_budget
       = total_low_layer_budget + final_low_layer_budget;
-  const uint64_t final_wl_target = std::max<uint64_t>(220000, seed_total_wirelength / 3200);
-  const size_t final_min_swaps = std::max<size_t>(80, final_swap_limit / 10);
+  const uint64_t final_wl_target = std::max<uint64_t>(120000, seed_total_wirelength / 5200);
+  const size_t final_min_swaps = std::max<size_t>(40, final_swap_limit / 12);
 
   uint64_t final_wl_gain = 0;
   size_t final_swaps = 0;
@@ -3172,21 +3170,24 @@ NetRouteMap buildWirelengthFusionHybrid(
         static_cast<int64_t>(live_base_usage.low_layer_wl)
             - static_cast<int64_t>(donor_usage.low_layer_wl));
     const int64_t effective_gain
-        = wl_gain * 4 + low_layer_release / 2 - via_increase * 22
-          - low_layer_growth;
+        = wl_gain * 5 + low_layer_release - via_increase * 26
+          - low_layer_growth * 3;
 
     if (via_increase > 0
         && effective_gain
-               < via_increase * 36 + low_layer_growth / 18
-                     + static_cast<int64_t>(12)) {
+               < via_increase * 62 + low_layer_growth * 2
+                     + static_cast<int64_t>(36)) {
       ++stats.skipped_by_via_guard;
       continue;
     }
     if (low_layer_growth > 0
-        && (effective_gain
-                < low_layer_growth * 2 + via_increase * 18 + static_cast<int64_t>(80)
-            || low_layer_growth
-                   > wl_gain + static_cast<int64_t>(candidate.pin_count) * 18)) {
+        && (low_layer_growth
+                > std::max<int64_t>(
+                      72,
+                      wl_gain / 4 + static_cast<int64_t>(candidate.pin_count) * 6)
+            || effective_gain
+                   < low_layer_growth * 4 + via_increase * 28
+                         + static_cast<int64_t>(90))) {
       ++stats.skipped_by_layer_guard;
       continue;
     }
@@ -3736,10 +3737,14 @@ bool shouldPreferWirelengthFusionHybrid(int incumbent_overflow,
   const int64_t via_growth = std::max<int64_t>(0, via_increase);
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
+  const int64_t low_layer_growth = std::max<int64_t>(0, low_layer_delta);
   const uint64_t low_layer_release_credit = static_cast<uint64_t>(
-      std::max<int64_t>(0, -low_layer_delta) / 2);
+      std::max<int64_t>(0, -low_layer_delta));
+  const int64_t effective_gain_i64
+      = static_cast<int64_t>(wl_gain * 2 + low_layer_release_credit)
+        - low_layer_growth / 2;
   const uint64_t effective_wl_gain
-      = wl_gain * 2 + low_layer_release_credit;
+      = static_cast<uint64_t>(std::max<int64_t>(0, effective_gain_i64));
   const uint64_t min_wl_gain
       = std::max<uint64_t>(700, incumbent_score.wirelength / 700000);
   if (effective_wl_gain < min_wl_gain) {
@@ -3758,33 +3763,33 @@ bool shouldPreferWirelengthFusionHybrid(int incumbent_overflow,
              < std::max<uint64_t>(
                  static_cast<uint64_t>(
                      via_growth * 88
-                     + std::max<int64_t>(0, low_layer_delta) / 11
+                     + low_layer_growth / 8
                      + static_cast<int64_t>(15000)),
                  static_cast<uint64_t>(17000))) {
     return false;
   }
 
   const int64_t low_layer_budget = std::max<int64_t>(
-      5600000, static_cast<int64_t>(incumbent_low_layer_wl / 36));
+      2200000, static_cast<int64_t>(incumbent_low_layer_wl / 80));
   if (low_layer_delta > low_layer_budget
-      && effective_wl_gain
-             < static_cast<uint64_t>(low_layer_delta / 7
-                                     + via_growth * 90
-                                     + static_cast<int64_t>(18000))) {
-    return false;
-  }
-  if (low_layer_delta > 0
       && effective_wl_gain
              < static_cast<uint64_t>(low_layer_delta
                                      + via_growth * 120
                                      + static_cast<int64_t>(90000))) {
     return false;
   }
+  if (low_layer_delta > 0
+      && effective_wl_gain
+             < static_cast<uint64_t>(low_layer_delta * 2
+                                     + via_growth * 140
+                                     + static_cast<int64_t>(120000))) {
+    return false;
+  }
   if (via_growth > 0 && low_layer_delta > 0
       && effective_wl_gain
-             < static_cast<uint64_t>(via_growth * 96
-                                     + low_layer_delta / 7
-                                     + static_cast<int64_t>(18000))) {
+             < static_cast<uint64_t>(via_growth * 120
+                                     + low_layer_delta
+                                     + static_cast<int64_t>(70000))) {
     return false;
   }
   return true;
