@@ -3251,25 +3251,44 @@ bool shouldPreferWirelengthChampion(int incumbent_overflow,
   const uint64_t wl_gain = incumbent_score.wirelength - candidate_score.wirelength;
   const int64_t via_increase = static_cast<int64_t>(candidate_score.vias)
                                - static_cast<int64_t>(incumbent_score.vias);
+  const int64_t via_growth = std::max<int64_t>(0, via_increase);
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
+  const int64_t low_layer_growth = std::max<int64_t>(0, low_layer_delta);
+  const int64_t low_layer_release = std::max<int64_t>(0, -low_layer_delta);
+  const uint64_t effective_wl_gain
+      = wl_gain + static_cast<uint64_t>(low_layer_release / 3);
   const uint64_t min_wl_gain
-      = std::max<uint64_t>(120, incumbent_score.wirelength / 1300000);
-  if (wl_gain < min_wl_gain) {
+      = std::max<uint64_t>(1000, incumbent_score.wirelength / 520000);
+  if (effective_wl_gain < min_wl_gain) {
     return false;
   }
   const int64_t via_increase_budget
-      = std::max<int64_t>(2600, static_cast<int64_t>(incumbent_score.vias / 45));
-  if (via_increase > via_increase_budget
-      && wl_gain
-             < static_cast<uint64_t>(via_increase * 120 + static_cast<int64_t>(22000))) {
+      = std::max<int64_t>(1200, static_cast<int64_t>(incumbent_score.vias / 90));
+  if (via_growth > via_increase_budget
+      && effective_wl_gain
+             < static_cast<uint64_t>(via_growth * 180 + static_cast<int64_t>(42000))) {
+    return false;
+  }
+  if (via_growth > 0
+      && effective_wl_gain
+             < std::max<uint64_t>(
+                 static_cast<uint64_t>(via_growth * 140 + low_layer_growth / 6
+                                       + static_cast<int64_t>(28000)),
+                 static_cast<uint64_t>(32000))) {
     return false;
   }
   const int64_t low_layer_budget = std::max<int64_t>(
-      5200000, static_cast<int64_t>(incumbent_low_layer_wl / 28));
-  if (low_layer_delta > low_layer_budget
-      && wl_gain
-             < static_cast<uint64_t>(low_layer_delta / 2 + static_cast<int64_t>(28000))) {
+      1800000, static_cast<int64_t>(incumbent_low_layer_wl / 60));
+  if (low_layer_growth > low_layer_budget
+      && effective_wl_gain
+             < static_cast<uint64_t>(low_layer_growth / 3 + static_cast<int64_t>(120000))) {
+    return false;
+  }
+  if (low_layer_growth > 0
+      && effective_wl_gain
+             < static_cast<uint64_t>(low_layer_growth / 2 + via_growth * 180
+                                     + static_cast<int64_t>(22000))) {
     return false;
   }
   return true;
