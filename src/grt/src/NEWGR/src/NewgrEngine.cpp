@@ -167,11 +167,11 @@ bool hasAcceptableWirelengthTradeoff(const RouteMetrics& candidate,
   }
   const int64_t via_increase = static_cast<int64_t>(candidate.vias)
                                - static_cast<int64_t>(incumbent.vias);
-  if (via_increase > 5200) {
+  if (via_increase > 1800) {
     return false;
   }
   const uint64_t risk_budget = std::max<uint64_t>(
-      420000000ULL, incumbent.congestion_risk * 3 / 4);
+      250000000ULL, incumbent.congestion_risk / 2);
   return candidate.congestion_risk <= incumbent.congestion_risk + risk_budget;
 }
 
@@ -415,14 +415,6 @@ NetRouteMap NewgrEngine::run()
                                        "Astar_RadicalMix");
 
   if (force_full_ensemble || best.overflow > 0) {
-    CandidateResult radical_mix_short = run_candidate(Algo::Astar,
-                                                      220,
-                                                      NEWGR_CAP_PROFILE_RADICAL_MIX,
-                                                      "Astar_RadicalMix_ShortMaze");
-    if (isBetterCandidate(radical_mix_short, best)) {
-      best = std::move(radical_mix_short);
-    }
-
     CandidateResult radical_wl = run_candidate(Algo::Astar,
                                                460,
                                                NEWGR_CAP_PROFILE_RADICAL_WL,
@@ -431,28 +423,12 @@ NetRouteMap NewgrEngine::run()
       best = std::move(radical_wl);
     }
 
-    CandidateResult radical_wl_short = run_candidate(Algo::Astar,
-                                                     240,
-                                                     NEWGR_CAP_PROFILE_RADICAL_WL,
-                                                     "Astar_RadicalWL_ShortMaze");
-    if (isBetterCandidate(radical_wl_short, best)) {
-      best = std::move(radical_wl_short);
-    }
-
     CandidateResult ultra_wl = run_candidate(Algo::Astar,
                                              420,
                                              NEWGR_CAP_PROFILE_ULTRA_WL,
                                              "Astar_UltraWL");
     if (isBetterCandidate(ultra_wl, best)) {
       best = std::move(ultra_wl);
-    }
-
-    CandidateResult ultra_wl_short = run_candidate(Algo::Astar,
-                                                   210,
-                                                   NEWGR_CAP_PROFILE_ULTRA_WL,
-                                                   "Astar_UltraWL_ShortMaze");
-    if (isBetterCandidate(ultra_wl_short, best)) {
-      best = std::move(ultra_wl_short);
     }
   }
 
