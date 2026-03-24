@@ -410,7 +410,7 @@ NetRouteMap NewgrEngine::run()
   // keep several profile outputs (including 3D-short) so later fusion can
   // mix routes per-net across FastRoute/SPRoute/CUGR-inspired styles.
   std::vector<CandidateResult> candidates;
-  candidates.reserve(5);
+  candidates.reserve(8);
   candidates.push_back(run_candidate(Algo::Astar,
                                      420,
                                      NEWGR_CAP_PROFILE_RADICAL_MIX,
@@ -427,6 +427,14 @@ NetRouteMap NewgrEngine::run()
                                      560,
                                      NEWGR_CAP_PROFILE_3D_SHORT,
                                      "Astar_3DShort"));
+  candidates.push_back(run_candidate(Algo::DetPart_Astar_Local,
+                                     520,
+                                     NEWGR_CAP_PROFILE_RADICAL_WL,
+                                     "DetPart_RadicalWL"));
+  candidates.push_back(run_candidate(Algo::FineGrain,
+                                     520,
+                                     NEWGR_CAP_PROFILE_RADICAL_MIX,
+                                     "FineGrain_RadicalMix"));
 
   int best_idx = 0;
   for (int idx = 1; idx < static_cast<int>(candidates.size()); ++idx) {

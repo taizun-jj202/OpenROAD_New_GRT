@@ -105,6 +105,15 @@ uint64_t computeLowLayerWirelength(const NetRouteMap& routes)
   return low_layer_wl;
 }
 
+int64_t routeSpan(const RouteLayerUsage& usage)
+{
+  if (!usage.has_segment) {
+    return 0;
+  }
+  return static_cast<int64_t>(usage.max_x - usage.min_x)
+         + static_cast<int64_t>(usage.max_y - usage.min_y);
+}
+
 uint64_t routeCostForPins(const RouteScore& score, int pin_count)
 {
   // Prioritize wirelength while keeping via count under control.
@@ -2583,6 +2592,7 @@ NetRouteMap buildWirelengthFusionHybrid(
       continue;
     }
     const RouteLayerUsage base_usage = analyzeRouteLayerUsage(base_it->second);
+    const int64_t base_span = routeSpan(base_usage);
     ++stats.considered_nets;
 
     for (const NetRouteMap* donor_set : donor_route_sets) {
@@ -2610,9 +2620,11 @@ NetRouteMap buildWirelengthFusionHybrid(
       const int64_t via_drop = static_cast<int64_t>(base_score.vias)
                                - static_cast<int64_t>(donor_score.vias);
       const RouteLayerUsage donor_usage = analyzeRouteLayerUsage(*donor_route);
+      const int64_t donor_span = routeSpan(donor_usage);
       const int64_t low_layer_delta
           = static_cast<int64_t>(donor_usage.low_layer_wl)
             - static_cast<int64_t>(base_usage.low_layer_wl);
+      const int64_t span_growth = donor_span - base_span;
       const int64_t low_layer_release = std::max<int64_t>(0, -low_layer_delta);
       const int64_t low_layer_growth = std::max<int64_t>(0, low_layer_delta);
 
@@ -2634,6 +2646,13 @@ NetRouteMap buildWirelengthFusionHybrid(
                  < low_layer_growth / 10
                        + std::max<int64_t>(0, via_increase) * 28
                        + static_cast<int64_t>(40)) {
+        ++stats.skipped_by_layer_guard;
+        continue;
+      }
+      if (span_growth > 0
+          && effective_gain
+                 < span_growth / 3 + std::max<int64_t>(0, via_increase) * 36
+                       + static_cast<int64_t>(80)) {
         ++stats.skipped_by_layer_guard;
         continue;
       }
@@ -2691,6 +2710,8 @@ NetRouteMap buildWirelengthFusionHybrid(
 
     const RouteLayerUsage live_base_usage = analyzeRouteLayerUsage(base_it->second);
     const RouteLayerUsage donor_usage = analyzeRouteLayerUsage(*candidate.donor_route);
+    const int64_t live_base_span = routeSpan(live_base_usage);
+    const int64_t donor_span = routeSpan(donor_usage);
     const int64_t wl_gain = static_cast<int64_t>(live_base_score.wirelength)
                             - static_cast<int64_t>(donor_score.wirelength);
     const int64_t via_increase = std::max<int64_t>(
@@ -2703,6 +2724,7 @@ NetRouteMap buildWirelengthFusionHybrid(
         0,
         static_cast<int64_t>(live_base_usage.low_layer_wl)
             - static_cast<int64_t>(donor_usage.low_layer_wl));
+    const int64_t span_growth = std::max<int64_t>(0, donor_span - live_base_span);
     const int64_t effective_gain
         = wl_gain * 2 + low_layer_release / 2 - via_increase * 40
           - low_layer_growth / 20;
@@ -2718,6 +2740,12 @@ NetRouteMap buildWirelengthFusionHybrid(
         && effective_gain
                < low_layer_growth / 9 + via_increase * 26
                      + static_cast<int64_t>(48)) {
+      ++stats.skipped_by_layer_guard;
+      continue;
+    }
+    if (span_growth > 0
+        && effective_gain
+               < span_growth / 3 + via_increase * 30 + static_cast<int64_t>(72)) {
       ++stats.skipped_by_layer_guard;
       continue;
     }
@@ -3744,6 +3772,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &envelope_hybrid,
         &wirelength_oracle_hybrid,
         &wirelength_closure_hybrid};
+    // Radical mix stage:
+    // bring back alternate profile banks only in the final fusion pass, where
+    // geometric guards keep unstable guide churn in check.
+    for (size_t alt_idx = 0; alt_idx < newgr_alternate_routes.size(); ++alt_idx) {
+      fusion_donors.push_back(&newgr_alternate_routes[alt_idx]);
+    }
     NetRouteMap wirelength_fusion_hybrid = buildWirelengthFusionHybrid(
         wirelength_closure_hybrid,
         fusion_donors,
