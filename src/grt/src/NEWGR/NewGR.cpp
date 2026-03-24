@@ -3434,7 +3434,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(dr_stable_minwl));
   }
 
-  if (false && has_best_wirelength) {
+  if (has_best_wirelength) {
     ScenarioResult longnet_fusion;
     longnet_fusion.name = "longnet-priority-fusion";
     if (ScenarioResult* collapse = find_scenario_result("consensus-collapse-fusion")) {
@@ -3516,7 +3516,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(longnet_fusion));
   }
 
-  if (false && has_best_wirelength) {
+  if (has_best_wirelength) {
     ScenarioResult hyper_collapse;
     hyper_collapse.name = "hyper-collapse-fusion";
     if (ScenarioResult* longnet = find_scenario_result("longnet-priority-fusion")) {
@@ -3862,13 +3862,25 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Apply DR-aware decision after replay/fallback logic so it is not
   // accidentally overwritten by scenario re-execution.
   if (dr_aware_choice != nullptr && dr_aware_choice->name != final_result.name) {
-    final_result = *dr_aware_choice;
-    logger_->info(GNR,
-                  6025,
-                  "NEWGR DR-aware override '{}': wirelength {:.0f} um, vias {}",
-                  final_result.name,
-                  final_result.metrics.wirelength_um,
-                  final_result.metrics.via_count);
+    // Guardrail: do not replace a clearly shorter guide set with a "DR-aware"
+    // candidate unless wirelength loss is negligible and via reduction is real.
+    const long wl_guard = std::max<long>(4L * proxy_tile_size, best_wirelength / 4000L);
+    const long via_guard = std::max<long>(proxy_tile_size,
+                                          final_result.metrics.via_count / 200L);
+    const bool wl_safe = dr_aware_choice->metrics.wirelength_dbu
+                         <= (final_result.metrics.wirelength_dbu + wl_guard);
+    const bool via_better = dr_aware_choice->metrics.via_count + via_guard
+                            <= final_result.metrics.via_count;
+
+    if (wl_safe && via_better) {
+      final_result = *dr_aware_choice;
+      logger_->info(GNR,
+                    6025,
+                    "NEWGR DR-aware override '{}': wirelength {:.0f} um, vias {}",
+                    final_result.name,
+                    final_result.metrics.wirelength_um,
+                    final_result.metrics.via_count);
+    }
   }
 
   logger_->info(GNR,
@@ -3880,6 +3892,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   const bool collapse_style_solution = final_result.name == "consensus-collapse-fusion"
                                        || final_result.name == "longnet-priority-fusion"
+                                       || final_result.name == "hyper-collapse-fusion"
+                                       || final_result.name == "router-donor-minwl-fusion"
+                                       || final_result.name == "cross-router-wirelength-fusion"
+                                       || final_result.name == "radical-shortpath-fusion"
+                                       || final_result.name == "extreme-wirelength-stitch"
                                        || final_result.name == "collapse-router-minwl-fusion"
                                        || final_result.name == "dr-stable-shortest-fusion";
   const bool apply_patching
