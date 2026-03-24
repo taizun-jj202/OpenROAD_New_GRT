@@ -47,6 +47,8 @@ enum class RouteSource
   kNewgrCriticalTopology,
   kNewgrWirelength,
   kNewgrDataWirelength,
+  kNewgrWirelengthSeed,
+  kNewgrDataSeed,
   kNewgrRegionAware,
   kNewgrRegularRegion,
   kNewgrFineGrain,
@@ -331,20 +333,20 @@ SelectionPolicy buildSelectionPolicy(const RouteScore& baseline_score, int tile_
     policy.long_net = true;
     policy.via_tradeoff = 0;
     policy.bend_tradeoff = std::max(1, tile_size / 260);
-    policy.via_guard = policy.via_guard * 12 + 72;
-    policy.hard_via_guard = policy.via_guard * 4 + 120;
+    policy.via_guard = policy.via_guard * 14 + 96;
+    policy.hard_via_guard = policy.via_guard * 6 + 192;
     policy.min_wl_improve = 1;
     policy.wl_per_extra_via = 1;
-    policy.aggressive_wl_gain = std::max<int64_t>(1, tile_size / 12);
+    policy.aggressive_wl_gain = std::max<int64_t>(1, tile_size / 16);
   } else if (baseline_score.wirelength >= medium_net_threshold) {
     policy.medium_net = true;
     policy.via_tradeoff = 0;
     policy.bend_tradeoff = std::max(1, tile_size / 220);
-    policy.via_guard = policy.via_guard * 6 + 40;
-    policy.hard_via_guard = policy.via_guard * 4 + 80;
+    policy.via_guard = policy.via_guard * 8 + 56;
+    policy.hard_via_guard = policy.via_guard * 5 + 120;
     policy.min_wl_improve = 1;
     policy.wl_per_extra_via = 2;
-    policy.aggressive_wl_gain = std::max<int64_t>(1, tile_size / 10);
+    policy.aggressive_wl_gain = std::max<int64_t>(1, tile_size / 14);
   }
 
   return policy;
@@ -459,6 +461,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   NetRouteMap critical_topology_routes = engine_->runCriticalTopologyRefine();
   NetRouteMap wirelength_routes = engine_->runWirelengthFirst();
   NetRouteMap data_wirelength_routes = engine_->runDataDrivenWirelength();
+  NetRouteMap wirelength_seed_routes = engine_->runWirelengthSeed();
+  NetRouteMap data_seed_routes = engine_->runDataSeed();
   NetRouteMap region_aware_routes = engine_->runRegionAware();
   NetRouteMap regular_region_routes = engine_->runRegularRegionAware();
   NetRouteMap finegrain_routes = engine_->runFineGrainRefine();
@@ -523,6 +527,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int selected_from_critical_topology = 0;
   int selected_from_wl = 0;
   int selected_from_data_wl = 0;
+  int selected_from_wl_seed = 0;
+  int selected_from_data_seed = 0;
   int selected_from_region = 0;
   int selected_from_regular_region = 0;
   int selected_from_finegrain = 0;
@@ -536,6 +542,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int inserted_from_critical_topology = 0;
   int inserted_from_wl = 0;
   int inserted_from_data_wl = 0;
+  int inserted_from_wl_seed = 0;
+  int inserted_from_data_seed = 0;
   int inserted_from_region = 0;
   int inserted_from_regular_region = 0;
   int inserted_from_finegrain = 0;
@@ -636,15 +644,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             = std::max<int64_t>(0, best_score.wirelength - candidate_score.wirelength);
         const int64_t congestion_delta = candidate_congestion_cost - best_congestion_cost;
         const int64_t allowed_delta
-            = policy.long_net ? std::max<int64_t>(12, best_congestion_cost / 6)
+            = policy.long_net ? std::max<int64_t>(28, best_congestion_cost / 2)
                               : (policy.medium_net
-                                     ? std::max<int64_t>(8, best_congestion_cost / 10)
+                                     ? std::max<int64_t>(20, best_congestion_cost / 3)
                                      : std::max<int64_t>(6, best_congestion_cost / 12));
         const int64_t required_wl_drop
-            = policy.long_net ? std::max<int64_t>(1, tile_size / 9)
-                              : (policy.medium_net
-                                     ? std::max<int64_t>(1, tile_size / 6)
-                                     : std::max<int64_t>(1, tile_size / 5));
+            = (policy.long_net || policy.medium_net)
+                  ? 1
+                  : std::max<int64_t>(1, tile_size / 5);
         if (congestion_delta > allowed_delta && wl_drop_vs_best < required_wl_drop) {
           return;
         }
@@ -696,6 +703,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
              false);
     consider(data_wirelength_routes,
              RouteSource::kNewgrDataWirelength,
+             exploratory_min_wl_drop,
+             true);
+    consider(wirelength_seed_routes,
+             RouteSource::kNewgrWirelengthSeed,
+             exploratory_min_wl_drop,
+             true);
+    consider(data_seed_routes,
+             RouteSource::kNewgrDataSeed,
              exploratory_min_wl_drop,
              true);
     consider(region_aware_routes,
@@ -770,6 +785,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                         RouteSource::kNewgrCriticalTopology);
     maybeUpdateChampion(wirelength_routes, RouteSource::kNewgrWirelength);
     maybeUpdateChampion(data_wirelength_routes, RouteSource::kNewgrDataWirelength);
+    maybeUpdateChampion(wirelength_seed_routes, RouteSource::kNewgrWirelengthSeed);
+    maybeUpdateChampion(data_seed_routes, RouteSource::kNewgrDataSeed);
     maybeUpdateChampion(region_aware_routes, RouteSource::kNewgrRegionAware);
     maybeUpdateChampion(regular_region_routes, RouteSource::kNewgrRegularRegion);
     maybeUpdateChampion(finegrain_routes, RouteSource::kNewgrFineGrain);
@@ -784,18 +801,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       const int64_t congestion_delta
           = wl_champion_congestion_cost - best_congestion_cost;
       const int64_t allowed_congestion_delta
-          = policy.long_net ? std::max<int64_t>(10, best_congestion_cost / 4)
+          = policy.long_net ? std::max<int64_t>(36, best_congestion_cost / 2)
                             : (policy.medium_net
-                                   ? std::max<int64_t>(8, best_congestion_cost / 6)
+                                   ? std::max<int64_t>(24, best_congestion_cost / 3)
                                    : std::max<int64_t>(6, best_congestion_cost / 8));
       const int64_t champion_min_wl_gain
-          = policy.long_net ? std::max<int64_t>(1, tile_size / 10)
+          = policy.long_net ? 1
                             : (policy.medium_net
-                                   ? std::max<int64_t>(1, tile_size / 9)
+                                   ? 1
                                    : std::max<int64_t>(1, tile_size / 6));
       const int64_t champion_force_gain
-          = policy.long_net ? std::max<int64_t>(1, tile_size / 2)
-                            : std::max<int64_t>(1, tile_size / 3);
+          = policy.long_net ? std::max<int64_t>(1, tile_size / 8)
+                            : (policy.medium_net ? std::max<int64_t>(1, tile_size / 6)
+                                                 : std::max<int64_t>(1, tile_size / 3));
 
       const int64_t current_net_extra_vias
           = std::max<int64_t>(0, best_score.vias - baseline_score.vias);
@@ -857,6 +875,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       case RouteSource::kNewgrDataWirelength:
         selected_from_data_wl++;
         break;
+      case RouteSource::kNewgrWirelengthSeed:
+        selected_from_wl_seed++;
+        break;
+      case RouteSource::kNewgrDataSeed:
+        selected_from_data_seed++;
+        break;
       case RouteSource::kNewgrRegionAware:
         selected_from_region++;
         break;
@@ -911,6 +935,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       inserted_from_data_wl++;
     }
   }
+  for (const auto& [db_net, route] : wirelength_seed_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_wl_seed++;
+    }
+  }
+  for (const auto& [db_net, route] : data_seed_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_data_seed++;
+    }
+  }
   for (const auto& [db_net, route] : region_aware_routes) {
     if (routes.find(db_net) == routes.end()) {
       routes.emplace(db_net, route);
@@ -957,9 +993,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   logger_->info(utl::GRT,
                 6004,
                 "NEWGR portfolio hybrid selected balanced={} critical={} critical_top={} wl={} data={} "
-                "region={} regular={} fine={} small={} astar={} rudy={} polish={} "
-                "(kept seed={}; +balanced={} +critical={} +critical_top={} +wl={} +data={} +region={} +regular={} "
-                "+fine={} +small={} +astar={} +rudy={} +polish={}). "
+                "wl_seed={} data_seed={} region={} regular={} fine={} small={} astar={} rudy={} polish={} "
+                "(kept seed={}; +balanced={} +critical={} +critical_top={} +wl={} +data={} +wl_seed={} +data_seed={} "
+                "+region={} +regular={} +fine={} +small={} +astar={} +rudy={} +polish={}). "
                 "Global WL gain={} "
                 "extra-vias={} (base via budget={} + gain/{}) out of {} total.",
                 selected_from_balanced,
@@ -967,6 +1003,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 selected_from_critical_topology,
                 selected_from_wl,
                 selected_from_data_wl,
+                selected_from_wl_seed,
+                selected_from_data_seed,
                 selected_from_region,
                 selected_from_regular_region,
                 selected_from_finegrain,
@@ -980,6 +1018,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 inserted_from_critical_topology,
                 inserted_from_wl,
                 inserted_from_data_wl,
+                inserted_from_wl_seed,
+                inserted_from_data_seed,
                 inserted_from_region,
                 inserted_from_regular_region,
                 inserted_from_finegrain,

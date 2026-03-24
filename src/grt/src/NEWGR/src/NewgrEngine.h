@@ -45,6 +45,8 @@ class NewgrEngine
   NetRouteMap run();
   NetRouteMap runWirelengthFirst();
   NetRouteMap runDataDrivenWirelength();
+  NetRouteMap runWirelengthSeed();
+  NetRouteMap runDataSeed();
   NetRouteMap runCriticalWirelengthRefine();
   NetRouteMap runCriticalTopologyRefine();
   NetRouteMap runRegionAware();

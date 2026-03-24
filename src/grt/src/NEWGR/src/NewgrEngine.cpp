@@ -94,6 +94,23 @@ NetRouteMap NewgrEngine::runDataDrivenWirelength()
                        /*warn_id=*/406);
 }
 
+NetRouteMap NewgrEngine::runWirelengthSeed()
+{
+  // Early-stop WL-biased pass to preserve short topologies before heavy
+  // congestion-driven rip-up rounds distort long nets.
+  return runWithConfig(/*max_maze_round=*/120,
+                       static_cast<int>(Algo::DetPart_Astar),
+                       /*warn_id=*/413);
+}
+
+NetRouteMap NewgrEngine::runDataSeed()
+{
+  // Data-guided early pass for diverse short alternatives in congested regions.
+  return runWithConfig(/*max_maze_round=*/140,
+                       static_cast<int>(Algo::DetPart_Astar_Data),
+                       /*warn_id=*/414);
+}
+
 NetRouteMap NewgrEngine::runCriticalWirelengthRefine()
 {
   const std::vector<int> critical_nets = selectCriticalNetIndices();
