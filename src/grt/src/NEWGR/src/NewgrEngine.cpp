@@ -30,6 +30,39 @@ void ensureGaloisRuntime()
   (void) runtime;
 }
 
+void applyRouteProfile(NewgrEngine::RouteProfile profile)
+{
+  switch (profile) {
+    case NewgrEngine::RouteProfile::kBalanced:
+      NEWGR_CAP_MODEL = 0;
+      NEWGR_CAP_SCALE = 1.0f;
+      NEWGR_RUDY_WEIGHT_SCALE = 1.0f;
+      NEWGR_PIN_DENSITY_SCALE = 1.0f;
+      break;
+    case NewgrEngine::RouteProfile::kLegacySqueeze:
+      // Legacy SPRoute-style capacity squeeze for congestion-safe fallback.
+      NEWGR_CAP_MODEL = 1;
+      NEWGR_CAP_SCALE = 1.0f;
+      NEWGR_RUDY_WEIGHT_SCALE = 1.35f;
+      NEWGR_PIN_DENSITY_SCALE = 1.15f;
+      break;
+    case NewgrEngine::RouteProfile::kDirectWirelength:
+      // Favor direct trunks by relaxing pseudo-capacity pressure.
+      NEWGR_CAP_MODEL = 2;
+      NEWGR_CAP_SCALE = 1.0f;
+      NEWGR_RUDY_WEIGHT_SCALE = 0.45f;
+      NEWGR_PIN_DENSITY_SCALE = 0.55f;
+      break;
+    case NewgrEngine::RouteProfile::kUltraDirectWirelength:
+      // Extremely WL-biased mode to expose short alternatives.
+      NEWGR_CAP_MODEL = 2;
+      NEWGR_CAP_SCALE = 1.0f;
+      NEWGR_RUDY_WEIGHT_SCALE = 0.22f;
+      NEWGR_PIN_DENSITY_SCALE = 0.35f;
+      break;
+  }
+}
+
 const Edge3D dummy_edge{};
 
 const Edge3D& horizontalEdge(const SprouteGridData& grid,
@@ -76,56 +109,64 @@ NetRouteMap NewgrEngine::run()
 {
   return runWithConfig(/*max_maze_round=*/350,
                        static_cast<int>(Algo::DetPart_Astar_Local),
-                       /*warn_id=*/401);
+                       /*warn_id=*/401,
+                       RouteProfile::kBalanced);
 }
 
 NetRouteMap NewgrEngine::runWirelengthFirst()
 {
   return runWithConfig(/*max_maze_round=*/260,
                        static_cast<int>(Algo::DetPart_Astar),
-                       /*warn_id=*/402);
+                       /*warn_id=*/402,
+                       RouteProfile::kBalanced);
 }
 
 NetRouteMap NewgrEngine::runDataDrivenWirelength()
 {
   return runWithConfig(/*max_maze_round=*/280,
                        static_cast<int>(Algo::DetPart_Astar_Data),
-                       /*warn_id=*/406);
+                       /*warn_id=*/406,
+                       RouteProfile::kBalanced);
 }
 
 NetRouteMap NewgrEngine::runRegionAware()
 {
   return runWithConfig(/*max_maze_round=*/220,
                        static_cast<int>(Algo::DetPart_Astar_Region),
-                       /*warn_id=*/403);
+                       /*warn_id=*/403,
+                       RouteProfile::kBalanced);
 }
 
 NetRouteMap NewgrEngine::runRegularRegionAware()
 {
   return runWithConfig(/*max_maze_round=*/220,
                        static_cast<int>(Algo::DetPart_Astar_Regular_Region),
-                       /*warn_id=*/405);
+                       /*warn_id=*/405,
+                       RouteProfile::kBalanced);
 }
 
 NetRouteMap NewgrEngine::runFineGrainRefine()
 {
   return runWithConfig(/*max_maze_round=*/180,
                        static_cast<int>(Algo::FineGrain),
-                       /*warn_id=*/404);
+                       /*warn_id=*/404,
+                       RouteProfile::kBalanced);
 }
 
 NetRouteMap NewgrEngine::runSmallNetAware()
 {
   return runWithConfig(/*max_maze_round=*/200,
                        static_cast<int>(Algo::DetPart_Astar_Small),
-                       /*warn_id=*/408);
+                       /*warn_id=*/408,
+                       RouteProfile::kBalanced);
 }
 
 NetRouteMap NewgrEngine::runAstarClassic()
 {
   return runWithConfig(/*max_maze_round=*/220,
                        static_cast<int>(Algo::Astar),
-                       /*warn_id=*/409);
+                       /*warn_id=*/409,
+                       RouteProfile::kBalanced);
 }
 
 NetRouteMap NewgrEngine::runAstarEarly()
@@ -134,7 +175,8 @@ NetRouteMap NewgrEngine::runAstarEarly()
   // detours, providing a wirelength-focused alternative for portfolio merge.
   return runWithConfig(/*max_maze_round=*/120,
                        static_cast<int>(Algo::Astar),
-                       /*warn_id=*/410);
+                       /*warn_id=*/410,
+                       RouteProfile::kBalanced);
 }
 
 NetRouteMap NewgrEngine::runDetPartClassic()
@@ -143,7 +185,8 @@ NetRouteMap NewgrEngine::runDetPartClassic()
   // keeps straighter trunks for long nets.
   return runWithConfig(/*max_maze_round=*/170,
                        static_cast<int>(Algo::DetPart),
-                       /*warn_id=*/412);
+                       /*warn_id=*/412,
+                       RouteProfile::kBalanced);
 }
 
 NetRouteMap NewgrEngine::runNonDetHybrid()
@@ -152,7 +195,8 @@ NetRouteMap NewgrEngine::runNonDetHybrid()
   // source even if final NEWGR merge stays deterministic.
   return runWithConfig(/*max_maze_round=*/140,
                        static_cast<int>(Algo::NonDet),
-                       /*warn_id=*/413);
+                       /*warn_id=*/413,
+                       RouteProfile::kBalanced);
 }
 
 NetRouteMap NewgrEngine::runRudyPartition()
@@ -161,21 +205,52 @@ NetRouteMap NewgrEngine::runRudyPartition()
   // expose shorter alternatives than pure local-A* in some congested regions.
   return runWithConfig(/*max_maze_round=*/220,
                        static_cast<int>(Algo::DetPart_Astar_RUDY),
-                       /*warn_id=*/411);
+                       /*warn_id=*/411,
+                       RouteProfile::kBalanced);
 }
 
 NetRouteMap NewgrEngine::runRudyDriven()
 {
   return runWithConfig(/*max_maze_round=*/200,
                        static_cast<int>(Algo::DetPart_Astar_RUDY),
-                       /*warn_id=*/407);
+                       /*warn_id=*/407,
+                       RouteProfile::kBalanced);
 }
 
-NetRouteMap NewgrEngine::runWithConfig(int max_maze_round, int algo_id, int warn_id)
+NetRouteMap NewgrEngine::runLegacySqueeze()
+{
+  return runWithConfig(/*max_maze_round=*/210,
+                       static_cast<int>(Algo::DetPart_Astar_RUDY),
+                       /*warn_id=*/414,
+                       RouteProfile::kLegacySqueeze);
+}
+
+NetRouteMap NewgrEngine::runDirectWirelength()
+{
+  return runWithConfig(/*max_maze_round=*/160,
+                       static_cast<int>(Algo::DetPart_Astar_Local),
+                       /*warn_id=*/415,
+                       RouteProfile::kDirectWirelength);
+}
+
+NetRouteMap NewgrEngine::runUltraDirectWirelength()
+{
+  return runWithConfig(/*max_maze_round=*/95,
+                       static_cast<int>(Algo::Astar),
+                       /*warn_id=*/416,
+                       RouteProfile::kUltraDirectWirelength);
+}
+
+NetRouteMap NewgrEngine::runWithConfig(int max_maze_round,
+                                       int algo_id,
+                                       int warn_id,
+                                       RouteProfile profile)
 {
   if (!input_ready_) {
     buildInput();
   }
+
+  applyRouteProfile(profile);
 
   // SPRoute vendor code keeps these as mutable globals; reset them before each
   // run so multi-pass NEWGR portfolios do not accumulate stale state.

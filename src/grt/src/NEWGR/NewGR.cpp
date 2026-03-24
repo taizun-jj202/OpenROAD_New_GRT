@@ -54,7 +54,10 @@ enum class RouteSource
   kNewgrAstarEarly,
   kNewgrDetPartClassic,
   kNewgrNonDetHybrid,
-  kNewgrRudyPartition
+  kNewgrRudyPartition,
+  kNewgrLegacySqueeze,
+  kNewgrDirectWirelength,
+  kNewgrUltraDirectWirelength
 };
 
 enum class SegmentDirection
@@ -498,6 +501,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   NetRouteMap detpart_routes = engine_->runDetPartClassic();
   NetRouteMap nondet_routes = engine_->runNonDetHybrid();
   NetRouteMap rudy_partition_routes = engine_->runRudyPartition();
+  NetRouteMap legacy_squeeze_routes = engine_->runLegacySqueeze();
+  NetRouteMap direct_wl_routes = engine_->runDirectWirelength();
+  NetRouteMap ultra_direct_wl_routes = engine_->runUltraDirectWirelength();
 
   const SprouteGridData& grid = grouter_->sproute_grid_data_;
   const int origin_x = grid.origin.x();
@@ -563,6 +569,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int selected_from_detpart = 0;
   int selected_from_nondet = 0;
   int selected_from_rudy_partition = 0;
+  int selected_from_legacy_squeeze = 0;
+  int selected_from_direct_wl = 0;
+  int selected_from_ultra_direct_wl = 0;
   int kept_fastroute = 0;
   int inserted_from_balanced = 0;
   int inserted_from_wl = 0;
@@ -577,6 +586,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   int inserted_from_detpart = 0;
   int inserted_from_nondet = 0;
   int inserted_from_rudy_partition = 0;
+  int inserted_from_legacy_squeeze = 0;
+  int inserted_from_direct_wl = 0;
+  int inserted_from_ultra_direct_wl = 0;
 
   EdgeUsageMap selected_usage;
   selected_usage.reserve(baseline_demand.size());
@@ -727,9 +739,21 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               ? std::max<int64_t>(1, tile_size / 16)
               : (policy.medium_net ? std::max<int64_t>(1, tile_size / 14)
                                    : std::max<int64_t>(1, tile_size / 10));
+    int64_t direct_min_wl_drop
+        = policy.long_net
+              ? std::max<int64_t>(1, tile_size / 20)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 18)
+                                   : std::max<int64_t>(1, tile_size / 14));
+    int64_t ultra_direct_min_wl_drop
+        = policy.long_net
+              ? std::max<int64_t>(1, tile_size / 24)
+              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 22)
+                                   : std::max<int64_t>(1, tile_size / 18));
     if (ultra_wl_mode) {
       exploratory_min_wl_drop = std::max<int64_t>(1, tile_size / 24);
       aggressive_min_wl_drop = std::max<int64_t>(1, tile_size / 26);
+      direct_min_wl_drop = std::max<int64_t>(1, tile_size / 28);
+      ultra_direct_min_wl_drop = std::max<int64_t>(1, tile_size / 30);
     }
     consider(balanced_routes, RouteSource::kNewgrBalanced, 0, false);
     consider(wirelength_routes, RouteSource::kNewgrWirelength, 0, false);
@@ -773,6 +797,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider(rudy_partition_routes,
              RouteSource::kNewgrRudyPartition,
              aggressive_min_wl_drop,
+             true);
+    consider(legacy_squeeze_routes,
+             RouteSource::kNewgrLegacySqueeze,
+             exploratory_min_wl_drop,
+             true);
+    consider(direct_wl_routes,
+             RouteSource::kNewgrDirectWirelength,
+             direct_min_wl_drop,
+             true);
+    consider(ultra_direct_wl_routes,
+             RouteSource::kNewgrUltraDirectWirelength,
+             ultra_direct_min_wl_drop,
              true);
 
     // Wirelength champion pass: if one candidate has a material WL gain and
@@ -823,6 +859,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     maybeUpdateChampion(detpart_routes, RouteSource::kNewgrDetPartClassic);
     maybeUpdateChampion(nondet_routes, RouteSource::kNewgrNonDetHybrid);
     maybeUpdateChampion(rudy_partition_routes, RouteSource::kNewgrRudyPartition);
+    maybeUpdateChampion(legacy_squeeze_routes, RouteSource::kNewgrLegacySqueeze);
+    maybeUpdateChampion(direct_wl_routes, RouteSource::kNewgrDirectWirelength);
+    maybeUpdateChampion(ultra_direct_wl_routes,
+                        RouteSource::kNewgrUltraDirectWirelength);
 
     if (wl_champion_route != selected_route) {
       const int64_t wl_drop_vs_best
@@ -976,6 +1016,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       case RouteSource::kNewgrRudyPartition:
         selected_from_rudy_partition++;
         break;
+      case RouteSource::kNewgrLegacySqueeze:
+        selected_from_legacy_squeeze++;
+        break;
+      case RouteSource::kNewgrDirectWirelength:
+        selected_from_direct_wl++;
+        break;
+      case RouteSource::kNewgrUltraDirectWirelength:
+        selected_from_ultra_direct_wl++;
+        break;
     }
   }
 
@@ -1094,6 +1143,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider_refine(detpart_routes);
     consider_refine(nondet_routes);
     consider_refine(rudy_partition_routes);
+    consider_refine(legacy_squeeze_routes);
+    consider_refine(direct_wl_routes);
+    consider_refine(ultra_direct_wl_routes);
 
     if (best_refine_route != &route) {
       second_pass_swaps++;
@@ -1206,6 +1258,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider_rescue(detpart_routes);
     consider_rescue(nondet_routes);
     consider_rescue(rudy_partition_routes);
+    consider_rescue(legacy_squeeze_routes);
+    consider_rescue(direct_wl_routes);
+    consider_rescue(ultra_direct_wl_routes);
 
     if (best_rescue_route != &route) {
       third_pass_swaps++;
@@ -1326,6 +1381,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     consider_polish(detpart_routes);
     consider_polish(nondet_routes);
     consider_polish(rudy_partition_routes);
+    consider_polish(legacy_squeeze_routes);
+    consider_polish(direct_wl_routes);
+    consider_polish(ultra_direct_wl_routes);
 
     if (best_polish_route != &route) {
       trunk_polish_swaps++;
@@ -1426,15 +1484,34 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       inserted_from_rudy_partition++;
     }
   }
+  for (const auto& [db_net, route] : legacy_squeeze_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_legacy_squeeze++;
+    }
+  }
+  for (const auto& [db_net, route] : direct_wl_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_direct_wl++;
+    }
+  }
+  for (const auto& [db_net, route] : ultra_direct_wl_routes) {
+    if (routes.find(db_net) == routes.end()) {
+      routes.emplace(db_net, route);
+      inserted_from_ultra_direct_wl++;
+    }
+  }
   logger_->info(utl::GRT,
                 6004,
                 "NEWGR WL-priority hybrid selected balanced={} wl={} data={} "
                 "region={} regular={} fine={} small={} astar={} rudy={} "
                 "astarEarly={} detpart={} nondet={} rudyPart={} "
+                "legacySqz={} directWl={} ultraDirectWl={} "
                 "(kept FR={}; +balanced={} "
                 "+wl={} +data={} +region={} +regular={} +fine={} +small={} "
                 "+astar={} +rudy={} +astarEarly={} +detpart={} +nondet={} "
-                "+rudyPart={}). "
+                "+rudyPart={} +legacySqz={} +directWl={} +ultraDirectWl={}). "
                 "Refine swaps={} wl-gain={} via-delta={}. "
                 "Rescue swaps={} wl-gain={} via-delta={}. "
                 "Trunk polish swaps={} wl-gain={} via-delta={}. "
@@ -1453,6 +1530,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 selected_from_detpart,
                 selected_from_nondet,
                 selected_from_rudy_partition,
+                selected_from_legacy_squeeze,
+                selected_from_direct_wl,
+                selected_from_ultra_direct_wl,
                 kept_fastroute,
                 inserted_from_balanced,
                 inserted_from_wl,
@@ -1467,6 +1547,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 inserted_from_detpart,
                 inserted_from_nondet,
                 inserted_from_rudy_partition,
+                inserted_from_legacy_squeeze,
+                inserted_from_direct_wl,
+                inserted_from_ultra_direct_wl,
                 second_pass_swaps,
                 second_pass_wl_gain,
                 second_pass_via_delta,

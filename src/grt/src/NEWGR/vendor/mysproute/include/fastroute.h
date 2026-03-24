@@ -319,8 +319,14 @@ void readGR(parser::grGenerator& grGen, Algo algo)
 
 	float rudy_weight = (max_rudy < 48)? DEFAULT_RUDY_WEIGHT : 0.01;
 	float pin_density_weight = (max_rudy < 48)? DEFAULT_PIN_DENSITY_WEIGHT : 1.00;
+	rudy_weight *= NEWGR_RUDY_WEIGHT_SCALE;
+	pin_density_weight *= NEWGR_PIN_DENSITY_SCALE;
 	if(NO_RUDY)
 		rudy_weight = 0;
+	if (rudy_weight < 0.0f)
+		rudy_weight = 0.0f;
+	if (pin_density_weight < 0.0f)
+		pin_density_weight = 0.0f;
 	
 	cout << "max rudy: " << max_rudy << endl;
 	for(int i = 0; i < xGrid * yGrid; i++) {
