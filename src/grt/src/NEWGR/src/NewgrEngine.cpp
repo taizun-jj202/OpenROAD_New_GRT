@@ -137,6 +137,24 @@ NetRouteMap NewgrEngine::runAstarEarly()
                        /*warn_id=*/410);
 }
 
+NetRouteMap NewgrEngine::runDetPartClassic()
+{
+  // Deterministic partitioning without A* adds topology diversity and often
+  // keeps straighter trunks for long nets.
+  return runWithConfig(/*max_maze_round=*/170,
+                       static_cast<int>(Algo::DetPart),
+                       /*warn_id=*/412);
+}
+
+NetRouteMap NewgrEngine::runNonDetHybrid()
+{
+  // NonDet explores a different rip-up ordering; useful as a WL candidate
+  // source even if final NEWGR merge stays deterministic.
+  return runWithConfig(/*max_maze_round=*/140,
+                       static_cast<int>(Algo::NonDet),
+                       /*warn_id=*/413);
+}
+
 NetRouteMap NewgrEngine::runRudyPartition()
 {
   // Hybrid SPRoute mode: deterministic partitioning with RUDY ordering can

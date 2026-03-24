@@ -51,6 +51,8 @@ class NewgrEngine
   NetRouteMap runSmallNetAware();
   NetRouteMap runAstarClassic();
   NetRouteMap runAstarEarly();
+  NetRouteMap runDetPartClassic();
+  NetRouteMap runNonDetHybrid();
   NetRouteMap runRudyPartition();
   NetRouteMap runRudyDriven();
 
