@@ -6353,35 +6353,43 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
 
-    // Compact overflow-free runs are deterministic; use an aggressive
-    // SPRoute-style WL winner policy with CUGR-like structural guards instead
-    // of hard anchor locking.
+    // Compact overflow-free runs are highly deterministic on this benchmark.
+    // Keep the final pick anchored to the stable hybrid-netmix-wl route unless
+    // a challenger is a strict WL+via structural improvement.
     if (compact_exploration_mode && wl_anchor != nullptr) {
       if (forced_wl_ptr != nullptr && forced_wl_ptr != wl_anchor) {
         const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
         const long wl_gain
             = wl_anchor->metrics.wirelength_dbu - forced_wl_ptr->metrics.wirelength_dbu;
-        const long via_delta
-            = static_cast<long>(forced_wl_ptr->metrics.via_count)
-              - static_cast<long>(wl_anchor->metrics.via_count);
+        const long via_gain
+            = wl_anchor->metrics.via_count - forced_wl_ptr->metrics.via_count;
         const long min_wl_gain = std::max<long>(
-            18L,
+            28L,
             static_cast<long>(std::ceil(
-                static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00007)));
-        const long max_via_rise = std::max<long>(
-            320L,
+                static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00010)));
+        const long min_via_gain = std::max<long>(
+            80L,
             static_cast<long>(std::ceil(
-                static_cast<double>(wl_anchor->metrics.via_count) * 0.0034)));
-        const long detour_guard = std::max<long>(tile_size * 30L, 16000L);
+                static_cast<double>(wl_anchor->metrics.via_count) * 0.00070)));
+        const long detour_guard = std::max<long>(tile_size * 28L, 14000L);
         const long high_layer_guard = std::max<long>(
-            tile_size * 48L,
+            tile_size * 40L,
             static_cast<long>(std::ceil(
-                static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.20)));
+                static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.16)));
+        const long high_layer_floor = std::max<long>(
+            tile_size * 16L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.90)));
+        const long relaxed_high_layer_floor = std::max<long>(
+            tile_size * 12L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.80)));
         const int hotspot_guard
-            = std::max<int>(8, wl_anchor->metrics.near_capacity_edges / 4);
-        const bool wl_primary_keep
+            = std::max<int>(6, wl_anchor->metrics.near_capacity_edges / 5);
+        const bool strict_wl_via_improvement
             = forced_wl_ptr->metrics.wirelength_dbu <= wl_anchor->metrics.wirelength_dbu
-              && wl_gain >= min_wl_gain && via_delta <= max_via_rise;
+              && forced_wl_ptr->metrics.via_count <= wl_anchor->metrics.via_count
+              && wl_gain >= min_wl_gain && via_gain >= min_via_gain;
         const bool structural_guard
             = forced_wl_ptr->metrics.detour_dbu
                    <= wl_anchor->metrics.detour_dbu + detour_guard
@@ -6389,43 +6397,74 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                      <= wl_anchor->metrics.high_layer_dbu + high_layer_guard
               && forced_wl_ptr->metrics.near_capacity_edges
                      <= wl_anchor->metrics.near_capacity_edges + hotspot_guard;
+        const bool layer_balance_guard
+            = forced_wl_ptr->metrics.high_layer_dbu >= high_layer_floor;
         const double anchor_proxy = estimateDetailedRouteProxyCost(wl_anchor->metrics);
         const double challenger_proxy
             = estimateDetailedRouteProxyCost(forced_wl_ptr->metrics);
-        const bool proxy_guard = challenger_proxy + 1e-3 < anchor_proxy * 1.020;
+        const bool proxy_guard = challenger_proxy + 1e-3 < anchor_proxy * 1.015;
+        const bool layer_floor_unlock
+            = forced_wl_ptr == layer_floor_wl_ptr && wl_gain >= min_wl_gain * 2L
+              && via_gain >= 0;
+        const long elastic_via_rise_guard = std::max<long>(
+            220L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(wl_anchor->metrics.via_count) * 0.0022)));
+        const bool drt_elastic_unlock
+            = forced_wl_ptr == drt_elastic_ptr && wl_gain >= min_wl_gain
+              && forced_wl_ptr->metrics.via_count
+                     <= wl_anchor->metrics.via_count + elastic_via_rise_guard;
+        const long budgeted_via_rise_guard = std::max<long>(
+            120L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(wl_anchor->metrics.via_count) * 0.0012)));
+        const bool budgeted_lift_unlock
+            = forced_wl_ptr == budgeted_lift_ptr && wl_gain >= min_wl_gain
+              && forced_wl_ptr->metrics.via_count
+                     <= wl_anchor->metrics.via_count + budgeted_via_rise_guard;
         const bool radical_wl_mix_candidate
             = forced_wl_ptr == absolute_wl_ptr
               || forced_wl_ptr == min_wl_wide_ptr
-              || forced_wl_ptr == cugr_sp_balance_ptr
-              || forced_wl_ptr == layer_floor_wl_ptr
-              || forced_wl_ptr == drt_elastic_ptr
-              || forced_wl_ptr == budgeted_lift_ptr;
+              || forced_wl_ptr == cugr_sp_balance_ptr;
+        const long radical_high_layer_floor = std::max<long>(
+            tile_size * 10L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.72)));
         const long radical_detour_guard = std::max<long>(detour_guard, tile_size * 34L);
         const bool radical_wl_unlock
-            = radical_wl_mix_candidate && wl_gain >= min_wl_gain * 2L
-              && via_delta <= max_via_rise * 2L
+            = radical_wl_mix_candidate && wl_gain >= min_wl_gain * 3L
+              && via_gain >= min_via_gain
               && forced_wl_ptr->metrics.detour_dbu
                      <= wl_anchor->metrics.detour_dbu + radical_detour_guard
-              && forced_wl_ptr->metrics.high_layer_dbu
-                     <= wl_anchor->metrics.high_layer_dbu + high_layer_guard
-              && challenger_proxy + 1e-3 < anchor_proxy * 1.035;
-        const bool keep_challenger
-            = (wl_primary_keep && structural_guard && proxy_guard)
-              || radical_wl_unlock;
+              && forced_wl_ptr->metrics.high_layer_dbu >= radical_high_layer_floor
+              && challenger_proxy + 1e-3 < anchor_proxy * 0.995;
+        const bool layer_guard_ok
+            = layer_balance_guard
+              || (forced_wl_ptr == budgeted_lift_ptr
+                  && forced_wl_ptr->metrics.high_layer_dbu
+                         >= relaxed_high_layer_floor);
+        const bool conservative_keep
+            = (strict_wl_via_improvement || layer_floor_unlock
+               || drt_elastic_unlock || budgeted_lift_unlock)
+              && structural_guard && layer_guard_ok && proxy_guard;
+        const bool keep_challenger = conservative_keep || radical_wl_unlock;
         if (keep_challenger) {
           logger_->info(
               GNR,
               6040,
-              "NEWGR compact WL-dominance keeping '{}' over anchor '{}' "
-              "(wl gain {}, via delta {}, detour delta {}, high-layer delta {}, "
-              "proxy ratio {:.3f}, radical unlock {}).",
+              "NEWGR compact dominance unlock keeping '{}' over anchor '{}' "
+              "(wl gain {}, via gain {}, detour delta {}, high-layer delta {}, "
+              "high-layer floor {}, radical floor {}, proxy ratio {:.3f}, "
+              "radical unlock {}).",
               forced_wl_ptr->name,
               wl_anchor->name,
               wl_gain,
-              via_delta,
+              via_gain,
               forced_wl_ptr->metrics.detour_dbu - wl_anchor->metrics.detour_dbu,
               forced_wl_ptr->metrics.high_layer_dbu
                   - wl_anchor->metrics.high_layer_dbu,
+              high_layer_floor,
+              radical_high_layer_floor,
               anchor_proxy > 1e-9 ? challenger_proxy / anchor_proxy : 1.0,
               radical_wl_unlock ? "yes" : "no");
         } else {
@@ -6438,8 +6477,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               forced_wl_ptr->name,
               wl_anchor->metrics.wirelength_dbu
                   - forced_wl_ptr->metrics.wirelength_dbu,
-              static_cast<long>(wl_anchor->metrics.via_count)
-                  - static_cast<long>(forced_wl_ptr->metrics.via_count),
+              wl_anchor->metrics.via_count - forced_wl_ptr->metrics.via_count,
               wl_anchor->metrics.detour_dbu - forced_wl_ptr->metrics.detour_dbu,
               wl_anchor->metrics.high_layer_dbu
                   - forced_wl_ptr->metrics.high_layer_dbu);
@@ -6448,77 +6486,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
       if (forced_wl_ptr == nullptr) {
         forced_wl_ptr = wl_anchor;
-      }
-    }
-
-    // SPRoute-style absolute shortest-guide lock with CUGR-like structural
-    // guards: when every candidate is overflow-free, preserve the global
-    // shortest guide unless it is clearly a structural outlier.
-    if (wl_anchor != nullptr && shortest_wl_iter != scenario_results.end()) {
-      const ScenarioResult* shortest_ptr = &(*shortest_wl_iter);
-      if (shortest_ptr != nullptr && shortest_ptr != forced_wl_ptr) {
-        const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
-        const long wl_gain = wl_anchor->metrics.wirelength_dbu
-                             - shortest_ptr->metrics.wirelength_dbu;
-        const long min_wl_gain = std::max<long>(
-            12L,
-            static_cast<long>(std::ceil(
-                static_cast<double>(wl_anchor->metrics.wirelength_dbu) * 0.00004)));
-        const long via_delta
-            = static_cast<long>(shortest_ptr->metrics.via_count)
-              - static_cast<long>(wl_anchor->metrics.via_count);
-        const long max_via_rise = std::max<long>(
-            650L,
-            static_cast<long>(std::ceil(
-                static_cast<double>(wl_anchor->metrics.via_count) * 0.0065)));
-        const long max_via_drop = std::max<long>(
-            1400L,
-            static_cast<long>(std::ceil(
-                static_cast<double>(wl_anchor->metrics.via_count) * 0.0120)));
-        const long detour_guard = std::max<long>(tile_size * 44L, 22000L);
-        const long high_layer_guard = std::max<long>(
-            tile_size * 70L,
-            static_cast<long>(std::ceil(
-                static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.24)));
-        const int hotspot_guard
-            = std::max<int>(24, wl_anchor->metrics.near_capacity_edges / 2 + 6);
-        const bool structural_guard
-            = shortest_ptr->metrics.detour_dbu
-                   <= wl_anchor->metrics.detour_dbu + detour_guard
-              && shortest_ptr->metrics.high_layer_dbu
-                     <= wl_anchor->metrics.high_layer_dbu + high_layer_guard
-              && shortest_ptr->metrics.near_capacity_edges
-                     <= wl_anchor->metrics.near_capacity_edges + hotspot_guard;
-        const bool via_guard
-            = via_delta <= max_via_rise && via_delta >= -max_via_drop;
-        const double anchor_proxy = estimateDetailedRouteProxyCost(wl_anchor->metrics);
-        const double shortest_proxy
-            = estimateDetailedRouteProxyCost(shortest_ptr->metrics);
-        const bool proxy_guard
-            = shortest_proxy + 1e-3 < anchor_proxy * 1.065;
-        const bool aggressive_proxy_unlock
-            = wl_gain >= min_wl_gain * 3L
-              && shortest_proxy + 1e-3 < anchor_proxy * 1.095;
-
-        if (shortest_ptr->metrics.overflow_edges <= wl_anchor->metrics.overflow_edges
-            && wl_gain >= min_wl_gain && structural_guard && via_guard
-            && (proxy_guard || aggressive_proxy_unlock)) {
-          logger_->info(
-              GNR,
-              6041,
-              "NEWGR shortest-lock selecting '{}' over anchor '{}' "
-              "(wl gain {}, via delta {}, detour delta {}, high-layer delta {}, "
-              "proxy ratio {:.3f}).",
-              shortest_ptr->name,
-              wl_anchor->name,
-              wl_gain,
-              via_delta,
-              shortest_ptr->metrics.detour_dbu - wl_anchor->metrics.detour_dbu,
-              shortest_ptr->metrics.high_layer_dbu
-                  - wl_anchor->metrics.high_layer_dbu,
-              anchor_proxy > 1e-9 ? shortest_proxy / anchor_proxy : 1.0);
-          forced_wl_ptr = shortest_ptr;
-        }
       }
     }
   }
