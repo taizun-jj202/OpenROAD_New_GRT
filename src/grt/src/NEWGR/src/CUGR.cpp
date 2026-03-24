@@ -218,19 +218,19 @@ bool isStrictWirelengthScoreBetter(const RouteScore& candidate,
     if (candidate.wire_length > baseline.wire_length + allowedIncrease) {
       return false;
     }
-    return candidate.via_count <= baseline.via_count;
+    return candidate.via_count <= baseline.via_count + 2;
   }
   // For overflow-neutral updates, require strict wirelength reduction.
   if (candidate.wire_length >= baseline.wire_length) {
     return false;
   }
-  if (candidate.via_count <= baseline.via_count + 2) {
+  if (candidate.via_count <= baseline.via_count + 4) {
     return true;
   }
   const uint64_t wireGain = baseline.wire_length - candidate.wire_length;
   const int viaIncrease = candidate.via_count - baseline.via_count;
   return viaIncrease > 0
-         && wireGain >= static_cast<uint64_t>(viaIncrease) * 32ULL;
+         && wireGain >= static_cast<uint64_t>(viaIncrease) * 12ULL;
 }
 
 bool routeCoversPins(const std::shared_ptr<GRTreeNode>& tree,
@@ -313,12 +313,17 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
 {
   const bool criticalLongNet
       = (pins >= 8 || hp >= 120) && rank < 2048;
+  const bool compactLongNet
+      = (pins >= 6 || hp >= 95) && rank < 4096;
   const bool extremeLongNet = (pins >= 12 || hp >= 180) && rank < 1536;
   std::vector<int> intervals{
       base_interval,
       std::max(2, base_interval - 1),
       std::max(2, base_interval - 2),
       std::min(12, base_interval + 1)};
+  if (compactLongNet) {
+    intervals.emplace_back(2);
+  }
   if (criticalLongNet) {
     // Add a dense sparse-grid option only for critical long nets to expose
     // shorter reconnection opportunities without applying the runtime hit to
@@ -331,6 +336,7 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
   if (extremeLongNet) {
     intervals.emplace_back(2);
     intervals.emplace_back(3);
+    intervals.emplace_back(4);
   }
   if (pins <= 3 && hp <= 60) {
     intervals.emplace_back(std::min(12, base_interval + 2));
@@ -367,6 +373,10 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
     addGrid(clamped_interval,
             clamped_interval - 1 - x_offset,
             clamped_interval - 1 - y_offset);
+    addGrid(clamped_interval, y_offset, x_offset);
+    addGrid(clamped_interval,
+            clamped_interval - 1 - y_offset,
+            clamped_interval - 1 - x_offset);
   }
   if (grids.empty()) {
     grids.emplace_back(3, 3, 0, 0);
@@ -1157,7 +1167,7 @@ void CUGR::strictWirelengthCompaction()
   const uint64_t longWireThreshold
       = routedScores[netIndices[longNetRank]].wire_length;
   const int denseMazeBudget
-      = std::min(compactionBudget, std::max(1536, compactionBudget / 2));
+      = std::min(compactionBudget, std::max(2048, (compactionBudget * 3) / 4));
   std::vector<int> scheduledNetIndices = buildSpatialCompactionOrder(
       netIndices, gr_nets_, compactionBudget, useXAxisWavefront);
   if (scheduledNetIndices.empty()) {
@@ -1216,18 +1226,31 @@ void CUGR::strictWirelengthCompaction()
 
     const int hp = net->getBoundingBox().hp();
     const int pins = net->getNumPins();
+    const bool criticalWirelengthNet
+        = oldScore.wire_length >= longWireThreshold || pins >= 8 || hp >= 130;
+
+    // FastRoute-style topology optimization for critical nets: re-evaluate
+    // with high-accuracy FLUTE before maze refinement.
+    if (criticalWirelengthNet) {
+      PatternRoute highAccuracyPatternRoute(
+          net, grid_graph_.get(), stt_builder_, constants_, logger_);
+      highAccuracyPatternRoute.setFluteAccuracy(9);
+      highAccuracyPatternRoute.constructSteinerTree();
+      highAccuracyPatternRoute.constructRoutingDAG();
+      highAccuracyPatternRoute.run();
+      tryCandidate(net->getRoutingTree(), /*fromMaze*/ false);
+    }
 
     const bool runMazeCandidate
         = rank < denseMazeBudget || oldScore.overflow_edges > 0
-          || oldScore.wire_length >= longWireThreshold
+          || criticalWirelengthNet
           || oldScore.via_count >= 6;
     if (runMazeCandidate) {
       int interval = 4;
       const bool ultraDenseSearch
-          = rank < denseMazeBudget / 8
-            || (oldScore.wire_length >= longWireThreshold
-                && (pins >= 6 || hp >= 140)
-                && rank < denseMazeBudget * 3 / 4);
+          = rank < denseMazeBudget / 5
+            || (criticalWirelengthNet && (pins >= 6 || hp >= 120)
+                && rank < denseMazeBudget * 4 / 5);
       if (ultraDenseSearch) {
         interval = 2;
       } else if (rank < denseMazeBudget * 2 / 3
@@ -1246,10 +1269,10 @@ void CUGR::strictWirelengthCompaction()
       }
       const int maxMazeCandidates
           = ultraDenseSearch
-                ? 8
-                : (rank < denseMazeBudget / 6
-                       ? 6
-                       : (rank < denseMazeBudget / 2 ? 5 : 4));
+                ? 10
+                : (rank < denseMazeBudget / 5
+                       ? 7
+                       : (rank < denseMazeBudget / 2 ? 6 : 5));
       const auto candidateGrids
           = buildMazeCandidateGrids(
               interval,
@@ -1344,6 +1367,10 @@ void CUGR::route()
   grid_graph_->setStageCostScales(0.01, 0.02, 0.88);
   strictWirelengthCompaction();
   grid_graph_->setStageCostScales(0.0, 0.01, 0.92);
+  strictWirelengthCompaction();
+  // Final wirelength polish: near-pure shortest-path pressure and lower via
+  // cost to collapse residual detours on clean nets.
+  grid_graph_->setStageCostScales(0.0, 0.0, 0.78);
   strictWirelengthCompaction();
 
   printStatistics();

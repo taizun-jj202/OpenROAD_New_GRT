@@ -65,7 +65,7 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   // Keep only nearby old-tree anchors so maze reroute can aggressively compact
   // long detours instead of preserving the previous expanded topology.
   int anchorMargin = shortestTopologyMode
-                         ? std::clamp(hp / (pins >= 12 ? 16 : 14), 1, 10)
+                         ? std::clamp(hp / (pins >= 12 ? 20 : 18), 1, 8)
                          : std::clamp(hp / (pins >= 12 ? 10 : 9), 3, 22);
   if (hp >= 220 || pins >= 18) {
     anchorMargin = shortestTopologyMode ? std::min(anchorMargin + 1, 12)
@@ -96,7 +96,7 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   // CUGR-style coarse-to-fine corridor search: bound sparse-graph expansion to
   // each net neighborhood to suppress long global detours.
   int margin = shortestTopologyMode
-                   ? std::clamp(hp / (pins >= 12 ? 11 : 10), 4, 38)
+                   ? std::clamp(hp / (pins >= 12 ? 15 : 14), 3, 28)
                    : std::clamp(hp / (pins >= 12 ? 8 : 7), 5, 52);
   if (pins <= 3) {
     margin = std::max(margin, 8);
@@ -112,7 +112,7 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   // If the old tree is overflow-clean, avoid preserving its topology too
   // aggressively so sparse maze can collapse detours toward shorter trees.
   if (!preserveOldTopologyAnchors) {
-    margin = shortestTopologyMode ? std::max(3, margin - 4)
+    margin = shortestTopologyMode ? std::max(2, margin - 5)
                                   : std::max(4, margin - 2);
   }
   margin += std::max(1, std::max(grid.interval.x(), grid.interval.y()) / 2);
@@ -337,8 +337,38 @@ void MazeRoute::run()
     }
     addStartCandidate(startCandidates, farthestFromCenter);
   }
+  if (numPseudoPins >= 8) {
+    int minXPin = -1;
+    int maxXPin = -1;
+    int minYPin = -1;
+    int maxYPin = -1;
+    for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
+      const auto& pseudoPin = graph_.getPseudoPin(pinIndex);
+      if (minXPin == -1
+          || pseudoPin.point.x() < graph_.getPseudoPin(minXPin).point.x()) {
+        minXPin = pinIndex;
+      }
+      if (maxXPin == -1
+          || pseudoPin.point.x() > graph_.getPseudoPin(maxXPin).point.x()) {
+        maxXPin = pinIndex;
+      }
+      if (minYPin == -1
+          || pseudoPin.point.y() < graph_.getPseudoPin(minYPin).point.y()) {
+        minYPin = pinIndex;
+      }
+      if (maxYPin == -1
+          || pseudoPin.point.y() > graph_.getPseudoPin(maxYPin).point.y()) {
+        maxYPin = pinIndex;
+      }
+    }
+    addStartCandidate(startCandidates, minXPin);
+    addStartCandidate(startCandidates, maxXPin);
+    addStartCandidate(startCandidates, minYPin);
+    addStartCandidate(startCandidates, maxYPin);
+  }
 
-  const int maxStartCandidates = numPseudoPins >= 8 ? 3 : 2;
+  const int maxStartCandidates
+      = numPseudoPins >= 12 ? 6 : (numPseudoPins >= 8 ? 4 : 2);
   if (startCandidates.size() > static_cast<size_t>(maxStartCandidates)) {
     startCandidates.resize(maxStartCandidates);
   }
