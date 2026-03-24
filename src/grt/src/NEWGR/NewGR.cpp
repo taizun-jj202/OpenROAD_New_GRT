@@ -2340,6 +2340,146 @@ int applyViaAwareStabilizationFusion(
   return replaced_nets;
 }
 
+int applyProxyAwareCorridorFusion(
+    NetRouteMap& base_routes,
+    const std::vector<const NetRouteMap*>& donor_route_sets,
+    int tile_size,
+    int x_min,
+    int y_min,
+    int x_grids,
+    int y_grids,
+    const std::map<std::int64_t, float>& hotspot_map,
+    long short_net_wl_loss_cap,
+    long long_net_wl_loss_cap,
+    double wl_loss_ratio_cap,
+    int min_via_gain_for_wl_loss,
+    double min_hotspot_gain_for_wl_loss,
+    double proxy_improvement_margin)
+{
+  int replaced_nets = 0;
+  if (base_routes.empty()) {
+    return replaced_nets;
+  }
+
+  tile_size = std::max(tile_size, 1);
+  short_net_wl_loss_cap = std::max(short_net_wl_loss_cap, 0L);
+  long_net_wl_loss_cap = std::max(long_net_wl_loss_cap, short_net_wl_loss_cap);
+  wl_loss_ratio_cap = std::clamp(wl_loss_ratio_cap, 0.0, 0.12);
+  min_via_gain_for_wl_loss = std::max(min_via_gain_for_wl_loss, 0);
+  min_hotspot_gain_for_wl_loss = std::max(min_hotspot_gain_for_wl_loss, 0.0);
+  proxy_improvement_margin = std::max(proxy_improvement_margin, 0.0);
+
+  std::vector<long> route_lengths;
+  route_lengths.reserve(base_routes.size());
+  for (const auto& [db_net, route] : base_routes) {
+    static_cast<void>(db_net);
+    const NetRouteCost cost = computeNetRouteCost(route,
+                                                  tile_size,
+                                                  x_min,
+                                                  y_min,
+                                                  x_grids,
+                                                  y_grids,
+                                                  hotspot_map);
+    route_lengths.push_back(std::max(cost.wirelength_dbu, 0L));
+  }
+  if (route_lengths.empty()) {
+    return replaced_nets;
+  }
+  std::sort(route_lengths.begin(), route_lengths.end());
+  const auto percentile_value = [&route_lengths](double q) {
+    q = std::clamp(q, 0.0, 1.0);
+    const size_t idx = static_cast<size_t>(
+        std::floor(q * static_cast<double>(route_lengths.size() - 1)));
+    return route_lengths[idx];
+  };
+  const long long_threshold = percentile_value(0.70);
+
+  const auto compute_dr_proxy = [tile_size](const NetRouteCost& cost) {
+    const double via_weight = static_cast<double>(tile_size) * 3.20;
+    const double hotspot_weight = static_cast<double>(tile_size) * 7.80;
+    return static_cast<double>(cost.wirelength_dbu)
+           + via_weight * static_cast<double>(cost.via_count)
+           + hotspot_weight * cost.hotspot_exposure;
+  };
+
+  for (auto& [db_net, base_route] : base_routes) {
+    static_cast<void>(db_net);
+    const NetRouteCost base_cost = computeNetRouteCost(base_route,
+                                                       tile_size,
+                                                       x_min,
+                                                       y_min,
+                                                       x_grids,
+                                                       y_grids,
+                                                       hotspot_map);
+    const bool is_long = base_cost.wirelength_dbu >= long_threshold;
+    const long abs_wl_loss_cap = is_long ? long_net_wl_loss_cap : short_net_wl_loss_cap;
+    const long ratio_wl_loss_cap = static_cast<long>(std::floor(
+        wl_loss_ratio_cap * static_cast<double>(std::max(base_cost.wirelength_dbu, 1L))));
+    const long wl_loss_cap = std::max(abs_wl_loss_cap, ratio_wl_loss_cap);
+
+    const GRoute* chosen_route = &base_route;
+    NetRouteCost chosen_cost = base_cost;
+    double chosen_proxy = compute_dr_proxy(base_cost);
+
+    for (const NetRouteMap* donor_routes : donor_route_sets) {
+      if (donor_routes == nullptr) {
+        continue;
+      }
+      const auto donor_it = donor_routes->find(db_net);
+      if (donor_it == donor_routes->end()) {
+        continue;
+      }
+      if (donor_it->second.empty()) {
+        continue;
+      }
+
+      const NetRouteCost donor_cost = computeNetRouteCost(donor_it->second,
+                                                          tile_size,
+                                                          x_min,
+                                                          y_min,
+                                                          x_grids,
+                                                          y_grids,
+                                                          hotspot_map);
+      const long wl_delta = donor_cost.wirelength_dbu - chosen_cost.wirelength_dbu;
+      const long wl_loss = std::max(0L, wl_delta);
+      if (wl_loss > wl_loss_cap) {
+        continue;
+      }
+
+      const int via_gain = chosen_cost.via_count - donor_cost.via_count;
+      const double hotspot_gain
+          = chosen_cost.hotspot_exposure - donor_cost.hotspot_exposure;
+      const bool has_compensation = wl_delta <= 0
+                                    || via_gain >= min_via_gain_for_wl_loss
+                                    || hotspot_gain >= min_hotspot_gain_for_wl_loss;
+      if (!has_compensation) {
+        continue;
+      }
+
+      const double donor_proxy = compute_dr_proxy(donor_cost);
+      const bool proxy_better
+          = donor_proxy + proxy_improvement_margin < chosen_proxy;
+      const bool strong_wl_gain
+          = donor_cost.wirelength_dbu
+            <= (chosen_cost.wirelength_dbu - std::max<long>(1, tile_size / 2));
+      if (!proxy_better && !strong_wl_gain) {
+        continue;
+      }
+
+      chosen_route = &donor_it->second;
+      chosen_cost = donor_cost;
+      chosen_proxy = donor_proxy;
+    }
+
+    if (chosen_route != &base_route) {
+      base_route = *chosen_route;
+      replaced_nets++;
+    }
+  }
+
+  return replaced_nets;
+}
+
 void deduplicateRouteSegments(GRoute& route)
 {
   if (route.size() < 2) {
@@ -4712,6 +4852,92 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(absolute_minwl));
   }
 
+  if (has_best_wirelength) {
+    // Proxy-corridor fusion:
+    // Start from consensus polish and selectively borrow lower-risk routes
+    // from SPRoute/CUGR/FastRoute-derived donors when DR proxy improves.
+    ScenarioResult proxy_corridor;
+    proxy_corridor.name = "proxy-corridor-fusion";
+    if (ScenarioResult* donor = find_scenario_result("consensus-via-capped-polish")) {
+      proxy_corridor.routes = donor->routes;
+    } else if (ScenarioResult* donor = find_scenario_result("wl-locked-via-stable-fusion")) {
+      proxy_corridor.routes = donor->routes;
+    } else if (ScenarioResult* donor = find_scenario_result("hard-wl-mincut-fusion")) {
+      proxy_corridor.routes = donor->routes;
+    } else if (ScenarioResult* donor = find_scenario_result("absolute-minwl-router-sweep")) {
+      proxy_corridor.routes = donor->routes;
+    } else {
+      proxy_corridor.routes = best_wirelength_routes;
+    }
+
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+
+    std::vector<const NetRouteMap*> corridor_donors;
+    corridor_donors.reserve(16);
+    for (const char* donor_name : {"wl-locked-via-stable-fusion",
+                                   "hard-wl-mincut-fusion",
+                                   "absolute-minwl-router-sweep",
+                                   "consensus-via-capped-polish",
+                                   "dr-stable-shortest-fusion",
+                                   "router-spine-balance-fusion",
+                                   "collapse-router-minwl-fusion",
+                                   "stabilized-dr-fusion",
+                                   "cugr-router-donor",
+                                   "sproute-router-donor",
+                                   "cross-router-wirelength-fusion",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting",
+                                   "sporder-shortest",
+                                   "bsp-scheduler",
+                                   "baseline"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        corridor_donors.push_back(&donor->routes);
+      }
+    }
+
+    int fused_swaps = applyProxyAwareCorridorFusion(proxy_corridor.routes,
+                                                    corridor_donors,
+                                                    tile_size,
+                                                    x_min,
+                                                    y_min,
+                                                    x_grids,
+                                                    y_grids,
+                                                    hotspot_map,
+                                                    2L * tile_size,
+                                                    10L * tile_size,
+                                                    0.010,
+                                                    2,
+                                                    0.25,
+                                                    0.08
+                                                        * static_cast<double>(tile_size));
+
+    fused_swaps += applyLongNetPriorityFusion(proxy_corridor.routes,
+                                              corridor_donors,
+                                              tile_size,
+                                              x_min,
+                                              y_min,
+                                              x_grids,
+                                              y_grids,
+                                              hotspot_map,
+                                              1,
+                                              3,
+                                              0.20);
+
+    proxy_corridor.metrics = compute_metrics(proxy_corridor.routes);
+    logger_->info(GNR,
+                  6035,
+                  "NEWGR scenario {} [dr-corridor]: wirelength {:.0f} um, vias {}, fused nets {}",
+                  proxy_corridor.name,
+                  proxy_corridor.metrics.wirelength_um,
+                  proxy_corridor.metrics.via_count,
+                  fused_swaps);
+    scenario_results.push_back(std::move(proxy_corridor));
+  }
+
   const long baseline_vias = baseline.metrics.via_count;
   long dbu_per_micron = 1;
   if (grouter_->db_ != nullptr && grouter_->db_->getTech() != nullptr) {
@@ -4804,8 +5030,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             ->metrics.wirelength_dbu;
   const long dr_window_tight
       = std::max<long>(wl_near_tie_window, 12L * proxy_tile_size);
-  const long dr_window_relaxed
-      = std::max<long>(2L * wl_near_tie_window, 20L * proxy_tile_size);
+  const long dr_window_relaxed = std::max<long>(
+      std::max<long>(2L * wl_near_tie_window, 20L * proxy_tile_size),
+      64L * dbu_per_micron);
   const long dr_via_guard_tight = baseline_vias > 0
                                       ? static_cast<long>(std::ceil(1.10 * baseline_vias))
                                       : std::numeric_limits<long>::max();
@@ -4879,7 +5106,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Apply DR-aware decision after replay/fallback logic so it is not
   // accidentally overwritten by scenario re-execution.
   if (dr_aware_choice != nullptr && dr_aware_choice->name != final_result.name) {
-    const long dr_wl_soft_guard = wl_near_tie_window;
+    const long dr_wl_soft_guard
+        = std::max<long>(wl_near_tie_window, 64L * dbu_per_micron);
     const long dr_via_gain_needed = std::max<long>(40L, baseline_vias / 7000L);
     const double dr_proxy_improvement_needed
         = static_cast<double>(2 * proxy_tile_size);
@@ -4975,6 +5203,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         || final_result.name.find("stitch") != std::string::npos;
   const bool patching_sensitive_final
       = final_result.name == "consensus-via-capped-polish"
+        || final_result.name == "wl-locked-via-stable-fusion"
+        || final_result.name == "proxy-corridor-fusion"
         || final_result.name == "hard-wl-mincut-fusion"
         || final_result.name == "absolute-minwl-router-sweep";
   // Enable CUGR-style patching for collapse/fusion winners as well.
