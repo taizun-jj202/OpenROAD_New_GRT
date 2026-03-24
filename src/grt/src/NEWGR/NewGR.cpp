@@ -6422,22 +6422,40 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             = forced_wl_ptr == budgeted_lift_ptr && wl_gain >= min_wl_gain
               && forced_wl_ptr->metrics.via_count
                      <= wl_anchor->metrics.via_count + budgeted_via_rise_guard;
+        const bool radical_wl_mix_candidate
+            = forced_wl_ptr == absolute_wl_ptr
+              || forced_wl_ptr == min_wl_wide_ptr
+              || forced_wl_ptr == cugr_sp_balance_ptr;
+        const long radical_high_layer_floor = std::max<long>(
+            tile_size * 10L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.72)));
+        const long radical_detour_guard = std::max<long>(detour_guard, tile_size * 34L);
+        const bool radical_wl_unlock
+            = radical_wl_mix_candidate && wl_gain >= min_wl_gain * 3L
+              && via_gain >= min_via_gain
+              && forced_wl_ptr->metrics.detour_dbu
+                     <= wl_anchor->metrics.detour_dbu + radical_detour_guard
+              && forced_wl_ptr->metrics.high_layer_dbu >= radical_high_layer_floor
+              && challenger_proxy + 1e-3 < anchor_proxy * 0.995;
         const bool layer_guard_ok
             = layer_balance_guard
               || (forced_wl_ptr == budgeted_lift_ptr
                   && forced_wl_ptr->metrics.high_layer_dbu
                          >= relaxed_high_layer_floor);
-        const bool keep_challenger
+        const bool conservative_keep
             = (strict_wl_via_improvement || layer_floor_unlock
                || drt_elastic_unlock || budgeted_lift_unlock)
               && structural_guard && layer_guard_ok && proxy_guard;
+        const bool keep_challenger = conservative_keep || radical_wl_unlock;
         if (keep_challenger) {
           logger_->info(
               GNR,
               6040,
               "NEWGR compact dominance unlock keeping '{}' over anchor '{}' "
               "(wl gain {}, via gain {}, detour delta {}, high-layer delta {}, "
-              "high-layer floor {}, proxy ratio {:.3f}).",
+              "high-layer floor {}, radical floor {}, proxy ratio {:.3f}, "
+              "radical unlock {}).",
               forced_wl_ptr->name,
               wl_anchor->name,
               wl_gain,
@@ -6446,7 +6464,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               forced_wl_ptr->metrics.high_layer_dbu
                   - wl_anchor->metrics.high_layer_dbu,
               high_layer_floor,
-              anchor_proxy > 1e-9 ? challenger_proxy / anchor_proxy : 1.0);
+              radical_high_layer_floor,
+              anchor_proxy > 1e-9 ? challenger_proxy / anchor_proxy : 1.0,
+              radical_wl_unlock ? "yes" : "no");
         } else {
           logger_->info(
               GNR,
