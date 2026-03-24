@@ -3786,6 +3786,92 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(envelope_minwl));
   }
 
+  if (has_best_wirelength) {
+    // Via-capped polish:
+    // Preserve the consensus/long-net backbone while harvesting only
+    // "safe" donor swaps (strict WL gain and no via growth per net).
+    ScenarioResult polish;
+    polish.name = "consensus-via-capped-polish";
+    if (ScenarioResult* donor = find_scenario_result("consensus-collapse-fusion")) {
+      polish.routes = donor->routes;
+    } else if (ScenarioResult* donor = find_scenario_result("ultra-minwl-envelope-fusion")) {
+      polish.routes = donor->routes;
+    } else if (ScenarioResult* donor = find_scenario_result("router-donor-minwl-fusion")) {
+      polish.routes = donor->routes;
+    } else if (ScenarioResult* donor = find_scenario_result("hyper-collapse-fusion")) {
+      polish.routes = donor->routes;
+    } else {
+      polish.routes = best_wirelength_routes;
+    }
+
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+
+    std::vector<const NetRouteMap*> polish_donors;
+    polish_donors.reserve(14);
+    for (const char* donor_name : {"ultra-minwl-envelope-fusion",
+                                   "router-donor-minwl-fusion",
+                                   "hyper-collapse-fusion",
+                                   "longnet-priority-fusion",
+                                   "dr-stable-shortest-fusion",
+                                   "collapse-router-minwl-fusion",
+                                   "router-spine-balance-fusion",
+                                   "cross-router-wirelength-fusion",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting",
+                                   "cugr-router-donor",
+                                   "sproute-router-donor",
+                                   "wl-direct-focused",
+                                   "sporder-shortest"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        polish_donors.push_back(&donor->routes);
+      }
+    }
+
+    int fused_swaps = applyDrStableShortestFusion(polish.routes,
+                                                  polish_donors,
+                                                  tile_size,
+                                                  x_min,
+                                                  y_min,
+                                                  x_grids,
+                                                  y_grids,
+                                                  hotspot_map,
+                                                  1,
+                                                  0.0,
+                                                  0,
+                                                  0,
+                                                  0.05,
+                                                  0.18,
+                                                  1.0,
+                                                  1.0);
+
+    fused_swaps += applyMultiScenarioWirelengthFusion(polish.routes,
+                                                      polish_donors,
+                                                      tile_size,
+                                                      x_min,
+                                                      y_min,
+                                                      x_grids,
+                                                      y_grids,
+                                                      hotspot_map,
+                                                      1,
+                                                      0,
+                                                      0.12);
+
+    polish.metrics = compute_metrics(polish.routes);
+    logger_->info(
+        GNR,
+        6030,
+        "NEWGR scenario {} [polish]: wirelength {:.0f} um, vias {}, fused nets {}",
+        polish.name,
+        polish.metrics.wirelength_um,
+        polish.metrics.via_count,
+        fused_swaps);
+    scenario_results.push_back(std::move(polish));
+  }
+
   const long baseline_vias = baseline.metrics.via_count;
   auto better_result = [baseline_vias](const ScenarioResult& lhs,
                                        const ScenarioResult& rhs) {
@@ -3994,16 +4080,29 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     // In repeated runs, consensus-collapse tends to be slightly longer in GR
     // but improves detailed routing by reducing via churn.
     const long wl_relax = 12L * dbu_per_micron;
+    ScenarioResult* consensus_like = consensus;
+    if (ScenarioResult* polish
+        = find_scenario_result("consensus-via-capped-polish")) {
+      const bool polish_near_consensus
+          = polish->metrics.wirelength_dbu
+            <= (consensus->metrics.wirelength_dbu + wl_relax);
+      const bool polish_via_better
+          = polish->metrics.via_count < consensus->metrics.via_count;
+      if (polish_near_consensus && polish_via_better) {
+        consensus_like = polish;
+      }
+    }
+
     const bool near_tie_wl
-        = consensus->metrics.wirelength_dbu
+        = consensus_like->metrics.wirelength_dbu
           <= (final_result.metrics.wirelength_dbu + wl_relax);
     const bool fewer_vias
-        = consensus->metrics.via_count < final_result.metrics.via_count;
-    if (near_tie_wl && fewer_vias && consensus->name != final_result.name) {
-      final_result = *consensus;
+        = consensus_like->metrics.via_count < final_result.metrics.via_count;
+    if (near_tie_wl && fewer_vias && consensus_like->name != final_result.name) {
+      final_result = *consensus_like;
       logger_->info(GNR,
                     6029,
-                    "NEWGR consensus override '{}': wirelength {:.0f} um, vias {}",
+                    "NEWGR consensus-family override '{}': wirelength {:.0f} um, vias {}",
                     final_result.name,
                     final_result.metrics.wirelength_um,
                     final_result.metrics.via_count);
