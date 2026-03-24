@@ -59,6 +59,9 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   const bool shortestTopologyMode
       = hp >= 120 || pins >= 8
         || std::max(grid.interval.x(), grid.interval.y()) <= 3;
+  const auto& oldTree = net_->getRoutingTree();
+  const int oldTreeOverflow = oldTree ? grid_graph_->checkOverflow(oldTree) : 0;
+  const bool preserveOldTopologyAnchors = oldTreeOverflow > 0;
   // Keep only nearby old-tree anchors so maze reroute can aggressively compact
   // long detours instead of preserving the previous expanded topology.
   int anchorMargin = shortestTopologyMode
@@ -72,8 +75,7 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   const int anchorXHigh = std::min(xSize - 1, box.hx() + anchorMargin);
   const int anchorYLow = std::max(0, box.ly() - anchorMargin);
   const int anchorYHigh = std::min(ySize - 1, box.hy() + anchorMargin);
-  const auto& oldTree = net_->getRoutingTree();
-  if (oldTree && anchorMargin > 0) {
+  if (oldTree && anchorMargin > 0 && preserveOldTopologyAnchors) {
     GRTreeNode::preorder(
         oldTree, [&](const std::shared_ptr<GRTreeNode>& node) {
           if (node->x() >= anchorXLow && node->x() <= anchorXHigh
@@ -106,6 +108,12 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   if (shortestTopologyMode
       && std::max(grid.interval.x(), grid.interval.y()) <= 3) {
     margin = std::max(4, margin - 2);
+  }
+  // If the old tree is overflow-clean, avoid preserving its topology too
+  // aggressively so sparse maze can collapse detours toward shorter trees.
+  if (!preserveOldTopologyAnchors) {
+    margin = shortestTopologyMode ? std::max(3, margin - 4)
+                                  : std::max(4, margin - 2);
   }
   margin += std::max(1, std::max(grid.interval.x(), grid.interval.y()) / 2);
   int xLow = std::max(0, box.lx() - margin);
