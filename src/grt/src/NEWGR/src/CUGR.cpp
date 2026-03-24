@@ -9,7 +9,6 @@
 #include <limits>
 #include <memory>
 #include <sstream>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -73,10 +72,9 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
                              const double allowed_overflow_increase_for_wl_gain)
 {
   constexpr double kOverflowEpsilon = 1e-6;
-  constexpr double kStrongOverflowDropThreshold = 52.0;
-  constexpr int64_t kStrongWireGain = 2;
-  constexpr int64_t kModerateWireGain = 1;
-  constexpr int64_t kMaxWirelengthTradeoff = 3;
+  constexpr double kStrongOverflowDropThreshold = 20.0;
+  constexpr int64_t kStrongWireGain = 12;
+  constexpr int64_t kMaxWirelengthTradeoff = 24;
 
   // Wirelength-first objective:
   // keep shorter candidates as long as they don't cause a large overflow jump.
@@ -84,18 +82,11 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
     return candidate.total_overflow
            <= current_best.total_overflow + allowed_overflow_increase_for_wl_gain;
   }
-  if (candidate.wirelength + 1 < current_best.wirelength
+  if (candidate.wirelength < current_best.wirelength
       && candidate.total_overflow
              <= current_best.total_overflow
-                    + allowed_overflow_increase_for_wl_gain * 0.35
-      && candidate.vias <= current_best.vias + 4) {
-    return true;
-  }
-  if (candidate.wirelength + kModerateWireGain < current_best.wirelength
-      && candidate.total_overflow
-             <= current_best.total_overflow
-                    + allowed_overflow_increase_for_wl_gain * 0.55
-      && candidate.vias <= current_best.vias + 3) {
+                    + allowed_overflow_increase_for_wl_gain * 0.6
+      && candidate.vias <= current_best.vias + 2) {
     return true;
   }
 
@@ -115,17 +106,13 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
 
   if (std::abs(overflow_drop) > kOverflowEpsilon) {
     if (baseline_overflow > 0) {
-      return overflow_drop > 0.0
-             && candidate.wirelength <= current_best.wirelength + 2;
+      return overflow_drop > 0.0;
     }
     return overflow_drop > 0.0 && candidate.wirelength <= current_best.wirelength;
   }
 
   if (candidate.vias != current_best.vias) {
     return candidate.vias < current_best.vias;
-  }
-  if (candidate.wirelength != current_best.wirelength) {
-    return candidate.wirelength < current_best.wirelength;
   }
   return candidate.overflow < current_best.overflow;
 }
@@ -321,10 +308,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
                  <= constants_.stage3_full_grid_overflow_threshold + 2
           && baseline_stretch >= 1.08;
     const double stage3_wl_overflow_slack
-        = aggressive_wirelength_mode ? 8.0 : 5.0;
-    const bool overflow_driven = baseline_overflow > 0;
-    const bool very_high_stretch
-        = baseline_stretch >= (aggressive_wirelength_mode ? 1.22 : 1.30);
+        = aggressive_wirelength_mode ? 11.5 : 7.0;
     const bool wide_bbox = bbox.width() >= bbox.height();
     const int base_sparse = std::clamp(hpwl >= 240 ? 8 : (hpwl >= 120 ? 7 : 6),
                                        4,
@@ -385,24 +369,6 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         }
       }
     }
-    int stage3_cfg_budget = overflow_driven ? 6 : 5;
-    if (hpwl >= constants_.stage3_full_grid_hpwl_threshold) {
-      stage3_cfg_budget += overflow_driven ? 2 : 1;
-    }
-    if (very_high_stretch) {
-      stage3_cfg_budget += 2;
-    }
-    if (aggressive_wirelength_mode && !overflow_driven) {
-      stage3_cfg_budget += 2;
-    }
-    if (!overflow_driven
-        && hpwl >= constants_.stage3_wl_only_hpwl_threshold
-        && net->getNumPins() <= 36) {
-      stage3_cfg_budget += 2;
-    }
-    stage3_cfg_budget
-        = std::max(3,
-                   std::min(stage3_cfg_budget, static_cast<int>(maze_configs.size())));
 
     auto considerCandidate = [&](const std::shared_ptr<GRTreeNode>& tree,
                                  const bool is_baseline_candidate) {
@@ -422,8 +388,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       }
     };
 
-    for (int cfg_index = 0; cfg_index < stage3_cfg_budget; cfg_index++) {
-      const auto& cfg = maze_configs[cfg_index];
+    for (const auto& cfg : maze_configs) {
       MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
       SparseGrid sparse_grid(cfg.sparse_x, cfg.sparse_y, cfg.offset_x, cfg.offset_y);
       mazeRoute.constructSparsifiedGraph(wireCostView, sparse_grid);
@@ -440,11 +405,6 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       patternRoute.run();
       considerCandidate(net->getRoutingTree(), /*is_baseline_candidate*/ false);
       evaluated_candidates++;
-      if (!overflow_driven && best_tree && !best_is_baseline
-          && best_stats.overflow <= baseline_overflow
-          && best_stats.wirelength + 12 < original_stats.wirelength) {
-        break;
-      }
     }
 
     // FastRoute-style wirelength-first intensification:
@@ -455,10 +415,8 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         && net->getNumPins() > 2) {
       const int wl_config_limit = std::max(1, constants_.stage3_wl_config_limit);
       const int wl_bonus_runs = aggressive_wirelength_mode ? 2 : 0;
-      int wl_runs = std::min(stage3_cfg_budget, wl_config_limit + wl_bonus_runs);
-      if (!overflow_driven) {
-        wl_runs = std::min(wl_runs, 5);
-      }
+      const int wl_runs = std::min(static_cast<int>(maze_configs.size()),
+                                   wl_config_limit + wl_bonus_runs);
       const double wl_via_cost_scale
           = std::clamp(constants_.stage3_wl_via_cost_scale
                            * (aggressive_wirelength_mode ? 0.8 : 1.0),
@@ -495,14 +453,11 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         && hpwl >= constants_.stage3_full_grid_hpwl_threshold
         && net->getNumPins() >= 3
         && net->getNumPins() <= constants_.stage3_full_grid_pin_limit
-        && baseline_overflow
-               <= (constants_.stage3_full_grid_overflow_threshold
-                   + (aggressive_wirelength_mode ? 1 : 0))
-        && (overflow_driven || very_high_stretch || aggressive_wirelength_mode)
+        && baseline_overflow <= constants_.stage3_full_grid_overflow_threshold
         && baseline_stretch
                >= (aggressive_wirelength_mode
-                       ? std::max(1.02,
-                                  constants_.stage3_full_grid_min_stretch - 0.10)
+                       ? std::max(1.05,
+                                  constants_.stage3_full_grid_min_stretch - 0.08)
                        : constants_.stage3_full_grid_min_stretch)) {
       const double full_grid_via_scale = std::clamp(
           constants_.stage3_full_grid_via_cost_scale, 0.0, 1.0);
@@ -562,9 +517,6 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     int index;
     int hpwl;
     double stretch;
-    uint64_t excess_wirelength;
-    int cx;
-    int cy;
   };
 
   auto measureRoute = [&](const std::shared_ptr<GRTreeNode>& tree) {
@@ -601,20 +553,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
   int total_accepted = 0;
   const int max_passes = std::max(1, constants_.recovery_max_passes);
   const double pass_decay = std::clamp(constants_.recovery_pass_decay, 0.25, 1.0);
-  int previous_pass_accepts = std::numeric_limits<int>::max();
   for (int pass = 0; pass < max_passes; pass++) {
-    if (pass > 0
-        && previous_pass_accepts
-               < constants_.recovery_late_pass_min_first_pass_accepts) {
-      logger_->report("stage 4.{} skipped (pass {} accepted {} nets, minimum "
-                      "required for late pass is {}).",
-                      pass + 1,
-                      pass,
-                      previous_pass_accepts,
-                      constants_.recovery_late_pass_min_first_pass_accepts);
-      break;
-    }
-
     std::vector<Candidate> candidates;
     candidates.reserve(netIndices.size());
     const double pass_scale = std::pow(pass_decay, pass);
@@ -648,13 +587,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
           && hpwl < constants_.recovery_deep_hpwl_threshold) {
         continue;
       }
-      const uint64_t excess_wirelength
-          = route_stats.first > approx_hpwl_dbu
-                ? route_stats.first - approx_hpwl_dbu
-                : 0;
-      const BoxT& bbox = net->getBoundingBox();
-      candidates.push_back(
-          {netIndex, hpwl, stretch, excess_wirelength, bbox.cx(), bbox.cy()});
+      candidates.push_back({netIndex, hpwl, stretch});
     }
 
     if (candidates.empty()) {
@@ -664,9 +597,6 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     std::sort(candidates.begin(),
               candidates.end(),
               [](const Candidate& lhs, const Candidate& rhs) {
-                if (lhs.excess_wirelength != rhs.excess_wirelength) {
-                  return lhs.excess_wirelength > rhs.excess_wirelength;
-                }
                 constexpr double kStretchEpsilon = 1e-4;
                 if (std::abs(lhs.stretch - rhs.stretch) > kStretchEpsilon) {
                   return lhs.stretch > rhs.stretch;
@@ -674,104 +604,21 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
                 return lhs.hpwl > rhs.hpwl;
               });
 
-    const double late_pass_scale = std::clamp(
-        constants_.recovery_late_pass_refine_scale, 0.10, 1.0);
-    const double pass_factor = pass == 0
-                                   ? 1.0
-                                   : std::max(0.20, pass_scale * late_pass_scale);
-    const double pass_ratio = std::clamp(constants_.recovery_refine_ratio
-                                             * pass_factor,
-                                         pass == 0 ? 0.2 : 0.08,
-                                         pass == 0 ? 1.0 : 0.45);
+    const double pass_ratio = std::clamp(
+        constants_.recovery_refine_ratio
+            * (pass == 0 ? 1.0 : std::max(0.45, pass_scale)),
+        0.2,
+        1.0);
     int keep
         = static_cast<int>(std::ceil(candidates.size() * pass_ratio));
     keep = std::max(1, std::min(keep, static_cast<int>(candidates.size())));
-    int candidate_cap = std::max(1, constants_.recovery_candidate_cap);
-    if (pass > 0) {
-      const int scaled_cap = static_cast<int>(std::ceil(
-          candidate_cap
-          * std::clamp(constants_.recovery_late_pass_cap_scale, 0.05, 1.0)));
-      candidate_cap = std::max(
-          1,
-          std::min({candidate_cap, scaled_cap, constants_.recovery_late_pass_abs_cap}));
-    }
+    const int candidate_cap = std::max(1, constants_.recovery_candidate_cap);
     keep = std::min(keep, candidate_cap);
-    if (pass > 0) {
-      keep = std::max(1, keep);
-    }
-    double deep_ratio = std::clamp(constants_.recovery_deep_ratio, 0.0, 1.0);
-    if (pass > 0) {
-      deep_ratio = std::clamp(
-          deep_ratio
-              * std::clamp(constants_.recovery_late_pass_deep_ratio_scale, 0.1, 1.0),
-          0.0,
-          1.0);
-    }
     int deep_keep = static_cast<int>(std::ceil(
-        keep * deep_ratio));
+        keep * std::clamp(constants_.recovery_deep_ratio, 0.0, 1.0)));
     deep_keep = std::min(
         deep_keep, std::max(1, constants_.recovery_deep_search_cap));
     deep_keep = std::max(1, std::min(deep_keep, keep));
-
-    std::vector<Candidate> selected_candidates;
-    selected_candidates.reserve(keep);
-    if (constants_.recovery_spatial_round_robin && keep > 2) {
-      const int pool_multiplier
-          = std::max(1, constants_.recovery_spatial_pool_multiplier);
-      const int pool_size = std::min(
-          static_cast<int>(candidates.size()),
-          std::max(keep, keep * pool_multiplier));
-      std::vector<Candidate> spatial_pool(candidates.begin(),
-                                          candidates.begin() + pool_size);
-      const bool sort_by_x = pass % 2 == 0;
-      std::sort(spatial_pool.begin(),
-                spatial_pool.end(),
-                [&](const Candidate& lhs, const Candidate& rhs) {
-                  const int lhs_coord = sort_by_x ? lhs.cx : lhs.cy;
-                  const int rhs_coord = sort_by_x ? rhs.cx : rhs.cy;
-                  if (lhs_coord != rhs_coord) {
-                    return lhs_coord < rhs_coord;
-                  }
-                  if (lhs.excess_wirelength != rhs.excess_wirelength) {
-                    return lhs.excess_wirelength > rhs.excess_wirelength;
-                  }
-                  return lhs.hpwl > rhs.hpwl;
-                });
-
-      const int batch_count = std::clamp(
-          constants_.recovery_spatial_batches, 2, std::max(2, keep));
-      std::vector<std::vector<Candidate>> batches(batch_count);
-      for (int i = 0; i < pool_size; i++) {
-        batches[i % batch_count].push_back(spatial_pool[i]);
-      }
-
-      std::unordered_set<int> selected_set;
-      selected_set.reserve(keep * 2);
-      for (const auto& batch : batches) {
-        for (const auto& candidate : batch) {
-          if (static_cast<int>(selected_candidates.size()) >= keep) {
-            break;
-          }
-          if (selected_set.emplace(candidate.index).second) {
-            selected_candidates.push_back(candidate);
-          }
-        }
-        if (static_cast<int>(selected_candidates.size()) >= keep) {
-          break;
-        }
-      }
-      for (const auto& candidate : candidates) {
-        if (static_cast<int>(selected_candidates.size()) >= keep) {
-          break;
-        }
-        if (selected_set.emplace(candidate.index).second) {
-          selected_candidates.push_back(candidate);
-        }
-      }
-    } else {
-      selected_candidates.insert(
-          selected_candidates.end(), candidates.begin(), candidates.begin() + keep);
-    }
 
     logger_->report("stage 4.{}: wirelength recovery on {} / {} nets (deep "
                     "search on {} nets, top stretch {:.3f})",
@@ -782,20 +629,17 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
                     candidates.front().stretch);
 
     int accepted_in_pass = 0;
-    for (int candidateIndex = 0;
-         candidateIndex < static_cast<int>(selected_candidates.size());
-         candidateIndex++) {
-      const Candidate& candidate = selected_candidates[candidateIndex];
-      const int netIndex = candidate.index;
+    for (int candidateIndex = 0; candidateIndex < keep; candidateIndex++) {
+      const int netIndex = candidates[candidateIndex].index;
       GRNet* net = gr_nets_[netIndex].get();
       const std::shared_ptr<GRTreeNode> original_tree = net->getRoutingTree();
       if (!original_tree) {
         continue;
       }
       const bool deep_search = candidateIndex < deep_keep
-                               || candidate.hpwl
+                               || candidates[candidateIndex].hpwl
                                       >= constants_.recovery_deep_hpwl_threshold
-                               || candidate.stretch
+                               || candidates[candidateIndex].stretch
                                       >= constants_.recovery_min_stretch + 0.12;
       const auto original_stats = measureRoute(original_tree);
       const int original_tree_overflow = grid_graph_->checkOverflow(original_tree);
@@ -811,8 +655,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         if (!tree) {
           return;
         }
-        const int kRecoveryOverflowSlack
-            = std::max(0, constants_.recovery_overflow_slack);
+        constexpr int kRecoveryOverflowSlack = 0;
         // Evaluate overflow after adding the candidate tree back to the live
         // graph. This avoids selecting routes that appear legal in rip-up mode
         // but create new overflows once committed.
@@ -922,7 +765,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
 
           const bool enable_full_offset_sweep
               = constants_.recovery_full_offset_sweep
-                && candidate.hpwl
+                && candidates[candidateIndex].hpwl
                        >= constants_.recovery_full_offset_hpwl_threshold;
           if (enable_full_offset_sweep) {
             for (int offset_x = 0;
@@ -976,7 +819,7 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
         const bool enable_wl_only_maze
             = constants_.recovery_use_wirelength_maze
               && (deep_search || candidateIndex < keep / 2)
-              && candidate.hpwl
+              && candidates[candidateIndex].hpwl
                      >= constants_.recovery_wl_only_hpwl_threshold;
         if (enable_wl_only_maze) {
           GridGraphView<CostT> recoveryWlOnlyView;
@@ -1016,9 +859,9 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
             = constants_.recovery_use_full_grid_maze
               && deep_search
               && candidateIndex < std::max(1, constants_.recovery_full_grid_top_n)
-              && candidate.hpwl
+              && candidates[candidateIndex].hpwl
                      >= constants_.recovery_full_grid_hpwl_threshold
-              && candidate.stretch
+              && candidates[candidateIndex].stretch
                      >= constants_.recovery_min_stretch;
         if (enable_full_grid_maze) {
           GridGraphView<CostT> fullGridWlOnlyView;
@@ -1053,7 +896,6 @@ void CUGR::wirelengthRecovery(const std::vector<int>& netIndices)
     }
 
     total_accepted += accepted_in_pass;
-    previous_pass_accepts = accepted_in_pass;
     logger_->report("stage 4.{} accepted {} reroutes.",
                     pass + 1,
                     accepted_in_pass);
@@ -1079,27 +921,15 @@ void CUGR::route()
 
   std::vector<int> detourIndices = netIndices;
   if (constants_.wirelength_first_refinement) {
-    double detour_ratio = constants_.detour_refine_ratio;
-    if (netIndices.size() > 512) {
-      detour_ratio = std::min(detour_ratio, 0.70);
-    } else if (netIndices.size() > 256) {
-      detour_ratio = std::min(detour_ratio, 0.78);
-    }
-    detourIndices = selectCriticalNets(netIndices, detour_ratio);
+    detourIndices
+        = selectCriticalNets(netIndices, constants_.detour_refine_ratio);
   }
   patternRouteWithDetours(detourIndices);
 
   std::vector<int> mazeIndices = detourIndices;
   if (constants_.wirelength_first_refinement) {
-    double maze_ratio = constants_.maze_refine_ratio;
-    if (detourIndices.size() > 160) {
-      maze_ratio = std::min(maze_ratio, 0.62);
-    } else if (detourIndices.size() > 80) {
-      maze_ratio = std::min(maze_ratio, 0.70);
-    } else if (detourIndices.size() > 40) {
-      maze_ratio = std::min(maze_ratio, 0.76);
-    }
-    mazeIndices = selectCriticalNets(detourIndices, maze_ratio);
+    mazeIndices
+        = selectCriticalNets(detourIndices, constants_.maze_refine_ratio);
   }
   mazeRoute(mazeIndices);
   wirelengthRecovery(allNetIndices);
@@ -1125,9 +955,6 @@ std::vector<int> CUGR::selectCriticalNets(
     int hpwl;
     double stretch;
     bool critical;
-    uint64_t excess_wirelength;
-    int cx;
-    int cy;
   };
 
   std::vector<ScoredNet> scored;
@@ -1136,16 +963,12 @@ std::vector<int> CUGR::selectCriticalNets(
   for (const int netIndex : candidates) {
     const auto& net = gr_nets_[netIndex];
     const int overflow = grid_graph_->checkOverflow(net->getRoutingTree());
-    const BoxT& bbox = net->getBoundingBox();
-    const int hpwl = bbox.hp();
+    const int hpwl = net->getBoundingBox().hp();
     const RouteStats stats
         = measureRouteStats(grid_graph_.get(), net->getRoutingTree());
     const uint64_t approx_hpwl_dbu
         = static_cast<uint64_t>(std::max(1, hpwl))
           * static_cast<uint64_t>(gcell_span);
-    const uint64_t excess_wirelength
-        = stats.wirelength > approx_hpwl_dbu ? stats.wirelength - approx_hpwl_dbu
-                                              : 0;
     const double stretch = approx_hpwl_dbu > 0
                                ? static_cast<double>(stats.wirelength)
                                      / static_cast<double>(approx_hpwl_dbu)
@@ -1154,14 +977,7 @@ std::vector<int> CUGR::selectCriticalNets(
         = overflow >= constants_.refinement_overflow_threshold
           || (hpwl >= constants_.refinement_hpwl_threshold
               && stretch >= constants_.refinement_stretch_threshold);
-    scored.push_back({netIndex,
-                      overflow,
-                      hpwl,
-                      stretch,
-                      critical,
-                      excess_wirelength,
-                      bbox.cx(),
-                      bbox.cy()});
+    scored.push_back({netIndex, overflow, hpwl, stretch, critical});
   }
 
   std::sort(scored.begin(),
@@ -1173,9 +989,6 @@ std::vector<int> CUGR::selectCriticalNets(
               if (lhs.overflow != rhs.overflow) {
                 return lhs.overflow > rhs.overflow;
               }
-              if (lhs.excess_wirelength != rhs.excess_wirelength) {
-                return lhs.excess_wirelength > rhs.excess_wirelength;
-              }
               if (std::abs(lhs.stretch - rhs.stretch) > 1e-4) {
                 return lhs.stretch > rhs.stretch;
               }
@@ -1185,95 +998,24 @@ std::vector<int> CUGR::selectCriticalNets(
   int keep = static_cast<int>(std::ceil(scored.size() * reroute_ratio));
   keep = std::max(1, std::min(keep, static_cast<int>(scored.size())));
 
-  // Keep a wider critical-net budget without letting very large overflow sets
-  // explode runtime.
+  // Always keep all critical nets to avoid starvation.
   int critical_count = 0;
   while (critical_count < static_cast<int>(scored.size())
          && scored[critical_count].critical) {
     critical_count++;
   }
-  const int critical_keep_budget
-      = std::min(critical_count,
-                 std::max(keep, std::max(8, keep * 2)));
-  keep = std::max(keep, critical_keep_budget);
+  keep = std::max(keep, critical_count);
   if (constants_.refinement_max_selected_nets > 0) {
-    keep = std::min(keep, constants_.refinement_max_selected_nets);
+    keep = std::min(keep,
+                    std::max(critical_count,
+                             constants_.refinement_max_selected_nets));
   }
-  keep = std::max(1, std::min(keep, static_cast<int>(scored.size())));
 
   std::vector<int> selected;
   selected.reserve(keep);
-  if (keep >= 8 && keep < static_cast<int>(scored.size())) {
-    const int pool_multiplier = 2;
-    const int pool_size = std::min(static_cast<int>(scored.size()),
-                                   std::max(keep, keep * pool_multiplier));
-    std::vector<ScoredNet> pool(scored.begin(), scored.begin() + pool_size);
-    const bool sort_by_x = candidates.size() % 2 == 0;
-    std::sort(pool.begin(),
-              pool.end(),
-              [sort_by_x](const ScoredNet& lhs, const ScoredNet& rhs) {
-                const int lhs_coord = sort_by_x ? lhs.cx : lhs.cy;
-                const int rhs_coord = sort_by_x ? rhs.cx : rhs.cy;
-                if (lhs_coord != rhs_coord) {
-                  return lhs_coord < rhs_coord;
-                }
-                if (lhs.critical != rhs.critical) {
-                  return lhs.critical > rhs.critical;
-                }
-                if (lhs.overflow != rhs.overflow) {
-                  return lhs.overflow > rhs.overflow;
-                }
-                if (lhs.excess_wirelength != rhs.excess_wirelength) {
-                  return lhs.excess_wirelength > rhs.excess_wirelength;
-                }
-                if (std::abs(lhs.stretch - rhs.stretch) > 1e-4) {
-                  return lhs.stretch > rhs.stretch;
-                }
-                return lhs.hpwl > rhs.hpwl;
-              });
-
-    const int batch_count = std::clamp(8, 2, std::max(2, keep));
-    std::vector<std::vector<int>> batches(batch_count);
-    for (int i = 0; i < pool_size; i++) {
-      batches[i % batch_count].push_back(i);
-    }
-
-    std::unordered_set<int> selected_set;
-    selected_set.reserve(keep * 2);
-    bool progress = true;
-    while (selected.size() < static_cast<size_t>(keep) && progress) {
-      progress = false;
-      for (auto& batch : batches) {
-        if (batch.empty()) {
-          continue;
-        }
-        const int idx = batch.back();
-        batch.pop_back();
-        const int net_index = pool[idx].index;
-        if (selected_set.emplace(net_index).second) {
-          selected.push_back(net_index);
-          progress = true;
-          if (selected.size() >= static_cast<size_t>(keep)) {
-            break;
-          }
-        }
-      }
-    }
-
-    for (int i = 0; i < static_cast<int>(scored.size())
-                    && selected.size() < static_cast<size_t>(keep);
-         i++) {
-      const int net_index = scored[i].index;
-      if (selected_set.emplace(net_index).second) {
-        selected.push_back(net_index);
-      }
-    }
-  } else {
-    for (int i = 0; i < keep; i++) {
-      selected.push_back(scored[i].index);
-    }
+  for (int i = 0; i < keep; i++) {
+    selected.push_back(scored[i].index);
   }
-
   logger_->report("wirelength-first refinement: {} -> {} nets",
                   candidates.size(),
                   selected.size());

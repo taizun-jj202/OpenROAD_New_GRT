@@ -59,53 +59,6 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
 
   const int xSize = grid_graph_->getSize(0);
   const int ySize = grid_graph_->getSize(1);
-  if (const auto& current_tree = net_->getRoutingTree()) {
-    GRTreeNode::preorder(
-        current_tree, [&](const std::shared_ptr<GRTreeNode>& node) {
-          addAnchor(x_guides, node->x(), xSize);
-          addAnchor(y_guides, node->y(), ySize);
-          for (const auto& child : node->getChildren()) {
-            addAnchor(x_guides, (node->x() + child->x()) / 2, xSize);
-            addAnchor(y_guides, (node->y() + child->y()) / 2, ySize);
-            if (std::abs(node->x() - child->x()) >= 4) {
-              addAnchor(x_guides, (2 * node->x() + child->x()) / 3, xSize);
-              addAnchor(x_guides, (node->x() + 2 * child->x()) / 3, xSize);
-            }
-            if (std::abs(node->y() - child->y()) >= 4) {
-              addAnchor(y_guides, (2 * node->y() + child->y()) / 3, ySize);
-              addAnchor(y_guides, (node->y() + 2 * child->y()) / 3, ySize);
-            }
-          }
-        });
-  }
-
-  auto limitGuideCount = [](std::vector<int>& guides, const int max_count) {
-    if (max_count <= 0 || static_cast<int>(guides.size()) <= max_count) {
-      return;
-    }
-    std::vector<int> limited;
-    limited.reserve(max_count);
-    limited.push_back(guides.front());
-    if (max_count > 1) {
-      const int interior_target = std::max(0, max_count - 2);
-      for (int i = 0; i < interior_target; i++) {
-        const int idx
-            = 1 + ((static_cast<int>(guides.size()) - 2) * (i + 1))
-                      / (interior_target + 1);
-        if (idx > 0 && idx < static_cast<int>(guides.size()) - 1
-            && guides[idx] != limited.back()) {
-          limited.push_back(guides[idx]);
-        }
-      }
-      if (guides.back() != limited.back()) {
-        limited.push_back(guides.back());
-      }
-    }
-    std::sort(limited.begin(), limited.end());
-    limited.erase(std::unique(limited.begin(), limited.end()), limited.end());
-    guides.swap(limited);
-  };
-
   if (!pxs.empty()) {
     const int x_min = pxs.front();
     const int x_max = pxs.back();
@@ -138,9 +91,6 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   x_guides.erase(std::unique(x_guides.begin(), x_guides.end()), x_guides.end());
   std::sort(y_guides.begin(), y_guides.end());
   y_guides.erase(std::unique(y_guides.begin(), y_guides.end()), y_guides.end());
-  const int max_guides_per_axis = std::clamp(24 + net_->getNumPins(), 32, 88);
-  limitGuideCount(x_guides, max_guides_per_axis);
-  limitGuideCount(y_guides, max_guides_per_axis);
 
   xs_.reserve(xSize / grid.interval.x() + x_guides.size());
   ys_.reserve(ySize / grid.interval.y() + y_guides.size());
@@ -267,83 +217,6 @@ void MazeRoute::run()
   };
 
   constexpr CostT kCostEpsilon = static_cast<CostT>(1e-6);
-  const uint64_t net_hpwl
-      = static_cast<uint64_t>(std::max(1, net_->getBoundingBox().hp()));
-  const int num_pseudo_pins = graph_.getNumPseudoPins();
-
-  int pin_min_x = 0;
-  int pin_max_x = 0;
-  int pin_min_y = 0;
-  int pin_max_y = 0;
-  if (num_pseudo_pins > 0) {
-    const PointT first_pin = graph_.getPseudoPin(0).point;
-    pin_min_x = pin_max_x = first_pin.x();
-    pin_min_y = pin_max_y = first_pin.y();
-    for (int pin_index = 1; pin_index < num_pseudo_pins; pin_index++) {
-      const PointT pin = graph_.getPseudoPin(pin_index).point;
-      pin_min_x = std::min(pin_min_x, pin.x());
-      pin_max_x = std::max(pin_max_x, pin.x());
-      pin_min_y = std::min(pin_min_y, pin.y());
-      pin_max_y = std::max(pin_max_y, pin.y());
-    }
-  }
-
-  const int pin_span_x = std::max(0, pin_max_x - pin_min_x);
-  const int pin_span_y = std::max(0, pin_max_y - pin_min_y);
-  const int pin_span_hpwl = pin_span_x + pin_span_y;
-  int corridor_margin = std::clamp(2 + pin_span_hpwl / 40, 2, 10);
-  if (num_pseudo_pins >= 24) {
-    corridor_margin += 1;
-  }
-  if (num_pseudo_pins >= 48) {
-    corridor_margin += 1;
-  }
-  corridor_margin = std::min(corridor_margin, 14);
-  const int corridor_lx = pin_min_x - corridor_margin;
-  const int corridor_hx = pin_max_x + corridor_margin;
-  const int corridor_ly = pin_min_y - corridor_margin;
-  const int corridor_hy = pin_max_y + corridor_margin;
-  const CostT via_unit_cost = std::max<CostT>(1.0, grid_graph_->getUnitViaCost());
-  const CostT corridor_weight = num_pseudo_pins <= 16 ? 1.20
-                               : (num_pseudo_pins <= 48 ? 1.05 : 0.90);
-  const CostT corridor_growth_weight = num_pseudo_pins <= 16 ? 1.80 : 1.45;
-
-  auto corridorDistance = [&](const GRPoint& point) -> int {
-    const int x = point.x();
-    const int y = point.y();
-    const int dx = x < corridor_lx ? corridor_lx - x
-                  : (x > corridor_hx ? x - corridor_hx : 0);
-    const int dy = y < corridor_ly ? corridor_ly - y
-                  : (y > corridor_hy ? y - corridor_hy : 0);
-    return dx + dy;
-  };
-
-  // FastRoute-style route-guide box control mixed with CUGR costing:
-  // penalize moves that drift farther away from the pin bbox corridor so
-  // candidate routes keep compact Manhattan trunks.
-  auto getCorridorPenalty = [&](const int current_vertex,
-                                const int next_vertex,
-                                const CostT edge_cost) -> CostT {
-    if (num_pseudo_pins <= 1) {
-      return 0;
-    }
-    const auto current = graph_.getPoint(current_vertex);
-    const auto next = graph_.getPoint(next_vertex);
-    const int current_outside = corridorDistance(current);
-    const int next_outside = corridorDistance(next);
-    if (current_outside == 0 && next_outside == 0) {
-      return 0;
-    }
-    const int growth = std::max(0, next_outside - current_outside);
-    const CostT unit
-        = std::max<CostT>(1.0, edge_cost + via_unit_cost * static_cast<CostT>(0.08));
-    CostT penalty = static_cast<CostT>(next_outside) * unit * corridor_weight;
-    if (growth > 0) {
-      penalty += static_cast<CostT>(growth) * unit * corridor_growth_weight;
-    }
-    return penalty;
-  };
-
   auto computeRouteGeometry
       = [&](const std::vector<std::shared_ptr<Solution>>& solutions) {
           uint64_t wirelength = 0;
@@ -360,14 +233,8 @@ void MazeRoute::run()
                 const auto lhs = graph_.getPoint(temp->vertex);
                 const auto rhs = graph_.getPoint(temp->prev->vertex);
                 if (lhs.getLayerIdx() == rhs.getLayerIdx()) {
-                  const int direction = lhs.y() == rhs.y() ? MetalLayer::H
-                                                           : MetalLayer::V;
-                  const int lo = std::min(lhs[direction], rhs[direction]);
-                  const int hi = std::max(lhs[direction], rhs[direction]);
-                  for (int edge_index = lo; edge_index < hi; edge_index++) {
-                    wirelength += static_cast<uint64_t>(
-                        grid_graph_->getEdgeLength(direction, edge_index));
-                  }
+                  wirelength += static_cast<uint64_t>(std::abs(lhs.x() - rhs.x())
+                                                      + std::abs(lhs.y() - rhs.y()));
                 } else {
                   vias += std::abs(lhs.getLayerIdx() - rhs.getLayerIdx());
                 }
@@ -396,25 +263,13 @@ void MazeRoute::run()
       return true;
     }
     // Wirelength-first tie breaking with bounded congestion-cost regression.
-    constexpr uint64_t kStrongWireGain = 4;
-    constexpr uint64_t kModerateWireGain = 1;
-    constexpr double kCostSlackForWireGain = 1.36;
-    constexpr double kCostSlackForModerateWireGain = 1.44;
-    const uint64_t kCostDrivenWireSlack = std::max<uint64_t>(1, net_hpwl / 120);
-    const uint64_t kMaxCostDrivenWireRegression
-        = std::max<uint64_t>(1, net_hpwl / 55);
-    const double candidate_stretch = static_cast<double>(candidate.unique_wirelength)
-                                     / static_cast<double>(net_hpwl);
-    const double best_stretch = static_cast<double>(current_best.unique_wirelength)
-                                / static_cast<double>(net_hpwl);
-    if (candidate.unique_wirelength
-        > current_best.unique_wirelength + kMaxCostDrivenWireRegression) {
-      return false;
-    }
+    constexpr uint64_t kStrongWireGain = 20;
+    constexpr uint64_t kModerateWireGain = 8;
+    constexpr double kCostSlackForWireGain = 1.15;
+    constexpr double kCostSlackForModerateWireGain = 1.22;
     if (candidate.unique_wirelength + kStrongWireGain
             < current_best.unique_wirelength
-        && candidate.total_cost <= current_best.total_cost * kCostSlackForWireGain
-        && candidate.unique_vias <= current_best.unique_vias + 4) {
+        && candidate.total_cost <= current_best.total_cost * kCostSlackForWireGain) {
       return true;
     }
     if (candidate.unique_wirelength + kModerateWireGain
@@ -424,23 +279,7 @@ void MazeRoute::run()
         && candidate.unique_vias <= current_best.unique_vias + 4) {
       return true;
     }
-    if (best_stretch >= 1.10
-        && candidate.unique_wirelength + 1 < current_best.unique_wirelength
-        && candidate.total_cost <= current_best.total_cost * 1.45
-        && candidate.unique_vias <= current_best.unique_vias + 4) {
-      return true;
-    }
-    // Allow congestion-cost wins only when they do not materially regress
-    // geometric route compactness.
-    if (candidate.total_cost + kCostEpsilon < current_best.total_cost
-        && candidate.unique_wirelength
-               <= current_best.unique_wirelength + kCostDrivenWireSlack
-        && candidate.unique_vias <= current_best.unique_vias + 2) {
-      return true;
-    }
-    if (candidate_stretch + 0.006 < best_stretch
-        && candidate.total_cost <= current_best.total_cost * 1.24
-        && candidate.unique_vias <= current_best.unique_vias + 3) {
+    if (candidate.total_cost + kCostEpsilon < current_best.total_cost) {
       return true;
     }
     if (std::abs(candidate.total_cost - current_best.total_cost) <= kCostEpsilon
@@ -525,11 +364,8 @@ void MazeRoute::run()
               || (solution->prev && next_vertex == solution->prev->vertex)) {
             continue;
           }
-          const CostT edge_cost
-              = graph_.getEdgeCost(solution->vertex, edge_index);
-          const CostT next_cost = solution->cost + edge_cost
-                                  + getCorridorPenalty(
-                                      solution->vertex, next_vertex, edge_cost);
+          const CostT next_cost
+              = solution->cost + graph_.getEdgeCost(solution->vertex, edge_index);
           if (next_cost + kCostEpsilon < min_costs[next_vertex]) {
             updateSolution(
                 std::make_shared<Solution>(next_cost, next_vertex, solution));
@@ -633,9 +469,7 @@ void MazeRoute::run()
         if (next_vertex < 0) {
           continue;
         }
-        const CostT edge_cost = graph_.getEdgeCost(vertex, edge_index);
-        const CostT next_cost
-            = cost + edge_cost + getCorridorPenalty(vertex, next_vertex, edge_cost);
+        const CostT next_cost = cost + graph_.getEdgeCost(vertex, edge_index);
         if (next_cost + kCostEpsilon < dist[next_vertex]
             || (std::abs(next_cost - dist[next_vertex]) <= kCostEpsilon
                 && (parent[next_vertex] < 0 || vertex < parent[next_vertex]))) {
@@ -722,11 +556,8 @@ void MazeRoute::run()
               || (solution->prev && next_vertex == solution->prev->vertex)) {
             continue;
           }
-          const CostT edge_cost
-              = graph_.getEdgeCost(solution->vertex, edge_index);
-          const CostT next_cost = solution->cost + edge_cost
-                                  + getCorridorPenalty(
-                                      solution->vertex, next_vertex, edge_cost);
+          const CostT next_cost
+              = solution->cost + graph_.getEdgeCost(solution->vertex, edge_index);
           if (next_cost + kCostEpsilon < min_costs[next_vertex]) {
             updateSolution(
                 std::make_shared<Solution>(next_cost, next_vertex, solution));
@@ -813,10 +644,7 @@ void MazeRoute::run()
           if (next_vertex < 0) {
             continue;
           }
-          const CostT edge_cost = graph_.getEdgeCost(vertex, edge_index);
-          const CostT next_cost = cost + edge_cost
-                                  + getCorridorPenalty(
-                                      vertex, next_vertex, edge_cost);
+          const CostT next_cost = cost + graph_.getEdgeCost(vertex, edge_index);
           if (next_cost + kCostEpsilon < dist[next_vertex]
               || (std::abs(next_cost - dist[next_vertex]) <= kCostEpsilon
                   && (parent[next_vertex] < 0 || vertex < parent[next_vertex]))) {
@@ -942,182 +770,6 @@ void MazeRoute::run()
     return result;
   };
 
-  // SPRoute/FastRoute hybrid candidate:
-  // build a Manhattan MST over pins, then embed each MST edge on the sparse
-  // graph using shortest paths. This preserves a low-wirelength topology while
-  // still honoring congestion-aware edge costs in path embedding.
-  auto runGeometricMstEmbedding = [&](const int root_pin) -> RunResult {
-    RunResult result;
-    const int num_vertices = graph_.getNumVertices();
-    const int num_pins = graph_.getNumPseudoPins();
-    if (num_vertices == 0 || num_pins <= 1 || root_pin < 0
-        || root_pin >= num_pins) {
-      return result;
-    }
-
-    constexpr int kMaxGeometricMstPins = 96;
-    if (num_pins > kMaxGeometricMstPins) {
-      return result;
-    }
-
-    std::vector<bool> used(num_pins, false);
-    std::vector<int> parent_pin(num_pins, -1);
-    std::vector<int> min_manhattan(num_pins, std::numeric_limits<int>::max());
-    min_manhattan[root_pin] = 0;
-
-    for (int iter = 0; iter < num_pins; iter++) {
-      int next_pin = -1;
-      int best_dist = std::numeric_limits<int>::max();
-      for (int pin = 0; pin < num_pins; pin++) {
-        if (!used[pin] && min_manhattan[pin] < best_dist) {
-          best_dist = min_manhattan[pin];
-          next_pin = pin;
-        }
-      }
-      if (next_pin < 0) {
-        return result;
-      }
-      used[next_pin] = true;
-
-      const PointT next_point = graph_.getPseudoPin(next_pin).point;
-      for (int pin = 0; pin < num_pins; pin++) {
-        if (used[pin]) {
-          continue;
-        }
-        const PointT point = graph_.getPseudoPin(pin).point;
-        const int manhattan_dist
-            = std::abs(next_point.x() - point.x())
-              + std::abs(next_point.y() - point.y());
-        if (manhattan_dist < min_manhattan[pin]
-            || (manhattan_dist == min_manhattan[pin]
-                && (parent_pin[pin] < 0 || next_pin < parent_pin[pin]))) {
-          min_manhattan[pin] = manhattan_dist;
-          parent_pin[pin] = next_pin;
-        }
-      }
-    }
-
-    struct SingleSourceData
-    {
-      bool ready = false;
-      std::vector<CostT> dist;
-      std::vector<int> parent;
-    };
-    std::vector<SingleSourceData> source_cache(num_pins);
-    using QueueItem = std::pair<CostT, int>;
-    const CostT inf = std::numeric_limits<CostT>::max();
-    auto buildSingleSource = [&](const int source_pin) -> bool {
-      if (source_pin < 0 || source_pin >= num_pins) {
-        return false;
-      }
-      auto& cache = source_cache[source_pin];
-      if (cache.ready) {
-        return true;
-      }
-      const int source_vertex = graph_.getPinVertex(source_pin);
-      if (source_vertex < 0 || source_vertex >= num_vertices) {
-        return false;
-      }
-
-      cache.dist.assign(num_vertices, inf);
-      cache.parent.assign(num_vertices, -1);
-      std::priority_queue<QueueItem,
-                          std::vector<QueueItem>,
-                          std::greater<QueueItem>>
-          queue;
-      cache.dist[source_vertex] = 0;
-      queue.emplace(0, source_vertex);
-      while (!queue.empty()) {
-        const auto [cost, vertex] = queue.top();
-        queue.pop();
-        if (cost > cache.dist[vertex] + kCostEpsilon) {
-          continue;
-        }
-        for (int edge_index = 0; edge_index < 3; edge_index++) {
-          const int next_vertex = graph_.getNextVertex(vertex, edge_index);
-          if (next_vertex < 0) {
-            continue;
-          }
-          const CostT edge_cost = graph_.getEdgeCost(vertex, edge_index);
-          const CostT next_cost = cost + edge_cost
-                                  + getCorridorPenalty(
-                                      vertex, next_vertex, edge_cost);
-          if (next_cost + kCostEpsilon < cache.dist[next_vertex]
-              || (std::abs(next_cost - cache.dist[next_vertex]) <= kCostEpsilon
-                  && (cache.parent[next_vertex] < 0
-                      || vertex < cache.parent[next_vertex]))) {
-            cache.dist[next_vertex] = next_cost;
-            cache.parent[next_vertex] = vertex;
-            queue.emplace(next_cost, next_vertex);
-          }
-        }
-      }
-      cache.ready = true;
-      return true;
-    };
-
-    result.total_cost = 0;
-    result.via_steps = 0;
-    result.solutions.reserve(num_pins - 1);
-    for (int target_pin = 0; target_pin < num_pins; target_pin++) {
-      const int source_pin = parent_pin[target_pin];
-      if (source_pin < 0) {
-        continue;
-      }
-      if (!buildSingleSource(source_pin)) {
-        return RunResult{};
-      }
-      const auto& cache = source_cache[source_pin];
-      const int source_vertex = graph_.getPinVertex(source_pin);
-      const int target_vertex = graph_.getPinVertex(target_pin);
-      if (source_vertex < 0 || target_vertex < 0 || target_vertex >= num_vertices) {
-        return RunResult{};
-      }
-      if (!std::isfinite(cache.dist[target_vertex])) {
-        return RunResult{};
-      }
-
-      std::vector<int> reverse_path;
-      reverse_path.reserve(32);
-      int vertex = target_vertex;
-      reverse_path.push_back(vertex);
-      const int max_steps = num_vertices + 1;
-      int steps = 0;
-      while (vertex != source_vertex && steps < max_steps) {
-        vertex = cache.parent[vertex];
-        if (vertex < 0) {
-          return RunResult{};
-        }
-        reverse_path.push_back(vertex);
-        steps++;
-      }
-      if (vertex != source_vertex) {
-        return RunResult{};
-      }
-
-      std::shared_ptr<Solution> chain = nullptr;
-      for (auto it = reverse_path.rbegin(); it != reverse_path.rend(); ++it) {
-        chain = std::make_shared<Solution>(0, *it, chain);
-      }
-      if (!chain) {
-        return RunResult{};
-      }
-      result.solutions.emplace_back(chain);
-      result.total_cost += cache.dist[target_vertex];
-
-      for (int i = 1; i < static_cast<int>(reverse_path.size()); i++) {
-        const auto lhs = graph_.getPoint(reverse_path[i - 1]);
-        const auto rhs = graph_.getPoint(reverse_path[i]);
-        if (lhs.getLayerIdx() != rhs.getLayerIdx()) {
-          result.via_steps++;
-        }
-      }
-    }
-    result.valid = true;
-    finalizeResult(result);
-    return result;
-  };
-
   solutions_.clear();
   const int num_pins = graph_.getNumPseudoPins();
   if (num_pins <= 1) {
@@ -1143,16 +795,10 @@ void MazeRoute::run()
   int max_x_seed = 0;
   int min_y_seed = 0;
   int max_y_seed = 0;
-  int min_sum_seed = 0;
-  int max_sum_seed = 0;
-  int min_diff_seed = 0;
-  int max_diff_seed = 0;
+  int far_pair_lhs = -1;
+  int far_pair_rhs = -1;
   int best_center_dist = std::numeric_limits<int>::max();
   int best_far_dist = std::numeric_limits<int>::min();
-  int min_sum = std::numeric_limits<int>::max();
-  int max_sum = std::numeric_limits<int>::min();
-  int min_diff = std::numeric_limits<int>::max();
-  int max_diff = std::numeric_limits<int>::min();
   for (int pin_index = 0; pin_index < num_pins; pin_index++) {
     const PointT point = graph_.getPseudoPin(pin_index).point;
     const int center_dist
@@ -1177,28 +823,27 @@ void MazeRoute::run()
     if (point.y() > graph_.getPseudoPin(max_y_seed).point.y()) {
       max_y_seed = pin_index;
     }
-    const int sum = point.x() + point.y();
-    if (sum < min_sum) {
-      min_sum = sum;
-      min_sum_seed = pin_index;
-    }
-    if (sum > max_sum) {
-      max_sum = sum;
-      max_sum_seed = pin_index;
-    }
-    const int diff = point.x() - point.y();
-    if (diff < min_diff) {
-      min_diff = diff;
-      min_diff_seed = pin_index;
-    }
-    if (diff > max_diff) {
-      max_diff = diff;
-      max_diff_seed = pin_index;
+  }
+  // Track one globally farthest pair to reinforce long trunk candidates.
+  if (num_pins <= 96) {
+    int far_pair_dist = std::numeric_limits<int>::min();
+    for (int lhs = 0; lhs < num_pins; lhs++) {
+      const PointT lhs_point = graph_.getPseudoPin(lhs).point;
+      for (int rhs = lhs + 1; rhs < num_pins; rhs++) {
+        const PointT rhs_point = graph_.getPseudoPin(rhs).point;
+        const int dist = std::abs(lhs_point.x() - rhs_point.x())
+                         + std::abs(lhs_point.y() - rhs_point.y());
+        if (dist > far_pair_dist) {
+          far_pair_dist = dist;
+          far_pair_lhs = lhs;
+          far_pair_rhs = rhs;
+        }
+      }
     }
   }
 
   std::vector<int> seeds;
-  seeds.reserve(std::min(num_pins, 8));
+  seeds.reserve(6);
   auto addSeed = [&](const int seed) {
     if (seed < 0 || seed >= num_pins) {
       return;
@@ -1213,174 +858,75 @@ void MazeRoute::run()
   addSeed(max_x_seed);
   addSeed(min_y_seed);
   addSeed(max_y_seed);
-  addSeed(min_sum_seed);
-  addSeed(max_sum_seed);
-  addSeed(min_diff_seed);
-  addSeed(max_diff_seed);
-  if (num_pins <= 8) {
-    for (int pin_index = 0; pin_index < num_pins; pin_index++) {
-      addSeed(pin_index);
-    }
+
+  std::vector<int> sorted_by_center;
+  sorted_by_center.reserve(num_pins);
+  for (int pin_index = 0; pin_index < num_pins; pin_index++) {
+    sorted_by_center.push_back(pin_index);
+  }
+  std::sort(sorted_by_center.begin(),
+            sorted_by_center.end(),
+            [&](const int lhs, const int rhs) {
+              const PointT lhs_point = graph_.getPseudoPin(lhs).point;
+              const PointT rhs_point = graph_.getPseudoPin(rhs).point;
+              const int lhs_dist = std::abs(lhs_point.x() - center.x())
+                                   + std::abs(lhs_point.y() - center.y());
+              const int rhs_dist = std::abs(rhs_point.x() - center.x())
+                                   + std::abs(rhs_point.y() - center.y());
+              if (lhs_dist != rhs_dist) {
+                return lhs_dist < rhs_dist;
+              }
+              return lhs < rhs;
+            });
+  for (const int seed : sorted_by_center) {
+    addSeed(seed);
   }
 
-  const int span_x = max_x - min_x;
-  const int span_y = max_y - min_y;
-  const int hpwl_span = span_x + span_y;
-  const bool long_span_net = hpwl_span >= 120 || std::max(span_x, span_y) >= 84;
-  const bool very_wide = span_x >= span_y * 2;
-  const bool very_tall = span_y >= span_x * 2;
+  std::vector<int> sorted_by_far = sorted_by_center;
+  std::reverse(sorted_by_far.begin(), sorted_by_far.end());
+  for (const int seed : sorted_by_far) {
+    addSeed(seed);
+  }
 
-  int max_seeds = 2;
-  if (num_pins <= 8) {
+  int max_seeds = 1;
+  if (num_pins <= 16) {
     max_seeds = num_pins;
-  } else if (num_pins <= 16) {
-    max_seeds = 7;
   } else if (num_pins <= 32) {
-    max_seeds = 6;
+    max_seeds = 12;
   } else if (num_pins <= 64) {
-    max_seeds = 5;
+    max_seeds = 12;
+  } else {
+    max_seeds = 10;
   }
-  if (long_span_net && num_pins <= 48) {
-    max_seeds = std::min(max_seeds + 2, std::min(num_pins, 9));
-  }
-
   if (max_seeds < static_cast<int>(seeds.size())) {
     seeds.resize(max_seeds);
   }
 
-  RunResult best_result = runFromSeed(center_seed);
-  auto tryCandidate = [&](RunResult&& candidate) {
+  RunResult best_result = runMetricClosureMst();
+
+  auto runPairCandidate = [&](const int lhs, const int rhs) {
+    if (lhs < 0 || rhs < 0 || lhs >= num_pins || rhs >= num_pins || lhs == rhs) {
+      return;
+    }
+    RunResult pair_result = runFromPinPair(lhs, rhs);
+    if (isBetterResult(pair_result, best_result)) {
+      best_result = std::move(pair_result);
+    }
+  };
+  runPairCandidate(min_x_seed, max_x_seed);
+  runPairCandidate(min_y_seed, max_y_seed);
+  runPairCandidate(center_seed, far_seed);
+  runPairCandidate(far_pair_lhs, far_pair_rhs);
+
+  for (const int seed : seeds) {
+    RunResult candidate = runFromSeed(seed);
     if (isBetterResult(candidate, best_result)) {
       best_result = std::move(candidate);
     }
-  };
-
-  // CUGR + FastRoute mix:
-  // evaluate only a small set of topology candidates and keep strong
-  // wirelength wins, avoiding exhaustive enumeration on high-pin nets.
-  if (num_pins <= 24) {
-    tryCandidate(runMetricClosureMst());
-  }
-  if (num_pins <= 64) {
-    tryCandidate(runGeometricMstEmbedding(center_seed));
-  }
-  if (num_pins <= 32 && far_seed != center_seed) {
-    tryCandidate(runGeometricMstEmbedding(far_seed));
-  }
-  if (num_pins <= 24) {
-    tryCandidate(runGeometricMstEmbedding(min_x_seed));
-    tryCandidate(runGeometricMstEmbedding(max_x_seed));
-    tryCandidate(runGeometricMstEmbedding(min_y_seed));
-    tryCandidate(runGeometricMstEmbedding(max_y_seed));
-  }
-
-  auto tryPairCandidate = [&](const int lhs, const int rhs) {
-    if (lhs < 0 || rhs < 0 || lhs >= num_pins || rhs >= num_pins || lhs == rhs) {
-      return;
-    }
-    tryCandidate(runFromPinPair(lhs, rhs));
-  };
-  std::vector<std::pair<int, int>> pair_candidates;
-  pair_candidates.reserve(16);
-  auto addPairCandidate = [&](int lhs, int rhs) {
-    if (lhs < 0 || rhs < 0 || lhs >= num_pins || rhs >= num_pins || lhs == rhs) {
-      return;
-    }
-    if (lhs > rhs) {
-      std::swap(lhs, rhs);
-    }
-    for (const auto& [existing_lhs, existing_rhs] : pair_candidates) {
-      if (existing_lhs == lhs && existing_rhs == rhs) {
-        return;
-      }
-    }
-    pair_candidates.emplace_back(lhs, rhs);
-  };
-  addPairCandidate(min_x_seed, max_x_seed);
-  addPairCandidate(min_y_seed, max_y_seed);
-  addPairCandidate(min_x_seed, max_y_seed);
-  addPairCandidate(max_x_seed, min_y_seed);
-  addPairCandidate(min_sum_seed, max_sum_seed);
-  addPairCandidate(min_diff_seed, max_diff_seed);
-  addPairCandidate(center_seed, far_seed);
-  if (num_pins <= 48) {
-    struct PairCandidate
-    {
-      int lhs;
-      int rhs;
-      int dist;
-    };
-    std::vector<PairCandidate> ranked_pairs;
-    ranked_pairs.reserve((num_pins * (num_pins - 1)) / 2);
-    for (int lhs = 0; lhs < num_pins; lhs++) {
-      const PointT lhs_point = graph_.getPseudoPin(lhs).point;
-      for (int rhs = lhs + 1; rhs < num_pins; rhs++) {
-        const PointT rhs_point = graph_.getPseudoPin(rhs).point;
-        const int dist = std::abs(lhs_point.x() - rhs_point.x())
-                         + std::abs(lhs_point.y() - rhs_point.y());
-        ranked_pairs.push_back({lhs, rhs, dist});
-      }
-    }
-    std::sort(ranked_pairs.begin(),
-              ranked_pairs.end(),
-              [](const PairCandidate& lhs, const PairCandidate& rhs) {
-                if (lhs.dist != rhs.dist) {
-                  return lhs.dist > rhs.dist;
-                }
-                if (lhs.lhs != rhs.lhs) {
-                  return lhs.lhs < rhs.lhs;
-                }
-                return lhs.rhs < rhs.rhs;
-              });
-    int far_pair_budget = 1;
-    if (num_pins <= 16) {
-      far_pair_budget = 3;
-    } else if (num_pins <= 32) {
-      far_pair_budget = 2;
-    }
-    for (const auto& pair : ranked_pairs) {
-      if (far_pair_budget <= 0) {
-        break;
-      }
-      const int before = pair_candidates.size();
-      addPairCandidate(pair.lhs, pair.rhs);
-      if (static_cast<int>(pair_candidates.size()) > before) {
-        far_pair_budget--;
-      }
-    }
-  }
-  if (num_pins <= 48) {
-    int pair_budget = 4;
-    if (num_pins <= 16) {
-      pair_budget = 7;
-    } else if (num_pins <= 32) {
-      pair_budget = 5;
-    }
-    if (very_wide || very_tall) {
-      pair_budget++;
-    }
-    if (long_span_net) {
-      pair_budget += 2;
-    }
-    pair_budget = std::min(pair_budget, static_cast<int>(pair_candidates.size()));
-    for (int pair_index = 0; pair_index < pair_budget; pair_index++) {
-      const auto& [lhs, rhs] = pair_candidates[pair_index];
-      tryPairCandidate(lhs, rhs);
-    }
-  }
-
-  for (const int seed : seeds) {
-    if (seed == center_seed) {
-      continue;
-    }
-    tryCandidate(runFromSeed(seed));
   }
 
   if (!best_result.valid) {
-    logger_->warn(
-        utl::GRT,
-        7012,
-        "maze route failed to connect all pins on sparse graph; skipping candidate.");
+    logger_->error(utl::GRT, 7002, "failed to connect all pins.");
     return;
   }
 
@@ -1394,9 +940,6 @@ std::shared_ptr<SteinerTreeNode> MazeRoute::getSteinerTree() const
     const auto& pseudoPin = graph_.getPseudoPin(0);
     tree = std::make_shared<SteinerTreeNode>(pseudoPin.point, pseudoPin.layers);
     return tree;
-  }
-  if (solutions_.empty()) {
-    return nullptr;
   }
 
   std::vector<bool> visited(net_->getNumPins(), false);
@@ -1432,9 +975,7 @@ std::shared_ptr<SteinerTreeNode> MazeRoute::getSteinerTree() const
       }
     }
   }
-  if (!tree) {
-    return nullptr;
-  }
+  assert(tree);
 
   // Remove redundant tree nodes
   SteinerTreeNode::preorder(
