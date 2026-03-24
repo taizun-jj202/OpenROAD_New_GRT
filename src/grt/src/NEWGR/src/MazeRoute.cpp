@@ -368,7 +368,7 @@ void MazeRoute::run()
   }
 
   const int maxStartCandidates
-      = numPseudoPins >= 12 ? 6 : (numPseudoPins >= 8 ? 4 : 2);
+      = numPseudoPins >= 14 ? 8 : (numPseudoPins >= 8 ? 5 : 2);
   if (startCandidates.size() > static_cast<size_t>(maxStartCandidates)) {
     startCandidates.resize(maxStartCandidates);
   }
@@ -454,14 +454,14 @@ void MazeRoute::run()
 
   struct CandidateScore
   {
-    uint64_t unique_manhattan = std::numeric_limits<uint64_t>::max();
+    uint64_t unique_wire_length = std::numeric_limits<uint64_t>::max();
     CostT total_path_cost = std::numeric_limits<CostT>::max();
     int via_steps = std::numeric_limits<int>::max();
   };
 
   auto scoreSolutions = [&](const std::vector<std::shared_ptr<Solution>>& sols) {
     CandidateScore score;
-    score.unique_manhattan = 0;
+    score.unique_wire_length = 0;
     score.total_path_cost = 0;
     score.via_steps = 0;
     robin_hood::unordered_set<uint64_t> visitedEdges;
@@ -487,7 +487,13 @@ void MazeRoute::run()
           if (dx == 0 && dy == 0) {
             score.via_steps += 1;
           } else {
-            score.unique_manhattan += static_cast<uint64_t>(dx + dy);
+            const int direction = dx > 0 ? MetalLayer::H : MetalLayer::V;
+            const int l = std::min(p[direction], q[direction]);
+            const int h = std::max(p[direction], q[direction]);
+            for (int edge = l; edge < h; edge++) {
+              score.unique_wire_length += static_cast<uint64_t>(
+                  grid_graph_->getEdgeLength(direction, edge));
+            }
           }
         }
         temp = temp->prev;
@@ -498,11 +504,11 @@ void MazeRoute::run()
 
   auto isBetterCandidate = [&](const CandidateScore& lhs,
                                const CandidateScore& rhs) {
-    if (rhs.unique_manhattan == std::numeric_limits<uint64_t>::max()) {
+    if (rhs.unique_wire_length == std::numeric_limits<uint64_t>::max()) {
       return true;
     }
-    if (lhs.unique_manhattan != rhs.unique_manhattan) {
-      return lhs.unique_manhattan < rhs.unique_manhattan;
+    if (lhs.unique_wire_length != rhs.unique_wire_length) {
+      return lhs.unique_wire_length < rhs.unique_wire_length;
     }
     if (lhs.total_path_cost != rhs.total_path_cost) {
       return lhs.total_path_cost < rhs.total_path_cost;

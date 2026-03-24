@@ -459,11 +459,28 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
   const auto& boundingBox = net->getBoundingBox();
   const PointT netCenter(boundingBox.cx(), boundingBox.cy());
   const bool longNet = num_pins >= 8 || boundingBox.hp() >= 120;
+  // Blend CUGR-style congestion awareness with FastRoute-style wirelength
+  // pressure based on the active pattern-stage congestion scale.
+  const double stageCongestionScale
+      = std::clamp(pattern_congestion_scale_, 0.0, 1.5);
+  const double stageWirelengthBias
+      = std::clamp((0.65 - stageCongestionScale) / 0.65, 0.0, 1.0);
+  const bool wirelengthFocusedStage = stageCongestionScale <= 0.25;
   const int relaxAccessibility = longNet ? 1 : 0;
-  const double hpwlWeight = longNet ? 28.0 : 22.0;
-  const double distanceWeight = longNet ? 2.5 : 3.5;
-  const double congestionWeight = longNet ? 5.5 : 7.0;
-  const double layerWeight = 0.25;
+  const double hpwlWeight
+      = (longNet ? 28.0 : 22.0) * (1.0 + 0.90 * stageWirelengthBias);
+  const double distanceWeight
+      = (longNet ? 2.5 : 3.5) * (1.0 + 0.35 * stageWirelengthBias);
+  const double congestionWeight
+      = (longNet ? 5.5 : 7.0) * (1.0 - 0.90 * stageWirelengthBias);
+  const double layerWeight = 0.25 * (1.0 - 0.35 * stageWirelengthBias);
+  const double selectionHpwlWeight = 120.0 * (1.0 + 0.70 * stageWirelengthBias);
+  const double selectionSpreadWeight
+      = 3.0 * (1.0 + 0.45 * stageWirelengthBias);
+  const double selectionCongestionWeight
+      = 9.0 * (1.0 - 0.90 * stageWirelengthBias);
+  const double selectionLayerWeight
+      = 0.5 * (1.0 - 0.35 * stageWirelengthBias);
   const int refineRounds = longNet ? 4 : 3;
   std::vector<int> max_accessibility(num_pins, 0);
   for (int pin_index = 0; pin_index < num_pins; pin_index++) {
@@ -656,9 +673,12 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
       spread += abs(point.x() - target.x()) + abs(point.y() - target.y());
     }
     const double accessibilityPenalty
-        = longNet ? 18.0 * accessibility_drop : 45.0 * accessibility_drop;
-    return hpwl * 120.0 + spread * 3.0 + congestion * 9.0
-           + layer_cost * 0.5 + accessibilityPenalty;
+        = (longNet ? (wirelengthFocusedStage ? 24.0 : 18.0)
+                   : (wirelengthFocusedStage ? 52.0 : 45.0))
+          * accessibility_drop;
+    return hpwl * selectionHpwlWeight + spread * selectionSpreadWeight
+           + congestion * selectionCongestionWeight
+           + layer_cost * selectionLayerWeight + accessibilityPenalty;
   };
 
   std::vector<PointT> seedTargets;
