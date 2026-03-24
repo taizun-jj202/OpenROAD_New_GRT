@@ -407,10 +407,11 @@ NetRouteMap NewgrEngine::run()
   };
 
   // Multi-profile NEWGR bank:
-  // keep a compact high-signal bank (A* + DetPart + FineGrain) to avoid
-  // excessive guide churn from low-quality alternates.
+  // blend FastRoute-like short-path A* profiles with SPRoute-style
+  // deterministic candidates so downstream hybrid fusion can pick the
+  // shortest stable per-net guide set.
   std::vector<CandidateResult> candidates;
-  candidates.reserve(5);
+  candidates.reserve(7);
   candidates.push_back(run_candidate(Algo::Astar,
                                      460,
                                      NEWGR_CAP_PROFILE_RADICAL_WL,
@@ -423,10 +424,18 @@ NetRouteMap NewgrEngine::run()
                                      560,
                                      NEWGR_CAP_PROFILE_3D_SHORT,
                                      "Astar_3DShort"));
+  candidates.push_back(run_candidate(Algo::Astar,
+                                     620,
+                                     NEWGR_CAP_PROFILE_RADICAL_MIX,
+                                     "Astar_RadicalMix"));
   candidates.push_back(run_candidate(Algo::DetPart_Astar_Local,
                                      520,
                                      NEWGR_CAP_PROFILE_RADICAL_WL,
                                      "DetPart_RadicalWL"));
+  candidates.push_back(run_candidate(Algo::DetPart_Astar_Local,
+                                     600,
+                                     NEWGR_CAP_PROFILE_ULTRA_WL,
+                                     "DetPart_UltraWL"));
   candidates.push_back(run_candidate(Algo::FineGrain,
                                      520,
                                      NEWGR_CAP_PROFILE_RADICAL_MIX,
