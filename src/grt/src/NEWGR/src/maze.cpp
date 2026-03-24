@@ -1167,15 +1167,18 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
     // practical capacity.
     const int capacity = std::max(is_horizontal ? h_capacity_ : v_capacity_, 1);
     const bool critical_net = nets_[net_id]->isCritical();
-    const double soft_cap_ratio = critical_net ? 0.97 : 0.91;
+    // Long/critical nets dominate total WL. Keep them close to shortest
+    // Manhattan paths by delaying congestion inflation.
+    const double soft_cap_ratio = critical_net ? 1.06 : 0.91;
     const double soft_cap = soft_cap_ratio * capacity;
     if (pos1 <= soft_cap) {
-      cost1 = 1.0 + (cost1 - 1.0) * 0.28;
+      const double soft_scale = critical_net ? 0.16 : 0.28;
+      cost1 = 1.0 + (cost1 - 1.0) * soft_scale;
     } else {
       const double overflow = static_cast<double>(pos1) - soft_cap;
       const double denom = std::max(1.0, capacity - soft_cap);
       const double overflow_ratio = std::clamp(overflow / denom, 0.0, 4.0);
-      const double overflow_penalty = (critical_net ? 1.60 : 2.35)
+      const double overflow_penalty = (critical_net ? 1.05 : 2.35)
                                       * overflow_ratio * overflow_ratio;
       cost1 += overflow_penalty;
     }
@@ -1202,7 +1205,7 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
     // while still allowing turns when congestion requires it.
     if (is_turn) {
       const bool critical_net = nets_[net_id]->isCritical();
-      const double turn_penalty = critical_net ? 1.65 : 2.45;
+      const double turn_penalty = critical_net ? 3.20 : 2.45;
       tmp += turn_penalty;
     }
 
@@ -1284,8 +1287,10 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
 
       enlarge_ = std::min(origENG, (iter / 6 + 3) * treeedge->route.routelen);
       const int manhattan_len = treeedge->len;
-      const int min_local_expand = 3;
-      const double expand_ratio = 0.14;
+      // Critical nets get a narrower maze envelope to suppress long detours.
+      const bool critical_net = nets_[netID]->isCritical();
+      const int min_local_expand = critical_net ? 2 : 3;
+      const double expand_ratio = critical_net ? 0.08 : 0.14;
       const int dynamic_cap
           = min_local_expand
             + static_cast<int>(std::round(manhattan_len * expand_ratio));
@@ -1296,16 +1301,17 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
           = treeedge->route.last_routelen > 0
             && treeedge->route.routelen
                    > static_cast<int>(1.5 * treeedge->route.last_routelen);
-      const double base_detour_penalty
-          = nets_[netID]->isCritical() || route_stretched ? 3.25 : 2.10;
+      const double base_detour_penalty = critical_net ? 4.75
+                                          : route_stretched ? 3.25
+                                                            : 2.10;
       const double iter_relax
           = std::clamp((iter - 1) / 90.0, 0.0, 0.28);
       corridor_detour_penalty = base_detour_penalty * (1.0 - iter_relax);
 
       int decrease = 0;
 
-      if (nets_[netID]->isCritical()) {
-        decrease = std::min((iter / 7) * 5, effective_enlarge / 2);
+      if (critical_net) {
+        decrease = std::min((iter / 6) * 6, (3 * effective_enlarge) / 4);
       }
       const int regionX1 = std::max(xmin - effective_enlarge + decrease, 0);
       const int regionX2
