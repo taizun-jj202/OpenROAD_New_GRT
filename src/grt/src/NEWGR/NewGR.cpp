@@ -3266,28 +3266,29 @@ bool shouldPreferWirelengthChampion(int incumbent_overflow,
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
   const uint64_t min_wl_gain
-      = std::max<uint64_t>(120, incumbent_score.wirelength / 1300000);
+      = std::max<uint64_t>(40000, incumbent_score.wirelength / 15000);
   if (wl_gain < min_wl_gain) {
     return false;
   }
   const int64_t via_increase_budget
-      = std::max<int64_t>(2600, static_cast<int64_t>(incumbent_score.vias / 45));
+      = std::max<int64_t>(4200, static_cast<int64_t>(incumbent_score.vias / 24));
   if (via_increase > via_increase_budget
       && wl_gain
-             < static_cast<uint64_t>(via_increase * 120 + static_cast<int64_t>(22000))) {
+             < static_cast<uint64_t>(via_increase * 70 + static_cast<int64_t>(24000))) {
     return false;
   }
   const int64_t low_layer_budget = std::max<int64_t>(
-      600000, static_cast<int64_t>(incumbent_low_layer_wl / 520));
+      1800000, static_cast<int64_t>(incumbent_low_layer_wl / 180));
   if (low_layer_delta > low_layer_budget
       && wl_gain
-             < static_cast<uint64_t>(low_layer_delta / 2 + static_cast<int64_t>(28000))) {
+             < static_cast<uint64_t>(low_layer_delta / 6 + static_cast<int64_t>(42000))) {
     return false;
   }
-  if (low_layer_delta > 0
+  if (low_layer_delta > 0 && via_increase > 0
       && wl_gain
-             < static_cast<uint64_t>(low_layer_delta / 2
-                                     + static_cast<int64_t>(120000))) {
+             < static_cast<uint64_t>(low_layer_delta / 10
+                                     + via_increase * 52
+                                     + static_cast<int64_t>(32000))) {
     return false;
   }
   return true;
@@ -4635,9 +4636,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       used_fastroute_last_run_ = false;
     }
 
-    const uint64_t oracle_min_gain = 120;
-    const uint64_t closure_min_gain = 120;
-    const uint64_t fusion_min_gain = 120;
+    const uint64_t oracle_min_gain = 40000;
+    const uint64_t closure_min_gain = 40000;
+    const uint64_t fusion_min_gain = 40000;
 
     if (shouldPreferWirelengthOracleHybrid(best_overflow,
                                            best_score,
