@@ -5446,7 +5446,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const ScenarioResult* cugr_sp_balance_ptr
         = find_scenario_by_name("hybrid-netmix-cugr-sp-balance-wl");
     const ScenarioResult* preferred_wl_ptr = nullptr;
-    bool radical_wl_preselected = false;
 
     // Radical WL-first override:
     // if an extreme min-WL hybrid is a strict WL+via improvement over the
@@ -5515,7 +5514,6 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
       if (radical_candidate != nullptr) {
         preferred_wl_ptr = radical_candidate;
-        radical_wl_preselected = true;
         logger_->info(
             GNR,
             6039,
@@ -6428,25 +6426,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             = forced_wl_ptr == absolute_wl_ptr
               || forced_wl_ptr == min_wl_wide_ptr
               || forced_wl_ptr == cugr_sp_balance_ptr;
-        const bool radical_prelock_candidate
-            = radical_wl_preselected && preferred_wl_ptr != nullptr
-              && forced_wl_ptr == preferred_wl_ptr;
         const long radical_high_layer_floor = std::max<long>(
             tile_size * 10L,
             static_cast<long>(std::ceil(
                 static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.72)));
         const long radical_detour_guard = std::max<long>(detour_guard, tile_size * 34L);
-        const long radical_via_gain_floor
-            = radical_prelock_candidate ? 0L : min_via_gain;
-        const double radical_proxy_cap
-            = radical_prelock_candidate ? 1.008 : 1.002;
         const bool radical_wl_unlock
             = radical_wl_mix_candidate && wl_gain >= min_wl_gain * 3L
-              && via_gain >= radical_via_gain_floor
+              && via_gain >= min_via_gain
               && forced_wl_ptr->metrics.detour_dbu
                      <= wl_anchor->metrics.detour_dbu + radical_detour_guard
               && forced_wl_ptr->metrics.high_layer_dbu >= radical_high_layer_floor
-              && challenger_proxy + 1e-3 < anchor_proxy * radical_proxy_cap;
+              && challenger_proxy + 1e-3 < anchor_proxy * 0.995;
         const bool layer_guard_ok
             = layer_balance_guard
               || (forced_wl_ptr == budgeted_lift_ptr
