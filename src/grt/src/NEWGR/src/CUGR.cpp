@@ -458,8 +458,8 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
     return lhs < rhs;
   });
   const int detourBudget
-      = std::max(96, static_cast<int>(netIndices.size() / 7));
-  const int minOverflowForDetour = 3;
+      = std::max(64, static_cast<int>(netIndices.size() / 10));
+  const int minOverflowForDetour = 4;
   if (overflowEdges[netIndices.front()] < minOverflowForDetour) {
     logger_->report("stage 2 skipped: overflow is below detour trigger.");
     updateOverflowNets(netIndices);
@@ -560,11 +560,11 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   const int totalOverflowNets = static_cast<int>(scheduledNetIndices.size());
   int mazeBudget = totalOverflowNets;
   if (totalOverflowNets > 1000) {
-    mazeBudget = std::max(560, totalOverflowNets * 5 / 9);
+    mazeBudget = std::max(420, totalOverflowNets * 2 / 5);
   } else if (totalOverflowNets > 700) {
-    mazeBudget = std::max(480, totalOverflowNets * 2 / 3);
+    mazeBudget = std::max(320, totalOverflowNets / 2);
   } else if (totalOverflowNets > 400) {
-    mazeBudget = std::max(320, totalOverflowNets * 4 / 5);
+    mazeBudget = std::max(240, totalOverflowNets * 3 / 5);
   }
   mazeBudget = std::min(totalOverflowNets, mazeBudget);
   if (mazeBudget <= 0) {
@@ -621,8 +621,8 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
     }
 
     int max_candidates = 1;
-    if ((pins >= 10 || hp >= 130 || oldOverflow >= 3)
-        && rank < static_cast<int>(scheduledNetIndices.size() / 3)) {
+    if ((pins >= 12 || hp >= 160 || oldOverflow >= 4)
+        && rank < static_cast<int>(scheduledNetIndices.size() / 4)) {
       max_candidates = 2;
     }
     if ((rank > static_cast<int>(scheduledNetIndices.size() * 4 / 5))
@@ -723,14 +723,25 @@ void CUGR::wirelengthRecovery()
   grid_graph_->extractWireCostView(wireCostView);
 
   const int totalNets = static_cast<int>(netIndices.size());
-  // Runtime-focused drastic move:
-  // keep wirelength recovery, but run it on a much tighter set of
-  // detour-heavy nets so we preserve quality while avoiding broad
-  // late-stage sweeps.
+  // SPRoute-style adaptive throttling:
+  // when overflow remains high, prioritize runtime and keep only a small
+  // detour cleanup wavefront. As overflow reduces, expand quality recovery.
+  int recoveryDivisor = 420;
+  int recoveryMinBudget = 128;
+  if (late_stage_overflow_nets_ > 900) {
+    recoveryDivisor = 1200;
+    recoveryMinBudget = 48;
+  } else if (late_stage_overflow_nets_ > 600) {
+    recoveryDivisor = 850;
+    recoveryMinBudget = 72;
+  } else if (late_stage_overflow_nets_ > 300) {
+    recoveryDivisor = 650;
+    recoveryMinBudget = 96;
+  }
   const int recoveryBudget
-      = std::min(totalNets, std::max(192, totalNets / 420));
-  const int mazeCandidateBudget = std::max(64, recoveryBudget / 4);
-  const int denseMazeBudget = std::max(16, recoveryBudget / 12);
+      = std::min(totalNets, std::max(recoveryMinBudget, totalNets / recoveryDivisor));
+  const int mazeCandidateBudget = std::max(32, recoveryBudget / 5);
+  const int denseMazeBudget = std::max(8, recoveryBudget / 10);
   const int longNetRank
       = std::min(recoveryBudget - 1, std::max(0, recoveryBudget / 5));
   const uint64_t longWireThreshold
@@ -1244,12 +1255,24 @@ void CUGR::strictWirelengthCompaction()
   });
 
   const int totalNets = static_cast<int>(netIndices.size());
-  // Single strict wavefront pass: keep quality pressure on worst detours
-  // while cutting runtime versus multi-pass strict sweeps.
+  // Single strict wavefront pass: dynamically shrink late-stage effort when
+  // overflow is still large to keep end-to-end runtime near SPRoute levels.
   const bool useXAxisWavefront = true;
   const bool firstStrictPass = true;
+  int strictDivisor = 700;
+  int strictMinBudget = 128;
+  if (late_stage_overflow_nets_ > 900) {
+    strictDivisor = 2400;
+    strictMinBudget = 32;
+  } else if (late_stage_overflow_nets_ > 600) {
+    strictDivisor = 1400;
+    strictMinBudget = 48;
+  } else if (late_stage_overflow_nets_ > 300) {
+    strictDivisor = 1000;
+    strictMinBudget = 64;
+  }
   const int compactionBudget
-      = std::min(totalNets, std::max(128, totalNets / 700));
+      = std::min(totalNets, std::max(strictMinBudget, totalNets / strictDivisor));
   if (compactionBudget <= 0) {
     return;
   }
@@ -1446,6 +1469,7 @@ void CUGR::route()
                     netIndices.size());
   }
 
+  late_stage_overflow_nets_ = static_cast<int>(netIndices.size());
   // FastRoute-like selective late-stage improvement: compact only the
   // highest-impact detours, then run one strict SPRoute-style wavefront pass.
   grid_graph_->setStageCostScales(0.18, 0.20, 0.98);

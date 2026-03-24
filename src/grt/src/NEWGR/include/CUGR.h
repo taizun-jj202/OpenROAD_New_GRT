@@ -105,6 +105,7 @@ class CUGR
 
   int area_of_pin_patches_ = 0;
   int area_of_wire_patches_ = 0;
+  int late_stage_overflow_nets_ = 0;
 };
 
 }  // namespace grt::newgr
