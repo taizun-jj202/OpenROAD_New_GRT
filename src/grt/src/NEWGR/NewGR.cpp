@@ -3077,39 +3077,39 @@ bool shouldPreferWirelengthOracleHybrid(int incumbent_overflow,
   // allow modest via growth when candidate releases significant low-layer
   // demand (proxy for reducing pin-access/resource risk).
   const uint64_t low_layer_release_credit = static_cast<uint64_t>(
-      std::max<int64_t>(0, -low_layer_delta) / 4);
+      std::max<int64_t>(0, -low_layer_delta) / 2);
   const uint64_t effective_wl_gain = wl_gain + low_layer_release_credit;
   const bool strong_risk_drop
-      = low_layer_delta <= -80000
-        && (via_increase <= 0 || via_increase <= 220);
+      = low_layer_delta <= -40000
+        && (via_increase <= 0 || via_increase <= 320);
   const uint64_t min_wl_gain
-      = std::max<uint64_t>(22000, incumbent_score.wirelength / 32000);
+      = std::max<uint64_t>(6000, incumbent_score.wirelength / 120000);
   if (effective_wl_gain < min_wl_gain
       && !(strong_risk_drop && wl_gain >= min_wl_gain / 2)) {
     return false;
   }
   const int64_t via_increase_budget
-      = std::max<int64_t>(520, static_cast<int64_t>(incumbent_score.vias / 180));
+      = std::max<int64_t>(1800, static_cast<int64_t>(incumbent_score.vias / 80));
   if (via_increase > via_increase_budget
       && effective_wl_gain
-             < static_cast<uint64_t>(via_increase * 300 + static_cast<int64_t>(50000))) {
+             < static_cast<uint64_t>(via_increase * 190 + static_cast<int64_t>(24000))) {
     return false;
   }
   if (via_increase > 0
       && effective_wl_gain
              < std::max<uint64_t>(
-                 static_cast<uint64_t>(via_increase * 260
-                                       + static_cast<int64_t>(50000)),
-                 static_cast<uint64_t>(80000))) {
+                 static_cast<uint64_t>(via_increase * 160
+                                       + static_cast<int64_t>(24000)),
+                 static_cast<uint64_t>(26000))) {
     return false;
   }
   const int64_t low_layer_budget = std::max<int64_t>(
-      1500000, static_cast<int64_t>(incumbent_low_layer_wl / 180));
+      3200000, static_cast<int64_t>(incumbent_low_layer_wl / 70));
   if (low_layer_delta > low_layer_budget
       || (low_layer_delta > 0
           && effective_wl_gain
-                 < static_cast<uint64_t>(low_layer_delta / 3
-                                         + static_cast<int64_t>(50000)))) {
+                 < static_cast<uint64_t>(low_layer_delta / 2
+                                         + static_cast<int64_t>(35000)))) {
     return false;
   }
   return true;
@@ -3143,45 +3143,45 @@ bool shouldPreferWirelengthClosureHybrid(int incumbent_overflow,
   // Promote routes that release low-layer resources while keeping via growth
   // bounded; this mirrors soft-cap balancing from SPRoute and CUGR.
   const uint64_t low_layer_release_credit = static_cast<uint64_t>(
-      std::max<int64_t>(0, -low_layer_delta) / 4);
+      std::max<int64_t>(0, -low_layer_delta) / 2);
   const uint64_t effective_wl_gain = wl_gain + low_layer_release_credit;
   const bool strong_risk_drop
-      = low_layer_delta <= -70000
-        && (via_increase <= 0 || via_increase <= 220);
+      = low_layer_delta <= -50000
+        && (via_increase <= 0 || via_increase <= 300);
   const uint64_t min_wl_gain
-      = std::max<uint64_t>(18000, incumbent_score.wirelength / 36000);
+      = std::max<uint64_t>(5000, incumbent_score.wirelength / 130000);
   if (effective_wl_gain < min_wl_gain
       && !(strong_risk_drop && wl_gain >= min_wl_gain / 2)) {
     return false;
   }
   const int64_t via_increase_budget
-      = std::max<int64_t>(380, static_cast<int64_t>(incumbent_score.vias / 250));
+      = std::max<int64_t>(1400, static_cast<int64_t>(incumbent_score.vias / 100));
   if (via_increase > via_increase_budget
       && effective_wl_gain
-             < static_cast<uint64_t>(via_increase * 320 + static_cast<int64_t>(60000))) {
+             < static_cast<uint64_t>(via_increase * 220 + static_cast<int64_t>(26000))) {
     return false;
   }
   if (via_increase > 0
       && effective_wl_gain
              < std::max<uint64_t>(
-                 static_cast<uint64_t>(via_increase * 260
-                                       + static_cast<int64_t>(60000)),
-                 static_cast<uint64_t>(90000))) {
+                 static_cast<uint64_t>(via_increase * 180
+                                       + static_cast<int64_t>(26000)),
+                 static_cast<uint64_t>(30000))) {
     return false;
   }
   const int64_t low_layer_budget = std::max<int64_t>(
-      1200000, static_cast<int64_t>(incumbent_low_layer_wl / 150));
+      2600000, static_cast<int64_t>(incumbent_low_layer_wl / 75));
   if (low_layer_delta > low_layer_budget
       && effective_wl_gain
              < static_cast<uint64_t>(low_layer_delta / 2
-                                     + static_cast<int64_t>(60000))) {
+                                     + static_cast<int64_t>(32000))) {
     return false;
   }
   if (low_layer_delta > 0 && via_increase > 0
       && effective_wl_gain
              < static_cast<uint64_t>(low_layer_delta / 2
-                                     + via_increase * 320
-                                     + static_cast<int64_t>(60000))) {
+                                     + via_increase * 220
+                                     + static_cast<int64_t>(32000))) {
     return false;
   }
   return true;
@@ -3214,46 +3214,46 @@ bool shouldPreferWirelengthFusionHybrid(int incumbent_overflow,
   const int64_t low_layer_delta = static_cast<int64_t>(candidate_low_layer_wl)
                                   - static_cast<int64_t>(incumbent_low_layer_wl);
   const uint64_t low_layer_release_credit = static_cast<uint64_t>(
-      std::max<int64_t>(0, -low_layer_delta) / 3);
+      std::max<int64_t>(0, -low_layer_delta) / 2);
   const uint64_t effective_wl_gain = wl_gain + low_layer_release_credit;
   const uint64_t min_wl_gain
-      = std::max<uint64_t>(16000, incumbent_score.wirelength / 50000);
+      = std::max<uint64_t>(4000, incumbent_score.wirelength / 160000);
   if (effective_wl_gain < min_wl_gain) {
     return false;
   }
 
   const int64_t via_increase_budget
-      = std::max<int64_t>(520, static_cast<int64_t>(incumbent_score.vias / 220));
+      = std::max<int64_t>(1900, static_cast<int64_t>(incumbent_score.vias / 85));
   if (via_growth > via_increase_budget
       && effective_wl_gain
-             < static_cast<uint64_t>(via_growth * 240 + static_cast<int64_t>(60000))) {
+             < static_cast<uint64_t>(via_growth * 180 + static_cast<int64_t>(26000))) {
     return false;
   }
   if (via_growth > 0
       && effective_wl_gain
              < std::max<uint64_t>(
                  static_cast<uint64_t>(
-                     via_growth * 170
-                     + std::max<int64_t>(0, low_layer_delta) / 4
-                     + static_cast<int64_t>(40000)),
-                 static_cast<uint64_t>(70000))) {
+                     via_growth * 130
+                     + std::max<int64_t>(0, low_layer_delta) / 5
+                     + static_cast<int64_t>(22000)),
+                 static_cast<uint64_t>(24000))) {
     return false;
   }
 
   const int64_t low_layer_budget = std::max<int64_t>(
-      1300000, static_cast<int64_t>(incumbent_low_layer_wl / 130));
+      3000000, static_cast<int64_t>(incumbent_low_layer_wl / 70));
   if (low_layer_delta > low_layer_budget
       && effective_wl_gain
              < static_cast<uint64_t>(low_layer_delta / 3
-                                     + via_growth * 180
-                                     + static_cast<int64_t>(80000))) {
+                                     + via_growth * 150
+                                     + static_cast<int64_t>(30000))) {
     return false;
   }
   if (via_growth > 0 && low_layer_delta > 0
       && effective_wl_gain
-             < static_cast<uint64_t>(via_growth * 210
+             < static_cast<uint64_t>(via_growth * 170
                                      + low_layer_delta / 3
-                                     + static_cast<int64_t>(90000))) {
+                                     + static_cast<int64_t>(34000))) {
     return false;
   }
   return true;
@@ -3814,13 +3814,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       used_fastroute_last_run_ = false;
     }
 
-    if (false
-        && shouldPreferWirelengthOracleHybrid(best_overflow,
-                                              best_score,
-                                              best_low_layer_wl,
-                                              last_total_overflow_,
-                                              wirelength_oracle_score,
-                                              wirelength_oracle_low_layer_wl)) {
+    const uint64_t oracle_min_gain = 120000;
+    const uint64_t closure_min_gain = 140000;
+    const uint64_t fusion_min_gain = 160000;
+
+    if (shouldPreferWirelengthOracleHybrid(best_overflow,
+                                           best_score,
+                                           best_low_layer_wl,
+                                           last_total_overflow_,
+                                           wirelength_oracle_score,
+                                           wirelength_oracle_low_layer_wl)
+        && best_score.wirelength > wirelength_oracle_score.wirelength
+        && best_score.wirelength - wirelength_oracle_score.wirelength
+               >= oracle_min_gain) {
       routes = std::move(wirelength_oracle_hybrid);
       best_score = wirelength_oracle_score;
       best_overflow = last_total_overflow_;
@@ -3840,13 +3846,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       used_fastroute_last_run_ = false;
     }
 
-    if (false
-        && shouldPreferWirelengthClosureHybrid(best_overflow,
-                                               best_score,
-                                               best_low_layer_wl,
-                                               last_total_overflow_,
-                                               wirelength_closure_score,
-                                               wirelength_closure_low_layer_wl)) {
+    if (shouldPreferWirelengthClosureHybrid(best_overflow,
+                                            best_score,
+                                            best_low_layer_wl,
+                                            last_total_overflow_,
+                                            wirelength_closure_score,
+                                            wirelength_closure_low_layer_wl)
+        && best_score.wirelength > wirelength_closure_score.wirelength
+        && best_score.wirelength - wirelength_closure_score.wirelength
+               >= closure_min_gain) {
       routes = std::move(wirelength_closure_hybrid);
       best_score = wirelength_closure_score;
       best_overflow = last_total_overflow_;
@@ -3868,13 +3876,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       used_fastroute_last_run_ = false;
     }
 
-    if (false
-        && shouldPreferWirelengthFusionHybrid(best_overflow,
-                                              best_score,
-                                              best_low_layer_wl,
-                                              last_total_overflow_,
-                                              wirelength_fusion_score,
-                                              wirelength_fusion_low_layer_wl)) {
+    if (shouldPreferWirelengthFusionHybrid(best_overflow,
+                                           best_score,
+                                           best_low_layer_wl,
+                                           last_total_overflow_,
+                                           wirelength_fusion_score,
+                                           wirelength_fusion_low_layer_wl)
+        && best_score.wirelength > wirelength_fusion_score.wirelength
+        && best_score.wirelength - wirelength_fusion_score.wirelength
+               >= fusion_min_gain) {
       routes = std::move(wirelength_fusion_hybrid);
       best_score = wirelength_fusion_score;
       best_overflow = last_total_overflow_;

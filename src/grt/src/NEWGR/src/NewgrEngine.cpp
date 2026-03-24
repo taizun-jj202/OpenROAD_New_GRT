@@ -381,7 +381,7 @@ NetRouteMap NewgrEngine::run()
   // 1) Run one SPRoute-style profile with FastRoute-like WL bias.
   // 2) Expand to a larger ensemble only if overflow remains, or when
   //    explicitly requested for experimentation.
-  const bool force_full_ensemble = std::getenv("NEWGR_FULL_ENSEMBLE") != nullptr;
+  const bool force_full_ensemble = true;
   CandidateResult best = run_candidate(Algo::Astar,
                                        420,
                                        NEWGR_CAP_PROFILE_RADICAL_MIX,
