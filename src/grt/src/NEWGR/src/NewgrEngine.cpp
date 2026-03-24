@@ -72,7 +72,6 @@ struct RouteMetrics
 {
   uint64_t wirelength{0};
   uint64_t vias{0};
-  uint64_t low_layer_wl{0};
   uint64_t congestion_risk{0};
   uint64_t proxy_cost{0};
 };
@@ -142,31 +141,22 @@ RouteMetrics computeRouteMetrics(const SprouteGridData& grid,
       if (segment.isVia()) {
         metrics.vias += static_cast<uint64_t>(
             std::abs(segment.final_layer - segment.init_layer));
-      } else {
-        const int low_layer
-            = std::min(segment.init_layer, segment.final_layer);
-        if (low_layer <= 4) {
-          metrics.low_layer_wl += static_cast<uint64_t>(segment.length());
-        }
       }
     }
   }
   metrics.congestion_risk = computeCongestionRisk(grid);
   // Proxy is intentionally risk-heavy because detailed-route wirelength
   // regresses when global-route hotspots are left unresolved.
-  metrics.proxy_cost = metrics.wirelength + metrics.vias * 10
-                       + metrics.low_layer_wl / 28
-                       + metrics.congestion_risk / 28;
+  metrics.proxy_cost = metrics.wirelength + metrics.vias * 12
+                       + metrics.congestion_risk / 24;
   return metrics;
 }
 
 uint64_t selectionCost(const RouteMetrics& metrics)
 {
-  // Wirelength-dominant ranking with SPRoute/CUGR-style low-layer pressure
-  // guard. This avoids selecting tiny WL wins that over-concentrate routing
-  // on lower layers and later regress detailed-route WL.
-  return metrics.wirelength + metrics.vias * 8 + metrics.low_layer_wl / 112
-         + metrics.congestion_risk / 22000;
+  // Wirelength-dominant ranking. Congestion risk is retained only as a
+  // tie-break proxy rather than the primary driver.
+  return metrics.wirelength + metrics.vias * 6 + metrics.congestion_risk / 18000;
 }
 
 bool hasAcceptableWirelengthTradeoff(const RouteMetrics& candidate,
@@ -177,26 +167,8 @@ bool hasAcceptableWirelengthTradeoff(const RouteMetrics& candidate,
   }
   const int64_t via_increase = static_cast<int64_t>(candidate.vias)
                                - static_cast<int64_t>(incumbent.vias);
-  if (via_increase > 1400) {
+  if (via_increase > 1800) {
     return false;
-  }
-  const uint64_t wl_gain = incumbent.wirelength - candidate.wirelength;
-  const int64_t low_layer_delta = static_cast<int64_t>(candidate.low_layer_wl)
-                                  - static_cast<int64_t>(incumbent.low_layer_wl);
-  if (low_layer_delta > 0) {
-    const uint64_t low_layer_growth = static_cast<uint64_t>(low_layer_delta);
-    const uint64_t max_low_layer_growth = std::max<uint64_t>(
-        1200000ULL, incumbent.low_layer_wl / 80);
-    if (low_layer_growth > max_low_layer_growth
-        && wl_gain < low_layer_growth / 3 + 160000ULL) {
-      return false;
-    }
-    if (wl_gain
-        < low_layer_growth / 4
-              + static_cast<uint64_t>(std::max<int64_t>(0, via_increase) * 120)
-              + 8000ULL) {
-      return false;
-    }
   }
   const uint64_t risk_budget = std::max<uint64_t>(
       250000000ULL, incumbent.congestion_risk / 2);
@@ -229,9 +201,6 @@ bool isBetterCandidate(const CandidateResult& lhs, const CandidateResult& rhs)
   }
   if (lhs.metrics.vias != rhs.metrics.vias) {
     return lhs.metrics.vias < rhs.metrics.vias;
-  }
-  if (lhs.metrics.low_layer_wl != rhs.metrics.low_layer_wl) {
-    return lhs.metrics.low_layer_wl < rhs.metrics.low_layer_wl;
   }
   if (lhs.metrics.congestion_risk != rhs.metrics.congestion_risk) {
     return lhs.metrics.congestion_risk < rhs.metrics.congestion_risk;
@@ -426,24 +395,22 @@ NetRouteMap NewgrEngine::run()
     logger_->info(utl::GRT,
                   402,
                   "NEWGR candidate {} [{}]: overflow={}, route_wl={}, "
-                  "route_vias={}, low_layer_wl={}, cong_risk={}, proxy_cost={}",
+                  "route_vias={}, cong_risk={}, proxy_cost={}",
                   candidateName(candidate),
                   capacityProfileName(candidate.capacity_profile),
                   candidate.overflow,
                   candidate.metrics.wirelength,
                   candidate.metrics.vias,
-                  candidate.metrics.low_layer_wl,
                   candidate.metrics.congestion_risk,
                   candidate.metrics.proxy_cost);
     return candidate;
   };
 
   // Multi-profile NEWGR bank:
-  // blend FastRoute-like short-path A* profiles with SPRoute-style
-  // deterministic candidates so downstream hybrid fusion can pick the
-  // shortest stable per-net guide set.
+  // keep a compact high-signal bank (A* + DetPart + FineGrain) to avoid
+  // excessive guide churn from low-quality alternates.
   std::vector<CandidateResult> candidates;
-  candidates.reserve(7);
+  candidates.reserve(5);
   candidates.push_back(run_candidate(Algo::Astar,
                                      460,
                                      NEWGR_CAP_PROFILE_RADICAL_WL,
@@ -456,18 +423,10 @@ NetRouteMap NewgrEngine::run()
                                      560,
                                      NEWGR_CAP_PROFILE_3D_SHORT,
                                      "Astar_3DShort"));
-  candidates.push_back(run_candidate(Algo::Astar,
-                                     620,
-                                     NEWGR_CAP_PROFILE_RADICAL_MIX,
-                                     "Astar_RadicalMix"));
   candidates.push_back(run_candidate(Algo::DetPart_Astar_Local,
                                      520,
                                      NEWGR_CAP_PROFILE_RADICAL_WL,
                                      "DetPart_RadicalWL"));
-  candidates.push_back(run_candidate(Algo::DetPart_Astar_Local,
-                                     600,
-                                     NEWGR_CAP_PROFILE_ULTRA_WL,
-                                     "DetPart_UltraWL"));
   candidates.push_back(run_candidate(Algo::FineGrain,
                                      520,
                                      NEWGR_CAP_PROFILE_RADICAL_MIX,
@@ -509,13 +468,12 @@ NetRouteMap NewgrEngine::run()
   logger_->info(utl::GRT,
                 404,
                 "NEWGR selected candidate {} [{}]: overflow={}, route_wl={}, "
-                "route_vias={}, low_layer_wl={}, cong_risk={}, proxy_cost={}, alternates={}",
+                "route_vias={}, cong_risk={}, proxy_cost={}, alternates={}",
                 candidateName(best),
                 capacityProfileName(best.capacity_profile),
                 best.overflow,
                 best.metrics.wirelength,
                 best.metrics.vias,
-                best.metrics.low_layer_wl,
                 best.metrics.congestion_risk,
                 best.metrics.proxy_cost,
                 alternate_routes_.size());
