@@ -5040,6 +5040,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                            0.0,
                            0.0,
                            7105);
+      // Deep HPWL squeeze: pull candidates from all generated scenarios
+      // to aggressively minimize net-level wirelength in compact mode.
+      append_min_wl_hybrid("hybrid-netmix-absolute-wl-deep",
+                           static_cast<int>(ranked.size()),
+                           0L,
+                           0.02,
+                           0.0004,
+                           0.015,
+                           7360,
+                           0.12,
+                           1.4);
       // CUGR/SPRoute-inspired blend: keep aggressive WL pressure but penalize
       // route fragmentation and layer collapse to stay DR-friendly.
       append_min_wl_hybrid("hybrid-netmix-cugr-sp-balance-wl",
@@ -5156,6 +5167,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                            0.0,
                            0.0,
                            7105);
+      append_min_wl_hybrid("hybrid-netmix-absolute-wl-deep",
+                           absolute_wl_source_count,
+                           0L,
+                           0.02,
+                           0.0004,
+                           0.015,
+                           7360,
+                           0.12,
+                           1.4);
       append_hybrid("hybrid-netmix-hpwl-lock",
                     hpwl_lock_source_count,
                     0,
@@ -5235,6 +5255,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const ScenarioResult* wl_hybrid = find_scenario("hybrid-netmix-wl");
     const ScenarioResult* absolute_wl_hybrid
         = find_scenario("hybrid-netmix-absolute-wl");
+    const ScenarioResult* absolute_wl_deep_hybrid
+        = find_scenario("hybrid-netmix-absolute-wl-deep");
     const ScenarioResult* layer_lift_wl_hybrid
         = find_scenario("hybrid-netmix-layer-lift-wl");
     const ScenarioResult* dr_stable_hybrid
@@ -5477,6 +5499,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       int radical_min_imports = 0;
       int radical_balance_imports = 0;
       int radical_budgeted_imports = 0;
+      int radical_abs_deep_imports = 0;
 
       for (auto& [db_net, selected_route] : radical_fusion_result.routes) {
         if (db_net == nullptr) {
@@ -5550,6 +5573,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         consider_radical(min_wl_wide_hybrid, 2);
         consider_radical(cugr_sp_balance_hybrid, 3);
         consider_radical(budgeted_lift_wl_hybrid, 4);
+        consider_radical(absolute_wl_deep_hybrid, 5);
 
         if (best_route != nullptr) {
           if (best_via_delta > 0
@@ -5574,6 +5598,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             radical_balance_imports++;
           } else if (best_donor == 4) {
             radical_budgeted_imports++;
+          } else if (best_donor == 5) {
+            radical_abs_deep_imports++;
           }
         }
       }
@@ -5584,13 +5610,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           GNR,
           7355,
           "NEWGR hybrid-netmix-radical-wl-fusion imported "
-          "abs/min/balance/budgeted nets {}/{}/{}/{}, wirelength {:.0f} um, "
+          "abs/min/balance/budgeted/abs-deep nets {}/{}/{}/{}/{}, wirelength "
+          "{:.0f} um, "
           "vias {}, high-layer drop {}/{}, via-rise budget {}/{}, "
           "budget-clamped nets {}, wl gain sum {}, via delta sum {}",
           radical_abs_imports,
           radical_min_imports,
           radical_balance_imports,
           radical_budgeted_imports,
+          radical_abs_deep_imports,
           radical_fusion_result.metrics.wirelength_um,
           radical_fusion_result.metrics.via_count,
           radical_high_layer_drop,
@@ -5996,6 +6024,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = find_scenario_by_name("hybrid-netmix-min-wl-wide");
     const ScenarioResult* absolute_wl_ptr
         = find_scenario_by_name("hybrid-netmix-absolute-wl");
+    const ScenarioResult* absolute_wl_deep_ptr
+        = find_scenario_by_name("hybrid-netmix-absolute-wl-deep");
     const ScenarioResult* cugr_sp_balance_ptr
         = find_scenario_by_name("hybrid-netmix-cugr-sp-balance-wl");
     const ScenarioResult* wl_layerbudget_ptr
@@ -6084,8 +6114,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
            std::array<const ScenarioResult*, 9>{budgeted_lift_ptr,
                                                 layer_floor_wl_ptr,
                                                 layer_lift_wl_ptr,
-                                                absolute_via_recover_ptr,
                                                 absolute_wl_ptr,
+                                                absolute_wl_deep_ptr,
                                                 min_wl_wide_ptr,
                                                 cugr_sp_balance_ptr,
                                                 wl_layerbudget_ptr,
@@ -6516,8 +6546,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
              "hybrid-netmix-smooth-wl",
              "hybrid-netmix-ultra-wl",
              "hybrid-netmix-min-wl-wide",
-             "hybrid-netmix-absolute-via-recover",
              "hybrid-netmix-absolute-wl",
+             "hybrid-netmix-absolute-wl-deep",
              "hybrid-netmix-cugr-sp-balance-wl",
              "hybrid-netmix-wl-compact",
              "hybrid-netmix-wl-safe",
@@ -6544,8 +6574,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                budgeted_lift_ptr,
                layer_floor_wl_ptr,
                layer_lift_wl_ptr,
-               absolute_via_recover_ptr,
                absolute_wl_ptr,
+               absolute_wl_deep_ptr,
                min_wl_wide_ptr,
                cugr_sp_balance_ptr,
                wl_layerbudget_ptr,
@@ -6815,8 +6845,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                budgeted_lift_ptr,
                layer_floor_wl_ptr,
                layer_lift_wl_ptr,
-               absolute_via_recover_ptr,
                absolute_wl_ptr,
+               absolute_wl_deep_ptr,
                min_wl_wide_ptr,
                cugr_sp_balance_ptr,
                radical_wl_fusion_ptr}) {
@@ -7000,6 +7030,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       consider_elastic_wl(cugr_sp_balance_ptr);
       consider_elastic_wl(wl_layerbudget_ptr);
       consider_elastic_wl(radical_wl_fusion_ptr);
+      consider_elastic_wl(absolute_wl_deep_ptr);
       consider_elastic_wl(absolute_via_recover_ptr);
 
       if (elastic_wl_ptr != nullptr
@@ -7133,7 +7164,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                      <= wl_anchor->metrics.via_count + layerbudget_via_rise_guard;
         const bool radical_wl_mix_candidate
             = forced_wl_ptr == absolute_wl_ptr
-              || forced_wl_ptr == absolute_via_recover_ptr
+              || forced_wl_ptr == absolute_wl_deep_ptr
               || forced_wl_ptr == min_wl_wide_ptr
               || forced_wl_ptr == cugr_sp_balance_ptr
               || forced_wl_ptr == wl_layerbudget_ptr
@@ -7226,6 +7257,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           tile_size * 52L,
           static_cast<long>(std::ceil(
               static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.24)));
+      const long high_layer_floor = std::max<long>(
+          tile_size * 16L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_anchor->metrics.high_layer_dbu) * 0.90)));
       const int hotspot_guard
           = std::max<int>(12, wl_anchor->metrics.near_capacity_edges / 3);
       const long via_rise_cap = std::max<long>(
@@ -7233,11 +7268,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           static_cast<long>(std::ceil(
               static_cast<double>(wl_anchor->metrics.via_count) * 0.0014)));
       const long via_drop_cap = std::max<long>(
-          2600L,
+          900L,
           static_cast<long>(std::ceil(
-              static_cast<double>(wl_anchor->metrics.via_count) * 0.0250)));
+              static_cast<double>(wl_anchor->metrics.via_count) * 0.0090)));
       const long via_trade_wl_factor = std::max<long>(40L, tile_size * 2L);
-      const long via_drop_trade_wl_factor = std::max<long>(18L, tile_size / 2L);
+      const long via_drop_trade_wl_factor = std::max<long>(65L, tile_size * 3L);
+      auto is_extreme_wl_candidate = [](const std::string& name) {
+        return name == "hybrid-netmix-absolute-wl"
+               || name == "hybrid-netmix-absolute-wl-deep"
+               || name == "hybrid-netmix-min-wl-wide"
+               || name == "hybrid-netmix-cugr-sp-balance-wl"
+               || name == "hybrid-netmix-radical-wl-fusion";
+      };
 
       const ScenarioResult* wl_locked_ptr = forced_wl_ptr;
       for (const ScenarioResult& candidate : scenario_results) {
@@ -7251,10 +7293,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         const long via_drop = static_cast<long>(wl_anchor->metrics.via_count)
                               - static_cast<long>(candidate.metrics.via_count);
         const bool minwl_extreme_candidate
-            = candidate.name == "hybrid-netmix-absolute-wl"
-              || candidate.name == "hybrid-netmix-min-wl-wide"
-              || candidate.name == "hybrid-netmix-cugr-sp-balance-wl"
-              || candidate.name == "hybrid-netmix-absolute-via-recover";
+            = is_extreme_wl_candidate(candidate.name);
         if (via_rise > via_rise_cap && wl_gain < via_rise * via_trade_wl_factor) {
           continue;
         }
@@ -7267,6 +7306,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                    > wl_anchor->metrics.high_layer_dbu + high_layer_guard
             || candidate.metrics.near_capacity_edges
                    > wl_anchor->metrics.near_capacity_edges + hotspot_guard) {
+          continue;
+        }
+        // Preserve enough upper-layer guide structure (FastRoute/CUGR-style
+        // routability guard) so extreme low-layer collapses do not degrade
+        // detailed routing despite lower global-route WL.
+        if (candidate.metrics.high_layer_dbu < high_layer_floor
+            && candidate.name != "hybrid-netmix-wl-layerbudget"
+            && candidate.name != "hybrid-netmix-budgeted-lift-wl") {
           continue;
         }
         if (wl_locked_ptr == nullptr) {
@@ -7286,14 +7333,24 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               72L,
               static_cast<long>(std::ceil(
                   static_cast<double>(wl_locked_ptr->metrics.via_count) * 0.0007)));
-          const long via_rise_trade_wl_factor
-              = std::max<long>(420L, tile_size / 3L);
-          if (via_rise_over_locked > via_rise_guard
-              && wl_gain_over_locked
-                     < via_rise_over_locked * via_rise_trade_wl_factor) {
-            better_locked = false;
-          } else {
+          const bool candidate_extreme = is_extreme_wl_candidate(candidate.name);
+          const bool locked_is_via_recover
+              = wl_locked_ptr->name == "hybrid-netmix-absolute-via-recover";
+          const long min_extreme_gain = std::max<long>(tile_size * 2L, 900L);
+          if (candidate_extreme && wl_gain_over_locked >= min_extreme_gain) {
             better_locked = true;
+          } else {
+            const long via_rise_trade_wl_factor
+                = candidate_extreme ? std::max<long>(18L, tile_size / 2L)
+                                    : std::max<long>(420L, tile_size / 3L);
+            if (via_rise_over_locked > via_rise_guard
+                && !locked_is_via_recover
+                && wl_gain_over_locked
+                       < via_rise_over_locked * via_rise_trade_wl_factor) {
+              better_locked = false;
+            } else {
+              better_locked = true;
+            }
           }
         } else if (candidate.metrics.wirelength_dbu
                        == wl_locked_ptr->metrics.wirelength_dbu
