@@ -2569,10 +2569,10 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
         return lhs.severity > rhs.severity;
       });
 
-  const int edge_budget = 220;
-  const int sources_per_edge = 3;
-  const int patches_per_net = 12;
-  const int total_patch_budget = 3200;
+  const int edge_budget = 160;
+  const int sources_per_edge = 2;
+  const int patches_per_net = 9;
+  const int total_patch_budget = 3600;
 
   int patched_edges = 0;
   int added_segments = 0;
@@ -2689,10 +2689,10 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
 
   // Add long-segment alternatives only when there are enough severe hotspots
   // to justify extra guide flexibility.
-  const bool enable_long_seg_patching = patched_edges >= (edge_budget / 6);
+  const bool enable_long_seg_patching = patched_edges >= (edge_budget / 5);
   const int long_seg_threshold = 2 * tile_size;
-  const int long_seg_patches_per_net = 8;
-  const int long_seg_segment_budget = 1200;
+  const int long_seg_patches_per_net = 6;
+  const int long_seg_segment_budget = 700;
   int long_seg_added_segments = 0;
   std::map<odb::dbNet*, int> long_seg_patch_count;
 
@@ -2779,8 +2779,8 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
   const int y_grids = grouter->grid()->getYGrids();
   const int x_max = x_min + tile_size * std::max(x_grids - 1, 0);
   const int y_max = y_min + tile_size * std::max(y_grids - 1, 0);
-  const int junction_segment_budget = 1100;
-  const int junction_patches_per_net = 8;
+  const int junction_segment_budget = 900;
+  const int junction_patches_per_net = 7;
   int junction_added_segments = 0;
   std::map<odb::dbNet*, int> junction_patch_count;
 
@@ -2931,14 +2931,174 @@ void applyCugrStyleGuidePatching(GlobalRouter* grouter,
     }
   }
 
+  // Pin-access corridor patching:
+  // This pass borrows CUGR's pin-region patching idea and SPRoute's local
+  // soft-cap behavior by adding compact adjacent-layer corridors around
+  // pin anchors. The goal is to reduce late detailed-routing detours caused
+  // by missing local alternatives near pins.
+  const int pin_segment_budget = 1400;
+  const int pin_patches_per_net = 8;
+  int pin_added_segments = 0;
+  std::map<odb::dbNet*, int> pin_patch_count;
+
+  const auto snap_to_grid = [tile_size](int coord, int origin, int grids) {
+    if (grids <= 1) {
+      return origin;
+    }
+    const long shifted = static_cast<long>(coord) - static_cast<long>(origin);
+    const long rounded
+        = shifted + static_cast<long>(tile_size / 2);
+    const int index = std::clamp(static_cast<int>(rounded / tile_size),
+                                 0,
+                                 grids - 1);
+    return origin + index * tile_size;
+  };
+
+  for (auto& [db_net, route] : routes) {
+    if (added_segments >= total_patch_budget
+        || pin_added_segments >= pin_segment_budget) {
+      break;
+    }
+
+    int& net_budget = pin_patch_count[db_net];
+    if (net_budget >= pin_patches_per_net) {
+      continue;
+    }
+
+    Net* net = grouter->getNet(db_net);
+    if (net == nullptr) {
+      continue;
+    }
+
+    struct PinPatchCandidate
+    {
+      int x = 0;
+      int y = 0;
+      int base_layer = 0;
+      bool is_port = false;
+      int layer_choices = 1;
+    };
+
+    std::vector<PinPatchCandidate> pin_candidates;
+    pin_candidates.reserve(net->getPins().size());
+    for (const Pin& pin : net->getPins()) {
+      const odb::Point& pos = pin.getPosition();
+      PinPatchCandidate candidate;
+      candidate.x = snap_to_grid(pos.x(), x_min, x_grids);
+      candidate.y = snap_to_grid(pos.y(), y_min, y_grids);
+      candidate.x = std::clamp(candidate.x, x_min, x_max);
+      candidate.y = std::clamp(candidate.y, y_min, y_max);
+      candidate.is_port = pin.isPort();
+
+      int base_layer = min_routing_layer;
+      bool has_valid_layer = false;
+      for (const int layer : pin.getLayers()) {
+        if (layer < min_routing_layer || layer > max_routing_layer) {
+          continue;
+        }
+        if (!has_valid_layer || layer < base_layer) {
+          base_layer = layer;
+          has_valid_layer = true;
+        }
+      }
+      if (!has_valid_layer) {
+        base_layer = min_routing_layer;
+      }
+      candidate.base_layer = std::clamp(
+          base_layer, min_routing_layer, max_routing_layer);
+      candidate.layer_choices
+          = std::max<int>(1, static_cast<int>(pin.getLayers().size()));
+      pin_candidates.push_back(candidate);
+    }
+
+    std::stable_sort(pin_candidates.begin(),
+                     pin_candidates.end(),
+                     [](const PinPatchCandidate& lhs, const PinPatchCandidate& rhs) {
+                       if (lhs.is_port != rhs.is_port) {
+                         return lhs.is_port;
+                       }
+                       if (lhs.layer_choices != rhs.layer_choices) {
+                         return lhs.layer_choices > rhs.layer_choices;
+                       }
+                       if (lhs.base_layer != rhs.base_layer) {
+                         return lhs.base_layer < rhs.base_layer;
+                       }
+                       return lhs.x < rhs.x;
+                     });
+
+    for (const PinPatchCandidate& pin : pin_candidates) {
+      if (added_segments >= total_patch_budget
+          || pin_added_segments >= pin_segment_budget
+          || net_budget >= pin_patches_per_net) {
+        break;
+      }
+
+      std::vector<int> alt_layers;
+      if (pin.base_layer < max_routing_layer) {
+        alt_layers.push_back(pin.base_layer + 1);
+      }
+      if (pin.base_layer > min_routing_layer) {
+        alt_layers.push_back(pin.base_layer - 1);
+      }
+      if (alt_layers.empty()) {
+        continue;
+      }
+      // Use both adjacent layers for ports/multi-layer pins; otherwise
+      // keep the patch compact with a single adjacent layer.
+      if (!pin.is_port && pin.layer_choices <= 1 && alt_layers.size() > 1) {
+        alt_layers.resize(1);
+      }
+
+      const size_t route_size_before = route.size();
+      for (const int alt_layer : alt_layers) {
+        if (alt_layer < min_routing_layer || alt_layer > max_routing_layer
+            || alt_layer == pin.base_layer) {
+          continue;
+        }
+
+        const int low_layer = std::min(pin.base_layer, alt_layer);
+        const int high_layer = std::max(pin.base_layer, alt_layer);
+        appendUniqueRouteSegment(route,
+                                 GSegment(pin.x,
+                                          pin.y,
+                                          low_layer,
+                                          pin.x,
+                                          pin.y,
+                                          high_layer));
+
+        const int x0 = std::clamp(pin.x - tile_size, x_min, x_max);
+        const int x1 = std::clamp(pin.x + tile_size, x_min, x_max);
+        if (x0 != x1) {
+          appendUniqueRouteSegment(
+              route, GSegment(x0, pin.y, alt_layer, x1, pin.y, alt_layer));
+        }
+        const int y0 = std::clamp(pin.y - tile_size, y_min, y_max);
+        const int y1 = std::clamp(pin.y + tile_size, y_min, y_max);
+        if (y0 != y1) {
+          appendUniqueRouteSegment(
+              route, GSegment(pin.x, y0, alt_layer, pin.x, y1, alt_layer));
+        }
+      }
+
+      const int new_segments
+          = static_cast<int>(route.size() - route_size_before);
+      if (new_segments > 0) {
+        added_segments += new_segments;
+        pin_added_segments += new_segments;
+        net_budget++;
+      }
+    }
+  }
+
   if (logger != nullptr && added_segments > 0) {
     logger->info(GNR,
                  6009,
-                 "NEWGR patching: added {} guide segments (congestion {}, long-segment {}, junction {}) across {} hotspots",
+                 "NEWGR patching: added {} guide segments (congestion {}, long-segment {}, junction {}, pin-corridor {}) across {} hotspots",
                  added_segments,
                  congestion_added_segments,
                  long_seg_added_segments,
                  junction_added_segments,
+                 pin_added_segments,
                  patched_edges);
   }
 }
