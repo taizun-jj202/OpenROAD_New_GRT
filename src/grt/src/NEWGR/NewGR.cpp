@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <unordered_set>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -101,6 +102,26 @@ struct RouteEdgeKeyHash
 };
 
 using EdgeUsageMap = std::unordered_map<RouteEdgeKey, int, RouteEdgeKeyHash>;
+using EdgeHistoryMap = std::unordered_map<RouteEdgeKey, double, RouteEdgeKeyHash>;
+
+uint64_t routeFingerprint(const GRoute& route)
+{
+  uint64_t hash = 1469598103934665603ull;
+  for (const GSegment& segment : route) {
+    const uint64_t values[] = {
+        static_cast<uint64_t>(static_cast<uint32_t>(segment.init_x)),
+        static_cast<uint64_t>(static_cast<uint32_t>(segment.init_y)),
+        static_cast<uint64_t>(static_cast<uint32_t>(segment.init_layer)),
+        static_cast<uint64_t>(static_cast<uint32_t>(segment.final_x)),
+        static_cast<uint64_t>(static_cast<uint32_t>(segment.final_y)),
+        static_cast<uint64_t>(static_cast<uint32_t>(segment.final_layer))};
+    for (uint64_t value : values) {
+      hash ^= value + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+      hash *= 1099511628211ull;
+    }
+  }
+  return hash;
+}
 
 SegmentDirection getSegmentDirection(const GSegment& segment)
 {
@@ -323,6 +344,41 @@ int64_t routeCongestionPenalty(const GRoute& route,
         }
       });
   return static_cast<int64_t>(std::llround(penalty));
+}
+
+double routeHistoryPenalty(const GRoute& route,
+                           int origin_x,
+                           int origin_y,
+                           int tile_size,
+                           const EdgeHistoryMap& history)
+{
+  double penalty = 0.0;
+  forEachUnitPlanarEdge(
+      route, origin_x, origin_y, tile_size, [&](const RouteEdgeKey& edge) {
+        const auto history_it = history.find(edge);
+        if (history_it != history.end()) {
+          penalty += history_it->second;
+        }
+      });
+  return penalty;
+}
+
+int64_t totalSoftOverflow(const EdgeUsageMap& usage,
+                          const SprouteGridData& grid,
+                          const EdgeUsageMap& soft_capacities)
+{
+  int64_t total_overflow = 0;
+  for (const auto& [edge, edge_usage] : usage) {
+    int soft_capacity = edgeHardCapacity(edge, grid);
+    const auto soft_it = soft_capacities.find(edge);
+    if (soft_it != soft_capacities.end()) {
+      soft_capacity = soft_it->second;
+    } else {
+      soft_capacity = softCapacityFromDemand(edge, soft_capacity, 0);
+    }
+    total_overflow += std::max(0, edge_usage - soft_capacity);
+  }
+  return total_overflow;
 }
 
 double congestionRiskDensity(const RouteScore& score,
@@ -1627,6 +1683,329 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     addRouteToUsage(route, origin_x, origin_y, tile_size, selected_usage);
   }
 
+  // Portfolio re-optimization pass:
+  // Mix-and-match candidates from all routing modes and run a negotiated
+  // selection loop that favors shorter trunks while progressively penalizing
+  // persistent hotspot edges (FastRoute-style history + SPRoute soft-cap view).
+  struct PortfolioCandidate
+  {
+    const GRoute* route{nullptr};
+    RouteScore score;
+    RouteSource source{RouteSource::kFastRoute};
+    uint64_t fingerprint{0};
+  };
+  using CandidateList = std::vector<PortfolioCandidate>;
+
+  std::unordered_map<odb::dbNet*, GRoute> frozen_current_routes;
+  frozen_current_routes.reserve(ordered_nets.size());
+  std::unordered_map<odb::dbNet*, CandidateList> candidate_portfolios;
+  candidate_portfolios.reserve(ordered_nets.size());
+
+  auto build_portfolio = [&](const OrderedNet& ordered_net) {
+    auto route_it = routes.find(ordered_net.db_net);
+    if (route_it == routes.end()) {
+      return;
+    }
+
+    const auto inserted
+        = frozen_current_routes.emplace(ordered_net.db_net, route_it->second);
+    const GRoute* frozen_route = &inserted.first->second;
+
+    CandidateList candidates;
+    candidates.reserve(24);
+    std::unordered_set<uint64_t> seen_fingerprints;
+    seen_fingerprints.reserve(32);
+
+    auto append_candidate = [&](const GRoute* candidate_route, RouteSource source) {
+      if (candidate_route == nullptr) {
+        return;
+      }
+      const uint64_t fingerprint = routeFingerprint(*candidate_route);
+      if (!seen_fingerprints.insert(fingerprint).second) {
+        return;
+      }
+      candidates.push_back(
+          PortfolioCandidate{candidate_route, scoreRoute(*candidate_route), source, fingerprint});
+    };
+
+    auto append_from_map = [&](const NetRouteMap& candidate_routes, RouteSource source) {
+      const auto candidate_it = candidate_routes.find(ordered_net.db_net);
+      if (candidate_it == candidate_routes.end()) {
+        return;
+      }
+      append_candidate(&candidate_it->second, source);
+    };
+
+    append_candidate(frozen_route, RouteSource::kFastRoute);
+    append_from_map(balanced_routes, RouteSource::kNewgrBalanced);
+    append_from_map(wirelength_routes, RouteSource::kNewgrWirelength);
+    append_from_map(data_wirelength_routes, RouteSource::kNewgrDataWirelength);
+    append_from_map(pin_density_routes, RouteSource::kNewgrDataWirelength);
+    append_from_map(region_aware_routes, RouteSource::kNewgrRegionAware);
+    append_from_map(regular_region_routes, RouteSource::kNewgrRegularRegion);
+    append_from_map(finegrain_routes, RouteSource::kNewgrFineGrain);
+    append_from_map(smallnet_routes, RouteSource::kNewgrSmallNet);
+    append_from_map(astar_routes, RouteSource::kNewgrAstar);
+    append_from_map(rudy_routes, RouteSource::kNewgrRudy);
+    append_from_map(rudy_classic_routes, RouteSource::kNewgrRudy);
+    append_from_map(rudy_pin_hybrid_routes, RouteSource::kNewgrRudy);
+    append_from_map(astar_early_routes, RouteSource::kNewgrAstarEarly);
+    append_from_map(detpart_routes, RouteSource::kNewgrDetPartClassic);
+    append_from_map(nondet_routes, RouteSource::kNewgrNonDetHybrid);
+    append_from_map(rudy_partition_routes, RouteSource::kNewgrRudyPartition);
+    append_from_map(legacy_squeeze_routes, RouteSource::kNewgrLegacySqueeze);
+    append_from_map(direct_wl_routes, RouteSource::kNewgrDirectWirelength);
+    append_from_map(ultra_direct_wl_routes, RouteSource::kNewgrUltraDirectWirelength);
+
+    std::sort(candidates.begin(),
+              candidates.end(),
+              [](const PortfolioCandidate& lhs, const PortfolioCandidate& rhs) {
+                if (lhs.score.wirelength != rhs.score.wirelength) {
+                  return lhs.score.wirelength < rhs.score.wirelength;
+                }
+                if (lhs.score.vias != rhs.score.vias) {
+                  return lhs.score.vias < rhs.score.vias;
+                }
+                if (lhs.score.bends != rhs.score.bends) {
+                  return lhs.score.bends < rhs.score.bends;
+                }
+                return static_cast<int>(lhs.source) < static_cast<int>(rhs.source);
+              });
+
+    // Keep a compact portfolio for speed while preserving the shortest options.
+    constexpr size_t kMaxPortfolioPerNet = 10;
+    if (candidates.size() > kMaxPortfolioPerNet) {
+      candidates.resize(kMaxPortfolioPerNet);
+    }
+
+    candidate_portfolios.emplace(ordered_net.db_net, std::move(candidates));
+  };
+
+  for (const OrderedNet& ordered_net : ordered_nets) {
+    build_portfolio(ordered_net);
+  }
+
+  int negotiated_swaps = 0;
+  int64_t negotiated_wl_gain = 0;
+  int64_t negotiated_via_delta = 0;
+  int64_t negotiated_final_overflow = totalSoftOverflow(
+      selected_usage, grid, soft_capacities);
+  EdgeHistoryMap edge_history;
+  edge_history.reserve(std::max<size_t>(selected_usage.size(), 4096));
+  double congestion_weight = 0.34;
+  double history_weight = 0.24;
+  constexpr int kNegotiationRounds = 3;
+
+  for (int round = 0; round < kNegotiationRounds; round++) {
+    int round_swaps = 0;
+    int64_t round_wl_gain = 0;
+    int64_t round_via_delta = 0;
+    int round_rank = 0;
+
+    for (const OrderedNet& ordered_net : ordered_nets) {
+      auto route_it = routes.find(ordered_net.db_net);
+      if (route_it == routes.end()) {
+        continue;
+      }
+      const auto portfolio_it = candidate_portfolios.find(ordered_net.db_net);
+      if (portfolio_it == candidate_portfolios.end()
+          || portfolio_it->second.empty()) {
+        continue;
+      }
+
+      const bool trunk_priority = round_rank < top_trunk_nets;
+      round_rank++;
+
+      GRoute& route = route_it->second;
+      const RouteScore baseline_score = ordered_net.baseline_score;
+      const SelectionPolicy policy = buildSelectionPolicy(baseline_score, tile_size);
+      const RouteScore current_score = scoreRoute(route);
+
+      removeRouteFromUsage(route, origin_x, origin_y, tile_size, selected_usage);
+
+      const GRoute* best_route = &route;
+      RouteScore best_score = current_score;
+      RouteSource best_source = RouteSource::kFastRoute;
+      const int64_t current_extra_vias
+          = std::max<int64_t>(0, current_score.vias - baseline_score.vias);
+      const double via_weight = trunk_priority ? 0.14 : (policy.long_net ? 0.20 : 0.28);
+      const double bend_weight = trunk_priority ? 0.02 : 0.05;
+      const double long_bonus = trunk_priority ? 0.25 : 0.0;
+
+      auto objective = [&](const GRoute& candidate_route,
+                           const RouteScore& candidate_score) {
+        const int64_t candidate_extra_vias
+            = std::max<int64_t>(0, candidate_score.vias - baseline_score.vias);
+        const int64_t congestion_cost
+            = routeCongestionPenalty(candidate_route,
+                                     grid,
+                                     origin_x,
+                                     origin_y,
+                                     tile_size,
+                                     selected_usage,
+                                     soft_capacities);
+        const double history_cost = routeHistoryPenalty(candidate_route,
+                                                        origin_x,
+                                                        origin_y,
+                                                        tile_size,
+                                                        edge_history);
+        return static_cast<double>(candidate_score.wirelength)
+               + static_cast<double>(candidate_extra_vias) * via_weight
+               + static_cast<double>(candidate_score.bends) * bend_weight
+               + static_cast<double>(congestion_cost) * congestion_weight
+               + history_cost * history_weight
+               - static_cast<double>(std::max<int64_t>(
+                     0, baseline_score.wirelength - candidate_score.wirelength))
+                     * long_bonus;
+      };
+
+      double best_objective = objective(route, current_score);
+      for (const PortfolioCandidate& candidate : portfolio_it->second) {
+        if (candidate.route == nullptr) {
+          continue;
+        }
+
+        const int64_t candidate_extra_vias
+            = std::max<int64_t>(0, candidate.score.vias - baseline_score.vias);
+        const int64_t via_cap = policy.hard_via_guard * 7
+                                + (trunk_priority ? 320 : (policy.long_net ? 240 : 160));
+        if (candidate_extra_vias > via_cap) {
+          continue;
+        }
+
+        const int64_t wl_gain_vs_current
+            = std::max<int64_t>(0, current_score.wirelength - candidate.score.wirelength);
+        const int64_t extra_vias_vs_current
+            = std::max<int64_t>(0, candidate.score.vias - current_score.vias);
+        if (extra_vias_vs_current > 0
+            && wl_gain_vs_current
+                   < std::max<int64_t>(1, extra_vias_vs_current / 3)) {
+          continue;
+        }
+
+        const double candidate_objective
+            = objective(*candidate.route, candidate.score);
+        if (candidate_objective < best_objective
+            || (std::abs(candidate_objective - best_objective) <= 1e-9
+                && candidate.score.wirelength < best_score.wirelength)
+            || (std::abs(candidate_objective - best_objective) <= 1e-9
+                && candidate.score.wirelength == best_score.wirelength
+                && candidate.score.vias < best_score.vias)) {
+          best_objective = candidate_objective;
+          best_route = candidate.route;
+          best_score = candidate.score;
+          best_source = candidate.source;
+        }
+      }
+
+      if (best_route != &route) {
+        route = *best_route;
+        round_swaps++;
+        round_wl_gain += std::max<int64_t>(
+            0, current_score.wirelength - best_score.wirelength);
+        const int64_t refined_extra_vias
+            = std::max<int64_t>(0, best_score.vias - baseline_score.vias);
+        round_via_delta += refined_extra_vias - current_extra_vias;
+      }
+
+      addRouteToUsage(route, origin_x, origin_y, tile_size, selected_usage);
+
+      switch (best_source) {
+        case RouteSource::kFastRoute:
+          break;
+        case RouteSource::kNewgrBalanced:
+          selected_from_balanced++;
+          break;
+        case RouteSource::kNewgrWirelength:
+          selected_from_wl++;
+          break;
+        case RouteSource::kNewgrDataWirelength:
+          selected_from_data_wl++;
+          break;
+        case RouteSource::kNewgrRegionAware:
+          selected_from_region++;
+          break;
+        case RouteSource::kNewgrRegularRegion:
+          selected_from_regular_region++;
+          break;
+        case RouteSource::kNewgrFineGrain:
+          selected_from_finegrain++;
+          break;
+        case RouteSource::kNewgrSmallNet:
+          selected_from_smallnet++;
+          break;
+        case RouteSource::kNewgrAstar:
+          selected_from_astar++;
+          break;
+        case RouteSource::kNewgrRudy:
+          selected_from_rudy++;
+          break;
+        case RouteSource::kNewgrAstarEarly:
+          selected_from_astar_early++;
+          break;
+        case RouteSource::kNewgrDetPartClassic:
+          selected_from_detpart++;
+          break;
+        case RouteSource::kNewgrNonDetHybrid:
+          selected_from_nondet++;
+          break;
+        case RouteSource::kNewgrRudyPartition:
+          selected_from_rudy_partition++;
+          break;
+        case RouteSource::kNewgrLegacySqueeze:
+          selected_from_legacy_squeeze++;
+          break;
+        case RouteSource::kNewgrDirectWirelength:
+          selected_from_direct_wl++;
+          break;
+        case RouteSource::kNewgrUltraDirectWirelength:
+          selected_from_ultra_direct_wl++;
+          break;
+      }
+    }
+
+    int64_t round_overflow = 0;
+    for (const auto& [edge, edge_usage] : selected_usage) {
+      int soft_capacity = edgeHardCapacity(edge, grid);
+      const auto soft_it = soft_capacities.find(edge);
+      if (soft_it != soft_capacities.end()) {
+        soft_capacity = soft_it->second;
+      } else {
+        soft_capacity = softCapacityFromDemand(edge, soft_capacity, 0);
+      }
+
+      const int overflow = std::max(0, edge_usage - soft_capacity);
+      if (overflow > 0) {
+        round_overflow += overflow;
+        edge_history[edge] += static_cast<double>(overflow) * 0.70;
+      } else {
+        const auto history_it = edge_history.find(edge);
+        if (history_it != edge_history.end()) {
+          history_it->second *= 0.94;
+        }
+      }
+    }
+
+    negotiated_swaps += round_swaps;
+    negotiated_wl_gain += round_wl_gain;
+    negotiated_via_delta += round_via_delta;
+    cumulative_wl_gain += round_wl_gain;
+    cumulative_extra_vias += round_via_delta;
+    negotiated_final_overflow = round_overflow;
+
+    if (round_overflow > 0) {
+      congestion_weight = std::min(2.20, congestion_weight * 1.25 + 0.04);
+      history_weight = std::min(2.00, history_weight * 1.18 + 0.05);
+    } else {
+      congestion_weight = std::max(0.22, congestion_weight * 0.92);
+      history_weight = std::max(0.12, history_weight * 0.90);
+    }
+
+    if (round_swaps == 0) {
+      break;
+    }
+  }
+
   for (const auto& [db_net, route] : balanced_routes) {
     if (routes.find(db_net) == routes.end()) {
       routes.emplace(db_net, route);
@@ -1755,6 +2134,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 "Rescue swaps={} wl-gain={} via-delta={}. "
                 "Trunk polish swaps={} wl-gain={} via-delta={}. "
                 "WL crush swaps={} wl-gain={} via-delta={}. "
+                "Negotiated swaps={} wl-gain={} via-delta={} "
+                "final-soft-overflow={}. "
                 "Global WL gain={} "
                 "extra-vias={} (base via budget={} + gain/{}) out of {} total.",
                 selected_from_balanced,
@@ -1802,6 +2183,10 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 wl_crush_swaps,
                 wl_crush_gain,
                 wl_crush_via_delta,
+                negotiated_swaps,
+                negotiated_wl_gain,
+                negotiated_via_delta,
+                negotiated_final_overflow,
                 cumulative_wl_gain,
                 cumulative_extra_vias,
                 global_base_via_budget,
