@@ -495,7 +495,9 @@ void MazeRoute::run()
   }
 
   if (bestSolutions.empty()) {
-    logger_->error(utl::GRT, 7002, "failed to connect all pins.");
+    logger_->warn(utl::GRT,
+                  7002,
+                  "sparse maze candidate skipped: failed to connect all pins.");
     return;
   }
 
@@ -509,6 +511,9 @@ std::shared_ptr<SteinerTreeNode> MazeRoute::getSteinerTree() const
     const auto& pseudoPin = graph_.getPseudoPin(0);
     tree = std::make_shared<SteinerTreeNode>(pseudoPin.point, pseudoPin.layers);
     return tree;
+  }
+  if (solutions_.empty()) {
+    return nullptr;
   }
 
   std::vector<bool> visited(net_->getNumPins(), false);
@@ -544,7 +549,9 @@ std::shared_ptr<SteinerTreeNode> MazeRoute::getSteinerTree() const
       }
     }
   }
-  assert(tree);
+  if (!tree) {
+    return nullptr;
+  }
 
   // Remove redundant tree nodes
   SteinerTreeNode::preorder(

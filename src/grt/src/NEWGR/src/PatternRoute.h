@@ -150,6 +150,15 @@ class PatternRoute
   {
     steiner_tree_ = tree;
   }
+  void setFluteAccuracy(int accuracy)
+  {
+    if (accuracy < 3) {
+      accuracy = 3;
+    } else if (accuracy > 9) {
+      accuracy = 9;
+    }
+    flute_accuracy_ = accuracy;
+  }
 
   const GRNet* getNet() const { return net_; }
 
@@ -185,7 +194,7 @@ class PatternRoute
   std::vector<std::vector<int>> gridlines_;
 
   Constants constants_;
-  const int flute_accuracy_ = 3;
+  int flute_accuracy_ = 3;
   utl::Logger* logger_;
 };
 

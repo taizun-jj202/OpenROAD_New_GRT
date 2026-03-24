@@ -98,12 +98,16 @@ void PatternRoute::constructSteinerTree()
   }
 
   int adaptiveFluteAccuracy = flute_accuracy_;
-  if (degree >= 24) {
-    adaptiveFluteAccuracy = 9;
+  if (degree >= 32) {
+    adaptiveFluteAccuracy = std::max(adaptiveFluteAccuracy, 9);
+  } else if (degree >= 24) {
+    adaptiveFluteAccuracy = std::max(adaptiveFluteAccuracy, 9);
+  } else if (degree >= 16) {
+    adaptiveFluteAccuracy = std::max(adaptiveFluteAccuracy, 8);
   } else if (degree >= 12) {
-    adaptiveFluteAccuracy = 7;
+    adaptiveFluteAccuracy = std::max(adaptiveFluteAccuracy, 8);
   } else if (degree >= 8) {
-    adaptiveFluteAccuracy = 5;
+    adaptiveFluteAccuracy = std::max(adaptiveFluteAccuracy, 6);
   }
   stt::Tree flutetree = stt_builder_->flute(xs, ys, adaptiveFluteAccuracy);
   const int numBranches = degree + degree - 2;
