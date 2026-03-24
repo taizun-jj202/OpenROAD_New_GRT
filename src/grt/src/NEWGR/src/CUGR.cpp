@@ -1215,7 +1215,7 @@ void CUGR::globalCompaction()
                   totalAcceptedMaze);
 }
 
-void CUGR::strictWirelengthCompaction()
+void CUGR::strictWirelengthCompaction(const bool use_x_axis_wavefront)
 {
   logger_->report("stage 7: strict wirelength compaction on detour-heavy nets");
   std::vector<int> netIndices;
@@ -1256,19 +1256,19 @@ void CUGR::strictWirelengthCompaction()
   const int totalNets = static_cast<int>(netIndices.size());
   // Strict late-stage compaction: allocate a larger optimization wavefront to
   // aggressively collapse residual detours.
-  const bool useXAxisWavefront = true;
-  const bool firstStrictPass = true;
+  const bool useXAxisWavefront = use_x_axis_wavefront;
+  const bool firstStrictPass = use_x_axis_wavefront;
   int strictDivisor = 260;
   int strictMinBudget = 320;
   if (late_stage_overflow_nets_ > 900) {
-    strictDivisor = 700;
-    strictMinBudget = 96;
+    strictDivisor = 360;
+    strictMinBudget = 224;
   } else if (late_stage_overflow_nets_ > 600) {
-    strictDivisor = 520;
-    strictMinBudget = 128;
-  } else if (late_stage_overflow_nets_ > 300) {
-    strictDivisor = 380;
+    strictDivisor = 300;
     strictMinBudget = 192;
+  } else if (late_stage_overflow_nets_ > 300) {
+    strictDivisor = 240;
+    strictMinBudget = 256;
   }
   const int compactionBudget
       = std::min(totalNets, std::max(strictMinBudget, totalNets / strictDivisor));
@@ -1475,11 +1475,11 @@ void CUGR::route()
   globalCompaction();
   grid_graph_->setSoftCapacityEnabled(false);
   grid_graph_->setStageCostScales(0.05, 0.06, 0.93);
-  strictWirelengthCompaction();
+  strictWirelengthCompaction(true);
   grid_graph_->setStageCostScales(0.02, 0.03, 0.90);
-  strictWirelengthCompaction();
+  strictWirelengthCompaction(false);
   grid_graph_->setStageCostScales(0.00, 0.01, 0.88);
-  strictWirelengthCompaction();
+  strictWirelengthCompaction(true);
   updateOverflowNets(netIndices);
 
   printStatistics();
