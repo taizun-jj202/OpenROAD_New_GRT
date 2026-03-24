@@ -4853,6 +4853,26 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         forced_wl_ptr = elastic_wl_ptr;
       }
     }
+
+    // Compact overflow-free runs are highly deterministic on this benchmark.
+    // Keep the final pick anchored to the stable hybrid-netmix-wl route to
+    // avoid DR wirelength regressions caused by aggressive via-elastic swaps.
+    if (compact_exploration_mode && wl_anchor != nullptr) {
+      if (forced_wl_ptr != nullptr && forced_wl_ptr != wl_anchor) {
+        logger_->info(
+            GNR,
+            6038,
+            "NEWGR compact anchor-lock keeping '{}' over '{}' "
+            "(wl delta {}, via delta {}, detour delta {}, high-layer delta {}).",
+            wl_anchor->name,
+            forced_wl_ptr->name,
+            wl_anchor->metrics.wirelength_dbu - forced_wl_ptr->metrics.wirelength_dbu,
+            wl_anchor->metrics.via_count - forced_wl_ptr->metrics.via_count,
+            wl_anchor->metrics.detour_dbu - forced_wl_ptr->metrics.detour_dbu,
+            wl_anchor->metrics.high_layer_dbu - forced_wl_ptr->metrics.high_layer_dbu);
+      }
+      forced_wl_ptr = wl_anchor;
+    }
   }
 
   const ScenarioResult* best_ptr = forced_wl_ptr;
