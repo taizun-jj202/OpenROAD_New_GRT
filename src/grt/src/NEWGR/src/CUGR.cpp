@@ -73,10 +73,10 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
                              const double allowed_overflow_increase_for_wl_gain)
 {
   constexpr double kOverflowEpsilon = 1e-6;
-  constexpr double kStrongOverflowDropThreshold = 36.0;
+  constexpr double kStrongOverflowDropThreshold = 52.0;
   constexpr int64_t kStrongWireGain = 2;
   constexpr int64_t kModerateWireGain = 1;
-  constexpr int64_t kMaxWirelengthTradeoff = 6;
+  constexpr int64_t kMaxWirelengthTradeoff = 3;
 
   // Wirelength-first objective:
   // keep shorter candidates as long as they don't cause a large overflow jump.
@@ -87,15 +87,15 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
   if (candidate.wirelength + 1 < current_best.wirelength
       && candidate.total_overflow
              <= current_best.total_overflow
-                    + allowed_overflow_increase_for_wl_gain * 0.45
-      && candidate.vias <= current_best.vias + 6) {
+                    + allowed_overflow_increase_for_wl_gain * 0.35
+      && candidate.vias <= current_best.vias + 4) {
     return true;
   }
   if (candidate.wirelength + kModerateWireGain < current_best.wirelength
       && candidate.total_overflow
              <= current_best.total_overflow
-                    + allowed_overflow_increase_for_wl_gain * 0.75
-      && candidate.vias <= current_best.vias + 4) {
+                    + allowed_overflow_increase_for_wl_gain * 0.55
+      && candidate.vias <= current_best.vias + 3) {
     return true;
   }
 
@@ -115,7 +115,8 @@ bool isBetterStage3Candidate(const RouteStats& candidate,
 
   if (std::abs(overflow_drop) > kOverflowEpsilon) {
     if (baseline_overflow > 0) {
-      return overflow_drop > 0.0;
+      return overflow_drop > 0.0
+             && candidate.wirelength <= current_best.wirelength + 2;
     }
     return overflow_drop > 0.0 && candidate.wirelength <= current_best.wirelength;
   }
@@ -320,7 +321,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
                  <= constants_.stage3_full_grid_overflow_threshold + 2
           && baseline_stretch >= 1.08;
     const double stage3_wl_overflow_slack
-        = aggressive_wirelength_mode ? 11.5 : 7.0;
+        = aggressive_wirelength_mode ? 8.0 : 5.0;
     const bool overflow_driven = baseline_overflow > 0;
     const bool very_high_stretch
         = baseline_stretch >= (aggressive_wirelength_mode ? 1.22 : 1.30);
@@ -384,23 +385,23 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
         }
       }
     }
-    int stage3_cfg_budget = overflow_driven ? 4 : 3;
+    int stage3_cfg_budget = overflow_driven ? 6 : 5;
     if (hpwl >= constants_.stage3_full_grid_hpwl_threshold) {
-      stage3_cfg_budget += overflow_driven ? 1 : 0;
+      stage3_cfg_budget += overflow_driven ? 2 : 1;
     }
     if (very_high_stretch) {
-      stage3_cfg_budget++;
+      stage3_cfg_budget += 2;
     }
     if (aggressive_wirelength_mode && !overflow_driven) {
-      stage3_cfg_budget++;
+      stage3_cfg_budget += 2;
     }
     if (!overflow_driven
         && hpwl >= constants_.stage3_wl_only_hpwl_threshold
         && net->getNumPins() <= 36) {
-      stage3_cfg_budget++;
+      stage3_cfg_budget += 2;
     }
     stage3_cfg_budget
-        = std::max(2,
+        = std::max(3,
                    std::min(stage3_cfg_budget, static_cast<int>(maze_configs.size())));
 
     auto considerCandidate = [&](const std::shared_ptr<GRTreeNode>& tree,
@@ -441,7 +442,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       evaluated_candidates++;
       if (!overflow_driven && best_tree && !best_is_baseline
           && best_stats.overflow <= baseline_overflow
-          && best_stats.wirelength + 20 < original_stats.wirelength) {
+          && best_stats.wirelength + 12 < original_stats.wirelength) {
         break;
       }
     }
@@ -456,7 +457,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
       const int wl_bonus_runs = aggressive_wirelength_mode ? 2 : 0;
       int wl_runs = std::min(stage3_cfg_budget, wl_config_limit + wl_bonus_runs);
       if (!overflow_driven) {
-        wl_runs = std::min(wl_runs, 3);
+        wl_runs = std::min(wl_runs, 5);
       }
       const double wl_via_cost_scale
           = std::clamp(constants_.stage3_wl_via_cost_scale
@@ -1080,9 +1081,9 @@ void CUGR::route()
   if (constants_.wirelength_first_refinement) {
     double detour_ratio = constants_.detour_refine_ratio;
     if (netIndices.size() > 512) {
-      detour_ratio = std::min(detour_ratio, 0.45);
+      detour_ratio = std::min(detour_ratio, 0.70);
     } else if (netIndices.size() > 256) {
-      detour_ratio = std::min(detour_ratio, 0.52);
+      detour_ratio = std::min(detour_ratio, 0.78);
     }
     detourIndices = selectCriticalNets(netIndices, detour_ratio);
   }
@@ -1092,11 +1093,11 @@ void CUGR::route()
   if (constants_.wirelength_first_refinement) {
     double maze_ratio = constants_.maze_refine_ratio;
     if (detourIndices.size() > 160) {
-      maze_ratio = std::min(maze_ratio, 0.28);
+      maze_ratio = std::min(maze_ratio, 0.62);
     } else if (detourIndices.size() > 80) {
-      maze_ratio = std::min(maze_ratio, 0.34);
+      maze_ratio = std::min(maze_ratio, 0.70);
     } else if (detourIndices.size() > 40) {
-      maze_ratio = std::min(maze_ratio, 0.38);
+      maze_ratio = std::min(maze_ratio, 0.76);
     }
     mazeIndices = selectCriticalNets(detourIndices, maze_ratio);
   }

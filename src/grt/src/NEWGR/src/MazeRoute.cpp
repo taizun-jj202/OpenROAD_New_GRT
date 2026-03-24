@@ -398,11 +398,11 @@ void MazeRoute::run()
     // Wirelength-first tie breaking with bounded congestion-cost regression.
     constexpr uint64_t kStrongWireGain = 4;
     constexpr uint64_t kModerateWireGain = 1;
-    constexpr double kCostSlackForWireGain = 1.44;
-    constexpr double kCostSlackForModerateWireGain = 1.56;
-    const uint64_t kCostDrivenWireSlack = std::max<uint64_t>(1, net_hpwl / 70);
+    constexpr double kCostSlackForWireGain = 1.36;
+    constexpr double kCostSlackForModerateWireGain = 1.44;
+    const uint64_t kCostDrivenWireSlack = std::max<uint64_t>(1, net_hpwl / 120);
     const uint64_t kMaxCostDrivenWireRegression
-        = std::max<uint64_t>(2, net_hpwl / 30);
+        = std::max<uint64_t>(1, net_hpwl / 55);
     const double candidate_stretch = static_cast<double>(candidate.unique_wirelength)
                                      / static_cast<double>(net_hpwl);
     const double best_stretch = static_cast<double>(current_best.unique_wirelength)
@@ -426,8 +426,8 @@ void MazeRoute::run()
     }
     if (best_stretch >= 1.10
         && candidate.unique_wirelength + 1 < current_best.unique_wirelength
-        && candidate.total_cost <= current_best.total_cost * 1.55
-        && candidate.unique_vias <= current_best.unique_vias + 5) {
+        && candidate.total_cost <= current_best.total_cost * 1.45
+        && candidate.unique_vias <= current_best.unique_vias + 4) {
       return true;
     }
     // Allow congestion-cost wins only when they do not materially regress
@@ -438,9 +438,9 @@ void MazeRoute::run()
         && candidate.unique_vias <= current_best.unique_vias + 2) {
       return true;
     }
-    if (candidate_stretch + 0.008 < best_stretch
-        && candidate.total_cost <= current_best.total_cost * 1.30
-        && candidate.unique_vias <= current_best.unique_vias + 4) {
+    if (candidate_stretch + 0.006 < best_stretch
+        && candidate.total_cost <= current_best.total_cost * 1.24
+        && candidate.unique_vias <= current_best.unique_vias + 3) {
       return true;
     }
     if (std::abs(candidate.total_cost - current_best.total_cost) <= kCostEpsilon
@@ -459,7 +459,7 @@ void MazeRoute::run()
       return true;
     }
     if (candidate.unique_wirelength < current_best.unique_wirelength
-        && candidate.total_cost <= current_best.total_cost * 1.14
+        && candidate.total_cost <= current_best.total_cost * 1.10
         && candidate.unique_vias <= current_best.unique_vias + 2) {
       return true;
     }

@@ -30,7 +30,7 @@ class BoxT;
 struct Constants
 {
   double weight_wire_length = 0.9;
-  double weight_via_number = 1.35;
+  double weight_via_number = 1.15;
   double weight_short_area = 320.0;
 
   int min_routing_layer = 1;
@@ -38,7 +38,7 @@ struct Constants
   double cost_logistic_slope = 0.75;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.18;
+  double max_detour_ratio = 0.12;
   int target_detour_count = 12;
 
   double via_multiplier = 1.0;
@@ -67,12 +67,12 @@ struct Constants
 
   // FastRoute-style critical-net refinement schedule
   bool wirelength_first_refinement = true;
-  int refinement_overflow_threshold = 4;
-  int refinement_hpwl_threshold = 180;
-  double refinement_stretch_threshold = 1.14;
-  int refinement_max_selected_nets = 192;
-  double detour_refine_ratio = 0.75;
-  double maze_refine_ratio = 0.50;
+  int refinement_overflow_threshold = 1;
+  int refinement_hpwl_threshold = 96;
+  double refinement_stretch_threshold = 1.08;
+  int refinement_max_selected_nets = 0;
+  double detour_refine_ratio = 0.92;
+  double maze_refine_ratio = 0.84;
 
   // Stage-3 (maze) exploration controls.
   int stage3_dense_sparse_x = 2;
@@ -80,61 +80,61 @@ struct Constants
   bool stage3_try_offset = true;
   bool stage3_full_offset_sweep = false;
   int stage3_full_offset_hpwl_threshold = 180;
-  int stage3_max_maze_configs = 8;
+  int stage3_max_maze_configs = 14;
   bool stage3_use_wirelength_maze = true;
-  int stage3_wl_only_hpwl_threshold = 96;
-  int stage3_wl_config_limit = 6;
-  double stage3_wl_via_cost_scale = 0.10;
+  int stage3_wl_only_hpwl_threshold = 84;
+  int stage3_wl_config_limit = 10;
+  double stage3_wl_via_cost_scale = 0.04;
   bool stage3_use_full_grid_wl_maze = true;
-  int stage3_full_grid_hpwl_threshold = 120;
-  int stage3_full_grid_pin_limit = 32;
-  int stage3_full_grid_overflow_threshold = 4;
+  int stage3_full_grid_hpwl_threshold = 96;
+  int stage3_full_grid_pin_limit = 40;
+  int stage3_full_grid_overflow_threshold = 5;
   double stage3_full_grid_via_cost_scale = 0.0;
-  double stage3_full_grid_min_stretch = 1.04;
+  double stage3_full_grid_min_stretch = 1.02;
 
   // FastRoute-style post-processing pass: reroute a subset of long,
   // overflow-free nets and keep only wirelength-improving solutions.
   bool enable_wirelength_recovery = true;
   bool recovery_use_maze = true;
   bool recovery_use_wirelength_maze = true;
-  double recovery_wl_maze_via_cost_scale = 0.12;
-  int recovery_wl_only_hpwl_threshold = 112;
-  int recovery_hpwl_threshold = 88;
-  double recovery_min_stretch = 1.03;
-  int recovery_candidate_cap = 56;
-  int recovery_deep_search_cap = 16;
-  int recovery_shallow_maze_config_limit = 2;
-  int recovery_deep_maze_config_limit = 3;
-  int recovery_shallow_wl_config_limit = 2;
-  int recovery_deep_wl_config_limit = 3;
-  double recovery_refine_ratio = 0.60;
-  int recovery_overflow_slack = 2;
-  int recovery_max_passes = 2;
+  double recovery_wl_maze_via_cost_scale = 0.05;
+  int recovery_wl_only_hpwl_threshold = 84;
+  int recovery_hpwl_threshold = 56;
+  double recovery_min_stretch = 1.01;
+  int recovery_candidate_cap = 220;
+  int recovery_deep_search_cap = 84;
+  int recovery_shallow_maze_config_limit = 4;
+  int recovery_deep_maze_config_limit = 9;
+  int recovery_shallow_wl_config_limit = 3;
+  int recovery_deep_wl_config_limit = 6;
+  double recovery_refine_ratio = 0.80;
+  int recovery_overflow_slack = 1;
+  int recovery_max_passes = 3;
   double recovery_pass_decay = 0.80;
-  double recovery_late_pass_refine_scale = 0.40;
-  double recovery_late_pass_cap_scale = 0.30;
-  double recovery_late_pass_deep_ratio_scale = 0.55;
-  int recovery_late_pass_abs_cap = 18;
-  int recovery_late_pass_min_first_pass_accepts = 3;
+  double recovery_late_pass_refine_scale = 0.70;
+  double recovery_late_pass_cap_scale = 0.75;
+  double recovery_late_pass_deep_ratio_scale = 0.85;
+  int recovery_late_pass_abs_cap = 84;
+  int recovery_late_pass_min_first_pass_accepts = 0;
   int recovery_maze_sparse_x = 3;
   int recovery_maze_sparse_y = 3;
-  double recovery_deep_ratio = 0.80;
+  double recovery_deep_ratio = 0.72;
   int recovery_deep_hpwl_threshold = 140;
   int recovery_aniso_sparse_long = 7;
   int recovery_aniso_sparse_short = 3;
-  bool recovery_try_offset = false;
+  bool recovery_try_offset = true;
   bool recovery_full_offset_sweep = false;
   int recovery_full_offset_hpwl_threshold = 220;
   int recovery_dense_sparse_x = 2;
   int recovery_dense_sparse_y = 2;
-  int recovery_max_maze_configs = 5;
+  int recovery_max_maze_configs = 14;
   int recovery_max_via_increase = 6;
   bool recovery_spatial_round_robin = true;
-  int recovery_spatial_batches = 6;
-  int recovery_spatial_pool_multiplier = 2;
+  int recovery_spatial_batches = 8;
+  int recovery_spatial_pool_multiplier = 3;
   bool recovery_use_full_grid_maze = true;
-  int recovery_full_grid_top_n = 6;
-  int recovery_full_grid_hpwl_threshold = 110;
+  int recovery_full_grid_top_n = 14;
+  int recovery_full_grid_hpwl_threshold = 90;
   double recovery_full_grid_via_cost_scale = 0.0;
 
   double pin_patch_threshold = 1000000.0;
