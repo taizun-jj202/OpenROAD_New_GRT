@@ -3959,15 +3959,20 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   // Apply DR-aware decision after replay/fallback logic so it is not
   // accidentally overwritten by scenario re-execution.
   if (dr_aware_choice != nullptr && dr_aware_choice->name != final_result.name) {
-    // Guardrail: do not replace a clearly shorter guide set with a "DR-aware"
-    // candidate unless wirelength loss is negligible and via reduction is real.
-    const long wl_guard = 0;
-    const long via_guard = std::max<long>(proxy_tile_size,
-                                          final_result.metrics.via_count / 200L);
+    // Guardrail: allow a tiny wirelength relaxation when DR proxy strongly
+    // prefers a lower-via guide set. This catches near-ties such as
+    // longnet-priority vs consensus-collapse where fewer vias generally
+    // translates to less detailed-route detouring.
+    long dbu_per_micron = 1;
+    if (grouter_->db_ != nullptr && grouter_->db_->getTech() != nullptr) {
+      dbu_per_micron
+          = std::max<long>(grouter_->db_->getTech()->getDbUnitsPerMicron(), 1);
+    }
+    const long wl_guard = 12L * dbu_per_micron;
     const bool wl_safe = dr_aware_choice->metrics.wirelength_dbu
                          <= (final_result.metrics.wirelength_dbu + wl_guard);
-    const bool via_better = dr_aware_choice->metrics.via_count + via_guard
-                            <= final_result.metrics.via_count;
+    const bool via_better
+        = dr_aware_choice->metrics.via_count < final_result.metrics.via_count;
 
     if (wl_safe && via_better) {
       final_result = *dr_aware_choice;
