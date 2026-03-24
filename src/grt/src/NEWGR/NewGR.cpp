@@ -5232,10 +5232,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       return nullptr;
     };
 
-    // CUGR-inspired post routing patching:
-    // start from wirelength-first hybrid and add local endpoint and hotspot
-    // guide patches taken from alternate hybrids.
     const ScenarioResult* wl_hybrid = find_scenario("hybrid-netmix-wl");
+    const ScenarioResult* absolute_wl_hybrid
+        = find_scenario("hybrid-netmix-absolute-wl");
+    const ScenarioResult* layer_lift_wl_hybrid
+        = find_scenario("hybrid-netmix-layer-lift-wl");
     const ScenarioResult* dr_stable_hybrid
         = find_scenario("hybrid-netmix-dr-stable");
     const ScenarioResult* layer_compact_hybrid
@@ -5251,6 +5252,156 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     const ScenarioResult* length_adaptive_hybrid
         = find_scenario("hybrid-netmix-length-adaptive");
 
+    // FastRoute/SPRoute hybridization:
+    // keep the stable wl-hybrid as anchor, then greedily import
+    // absolute-wl routes for local nets while enforcing a strict global
+    // high-layer retention budget to preserve DR flexibility.
+    if (wl_hybrid != nullptr && absolute_wl_hybrid != nullptr) {
+      ScenarioResult layerbudget_result;
+      layerbudget_result.name = "hybrid-netmix-wl-layerbudget";
+      layerbudget_result.routes = wl_hybrid->routes;
+
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      const long short_hpwl_limit = std::max<long>(tile_size * 18L, 9000L);
+      const long short_wl_limit = std::max<long>(tile_size * 24L, 12000L);
+      const long min_wl_gain = std::max<long>(8L, tile_size / 2L);
+      const long detour_guard = std::max<long>(tile_size * 8L, 2400L);
+      const int via_rise_cap = 2;
+      const long high_layer_drop_budget = std::max<long>(
+          tile_size * 6400L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(wl_hybrid->metrics.high_layer_dbu) * 0.07)));
+      const long high_layer_drop_guard = std::max<long>(tile_size * 4L, 1400L);
+      const long recover_wl_guard = std::max<long>(tile_size * 5L, 2400L);
+
+      long consumed_high_layer_drop = 0L;
+      int imported_absolute_nets = 0;
+      int recovered_layer_lift_nets = 0;
+      long wl_gain_sum = 0L;
+      long via_delta_sum = 0L;
+
+      for (auto& [db_net, selected_route] : layerbudget_result.routes) {
+        if (db_net == nullptr) {
+          continue;
+        }
+        const auto abs_it = absolute_wl_hybrid->routes.find(db_net);
+        if (abs_it == absolute_wl_hybrid->routes.end()) {
+          continue;
+        }
+
+        const RouteEdgeStats anchor_stats
+            = collectRouteEdgeStats(selected_route, grouter_->grid_);
+        const RouteEdgeStats abs_stats
+            = collectRouteEdgeStats(abs_it->second, grouter_->grid_);
+        const long route_hpwl = getRouteBBoxHpwl(selected_route);
+        const long anchor_detour
+            = std::max(0L, anchor_stats.wirelength_dbu - route_hpwl);
+        const long abs_detour = std::max(0L, abs_stats.wirelength_dbu - route_hpwl);
+        const long wl_gain = anchor_stats.wirelength_dbu - abs_stats.wirelength_dbu;
+        if (wl_gain < min_wl_gain) {
+          continue;
+        }
+
+        const long via_delta = static_cast<long>(abs_stats.via_count)
+                               - static_cast<long>(anchor_stats.via_count);
+        if (via_delta > via_rise_cap) {
+          continue;
+        }
+        if (abs_detour > anchor_detour + detour_guard) {
+          continue;
+        }
+
+        const bool short_net
+            = route_hpwl <= short_hpwl_limit
+              || anchor_stats.wirelength_dbu <= short_wl_limit;
+        if (!short_net) {
+          continue;
+        }
+
+        const long high_layer_drop = std::max(
+            0L, anchor_stats.high_layer_dbu - abs_stats.high_layer_dbu);
+        if (high_layer_drop > 0 && wl_gain < min_wl_gain * 2L) {
+          continue;
+        }
+        if (consumed_high_layer_drop + high_layer_drop > high_layer_drop_budget) {
+          continue;
+        }
+
+        selected_route = abs_it->second;
+        consumed_high_layer_drop += high_layer_drop;
+        imported_absolute_nets++;
+        wl_gain_sum += wl_gain;
+        via_delta_sum += via_delta;
+      }
+
+      if (layer_lift_wl_hybrid != nullptr
+          && consumed_high_layer_drop > high_layer_drop_budget * 3L / 4L) {
+        for (auto& [db_net, selected_route] : layerbudget_result.routes) {
+          if (consumed_high_layer_drop
+              <= std::max<long>(0L, high_layer_drop_budget - high_layer_drop_guard)) {
+            break;
+          }
+          if (db_net == nullptr) {
+            continue;
+          }
+          const auto lift_it = layer_lift_wl_hybrid->routes.find(db_net);
+          if (lift_it == layer_lift_wl_hybrid->routes.end()) {
+            continue;
+          }
+
+          const RouteEdgeStats current_stats
+              = collectRouteEdgeStats(selected_route, grouter_->grid_);
+          const RouteEdgeStats lift_stats
+              = collectRouteEdgeStats(lift_it->second, grouter_->grid_);
+          if (lift_stats.high_layer_dbu <= current_stats.high_layer_dbu) {
+            continue;
+          }
+          if (lift_stats.wirelength_dbu
+              > current_stats.wirelength_dbu + recover_wl_guard) {
+            continue;
+          }
+
+          const long layer_recovery
+              = lift_stats.high_layer_dbu - current_stats.high_layer_dbu;
+          selected_route = lift_it->second;
+          consumed_high_layer_drop = std::max<long>(
+              0L, consumed_high_layer_drop - layer_recovery);
+          recovered_layer_lift_nets++;
+        }
+      }
+
+      layerbudget_result.metrics = compute_metrics(layerbudget_result.routes);
+      apply_routability_proxy(layerbudget_result.metrics);
+      logger_->info(
+          GNR,
+          7345,
+          "NEWGR hybrid-netmix-wl-layerbudget imported abs nets {}, "
+          "layer recoveries {}, wirelength {:.0f} um, vias {}, "
+          "high-layer drop {}/{}, wl gain sum {}, via delta sum {}",
+          imported_absolute_nets,
+          recovered_layer_lift_nets,
+          layerbudget_result.metrics.wirelength_um,
+          layerbudget_result.metrics.via_count,
+          consumed_high_layer_drop,
+          high_layer_drop_budget,
+          wl_gain_sum,
+          via_delta_sum);
+      scenario_results.push_back(std::move(layerbudget_result));
+    }
+
+    // Rebind pointers after appending synthetic scenarios.
+    wl_hybrid = find_scenario("hybrid-netmix-wl");
+    dr_stable_hybrid = find_scenario("hybrid-netmix-dr-stable");
+    layer_compact_hybrid = find_scenario("hybrid-netmix-layer-compact");
+    via_band_hybrid = find_scenario("hybrid-netmix-via-band-wl");
+    anchor_wl_hybrid = find_scenario("hybrid-netmix-anchor-wl");
+    anchor_wl_deep_hybrid = find_scenario("hybrid-netmix-anchor-wl-deep");
+    wl_corridor_hybrid = find_scenario("hybrid-netmix-wl-corridor");
+    length_adaptive_hybrid = find_scenario("hybrid-netmix-length-adaptive");
+
+    // CUGR-inspired post routing patching:
+    // start from wirelength-first hybrid and add local endpoint and hotspot
+    // guide patches taken from alternate hybrids.
     const ScenarioResult* patch_alt_a
         = dr_stable_hybrid != nullptr ? dr_stable_hybrid : anchor_wl_deep_hybrid;
     if (patch_alt_a == nullptr) {
@@ -5445,6 +5596,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = find_scenario_by_name("hybrid-netmix-absolute-wl");
     const ScenarioResult* cugr_sp_balance_ptr
         = find_scenario_by_name("hybrid-netmix-cugr-sp-balance-wl");
+    const ScenarioResult* wl_layerbudget_ptr
+        = find_scenario_by_name("hybrid-netmix-wl-layerbudget");
     const ScenarioResult* preferred_wl_ptr = nullptr;
 
     // Radical WL-first override:
@@ -5472,12 +5625,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
       const ScenarioResult* radical_candidate = nullptr;
       for (const ScenarioResult* candidate :
-           std::array<const ScenarioResult*, 6>{budgeted_lift_ptr,
+           std::array<const ScenarioResult*, 7>{budgeted_lift_ptr,
                                                 layer_floor_wl_ptr,
                                                 layer_lift_wl_ptr,
                                                 absolute_wl_ptr,
                                                 min_wl_wide_ptr,
-                                                cugr_sp_balance_ptr}) {
+                                                cugr_sp_balance_ptr,
+                                                wl_layerbudget_ptr}) {
         if (candidate == nullptr) {
           continue;
         }
@@ -5880,13 +6034,14 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
     if (compact_exploration_mode) {
       const ScenarioResult* aggressive_wl_ptr = forced_wl_ptr;
-      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 6>{
+      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 7>{
                budgeted_lift_ptr,
                layer_floor_wl_ptr,
                layer_lift_wl_ptr,
                absolute_wl_ptr,
                min_wl_wide_ptr,
-               cugr_sp_balance_ptr}) {
+               cugr_sp_balance_ptr,
+               wl_layerbudget_ptr}) {
         if (candidate == nullptr) {
           continue;
         }
@@ -6333,6 +6488,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       consider_elastic_wl(layer_lift_wl_ptr);
       consider_elastic_wl(wl_corridor_ptr);
       consider_elastic_wl(cugr_sp_balance_ptr);
+      consider_elastic_wl(wl_layerbudget_ptr);
 
       if (elastic_wl_ptr != nullptr
           && (forced_wl_ptr == nullptr
@@ -6425,7 +6581,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         const bool radical_wl_mix_candidate
             = forced_wl_ptr == absolute_wl_ptr
               || forced_wl_ptr == min_wl_wide_ptr
-              || forced_wl_ptr == cugr_sp_balance_ptr;
+              || forced_wl_ptr == cugr_sp_balance_ptr
+              || forced_wl_ptr == wl_layerbudget_ptr;
         const long radical_high_layer_floor = std::max<long>(
             tile_size * 10L,
             static_cast<long>(std::ceil(
