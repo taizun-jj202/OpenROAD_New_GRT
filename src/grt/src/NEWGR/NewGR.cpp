@@ -4938,6 +4938,109 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     scenario_results.push_back(std::move(proxy_corridor));
   }
 
+  if (has_best_wirelength) {
+    // Detour-guard fusion:
+    // Start from a DR-proxy-friendly candidate, then re-tighten with
+    // shortest-path-only borrowing so long trunks stay compact while
+    // preserving lower via/hotspot pressure from SPRoute/CUGR donors.
+    ScenarioResult detour_guard;
+    detour_guard.name = "detour-guard-minwl-fusion";
+    if (ScenarioResult* donor = find_scenario_result("proxy-corridor-fusion")) {
+      detour_guard.routes = donor->routes;
+    } else if (ScenarioResult* donor = find_scenario_result("consensus-via-capped-polish")) {
+      detour_guard.routes = donor->routes;
+    } else if (ScenarioResult* donor = find_scenario_result("wl-locked-via-stable-fusion")) {
+      detour_guard.routes = donor->routes;
+    } else {
+      detour_guard.routes = best_wirelength_routes;
+    }
+
+    const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+    const int x_min = grouter_->grid_->getXMin();
+    const int y_min = grouter_->grid_->getYMin();
+    const int x_grids = grouter_->grid_->getXGrids();
+    const int y_grids = grouter_->grid_->getYGrids();
+
+    std::vector<const NetRouteMap*> guard_donors;
+    guard_donors.reserve(18);
+    for (const char* donor_name : {"proxy-corridor-fusion",
+                                   "stabilized-dr-fusion",
+                                   "router-spine-balance-fusion",
+                                   "dr-stable-shortest-fusion",
+                                   "collapse-router-minwl-fusion",
+                                   "consensus-via-capped-polish",
+                                   "wl-locked-via-stable-fusion",
+                                   "hard-wl-mincut-fusion",
+                                   "absolute-minwl-router-sweep",
+                                   "cugr-router-donor",
+                                   "sproute-router-donor",
+                                   "cross-router-wirelength-fusion",
+                                   "multi-router-wirelength-fusion",
+                                   "spatial-wirelength-grafting",
+                                   "sporder-shortest",
+                                   "bsp-scheduler",
+                                   "spatial-roundrobin-turbo",
+                                   "baseline"}) {
+      if (ScenarioResult* donor = find_scenario_result(donor_name)) {
+        guard_donors.push_back(&donor->routes);
+      }
+    }
+
+    int fused_swaps = applyProxyAwareCorridorFusion(detour_guard.routes,
+                                                    guard_donors,
+                                                    tile_size,
+                                                    x_min,
+                                                    y_min,
+                                                    x_grids,
+                                                    y_grids,
+                                                    hotspot_map,
+                                                    1L * tile_size,
+                                                    7L * tile_size,
+                                                    0.006,
+                                                    3,
+                                                    0.35,
+                                                    0.10
+                                                        * static_cast<double>(tile_size));
+    fused_swaps += applyLongNetPriorityFusion(detour_guard.routes,
+                                              guard_donors,
+                                              tile_size,
+                                              x_min,
+                                              y_min,
+                                              x_grids,
+                                              y_grids,
+                                              hotspot_map,
+                                              1,
+                                              6,
+                                              0.45);
+    fused_swaps += applyDrStableShortestFusion(detour_guard.routes,
+                                               guard_donors,
+                                               tile_size,
+                                               x_min,
+                                               y_min,
+                                               x_grids,
+                                               y_grids,
+                                               hotspot_map,
+                                               1,
+                                               0.0010,
+                                               2,
+                                               7,
+                                               0.25,
+                                               0.70,
+                                               1.06,
+                                               1.20);
+
+    detour_guard.metrics = compute_metrics(detour_guard.routes);
+    logger_->info(
+        GNR,
+        6036,
+        "NEWGR scenario {} [detour-guard]: wirelength {:.0f} um, vias {}, fused nets {}",
+        detour_guard.name,
+        detour_guard.metrics.wirelength_um,
+        detour_guard.metrics.via_count,
+        fused_swaps);
+    scenario_results.push_back(std::move(detour_guard));
+  }
+
   const long baseline_vias = baseline.metrics.via_count;
   long dbu_per_micron = 1;
   if (grouter_->db_ != nullptr && grouter_->db_->getTech() != nullptr) {
@@ -5033,6 +5136,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const long dr_window_relaxed = std::max<long>(
       std::max<long>(2L * wl_near_tie_window, 20L * proxy_tile_size),
       64L * dbu_per_micron);
+  const long dr_window_proxy = std::max<long>(
+      dr_window_relaxed,
+      std::max<long>(best_wirelength / 120L, 32L * proxy_tile_size));
   const long dr_via_guard_tight = baseline_vias > 0
                                       ? static_cast<long>(std::ceil(1.10 * baseline_vias))
                                       : std::numeric_limits<long>::max();
@@ -5071,6 +5177,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   if (dr_aware_choice == nullptr) {
     dr_pick = choose_dr_aware(dr_window_relaxed, 0, false);
     dr_aware_choice = dr_pick.first;
+  }
+  auto dr_proxy_pick = choose_dr_aware(dr_window_proxy, dr_via_guard_relaxed, true);
+  ScenarioResult* dr_proxy_choice = dr_proxy_pick.first;
+  if (dr_proxy_choice == nullptr) {
+    dr_proxy_pick = choose_dr_aware(dr_window_proxy, 0, false);
+    dr_proxy_choice = dr_proxy_pick.first;
   }
 
   // Replaying the winning scenario can perturb congestion history and lose the
@@ -5132,6 +5244,39 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       logger_->info(GNR,
                     6025,
                     "NEWGR DR-aware override '{}': wirelength {:.0f} um, vias {}",
+                    final_result.name,
+                    final_result.metrics.wirelength_um,
+                    final_result.metrics.via_count);
+    }
+  }
+
+  // Bounded DR-proxy override:
+  // Permit a small GR WL uplift to avoid large DR detours when proxy and via
+  // improvements are both strong.
+  if (dr_proxy_choice != nullptr && dr_proxy_choice->name != final_result.name) {
+    const long wl_soft_uplift = std::max<long>(
+        std::max<long>(24L * dbu_per_micron, 5L * proxy_tile_size),
+        static_cast<long>(std::ceil(0.0004 * static_cast<double>(best_wirelength))));
+    const long wl_uplift
+        = dr_proxy_choice->metrics.wirelength_dbu - final_result.metrics.wirelength_dbu;
+    const long via_gain
+        = final_result.metrics.via_count - dr_proxy_choice->metrics.via_count;
+    const long via_gain_needed
+        = std::max<long>(220L, baseline_vias / 320L);
+    const double final_proxy_score = compute_detailed_route_proxy(final_result.routes);
+    const double proxy_choice_score
+        = compute_detailed_route_proxy(dr_proxy_choice->routes);
+    const double proxy_gain_needed
+        = 10.0 * static_cast<double>(proxy_tile_size);
+    const bool proxy_materially_better
+        = proxy_choice_score + proxy_gain_needed < final_proxy_score;
+    const bool wl_guarded = wl_uplift <= wl_soft_uplift;
+    const bool via_materially_better = via_gain >= via_gain_needed;
+    if (wl_uplift <= 0 || (wl_guarded && via_materially_better && proxy_materially_better)) {
+      final_result = *dr_proxy_choice;
+      logger_->info(GNR,
+                    6037,
+                    "NEWGR bounded DR-proxy override '{}': wirelength {:.0f} um, vias {}",
                     final_result.name,
                     final_result.metrics.wirelength_um,
                     final_result.metrics.via_count);
@@ -5201,17 +5346,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
   const bool is_hybrid_solution
       = final_result.name.find("fusion") != std::string::npos
         || final_result.name.find("stitch") != std::string::npos;
-  const bool patching_sensitive_final
+  const bool force_patching_final
       = final_result.name == "consensus-via-capped-polish"
-        || final_result.name == "wl-locked-via-stable-fusion"
-        || final_result.name == "proxy-corridor-fusion"
-        || final_result.name == "hard-wl-mincut-fusion"
+        || final_result.name == "wl-locked-via-stable-fusion";
+  const bool patching_sensitive_final
+      = final_result.name == "hard-wl-mincut-fusion"
         || final_result.name == "absolute-minwl-router-sweep";
   // Enable CUGR-style patching for collapse/fusion winners as well.
   // These mixed-source guides are shortest in GR but can be sparse around
   // congested hubs; patching adds alternate tracks that reduce DR detours.
   const bool apply_patching
-      = (final_result.name == "cugr-softcap-wirelength" || is_hybrid_solution)
+      = (final_result.name == "cugr-softcap-wirelength" || is_hybrid_solution
+         || force_patching_final)
         && !patching_sensitive_final;
   if (apply_patching) {
     applyCugrStyleGuidePatching(grouter_,
