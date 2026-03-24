@@ -3561,8 +3561,19 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
   engine_->init(grouter_->sproute_grid_data_, grouter_->sproute_nets_);
   NetRouteMap routes = engine_->run();
+  const std::vector<NetRouteMap>& newgr_alternate_routes
+      = engine_->getAlternateRoutes();
+  const std::vector<std::string>& newgr_alternate_route_labels
+      = engine_->getAlternateRouteLabels();
   last_total_overflow_ = engine_->getTotalOverflow();
   used_fastroute_last_run_ = false;
+
+  if (!newgr_alternate_routes.empty()) {
+    logger_->info(utl::GRT,
+                  6009,
+                  "NEWGR alternate profile route bank is enabled: {} route sets.",
+                  newgr_alternate_routes.size());
+  }
 
   const bool disable_fastroute_graft
       = std::getenv("NEWGR_DISABLE_FASTROUTE_GRAFT") != nullptr;
@@ -3650,6 +3661,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &wirelength_sweep_hybrid,
         &extreme_sweep_hybrid,
         &radical_refine_hybrid};
+    for (size_t alt_idx = 0; alt_idx < newgr_alternate_routes.size(); ++alt_idx) {
+      envelope_donors.push_back(&newgr_alternate_routes[alt_idx]);
+    }
     NetRouteMap envelope_hybrid = buildRadicalEnvelopeHybrid(
         radical_refine_hybrid,
         envelope_donors,
@@ -3683,6 +3697,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &extreme_sweep_hybrid,
         &radical_refine_hybrid,
         &envelope_hybrid};
+    for (size_t alt_idx = 0; alt_idx < newgr_alternate_routes.size(); ++alt_idx) {
+      wirelength_oracle_donors.push_back(&newgr_alternate_routes[alt_idx]);
+    }
     NetRouteMap wirelength_oracle_hybrid = buildWirelengthOracleHybrid(
         envelope_hybrid,
         wirelength_oracle_donors,
@@ -3706,6 +3723,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &radical_refine_hybrid,
         &envelope_hybrid,
         &wirelength_oracle_hybrid};
+    for (size_t alt_idx = 0; alt_idx < newgr_alternate_routes.size(); ++alt_idx) {
+      closure_donors.push_back(&newgr_alternate_routes[alt_idx]);
+    }
     NetRouteMap wirelength_closure_hybrid = buildWirelengthClosureHybrid(
         wirelength_oracle_hybrid,
         closure_donors,
@@ -3730,6 +3750,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         &envelope_hybrid,
         &wirelength_oracle_hybrid,
         &wirelength_closure_hybrid};
+    for (size_t alt_idx = 0; alt_idx < newgr_alternate_routes.size(); ++alt_idx) {
+      fusion_donors.push_back(&newgr_alternate_routes[alt_idx]);
+    }
     NetRouteMap wirelength_fusion_hybrid = buildWirelengthFusionHybrid(
         wirelength_closure_hybrid,
         fusion_donors,
@@ -3782,6 +3805,25 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                   fastroute_score.vias,
                   fastroute_low_layer_wl,
                   fastroute_score.routed_nets);
+    if (!newgr_alternate_routes.empty()) {
+      for (size_t alt_idx = 0; alt_idx < newgr_alternate_routes.size(); ++alt_idx) {
+        const RouteScore alt_score = computeRouteScore(newgr_alternate_routes[alt_idx]);
+        const uint64_t alt_low_layer_wl
+            = computeLowLayerWirelength(newgr_alternate_routes[alt_idx]);
+        const std::string& alt_label
+            = (alt_idx < newgr_alternate_route_labels.size())
+                  ? newgr_alternate_route_labels[alt_idx]
+                  : std::string("ALT_") + std::to_string(alt_idx);
+        logger_->info(utl::GRT,
+                      6019,
+                      "NEWGR alternate {} summary: wl={}, vias={}, low_wl={}, nets={}",
+                      alt_label,
+                      alt_score.wirelength,
+                      alt_score.vias,
+                      alt_low_layer_wl,
+                      alt_score.routed_nets);
+      }
+    }
     logger_->info(utl::GRT,
                   6010,
                   "NEWGR interleaved hybrid summary: "

@@ -353,6 +353,8 @@ NetRouteMap NewgrEngine::run()
   }
   galois::preAlloc(numThreads * 2);
   numThreads = galois::setActiveThreads(numThreads);
+  alternate_routes_.clear();
+  alternate_route_labels_.clear();
 
   auto run_candidate = [&](Algo algo,
                            int maze_rounds,
@@ -404,65 +406,74 @@ NetRouteMap NewgrEngine::run()
     return candidate;
   };
 
-  // Fast-first NEWGR policy:
-  // 1) Run one SPRoute-style profile with FastRoute-like WL bias.
-  // 2) Expand to a larger ensemble only if overflow remains, or when
-  //    explicitly requested for experimentation.
-  const bool force_full_ensemble = true;
-  CandidateResult best = run_candidate(Algo::Astar,
-                                       420,
-                                       NEWGR_CAP_PROFILE_RADICAL_MIX,
-                                       "Astar_RadicalMix");
+  // Multi-profile NEWGR bank:
+  // keep several profile outputs (including 3D-short) so later fusion can
+  // mix routes per-net across FastRoute/SPRoute/CUGR-inspired styles.
+  std::vector<CandidateResult> candidates;
+  candidates.reserve(5);
+  candidates.push_back(run_candidate(Algo::Astar,
+                                     420,
+                                     NEWGR_CAP_PROFILE_RADICAL_MIX,
+                                     "Astar_RadicalMix"));
+  candidates.push_back(run_candidate(Algo::Astar,
+                                     460,
+                                     NEWGR_CAP_PROFILE_RADICAL_WL,
+                                     "Astar_RadicalWL"));
+  candidates.push_back(run_candidate(Algo::Astar,
+                                     420,
+                                     NEWGR_CAP_PROFILE_ULTRA_WL,
+                                     "Astar_UltraWL"));
+  candidates.push_back(run_candidate(Algo::Astar,
+                                     560,
+                                     NEWGR_CAP_PROFILE_3D_SHORT,
+                                     "Astar_3DShort"));
 
-  if (force_full_ensemble || best.overflow > 0) {
-    CandidateResult radical_wl = run_candidate(Algo::Astar,
-                                               460,
-                                               NEWGR_CAP_PROFILE_RADICAL_WL,
-                                               "Astar_RadicalWL");
-    if (isBetterCandidate(radical_wl, best)) {
-      best = std::move(radical_wl);
-    }
-
-    CandidateResult ultra_wl = run_candidate(Algo::Astar,
-                                             420,
-                                             NEWGR_CAP_PROFILE_ULTRA_WL,
-                                             "Astar_UltraWL");
-    if (isBetterCandidate(ultra_wl, best)) {
-      best = std::move(ultra_wl);
-    }
-  }
-
-  if (best.overflow > 0) {
-    CandidateResult short3d = run_candidate(Algo::Astar,
-                                            560,
-                                            NEWGR_CAP_PROFILE_3D_SHORT,
-                                            "Astar_3DShort_Overflow");
-    if (isBetterCandidate(short3d, best)) {
-      best = std::move(short3d);
-    }
-    CandidateResult fallback = run_candidate(Algo::DetPart_Astar_Local,
-                                             520,
-                                             NEWGR_CAP_PROFILE_DR_FOCUSED,
-                                             "DetPart_DRFallback");
-    if (isBetterCandidate(fallback, best)) {
-      best = std::move(fallback);
+  int best_idx = 0;
+  for (int idx = 1; idx < static_cast<int>(candidates.size()); ++idx) {
+    if (isBetterCandidate(candidates[idx], candidates[best_idx])) {
+      best_idx = idx;
     }
   }
 
+  if (candidates[best_idx].overflow > 0) {
+    candidates.push_back(run_candidate(Algo::DetPart_Astar_Local,
+                                       520,
+                                       NEWGR_CAP_PROFILE_DR_FOCUSED,
+                                       "DetPart_DRFallback"));
+    if (isBetterCandidate(candidates.back(), candidates[best_idx])) {
+      best_idx = static_cast<int>(candidates.size()) - 1;
+    }
+  }
+
+  CandidateResult& best = candidates[best_idx];
   newgr_capacity_profile = best.capacity_profile;
   last_total_overflow_ = best.overflow;
+
+  alternate_routes_.reserve(candidates.size() - 1);
+  alternate_route_labels_.reserve(candidates.size() - 1);
+  for (int idx = 0; idx < static_cast<int>(candidates.size()); ++idx) {
+    if (idx == best_idx) {
+      continue;
+    }
+    CandidateResult& candidate = candidates[idx];
+    alternate_route_labels_.push_back(
+        candidateName(candidate) + "_" + capacityProfileName(candidate.capacity_profile));
+    alternate_routes_.push_back(std::move(candidate.routes));
+  }
+
   logger_->info(utl::GRT,
                 404,
                 "NEWGR selected candidate {} [{}]: overflow={}, route_wl={}, "
-                "route_vias={}, cong_risk={}, proxy_cost={}",
+                "route_vias={}, cong_risk={}, proxy_cost={}, alternates={}",
                 candidateName(best),
                 capacityProfileName(best.capacity_profile),
                 best.overflow,
                 best.metrics.wirelength,
                 best.metrics.vias,
                 best.metrics.congestion_risk,
-                best.metrics.proxy_cost);
-  return best.routes;
+                best.metrics.proxy_cost,
+                alternate_routes_.size());
+  return std::move(best.routes);
 }
 
 void NewgrEngine::buildInput()

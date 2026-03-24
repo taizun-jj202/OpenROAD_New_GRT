@@ -46,6 +46,14 @@ class NewgrEngine
 
   const NewgrInput& getInput() const { return input_; }
   int getTotalOverflow() const { return last_total_overflow_; }
+  const std::vector<NetRouteMap>& getAlternateRoutes() const
+  {
+    return alternate_routes_;
+  }
+  const std::vector<std::string>& getAlternateRouteLabels() const
+  {
+    return alternate_route_labels_;
+  }
   void updateDbCongestion(odb::dbBlock* block);
 
  private:
@@ -73,6 +81,8 @@ class NewgrEngine
   NewgrInput input_;
   bool input_ready_{false};
   int last_total_overflow_{0};
+  std::vector<NetRouteMap> alternate_routes_;
+  std::vector<std::string> alternate_route_labels_;
 };
 
 }  // namespace grt
