@@ -453,10 +453,26 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     return penalty;
   };
 
-  std::vector<int> selected_index(pin_access_points.size(), -1);
-  std::vector<int> selected_accessibility(pin_access_points.size(), -1);
+  const int num_pins = pin_access_points.size();
+  std::vector<int> selected_index(num_pins, -1);
+  std::vector<int> selected_accessibility(num_pins, -1);
   const auto& boundingBox = net->getBoundingBox();
   const PointT netCenter(boundingBox.cx(), boundingBox.cy());
+  const bool longNet = num_pins >= 8 || boundingBox.hp() >= 120;
+  const int relaxAccessibility = longNet ? 1 : 0;
+  const double hpwlWeight = longNet ? 28.0 : 22.0;
+  const double distanceWeight = longNet ? 2.5 : 3.5;
+  const double congestionWeight = longNet ? 5.5 : 7.0;
+  const double layerWeight = 0.25;
+  const int refineRounds = longNet ? 4 : 3;
+  std::vector<int> max_accessibility(num_pins, 0);
+  for (int pin_index = 0; pin_index < num_pins; pin_index++) {
+    int best = 0;
+    for (const auto& point : pin_access_points[pin_index]) {
+      best = std::max(best, getAccessibility(point));
+    }
+    max_accessibility[pin_index] = best;
+  }
 
   auto getTarget = [&](const std::vector<int>& selected) {
     std::vector<int> xs;
@@ -489,89 +505,70 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
         = point.getLayerIdx() >= constants_.min_routing_layer
               ? (point.getLayerIdx() - constants_.min_routing_layer) * 0.25
               : 0.0;
-    return hpwl * 20.0 + distance * 4.0 + getCongestionPenalty(point) * 8.0
-           + layerPenalty;
+    return hpwl * hpwlWeight + distance * distanceWeight
+           + getCongestionPenalty(point) * congestionWeight
+           + layerPenalty * layerWeight;
   };
 
-  for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
-    const auto& access_points = pin_access_points[pin_index];
-    int best_index = -1;
-    int best_accessibility = -1;
-    double best_score = std::numeric_limits<double>::max();
-    for (int index = 0; index < access_points.size(); index++) {
-      const auto& point = access_points[index];
-      const int accessibility = getAccessibility(point);
-      const double score = scoreAccessPoint(point, netCenter, 0);
-      if (accessibility > best_accessibility
-          || (accessibility == best_accessibility && score < best_score)) {
-        best_index = index;
-        best_accessibility = accessibility;
-        best_score = score;
-      }
-    }
-    if (best_accessibility <= 0) {
-      logger_->warn(utl::GRT, 7001, "pin is hard to access.");
-    }
-    selected_index[pin_index] = best_index;
-    selected_accessibility[pin_index] = best_accessibility;
-  }
-
-  PointT target = getTarget(selected_index);
-  for (int refine_round = 0; refine_round < 2; refine_round++) {
-    for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
+  auto initializeSelection = [&](const PointT& target,
+                                 std::vector<int>& selected,
+                                 std::vector<int>& selected_access) {
+    for (int pin_index = 0; pin_index < num_pins; pin_index++) {
       const auto& access_points = pin_access_points[pin_index];
-      int lx = std::numeric_limits<int>::max();
-      int hx = std::numeric_limits<int>::min();
-      int ly = std::numeric_limits<int>::max();
-      int hy = std::numeric_limits<int>::min();
-      bool has_other_points = false;
-      for (int other_pin = 0; other_pin < pin_access_points.size();
-           other_pin++) {
-        if (other_pin == pin_index || selected_index[other_pin] < 0) {
-          continue;
-        }
-        const auto& other_point
-            = pin_access_points[other_pin][selected_index[other_pin]];
-        lx = std::min(lx, other_point.x());
-        hx = std::max(hx, other_point.x());
-        ly = std::min(ly, other_point.y());
-        hy = std::max(hy, other_point.y());
-        has_other_points = true;
-      }
-
-      int required_accessibility = selected_accessibility[pin_index];
-      if (required_accessibility < 0) {
-        required_accessibility = 0;
-      }
-      int best_index = selected_index[pin_index];
+      int best_index = -1;
+      int best_access = -1;
       double best_score = std::numeric_limits<double>::max();
-      int best_accessibility = required_accessibility;
       for (int index = 0; index < access_points.size(); index++) {
         const auto& point = access_points[index];
         const int accessibility = getAccessibility(point);
-        if (accessibility < required_accessibility) {
-          continue;
-        }
-        int hpwl = 0;
-        if (has_other_points) {
-          const int candidate_lx = std::min(lx, point.x());
-          const int candidate_hx = std::max(hx, point.x());
-          const int candidate_ly = std::min(ly, point.y());
-          const int candidate_hy = std::max(hy, point.y());
-          hpwl = (candidate_hx - candidate_lx) + (candidate_hy - candidate_ly);
-        }
-        const double score = scoreAccessPoint(point, target, hpwl);
-        if (score < best_score) {
-          best_score = score;
+        const double score = scoreAccessPoint(point, target, 0);
+        if (accessibility > best_access
+            || (accessibility == best_access && score < best_score)) {
           best_index = index;
-          best_accessibility = accessibility;
+          best_access = accessibility;
+          best_score = score;
         }
       }
+      selected[pin_index] = best_index;
+      selected_access[pin_index] = best_access;
+    }
+  };
 
-      if (best_index < 0) {
+  auto optimizeSelection = [&](std::vector<int>& selected,
+                               std::vector<int>& selected_access,
+                               const PointT& initial_target) {
+    PointT target = initial_target;
+    for (int refine_round = 0; refine_round < refineRounds; refine_round++) {
+      for (int pin_index = 0; pin_index < num_pins; pin_index++) {
+        const auto& access_points = pin_access_points[pin_index];
+        int lx = std::numeric_limits<int>::max();
+        int hx = std::numeric_limits<int>::min();
+        int ly = std::numeric_limits<int>::max();
+        int hy = std::numeric_limits<int>::min();
+        bool has_other_points = false;
+        for (int other_pin = 0; other_pin < num_pins; other_pin++) {
+          if (other_pin == pin_index || selected[other_pin] < 0) {
+            continue;
+          }
+          const auto& other_point = pin_access_points[other_pin][selected[other_pin]];
+          lx = std::min(lx, other_point.x());
+          hx = std::max(hx, other_point.x());
+          ly = std::min(ly, other_point.y());
+          hy = std::max(hy, other_point.y());
+          has_other_points = true;
+        }
+
+        const int required_accessibility
+            = std::max(0, max_accessibility[pin_index] - relaxAccessibility);
+        int best_index = -1;
+        int best_access = -1;
+        double best_score = std::numeric_limits<double>::max();
         for (int index = 0; index < access_points.size(); index++) {
           const auto& point = access_points[index];
           const int accessibility = getAccessibility(point);
+          if (accessibility < required_accessibility) {
+            continue;
+          }
           int hpwl = 0;
           if (has_other_points) {
             const int candidate_lx = std::min(lx, point.x());
@@ -581,22 +578,121 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
             hpwl = (candidate_hx - candidate_lx) + (candidate_hy - candidate_ly);
           }
           const double score = scoreAccessPoint(point, target, hpwl);
-          if (accessibility > best_accessibility
-              || (accessibility == best_accessibility && score < best_score)) {
-            best_index = index;
-            best_accessibility = accessibility;
+          if (score < best_score) {
             best_score = score;
+            best_index = index;
+            best_access = accessibility;
           }
         }
-      }
 
-      selected_index[pin_index] = best_index;
-      selected_accessibility[pin_index] = best_accessibility;
+        if (best_index < 0) {
+          for (int index = 0; index < access_points.size(); index++) {
+            const auto& point = access_points[index];
+            const int accessibility = getAccessibility(point);
+            int hpwl = 0;
+            if (has_other_points) {
+              const int candidate_lx = std::min(lx, point.x());
+              const int candidate_hx = std::max(hx, point.x());
+              const int candidate_ly = std::min(ly, point.y());
+              const int candidate_hy = std::max(hy, point.y());
+              hpwl = (candidate_hx - candidate_lx) + (candidate_hy - candidate_ly);
+            }
+            const double score = scoreAccessPoint(point, target, hpwl);
+            if (accessibility > best_access
+                || (accessibility == best_access && score < best_score)) {
+              best_index = index;
+              best_access = accessibility;
+              best_score = score;
+            }
+          }
+        }
+
+        selected[pin_index] = best_index;
+        selected_access[pin_index] = best_access;
+      }
+      target = getTarget(selected);
     }
-    target = getTarget(selected_index);
+  };
+
+  auto evaluateSelection = [&](const std::vector<int>& selected,
+                               const std::vector<int>& selected_access) {
+    int lx = std::numeric_limits<int>::max();
+    int hx = std::numeric_limits<int>::min();
+    int ly = std::numeric_limits<int>::max();
+    int hy = std::numeric_limits<int>::min();
+    bool has_point = false;
+    double congestion = 0.0;
+    double layer_cost = 0.0;
+    int accessibility_drop = 0;
+    for (int pin_index = 0; pin_index < num_pins; pin_index++) {
+      const int ap_index = selected[pin_index];
+      if (ap_index < 0) {
+        accessibility_drop += max_accessibility[pin_index];
+        continue;
+      }
+      const auto& point = pin_access_points[pin_index][ap_index];
+      lx = std::min(lx, point.x());
+      hx = std::max(hx, point.x());
+      ly = std::min(ly, point.y());
+      hy = std::max(hy, point.y());
+      has_point = true;
+      congestion += getCongestionPenalty(point);
+      if (point.getLayerIdx() >= constants_.min_routing_layer) {
+        layer_cost += point.getLayerIdx() - constants_.min_routing_layer;
+      }
+      accessibility_drop += std::max(0, max_accessibility[pin_index]
+                                            - selected_access[pin_index]);
+    }
+    const double hpwl = has_point ? static_cast<double>((hx - lx) + (hy - ly))
+                                  : 0.0;
+    const PointT target = getTarget(selected);
+    double spread = 0.0;
+    for (int pin_index = 0; pin_index < num_pins; pin_index++) {
+      const int ap_index = selected[pin_index];
+      if (ap_index < 0) {
+        continue;
+      }
+      const auto& point = pin_access_points[pin_index][ap_index];
+      spread += abs(point.x() - target.x()) + abs(point.y() - target.y());
+    }
+    const double accessibilityPenalty
+        = longNet ? 18.0 * accessibility_drop : 45.0 * accessibility_drop;
+    return hpwl * 120.0 + spread * 3.0 + congestion * 9.0
+           + layer_cost * 0.5 + accessibilityPenalty;
+  };
+
+  std::vector<PointT> seedTargets;
+  seedTargets.reserve(6);
+  seedTargets.emplace_back(netCenter);
+  seedTargets.emplace_back(boundingBox.lx(), boundingBox.ly());
+  seedTargets.emplace_back(boundingBox.hx(), boundingBox.hy());
+  if (longNet) {
+    seedTargets.emplace_back(boundingBox.lx(), boundingBox.hy());
+    seedTargets.emplace_back(boundingBox.hx(), boundingBox.ly());
   }
 
-  for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
+  double bestSelectionScore = std::numeric_limits<double>::max();
+  for (const PointT& seedTarget : seedTargets) {
+    std::vector<int> candidate_index(num_pins, -1);
+    std::vector<int> candidate_access(num_pins, -1);
+    initializeSelection(seedTarget, candidate_index, candidate_access);
+    optimizeSelection(candidate_index, candidate_access, seedTarget);
+    const double selectionScore
+        = evaluateSelection(candidate_index, candidate_access);
+    if (selectionScore < bestSelectionScore) {
+      bestSelectionScore = selectionScore;
+      selected_index = candidate_index;
+      selected_accessibility = candidate_access;
+    }
+  }
+
+  for (int pin_index = 0; pin_index < num_pins; pin_index++) {
+    if (selected_accessibility[pin_index] <= 0) {
+      logger_->warn(utl::GRT, 7001, "pin is hard to access.");
+    }
+  }
+
+  for (int pin_index = 0; pin_index < num_pins; pin_index++) {
     const auto& access_points = pin_access_points[pin_index];
     const int best_index = selected_index[pin_index];
     if (best_index < 0 || best_index >= access_points.size()) {

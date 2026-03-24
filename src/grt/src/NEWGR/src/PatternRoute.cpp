@@ -97,7 +97,15 @@ void PatternRoute::constructSteinerTree()
     ys.push_back(accessPoint.point.y());
   }
 
-  stt::Tree flutetree = stt_builder_->flute(xs, ys, flute_accuracy_);
+  int adaptiveFluteAccuracy = flute_accuracy_;
+  if (degree >= 24) {
+    adaptiveFluteAccuracy = 9;
+  } else if (degree >= 12) {
+    adaptiveFluteAccuracy = 7;
+  } else if (degree >= 8) {
+    adaptiveFluteAccuracy = 5;
+  }
+  stt::Tree flutetree = stt_builder_->flute(xs, ys, adaptiveFluteAccuracy);
   const int numBranches = degree + degree - 2;
   std::vector<PointT> steinerPoints;
   steinerPoints.reserve(numBranches);
