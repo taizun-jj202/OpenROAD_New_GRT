@@ -45,17 +45,12 @@ class NewgrEngine
   NetRouteMap run();
   NetRouteMap runWirelengthFirst();
   NetRouteMap runDataDrivenWirelength();
-  NetRouteMap runWirelengthSeed();
-  NetRouteMap runDataSeed();
-  NetRouteMap runCriticalWirelengthRefine();
-  NetRouteMap runCriticalTopologyRefine();
   NetRouteMap runRegionAware();
   NetRouteMap runRegularRegionAware();
   NetRouteMap runFineGrainRefine();
   NetRouteMap runSmallNetAware();
   NetRouteMap runAstarClassic();
   NetRouteMap runRudyDriven();
-  NetRouteMap runLocalPolish();
 
   const NewgrInput& getInput() const { return input_; }
   int getTotalOverflow() const { return last_total_overflow_; }
@@ -63,8 +58,6 @@ class NewgrEngine
 
  private:
   void buildInput();
-  void buildInput(const std::vector<int>& net_indices);
-  std::vector<int> selectCriticalNetIndices() const;
   void prepareLefDefMetadata();
   parser::grGenerator buildGenerator() const;
   int coordFromIndex(int index, bool is_y = false) const;
