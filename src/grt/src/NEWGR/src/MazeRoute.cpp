@@ -59,6 +59,53 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
 
   const int xSize = grid_graph_->getSize(0);
   const int ySize = grid_graph_->getSize(1);
+  if (const auto& current_tree = net_->getRoutingTree()) {
+    GRTreeNode::preorder(
+        current_tree, [&](const std::shared_ptr<GRTreeNode>& node) {
+          addAnchor(x_guides, node->x(), xSize);
+          addAnchor(y_guides, node->y(), ySize);
+          for (const auto& child : node->getChildren()) {
+            addAnchor(x_guides, (node->x() + child->x()) / 2, xSize);
+            addAnchor(y_guides, (node->y() + child->y()) / 2, ySize);
+            if (std::abs(node->x() - child->x()) >= 4) {
+              addAnchor(x_guides, (2 * node->x() + child->x()) / 3, xSize);
+              addAnchor(x_guides, (node->x() + 2 * child->x()) / 3, xSize);
+            }
+            if (std::abs(node->y() - child->y()) >= 4) {
+              addAnchor(y_guides, (2 * node->y() + child->y()) / 3, ySize);
+              addAnchor(y_guides, (node->y() + 2 * child->y()) / 3, ySize);
+            }
+          }
+        });
+  }
+
+  auto limitGuideCount = [](std::vector<int>& guides, const int max_count) {
+    if (max_count <= 0 || static_cast<int>(guides.size()) <= max_count) {
+      return;
+    }
+    std::vector<int> limited;
+    limited.reserve(max_count);
+    limited.push_back(guides.front());
+    if (max_count > 1) {
+      const int interior_target = std::max(0, max_count - 2);
+      for (int i = 0; i < interior_target; i++) {
+        const int idx
+            = 1 + ((static_cast<int>(guides.size()) - 2) * (i + 1))
+                      / (interior_target + 1);
+        if (idx > 0 && idx < static_cast<int>(guides.size()) - 1
+            && guides[idx] != limited.back()) {
+          limited.push_back(guides[idx]);
+        }
+      }
+      if (guides.back() != limited.back()) {
+        limited.push_back(guides.back());
+      }
+    }
+    std::sort(limited.begin(), limited.end());
+    limited.erase(std::unique(limited.begin(), limited.end()), limited.end());
+    guides.swap(limited);
+  };
+
   if (!pxs.empty()) {
     const int x_min = pxs.front();
     const int x_max = pxs.back();
@@ -91,6 +138,9 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   x_guides.erase(std::unique(x_guides.begin(), x_guides.end()), x_guides.end());
   std::sort(y_guides.begin(), y_guides.end());
   y_guides.erase(std::unique(y_guides.begin(), y_guides.end()), y_guides.end());
+  const int max_guides_per_axis = std::clamp(24 + net_->getNumPins(), 32, 88);
+  limitGuideCount(x_guides, max_guides_per_axis);
+  limitGuideCount(y_guides, max_guides_per_axis);
 
   xs_.reserve(xSize / grid.interval.x() + x_guides.size());
   ys_.reserve(ySize / grid.interval.y() + y_guides.size());
