@@ -13,7 +13,8 @@ int n_small_undone;
 float max_rudy;
 
 // Runtime knobs used by NEWGR to generate diverse route portfolios.
-int NEWGR_CAP_MODEL = 0;  // 0=tuned default, 1=legacy squeeze, 2=direct-WL.
+int NEWGR_CAP_MODEL
+    = 0;  // 0=tuned default, 1=legacy squeeze, 2=direct-WL, 3=ultra-direct.
 float NEWGR_CAP_SCALE = 1.0f;
 float NEWGR_RUDY_WEIGHT_SCALE = 1.0f;
 float NEWGR_PIN_DENSITY_SCALE = 1.0f;
@@ -81,6 +82,23 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 				adj = (adj + 0.12f > 1.0f) ? 1.0f : (adj + 0.12f);
 			else if (rudy > 9.0f)
 				adj *= 0.95f;
+		} else if (NEWGR_CAP_MODEL == 3) {
+			// Ultra-direct profile: preserve near-hard capacity except in severe hotspots.
+			if (layerID <= 0)
+				adj = 1.00f;
+			else if (layerID == 1)
+				adj = 0.90f + (1.00f - 0.90f) / (1.0f + exp(0.9f * (rudy - 8.5f)));
+			else if (layerID == 2)
+				adj = 0.92f + (1.00f - 0.92f) / (1.0f + exp(0.9f * (rudy - 8.5f)));
+			else if (layerID >= 3 && layerID <= 4)
+				adj = 0.95f + (1.00f - 0.95f) / (1.0f + exp(0.8f * (rudy - 9.5f)));
+			else if (layerID >= 5)
+				adj = 0.98f;
+
+			if (rudy < 6.0f)
+				adj = 1.0f;
+			else if (rudy > 12.0f)
+				adj *= 0.92f;
 		} else {
 			if(layerID <= 0) //metal1
 				adj = 0.95f;

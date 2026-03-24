@@ -50,15 +50,15 @@ void applyRouteProfile(NewgrEngine::RouteProfile profile)
       // Favor direct trunks by relaxing pseudo-capacity pressure.
       NEWGR_CAP_MODEL = 2;
       NEWGR_CAP_SCALE = 1.0f;
-      NEWGR_RUDY_WEIGHT_SCALE = 0.45f;
-      NEWGR_PIN_DENSITY_SCALE = 0.55f;
+      NEWGR_RUDY_WEIGHT_SCALE = 0.20f;
+      NEWGR_PIN_DENSITY_SCALE = 0.30f;
       break;
     case NewgrEngine::RouteProfile::kUltraDirectWirelength:
       // Extremely WL-biased mode to expose short alternatives.
-      NEWGR_CAP_MODEL = 2;
+      NEWGR_CAP_MODEL = 3;
       NEWGR_CAP_SCALE = 1.0f;
-      NEWGR_RUDY_WEIGHT_SCALE = 0.22f;
-      NEWGR_PIN_DENSITY_SCALE = 0.35f;
+      NEWGR_RUDY_WEIGHT_SCALE = 0.06f;
+      NEWGR_PIN_DENSITY_SCALE = 0.10f;
       break;
   }
 }
@@ -227,7 +227,7 @@ NetRouteMap NewgrEngine::runLegacySqueeze()
 
 NetRouteMap NewgrEngine::runDirectWirelength()
 {
-  return runWithConfig(/*max_maze_round=*/160,
+  return runWithConfig(/*max_maze_round=*/120,
                        static_cast<int>(Algo::DetPart_Astar_Local),
                        /*warn_id=*/415,
                        RouteProfile::kDirectWirelength);
@@ -235,8 +235,8 @@ NetRouteMap NewgrEngine::runDirectWirelength()
 
 NetRouteMap NewgrEngine::runUltraDirectWirelength()
 {
-  return runWithConfig(/*max_maze_round=*/95,
-                       static_cast<int>(Algo::Astar),
+  return runWithConfig(/*max_maze_round=*/80,
+                       static_cast<int>(Algo::NonDet),
                        /*warn_id=*/416,
                        RouteProfile::kUltraDirectWirelength);
 }
