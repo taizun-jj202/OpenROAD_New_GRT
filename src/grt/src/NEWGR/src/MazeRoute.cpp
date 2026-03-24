@@ -263,17 +263,18 @@ void MazeRoute::run()
     if (!current_best.valid) {
       return true;
     }
+    // Strong wirelength-first selection:
+    // accept shorter trees with bounded cost/via growth, and only allow
+    // cost-only wins when the wirelength regression is very small.
     if (wirelength_heavy_mode) {
-      // Wirelength-only mazes are explicitly used as a shortening oracle.
-      // Keep meaningful WL gains even if congestion proxy cost is somewhat higher.
-      if (candidate.unique_wirelength + 2 < current_best.unique_wirelength
-          && candidate.total_cost <= current_best.total_cost * 1.38
-          && candidate.unique_vias <= current_best.unique_vias + 12) {
+      if (candidate.unique_wirelength + 1 < current_best.unique_wirelength
+          && candidate.total_cost <= current_best.total_cost * 1.42
+          && candidate.unique_vias <= current_best.unique_vias + 16) {
         return true;
       }
       if (candidate.unique_wirelength < current_best.unique_wirelength
-          && candidate.total_cost <= current_best.total_cost * 1.25
-          && candidate.unique_vias <= current_best.unique_vias + 8) {
+          && candidate.total_cost <= current_best.total_cost * 1.30
+          && candidate.unique_vias <= current_best.unique_vias + 10) {
         return true;
       }
       if (candidate.unique_wirelength == current_best.unique_wirelength
@@ -284,50 +285,49 @@ void MazeRoute::run()
           && candidate.total_cost + kCostEpsilon < current_best.total_cost) {
         return true;
       }
-      if (candidate.total_cost + kCostEpsilon < current_best.total_cost * 0.82
-          && candidate.unique_wirelength <= current_best.unique_wirelength + 18) {
+      if (candidate.total_cost + kCostEpsilon < current_best.total_cost * 0.78
+          && candidate.unique_wirelength <= current_best.unique_wirelength + 10) {
         return true;
       }
+      return false;
     }
 
-    // Wirelength-first tie breaking with bounded congestion-cost regression.
-    constexpr uint64_t kStrongWireGain = 20;
-    constexpr uint64_t kModerateWireGain = 8;
-    constexpr double kCostSlackForWireGain = 1.15;
-    constexpr double kCostSlackForModerateWireGain = 1.22;
+    constexpr uint64_t kStrongWireGain = 16;
+    constexpr uint64_t kModerateWireGain = 6;
     if (candidate.unique_wirelength + kStrongWireGain
             < current_best.unique_wirelength
-        && candidate.total_cost <= current_best.total_cost * kCostSlackForWireGain) {
+        && candidate.total_cost <= current_best.total_cost * 1.22) {
       return true;
     }
     if (candidate.unique_wirelength + kModerateWireGain
             < current_best.unique_wirelength
-        && candidate.total_cost
-               <= current_best.total_cost * kCostSlackForModerateWireGain
-        && candidate.unique_vias <= current_best.unique_vias + 4) {
+        && candidate.total_cost <= current_best.total_cost * 1.14
+        && candidate.unique_vias <= current_best.unique_vias + 5) {
       return true;
     }
-    if (candidate.total_cost + kCostEpsilon < current_best.total_cost) {
+    if (candidate.unique_wirelength < current_best.unique_wirelength
+        && candidate.total_cost <= current_best.total_cost * 1.08
+        && candidate.unique_vias <= current_best.unique_vias + 2) {
       return true;
     }
-    if (std::abs(candidate.total_cost - current_best.total_cost) <= kCostEpsilon
-        && candidate.unique_wirelength < current_best.unique_wirelength) {
-      return true;
-    }
-    if (std::abs(candidate.total_cost - current_best.total_cost) <= kCostEpsilon
-        && candidate.unique_wirelength == current_best.unique_wirelength
+    if (candidate.unique_wirelength == current_best.unique_wirelength
         && candidate.unique_vias < current_best.unique_vias) {
+      return true;
+    }
+    if (candidate.unique_wirelength == current_best.unique_wirelength
+        && std::abs(candidate.unique_vias - current_best.unique_vias) == 0
+        && candidate.total_cost + kCostEpsilon < current_best.total_cost) {
+      return true;
+    }
+    if (candidate.total_cost + kCostEpsilon < current_best.total_cost * 0.76
+        && candidate.unique_wirelength <= current_best.unique_wirelength + 6
+        && candidate.unique_vias <= current_best.unique_vias + 2) {
       return true;
     }
     if (std::abs(candidate.total_cost - current_best.total_cost) <= kCostEpsilon
         && candidate.unique_wirelength == current_best.unique_wirelength
         && candidate.unique_vias == current_best.unique_vias
         && candidate.via_steps < current_best.via_steps) {
-      return true;
-    }
-    if (candidate.unique_wirelength < current_best.unique_wirelength
-        && candidate.total_cost <= current_best.total_cost * 1.10
-        && candidate.unique_vias <= current_best.unique_vias + 2) {
       return true;
     }
     return false;
@@ -634,8 +634,9 @@ void MazeRoute::run()
     }
 
     // Runtime guardrail: use the metric closure only for small/medium nets.
-    constexpr int kMaxMetricClosurePins = 56;
-    if (num_pins > kMaxMetricClosurePins) {
+    const int max_metric_closure_pins
+        = wirelength_heavy_mode ? 72 : 56;
+    if (num_pins > max_metric_closure_pins) {
       return result;
     }
 
@@ -947,7 +948,10 @@ void MazeRoute::run()
                 return lhs.rhs < rhs.rhs;
               });
 
-    const int pair_budget = num_pins <= 20 ? 14 : (num_pins <= 40 ? 10 : 7);
+    int pair_budget = num_pins <= 20 ? 14 : (num_pins <= 40 ? 10 : 7);
+    if (wirelength_heavy_mode) {
+      pair_budget += (num_pins <= 24 ? 10 : (num_pins <= 48 ? 6 : 4));
+    }
     const int keep = std::min(pair_budget, static_cast<int>(scored_pairs.size()));
     extra_pair_candidates.reserve(keep);
     for (int i = 0; i < keep; i++) {

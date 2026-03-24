@@ -1061,6 +1061,70 @@ AccessPointSet GridGraph::selectAccessPoints(const GRNet* net) const
     }
   }
 
+  // Exact two-pin access-point optimization:
+  // evaluate all legal endpoint pairs and directly minimize
+  // Manhattan span + layer mismatch. This is a FastRoute-like
+  // shortest-connection objective with CUGR/SPRoute accessibility guards.
+  if (pin_access_points.size() == 2) {
+    struct PairChoice
+    {
+      int idx0 = -1;
+      int idx1 = -1;
+      int acc_sum = std::numeric_limits<int>::min();
+      int64_t score = std::numeric_limits<int64_t>::max();
+    };
+
+    auto trySolvePair = [&](const bool enforce_access_guard) {
+      PairChoice best;
+      const auto& pin0 = pin_access_points[0];
+      const auto& pin1 = pin_access_points[1];
+      for (int idx0 = 0; idx0 < static_cast<int>(pin0.size()); idx0++) {
+        const auto& p0 = pin0[idx0];
+        const int acc0 = getAccessibility(p0);
+        if (enforce_access_guard && acc0 < min_allowed_accessibility[0]) {
+          continue;
+        }
+        for (int idx1 = 0; idx1 < static_cast<int>(pin1.size()); idx1++) {
+          const auto& p1 = pin1[idx1];
+          const int acc1 = getAccessibility(p1);
+          if (enforce_access_guard && acc1 < min_allowed_accessibility[1]) {
+            continue;
+          }
+
+          const int manhattan = std::abs(p0.x() - p1.x()) + std::abs(p0.y() - p1.y());
+          const int layer_gap = std::abs(p0.getLayerIdx() - p1.getLayerIdx());
+          const int center_dist = std::abs(net_center.x() - p0.x())
+                                  + std::abs(net_center.y() - p0.y())
+                                  + std::abs(net_center.x() - p1.x())
+                                  + std::abs(net_center.y() - p1.y());
+          const int acc_sum = acc0 + acc1;
+          const int64_t score = static_cast<int64_t>(manhattan) * 8192
+                                + static_cast<int64_t>(layer_gap) * 384
+                                + static_cast<int64_t>(center_dist) * 8;
+          if (score < best.score
+              || (score == best.score && acc_sum > best.acc_sum)) {
+            best.idx0 = idx0;
+            best.idx1 = idx1;
+            best.acc_sum = acc_sum;
+            best.score = score;
+          }
+        }
+      }
+      return best;
+    };
+
+    PairChoice best_pair = trySolvePair(/*enforce_access_guard*/ true);
+    if (best_pair.idx0 < 0 || best_pair.idx1 < 0) {
+      best_pair = trySolvePair(/*enforce_access_guard*/ false);
+    }
+    if (best_pair.idx0 >= 0 && best_pair.idx1 >= 0) {
+      selected_indices[0] = best_pair.idx0;
+      selected_indices[1] = best_pair.idx1;
+      selected_points[0] = pin_access_points[0][best_pair.idx0];
+      selected_points[1] = pin_access_points[1][best_pair.idx1];
+    }
+  }
+
   for (int pin_index = 0; pin_index < pin_access_points.size(); pin_index++) {
     const auto& access_points = pin_access_points[pin_index];
     const int selected_index = selected_indices[pin_index];

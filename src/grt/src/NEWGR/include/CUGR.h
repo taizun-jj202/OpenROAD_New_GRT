@@ -86,11 +86,11 @@ struct Constants
   int stage3_wl_config_limit = 10;
   double stage3_wl_via_cost_scale = 0.22;
   bool stage3_use_full_grid_wl_maze = true;
-  int stage3_full_grid_hpwl_threshold = 160;
-  int stage3_full_grid_pin_limit = 32;
-  int stage3_full_grid_overflow_threshold = 3;
+  int stage3_full_grid_hpwl_threshold = 120;
+  int stage3_full_grid_pin_limit = 44;
+  int stage3_full_grid_overflow_threshold = 4;
   double stage3_full_grid_via_cost_scale = 0.0;
-  double stage3_full_grid_min_stretch = 1.13;
+  double stage3_full_grid_min_stretch = 1.08;
 
   // FastRoute-style post-processing pass: reroute a subset of long,
   // overflow-free nets and keep only wirelength-improving solutions.
@@ -99,10 +99,10 @@ struct Constants
   bool recovery_use_wirelength_maze = true;
   double recovery_wl_maze_via_cost_scale = 0.18;
   int recovery_wl_only_hpwl_threshold = 56;
-  int recovery_hpwl_threshold = 32;
+  int recovery_hpwl_threshold = 24;
   double recovery_min_stretch = 1.01;
-  int recovery_candidate_cap = 920;
-  int recovery_deep_search_cap = 340;
+  int recovery_candidate_cap = 1100;
+  int recovery_deep_search_cap = 460;
   int recovery_shallow_maze_config_limit = 5;
   int recovery_deep_maze_config_limit = 14;
   int recovery_shallow_wl_config_limit = 4;
@@ -113,7 +113,7 @@ struct Constants
   int recovery_maze_sparse_x = 3;
   int recovery_maze_sparse_y = 3;
   double recovery_deep_ratio = 0.72;
-  int recovery_deep_hpwl_threshold = 96;
+  int recovery_deep_hpwl_threshold = 72;
   int recovery_aniso_sparse_long = 7;
   int recovery_aniso_sparse_short = 3;
   bool recovery_try_offset = true;
@@ -124,8 +124,8 @@ struct Constants
   int recovery_max_maze_configs = 20;
   int recovery_max_via_increase = 10;
   bool recovery_use_full_grid_maze = true;
-  int recovery_full_grid_top_n = 90;
-  int recovery_full_grid_hpwl_threshold = 80;
+  int recovery_full_grid_top_n = 150;
+  int recovery_full_grid_hpwl_threshold = 64;
   double recovery_full_grid_via_cost_scale = 0.0;
 
   double pin_patch_threshold = 1000000.0;
