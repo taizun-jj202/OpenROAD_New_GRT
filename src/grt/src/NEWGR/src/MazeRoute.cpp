@@ -263,8 +263,6 @@ void MazeRoute::run()
   if (numPseudoPins <= 0) {
     return;
   }
-  const auto& oldTree = net_->getRoutingTree();
-  const int oldTreeOverflow = oldTree ? grid_graph_->checkOverflow(oldTree) : 0;
   const auto& box = net_->getBoundingBox();
   const PointT center(box.cx(), box.cy());
   std::vector<int64_t> centerDistances(numPseudoPins, 0);
@@ -494,66 +492,6 @@ void MazeRoute::run()
                        output);
   };
 
-  auto findPinToPinPath = [&](int sourcePin,
-                              int targetPin,
-                              std::shared_ptr<Solution>& path) {
-    path = nullptr;
-    const int sourceVertex = graph_.getPinVertex(sourcePin);
-    const int targetVertex = graph_.getPinVertex(targetPin);
-    if (sourceVertex < 0 || targetVertex < 0) {
-      return false;
-    }
-    if (sourceVertex == targetVertex) {
-      path = std::make_shared<Solution>(0, sourceVertex, nullptr);
-      return true;
-    }
-
-    std::vector<CostT> minCosts(graph_.getNumVertices(),
-                                std::numeric_limits<CostT>::max());
-    auto compareSolution = [&](const std::shared_ptr<Solution>& lhs,
-                               const std::shared_ptr<Solution>& rhs) {
-      return lhs->cost > rhs->cost;
-    };
-    std::priority_queue<std::shared_ptr<Solution>,
-                        std::vector<std::shared_ptr<Solution>>,
-                        decltype(compareSolution)>
-        queue(compareSolution);
-
-    auto pushSolution = [&](const std::shared_ptr<Solution>& solution) {
-      queue.push(solution);
-      if (solution->cost < minCosts[solution->vertex]) {
-        minCosts[solution->vertex] = solution->cost;
-      }
-    };
-
-    pushSolution(std::make_shared<Solution>(0, sourceVertex, nullptr));
-    while (!queue.empty()) {
-      std::shared_ptr<Solution> solution = queue.top();
-      queue.pop();
-      if (solution->vertex == targetVertex) {
-        path = std::move(solution);
-        return true;
-      }
-      if (solution->cost > minCosts[solution->vertex]) {
-        continue;
-      }
-      for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++) {
-        const int nextVertex = graph_.getNextVertex(solution->vertex, edgeIndex);
-        if (nextVertex == -1
-            || (solution->prev && nextVertex == solution->prev->vertex)) {
-          continue;
-        }
-        const CostT nextCost
-            = solution->cost + graph_.getEdgeCost(solution->vertex, edgeIndex);
-        if (nextCost < minCosts[nextVertex]) {
-          pushSolution(
-              std::make_shared<Solution>(nextCost, nextVertex, solution));
-        }
-      }
-    }
-    return false;
-  };
-
   struct CandidateScore
   {
     uint64_t unique_wire_length = std::numeric_limits<uint64_t>::max();
@@ -629,101 +567,6 @@ void MazeRoute::run()
     if (isBetterCandidate(candidateScore, bestScore)) {
       bestScore = candidateScore;
       bestSolutions = std::move(candidateSolutions);
-    }
-  }
-
-  struct BackboneSeed
-  {
-    int sourcePin;
-    int targetPin;
-  };
-  auto makeSeedKey = [](int lhs, int rhs) {
-    const uint32_t lo = static_cast<uint32_t>(std::min(lhs, rhs));
-    const uint32_t hi = static_cast<uint32_t>(std::max(lhs, rhs));
-    return (static_cast<uint64_t>(lo) << 32) | static_cast<uint64_t>(hi);
-  };
-  std::vector<BackboneSeed> backboneSeeds;
-  robin_hood::unordered_set<uint64_t> usedBackbonePairs;
-  auto addBackboneSeed = [&](int sourcePin, int targetPin) {
-    if (sourcePin < 0 || targetPin < 0 || sourcePin == targetPin) {
-      return;
-    }
-    const uint64_t key = makeSeedKey(sourcePin, targetPin);
-    if (!usedBackbonePairs.insert(key).second) {
-      return;
-    }
-    backboneSeeds.push_back({sourcePin, targetPin});
-  };
-
-  // Backbone-first growth is powerful but can be disruptive on congested nets.
-  // Restrict it to large, overflow-clean nets where compaction dominates.
-  const bool enableBackboneMode
-      = oldTreeOverflow == 0 && (numPseudoPins >= 10 || box.hp() >= 170);
-  if (enableBackboneMode) {
-    int minXPin = -1;
-    int maxXPin = -1;
-    int minYPin = -1;
-    int maxYPin = -1;
-    int diameterA = -1;
-    int diameterB = -1;
-    int64_t diameter = -1;
-    for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
-      const auto& pseudoPin = graph_.getPseudoPin(pinIndex);
-      if (minXPin == -1
-          || pseudoPin.point.x() < graph_.getPseudoPin(minXPin).point.x()) {
-        minXPin = pinIndex;
-      }
-      if (maxXPin == -1
-          || pseudoPin.point.x() > graph_.getPseudoPin(maxXPin).point.x()) {
-        maxXPin = pinIndex;
-      }
-      if (minYPin == -1
-          || pseudoPin.point.y() < graph_.getPseudoPin(minYPin).point.y()) {
-        minYPin = pinIndex;
-      }
-      if (maxYPin == -1
-          || pseudoPin.point.y() > graph_.getPseudoPin(maxYPin).point.y()) {
-        maxYPin = pinIndex;
-      }
-      for (int otherPin = pinIndex + 1; otherPin < numPseudoPins; otherPin++) {
-        const auto& other = graph_.getPseudoPin(otherPin);
-        const int64_t dist
-            = std::llabs(static_cast<int64_t>(pseudoPin.point.x())
-                         - other.point.x())
-              + std::llabs(static_cast<int64_t>(pseudoPin.point.y())
-                           - other.point.y());
-        if (dist > diameter) {
-          diameter = dist;
-          diameterA = pinIndex;
-          diameterB = otherPin;
-        }
-      }
-    }
-
-    addBackboneSeed(diameterA, diameterB);
-    addBackboneSeed(minXPin, maxXPin);
-    addBackboneSeed(minYPin, maxYPin);
-    addBackboneSeed(startPinIndex, farthestFromPrimary);
-
-    const int maxBackboneSeeds = numPseudoPins >= 16 ? 3 : 2;
-    if (backboneSeeds.size() > static_cast<size_t>(maxBackboneSeeds)) {
-      backboneSeeds.resize(maxBackboneSeeds);
-    }
-
-    for (const auto& seed : backboneSeeds) {
-      std::shared_ptr<Solution> backbonePath;
-      if (!findPinToPinPath(seed.sourcePin, seed.targetPin, backbonePath)) {
-        continue;
-      }
-      std::vector<std::shared_ptr<Solution>> candidateSolutions;
-      if (!runFromSeed(backbonePath, candidateSolutions)) {
-        continue;
-      }
-      const CandidateScore candidateScore = scoreSolutions(candidateSolutions);
-      if (isBetterCandidate(candidateScore, bestScore)) {
-        bestScore = candidateScore;
-        bestSolutions = std::move(candidateSolutions);
-      }
     }
   }
 
