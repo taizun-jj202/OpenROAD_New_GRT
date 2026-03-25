@@ -87,18 +87,18 @@ int GLOBAL_CAP_ADJ(int x, float rudy, int layerID) //layerID starting from 0, i.
 			if (layerID <= 0)
 				adj = 1.00f;
 			else if (layerID == 1)
-				adj = 0.90f + (1.00f - 0.90f) / (1.0f + exp(0.9f * (rudy - 8.5f)));
+				adj = 0.92f + (1.00f - 0.92f) / (1.0f + exp(0.9f * (rudy - 9.0f)));
 			else if (layerID == 2)
-				adj = 0.92f + (1.00f - 0.92f) / (1.0f + exp(0.9f * (rudy - 8.5f)));
+				adj = 0.94f + (1.00f - 0.94f) / (1.0f + exp(0.9f * (rudy - 9.2f)));
 			else if (layerID >= 3 && layerID <= 4)
-				adj = 0.95f + (1.00f - 0.95f) / (1.0f + exp(0.8f * (rudy - 9.5f)));
+				adj = 0.96f + (1.00f - 0.96f) / (1.0f + exp(0.8f * (rudy - 9.8f)));
 			else if (layerID >= 5)
 				adj = 0.98f;
 
-			if (rudy < 6.0f)
+			if (rudy < 7.5f)
 				adj = 1.0f;
 			else if (rudy > 12.0f)
-				adj *= 0.92f;
+				adj *= 0.93f;
 		} else if (NEWGR_CAP_MODEL == 4) {
 			// Hybrid profile: direct trunks in sparse regions, CUGR-like squeeze
 			// only inside sustained hotspots.

@@ -57,8 +57,8 @@ void applyRouteProfile(NewgrEngine::RouteProfile profile)
       // Extremely WL-biased mode to expose short alternatives.
       NEWGR_CAP_MODEL = 3;
       NEWGR_CAP_SCALE = 1.0f;
-      NEWGR_RUDY_WEIGHT_SCALE = 0.06f;
-      NEWGR_PIN_DENSITY_SCALE = 0.10f;
+      NEWGR_RUDY_WEIGHT_SCALE = 0.02f;
+      NEWGR_PIN_DENSITY_SCALE = 0.04f;
       break;
     case NewgrEngine::RouteProfile::kPinDensityFocused:
       // CUGR-like local density pressure while preserving direct trunks.
@@ -270,7 +270,9 @@ NetRouteMap NewgrEngine::runLegacySqueeze()
 
 NetRouteMap NewgrEngine::runDirectWirelength()
 {
-  return runWithConfig(/*max_maze_round=*/120,
+  // CUGR-style directness pressure + longer search horizon to recover short
+  // alternatives that only appear after a few negotiated maze rounds.
+  return runWithConfig(/*max_maze_round=*/220,
                        static_cast<int>(Algo::DetPart_Astar_Local),
                        /*warn_id=*/415,
                        RouteProfile::kDirectWirelength);
@@ -278,8 +280,9 @@ NetRouteMap NewgrEngine::runDirectWirelength()
 
 NetRouteMap NewgrEngine::runUltraDirectWirelength()
 {
-  return runWithConfig(/*max_maze_round=*/80,
-                       static_cast<int>(Algo::NonDet),
+  // SPRoute deterministic partitioning + ultra-direct soft-cap profile.
+  return runWithConfig(/*max_maze_round=*/180,
+                       static_cast<int>(Algo::DetPart_Astar_RUDY),
                        /*warn_id=*/416,
                        RouteProfile::kUltraDirectWirelength);
 }

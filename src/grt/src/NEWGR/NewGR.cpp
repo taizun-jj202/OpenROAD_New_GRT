@@ -796,21 +796,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               ? std::max<int64_t>(1, tile_size / 68)
               : (policy.medium_net ? std::max<int64_t>(1, tile_size / 64)
                                    : std::max<int64_t>(1, tile_size / 60));
-    int64_t direct_min_wl_drop
-        = policy.long_net
-              ? std::max<int64_t>(1, tile_size / 96)
-              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 90)
-                                   : std::max<int64_t>(1, tile_size / 84));
-    int64_t ultra_direct_min_wl_drop
-        = policy.long_net
-              ? std::max<int64_t>(1, tile_size / 120)
-              : (policy.medium_net ? std::max<int64_t>(1, tile_size / 112)
-                                   : std::max<int64_t>(1, tile_size / 104));
+    int64_t direct_min_wl_drop = std::max<int64_t>(1, tile_size / 1200);
+    int64_t ultra_direct_min_wl_drop = std::max<int64_t>(1, tile_size / 1600);
     if (ultra_wl_mode) {
       exploratory_min_wl_drop = std::max<int64_t>(1, tile_size / 120);
       aggressive_min_wl_drop = std::max<int64_t>(1, tile_size / 140);
-      direct_min_wl_drop = std::max<int64_t>(1, tile_size / 180);
-      ultra_direct_min_wl_drop = std::max<int64_t>(1, tile_size / 220);
+      direct_min_wl_drop = std::max<int64_t>(1, tile_size / 1800);
+      ultra_direct_min_wl_drop = std::max<int64_t>(1, tile_size / 2400);
     }
     consider(balanced_routes, RouteSource::kNewgrBalanced, 0, false);
     consider(wirelength_routes, RouteSource::kNewgrWirelength, 0, false);
@@ -1930,7 +1922,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               || candidate.source == RouteSource::kNewgrDirectWirelength
               || candidate.source == RouteSource::kNewgrUltraDirectWirelength;
 
-        if (aggressive_profile_source && wl_gain_vs_best < std::max<int64_t>(1, tile_size / 24)) {
+        if (aggressive_profile_source
+            && wl_gain_vs_best < std::max<int64_t>(1, tile_size / 120)) {
           continue;
         }
         const int64_t allowed_congestion_delta
