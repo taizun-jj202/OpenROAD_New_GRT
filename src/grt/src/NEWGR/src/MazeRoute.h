@@ -54,10 +54,16 @@ class SparseGraph
   }
 
   int getPinVertex(const int pin_index) const { return pin_vertex_[pin_index]; }
+  const std::vector<int>& getVertexPins(const int vertex) const
+  {
+    static const std::vector<int> kEmptyPins;
+    auto it = vertex_pins_.find(vertex);
+    return it == vertex_pins_.end() ? kEmptyPins : it->second;
+  }
   int getVertexPin(const int vertex) const
   {
-    auto it = vertex_pin_.find(vertex);
-    return it == vertex_pin_.end() ? -1 : it->second;
+    const auto& pins = getVertexPins(vertex);
+    return pins.empty() ? -1 : pins.front();
   }
 
   int getNextVertex(const int vertex, const int edge_index) const
@@ -89,7 +95,7 @@ class SparseGraph
   std::vector<GRPoint> vertices_;
   std::vector<std::array<int, 3>> edges_;
   std::vector<std::array<CostT, 3>> costs_;
-  robin_hood::unordered_map<int, int> vertex_pin_;
+  robin_hood::unordered_map<int, std::vector<int>> vertex_pins_;
   std::vector<int> pin_vertex_;
 };
 

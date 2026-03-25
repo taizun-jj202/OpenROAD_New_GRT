@@ -30,7 +30,7 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   vertices_.clear();
   edges_.clear();
   costs_.clear();
-  vertex_pin_.clear();
+  vertex_pins_.clear();
   pin_vertex_.clear();
 
   const int xSize = grid_graph_->getSize(0);
@@ -248,7 +248,7 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
     const int xi = xtoxi[pin.point.x()];
     const int yi = ytoyi[pin.point.y()];
     const int u = getVertexIndex(0, xi, yi);
-    vertex_pin_.emplace(u, pinIndex);
+    vertex_pins_[u].push_back(pinIndex);
     pin_vertex_[pinIndex] = u;
     // Set the cost of the diff-layer connection at u to be 0
     costs_[u][2] = 0;
@@ -396,8 +396,19 @@ void MazeRoute::run()
     };
 
     std::vector<bool> visited(numPseudoPins, false);
-    visited[startPin] = true;
-    int numDetached = numPseudoPins - 1;
+    int numDetached = numPseudoPins;
+    auto markVisitedPinsAtVertex = [&](int vertex) {
+      int newlyVisited = 0;
+      const auto& pinsAtVertex = graph_.getVertexPins(vertex);
+      for (const int pinIndex : pinsAtVertex) {
+        if (!visited[pinIndex]) {
+          visited[pinIndex] = true;
+          newlyVisited++;
+        }
+      }
+      return newlyVisited;
+    };
+    numDetached -= markVisitedPinsAtVertex(graph_.getPinVertex(startPin));
     updateSolution(
         std::make_shared<Solution>(0, graph_.getPinVertex(startPin), nullptr));
 
@@ -407,9 +418,15 @@ void MazeRoute::run()
       while (!queue.empty()) {
         auto solution = queue.top();
         queue.pop();
-        foundPinIndex = graph_.getVertexPin(solution->vertex);
-        if (foundPinIndex != -1 && !visited[foundPinIndex]) {
-          foundSolution = std::move(solution);
+        const auto& pinsAtVertex = graph_.getVertexPins(solution->vertex);
+        for (const int pinIndex : pinsAtVertex) {
+          if (!visited[pinIndex]) {
+            foundPinIndex = pinIndex;
+            foundSolution = std::move(solution);
+            break;
+          }
+        }
+        if (foundSolution) {
           break;
         }
         if (solution->cost > minCosts[solution->vertex]) {
@@ -437,8 +454,7 @@ void MazeRoute::run()
       }
 
       output.emplace_back(foundSolution);
-      visited[foundPinIndex] = true;
-      numDetached -= 1;
+      numDetached -= markVisitedPinsAtVertex(foundSolution->vertex);
 
       // Multi-source expansion: every accepted path is added as zero-cost
       // frontier so the next connection can attach to any routed branch.
@@ -552,8 +568,33 @@ std::shared_ptr<SteinerTreeNode> MazeRoute::getSteinerTree() const
     return nullptr;
   }
 
-  std::vector<bool> visited(net_->getNumPins(), false);
   robin_hood::unordered_map<int, std::shared_ptr<SteinerTreeNode>> created;
+  auto mergeVertexPinLayers = [&](int vertex,
+                                  const std::shared_ptr<SteinerTreeNode>& node) {
+    const auto& pinsAtVertex = graph_.getVertexPins(vertex);
+    if (pinsAtVertex.empty()) {
+      return;
+    }
+    bool hasLayers = false;
+    IntervalT mergedLayers;
+    for (const int pinIndex : pinsAtVertex) {
+      const auto& layers = graph_.getPseudoPin(pinIndex).layers;
+      if (!hasLayers) {
+        mergedLayers = layers;
+        hasLayers = true;
+      } else {
+        mergedLayers.UnionWith(layers);
+      }
+    }
+    if (!hasLayers) {
+      return;
+    }
+    if (node->getFixedLayers().IsValid()) {
+      node->getFixedLayers().UnionWith(mergedLayers);
+    } else {
+      node->setFixedLayers(mergedLayers);
+    }
+  };
   for (auto& solution : solutions_) {
     std::shared_ptr<Solution> temp = solution;
     std::shared_ptr<SteinerTreeNode> lastNode = nullptr;
@@ -570,14 +611,16 @@ std::shared_ptr<SteinerTreeNode> MazeRoute::getSteinerTree() const
           tree = node;
         }
         if (!lastNode || !temp->prev) {
-          // Both the start and the end of the path should contain pins
-          const int pinIndex = graph_.getVertexPin(temp->vertex);
-          assert(pinIndex != -1);
-          node->setFixedLayers(graph_.getPseudoPin(pinIndex).layers);
+          // Both the start and the end of a path represent pseudo pins.
+          // Merge all colocated pin layer constraints at this vertex.
+          mergeVertexPinLayers(temp->vertex, node);
         }
         lastNode = std::move(node);
         temp = temp->prev;
       } else {
+        if (!lastNode || !temp->prev) {
+          mergeVertexPinLayers(temp->vertex, it->second);
+        }
         if (lastNode) {
           it->second->addChild(lastNode);
         }

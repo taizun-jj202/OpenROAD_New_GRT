@@ -210,12 +210,9 @@ bool isStrictWirelengthScoreBetter(const RouteScore& candidate,
     return false;
   }
   if (candidate.overflow_edges < baseline.overflow_edges) {
-    const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
-    // Preserve overflow relief while keeping the route close to wirelength
-    // neutral.
-    const uint64_t allowedIncrease
-        = std::max<uint64_t>(1ULL, static_cast<uint64_t>(overflowGain) / 12ULL);
-    if (candidate.wire_length > baseline.wire_length + allowedIncrease) {
+    // Stage-7 compaction is wirelength-first. Keep overflow gains only when
+    // they do not inflate wirelength.
+    if (candidate.wire_length > baseline.wire_length) {
       return false;
     }
     return candidate.via_count <= baseline.via_count + 2;
@@ -1157,7 +1154,7 @@ void CUGR::strictWirelengthCompaction()
   const bool useXAxisWavefront = (strictCallCount % 2 == 0);
   strictCallCount++;
   const int compactionBudget
-      = std::min(totalNets, std::max(6144, (totalNets * 3) / 5));
+      = std::min(totalNets, std::max(8192, (totalNets * 7) / 10));
   if (compactionBudget <= 0) {
     return;
   }
@@ -1371,6 +1368,10 @@ void CUGR::route()
   // Final wirelength polish: near-pure shortest-path pressure and lower via
   // cost to collapse residual detours on clean nets.
   grid_graph_->setStageCostScales(0.0, 0.0, 0.78);
+  strictWirelengthCompaction();
+  grid_graph_->setStageCostScales(0.0, 0.0, 0.74);
+  strictWirelengthCompaction();
+  grid_graph_->setStageCostScales(0.0, 0.0, 0.70);
   strictWirelengthCompaction();
 
   printStatistics();
