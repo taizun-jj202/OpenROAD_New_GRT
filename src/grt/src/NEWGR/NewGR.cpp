@@ -6063,6 +6063,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       hyper_absolute_wl_result.name = "hybrid-netmix-hyper-absolute-wl";
       const ScenarioResult* hyper_anchor_hybrid
           = find_scenario("hybrid-netmix-absolute-via-recover");
+      const ScenarioResult* absolute_via_recover_hybrid = hyper_anchor_hybrid;
       if (hyper_anchor_hybrid == nullptr) {
         hyper_anchor_hybrid = absolute_wl_hybrid;
       }
@@ -6299,27 +6300,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         hyper_via_stabilized_result.routes = hyper_via_anchor_hybrid->routes;
 
         const long via_stab_per_net_wl_backoff_guard
-            = std::max<long>(tile_size * 2L, 1200L);
+            = std::max<long>(tile_size * 3L, 1800L);
         const long via_stab_total_wl_backoff_budget = std::max<long>(
-            tile_size * 7000L,
+            tile_size * 11000L,
             static_cast<long>(std::ceil(
                 static_cast<double>(hyper_via_anchor_hybrid->metrics.wirelength_dbu)
-                * 0.00028)));
+                * 0.00045)));
         const long via_stab_via_gain_target = std::max<long>(
-            300L,
+            420L,
             static_cast<long>(std::ceil(
                 static_cast<double>(hyper_via_anchor_hybrid->metrics.via_count)
-                * 0.0030)));
+                * 0.0042)));
         const long via_stab_via_gain_cap = std::max<long>(
-            640L,
+            980L,
             static_cast<long>(std::ceil(
                 static_cast<double>(hyper_via_anchor_hybrid->metrics.via_count)
-                * 0.0060)));
-        const long via_stab_detour_gain_guard = std::max<long>(tile_size * 4L, 1800L);
+                * 0.0092)));
+        const long via_stab_detour_gain_guard = std::max<long>(tile_size * 3L, 1400L);
         const long via_stab_high_layer_gain_guard
-            = std::max<long>(tile_size * 8L, 4200L);
+            = std::max<long>(tile_size * 6L, 3200L);
         const long via_stab_long_hpwl_threshold
-            = std::max<long>(tile_size * 20L, 10000L);
+            = std::max<long>(tile_size * 18L, 9000L);
 
         long via_stab_total_wl_backoff = 0L;
         long via_stab_total_via_gain = 0L;
@@ -6335,6 +6336,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         int via_stab_layerlift_imports = 0;
         int via_stab_anchor_imports = 0;
         int via_stab_longhpwl_imports = 0;
+        int via_stab_corridor_imports = 0;
+        int via_stab_adaptive_imports = 0;
+        int via_stab_layercompact_imports = 0;
 
         for (auto& [db_net, selected_route] : hyper_via_stabilized_result.routes) {
           if (db_net == nullptr) {
@@ -6373,14 +6377,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 = collectRouteEdgeStats(donor_it->second, grouter_->grid_);
             const long wl_backoff
                 = donor_stats.wirelength_dbu - anchor_stats.wirelength_dbu;
-            if (wl_backoff > via_stab_per_net_wl_backoff_guard) {
+            const long per_net_backoff_guard = is_long_net
+                                                   ? via_stab_per_net_wl_backoff_guard * 2L
+                                                   : via_stab_per_net_wl_backoff_guard;
+            if (wl_backoff > per_net_backoff_guard) {
               return;
             }
 
             const long via_gain
                 = static_cast<long>(donor_stats.via_count)
                   - static_cast<long>(anchor_stats.via_count);
-            if (via_gain > 16L) {
+            const long per_net_via_gain_cap = is_long_net ? 24L : 18L;
+            if (via_gain > per_net_via_gain_cap) {
               return;
             }
 
@@ -6394,7 +6402,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             const bool structural_gain
                 = detour_gain >= via_stab_detour_gain_guard
                   || high_layer_gain >= via_stab_high_layer_gain_guard;
-            const bool useful_via_gain = via_gain >= 2L;
+            const long min_useful_via_gain = is_long_net ? 1L : 2L;
+            const bool useful_via_gain = via_gain >= min_useful_via_gain;
             if (!structural_gain && !useful_via_gain) {
               return;
             }
@@ -6406,15 +6415,15 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               return;
             }
 
-            double score = static_cast<double>(detour_gain) * 0.85
-                           + static_cast<double>(high_layer_gain) * 0.030
-                           + static_cast<double>(via_gain) * 520.0
-                           - static_cast<double>(std::max(0L, wl_backoff)) * 2.4;
+            double score = static_cast<double>(detour_gain) * 0.90
+                           + static_cast<double>(high_layer_gain) * 0.034
+                           + static_cast<double>(via_gain) * 640.0
+                           - static_cast<double>(std::max(0L, wl_backoff)) * 2.6;
             if (is_long_net) {
-              score += 350.0;
+              score += 420.0;
             }
             if (via_gain < 0) {
-              score -= static_cast<double>(-via_gain) * 700.0;
+              score -= static_cast<double>(-via_gain) * 760.0;
             }
             if (score <= 1e-3) {
               return;
@@ -6450,6 +6459,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
           consider_via_stabilizer(layer_lift_wl_hybrid, 5);
           consider_via_stabilizer(wl_hybrid, 6);
           consider_via_stabilizer(longhpwl_radical_hybrid, 7);
+          consider_via_stabilizer(wl_corridor_hybrid, 8);
+          consider_via_stabilizer(length_adaptive_hybrid, 9);
+          consider_via_stabilizer(layer_compact_hybrid, 10);
 
           if (best_route == nullptr || best_score <= 1e-3) {
             continue;
@@ -6491,6 +6503,12 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             via_stab_anchor_imports++;
           } else if (best_donor == 7) {
             via_stab_longhpwl_imports++;
+          } else if (best_donor == 8) {
+            via_stab_corridor_imports++;
+          } else if (best_donor == 9) {
+            via_stab_adaptive_imports++;
+          } else if (best_donor == 10) {
+            via_stab_layercompact_imports++;
           }
         }
 
@@ -6502,8 +6520,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               GNR,
               7365,
               "NEWGR hybrid-netmix-hyper-via-stabilized-wl imported "
-              "deep/drstable/budgeted/layerbudget/layerlift/anchor/longhpwl nets "
-              "{}/{}/{}/{}/{}/{}/{}, wirelength {:.0f} um, vias {}, swapped "
+              "deep/drstable/budgeted/layerbudget/layerlift/anchor/longhpwl/"
+              "corridor/adaptive/layercompact nets "
+              "{}/{}/{}/{}/{}/{}/{}/{}/{}/{}, wirelength {:.0f} um, vias {}, swapped "
               "nets {}, wl backoff {}/{}, via gain target {}/{}, detour gain "
               "sum {}, high-layer gain sum {}, wl-clamped nets {}, "
               "via-clamped nets {}, anchor '{}'",
@@ -6514,6 +6533,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               via_stab_layerlift_imports,
               via_stab_anchor_imports,
               via_stab_longhpwl_imports,
+              via_stab_corridor_imports,
+              via_stab_adaptive_imports,
+              via_stab_layercompact_imports,
               hyper_via_stabilized_result.metrics.wirelength_um,
               hyper_via_stabilized_result.metrics.via_count,
               via_stab_swapped_nets,
@@ -6526,7 +6548,257 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               via_stab_wl_clamped_nets,
               via_stab_via_clamped_nets,
               hyper_via_anchor_hybrid->name);
+
+          ScenarioResult hyper_via_ultra_result;
+          hyper_via_ultra_result.name = "hybrid-netmix-hyper-via-ultra-wl";
+          hyper_via_ultra_result.routes = hyper_via_stabilized_result.routes;
+
+          const long ultra_per_net_wl_backoff_guard
+              = std::max<long>(tile_size * 2L, 1400L);
+          const long ultra_total_wl_backoff_budget = std::max<long>(
+              tile_size * 12000L,
+              static_cast<long>(std::ceil(
+                  static_cast<double>(hyper_via_anchor_hybrid->metrics.wirelength_dbu)
+                  * 0.00055)));
+          const long ultra_via_gain_target = std::max<long>(
+              680L,
+              static_cast<long>(std::ceil(
+                  static_cast<double>(hyper_via_anchor_hybrid->metrics.via_count)
+                  * 0.0065)));
+          const long ultra_via_gain_cap = std::max<long>(
+              1400L,
+              static_cast<long>(std::ceil(
+                  static_cast<double>(hyper_via_anchor_hybrid->metrics.via_count)
+                  * 0.0130)));
+          const long ultra_detour_gain_guard = std::max<long>(tile_size * 3L, 1200L);
+          const long ultra_high_layer_gain_guard
+              = std::max<long>(tile_size * 7L, 3600L);
+          const long ultra_long_hpwl_threshold
+              = std::max<long>(tile_size * 18L, 9000L);
+
+          long ultra_total_wl_backoff = 0L;
+          long ultra_total_via_gain = 0L;
+          long ultra_total_detour_gain = 0L;
+          long ultra_total_high_layer_gain = 0L;
+          int ultra_swapped_nets = 0;
+          int ultra_wl_clamped_nets = 0;
+          int ultra_via_clamped_nets = 0;
+          int ultra_from_hyper_abs = 0;
+          int ultra_from_abs_recover = 0;
+          int ultra_from_anchor_deep = 0;
+          int ultra_from_drstable = 0;
+          int ultra_from_budgeted = 0;
+          int ultra_from_layerbudget = 0;
+          int ultra_from_layerlift = 0;
+          int ultra_from_corridor = 0;
+          int ultra_from_adaptive = 0;
+          int ultra_from_layercompact = 0;
+          int ultra_from_longhpwl = 0;
+
+          for (auto& [db_net, selected_route] : hyper_via_ultra_result.routes) {
+            if (db_net == nullptr) {
+              continue;
+            }
+
+            const RouteEdgeStats anchor_stats
+                = collectRouteEdgeStats(selected_route, grouter_->grid_);
+            const long anchor_hpwl = getRouteBBoxHpwl(selected_route);
+            const long anchor_detour
+                = std::max(0L, anchor_stats.wirelength_dbu - anchor_hpwl);
+            const bool is_long_net
+                = anchor_hpwl >= ultra_long_hpwl_threshold
+                  || anchor_stats.wirelength_dbu >= ultra_long_hpwl_threshold * 2L;
+
+            const GRoute* best_route = nullptr;
+            RouteEdgeStats best_stats = anchor_stats;
+            long best_wl_backoff = 0L;
+            long best_via_gain = 0L;
+            long best_detour_gain = 0L;
+            long best_high_layer_gain = 0L;
+            double best_score = 0.0;
+            int best_donor = 0;
+
+            auto consider_ultra_stabilizer = [&](const ScenarioResult* donor,
+                                                 int donor_id) {
+              if (donor == nullptr) {
+                return;
+              }
+              const auto donor_it = donor->routes.find(db_net);
+              if (donor_it == donor->routes.end()) {
+                return;
+              }
+
+              const RouteEdgeStats donor_stats
+                  = collectRouteEdgeStats(donor_it->second, grouter_->grid_);
+              const long wl_backoff
+                  = donor_stats.wirelength_dbu - anchor_stats.wirelength_dbu;
+              const long per_net_backoff_guard = is_long_net
+                                                     ? ultra_per_net_wl_backoff_guard * 2L
+                                                     : ultra_per_net_wl_backoff_guard;
+              if (wl_backoff > per_net_backoff_guard) {
+                return;
+              }
+
+              const long via_gain
+                  = static_cast<long>(donor_stats.via_count)
+                    - static_cast<long>(anchor_stats.via_count);
+              const long per_net_via_gain_cap = is_long_net ? 28L : 20L;
+              if (via_gain > per_net_via_gain_cap) {
+                return;
+              }
+
+              const long donor_hpwl = getRouteBBoxHpwl(donor_it->second);
+              const long donor_detour
+                  = std::max(0L, donor_stats.wirelength_dbu - donor_hpwl);
+              const long detour_gain = anchor_detour - donor_detour;
+              const long high_layer_gain = std::max(
+                  0L, donor_stats.high_layer_dbu - anchor_stats.high_layer_dbu);
+              const bool structural_gain
+                  = detour_gain >= ultra_detour_gain_guard
+                    || high_layer_gain >= ultra_high_layer_gain_guard;
+              const bool useful_via_gain = via_gain >= (is_long_net ? 1L : 2L);
+              if (!structural_gain && !useful_via_gain) {
+                return;
+              }
+
+              const double score = static_cast<double>(detour_gain) * 0.95
+                                   + static_cast<double>(high_layer_gain) * 0.040
+                                   + static_cast<double>(via_gain) * 760.0
+                                   - static_cast<double>(std::max(0L, wl_backoff))
+                                         * 3.1
+                                   - static_cast<double>(std::max(0L, -via_gain))
+                                         * 840.0
+                                   + (is_long_net ? 450.0 : 0.0);
+              if (score <= 1e-3) {
+                return;
+              }
+
+              const bool better_score = best_route == nullptr
+                                        || score > best_score + 1e-3;
+              const bool tie_break_wl = std::abs(score - best_score) <= 1e-3
+                                        && donor_stats.wirelength_dbu
+                                               < best_stats.wirelength_dbu;
+              const bool tie_break_via = std::abs(score - best_score) <= 1e-3
+                                         && donor_stats.wirelength_dbu
+                                                == best_stats.wirelength_dbu
+                                         && donor_stats.via_count > best_stats.via_count;
+              if (!(better_score || tie_break_wl || tie_break_via)) {
+                return;
+              }
+
+              best_route = &donor_it->second;
+              best_stats = donor_stats;
+              best_wl_backoff = std::max(0L, wl_backoff);
+              best_via_gain = via_gain;
+              best_detour_gain = detour_gain;
+              best_high_layer_gain = high_layer_gain;
+              best_score = score;
+              best_donor = donor_id;
+            };
+
+            consider_ultra_stabilizer(hyper_anchor_hybrid, 1);
+            consider_ultra_stabilizer(absolute_via_recover_hybrid, 2);
+            consider_ultra_stabilizer(anchor_wl_deep_hybrid, 3);
+            consider_ultra_stabilizer(dr_stable_hybrid, 4);
+            consider_ultra_stabilizer(budgeted_lift_wl_hybrid, 5);
+            consider_ultra_stabilizer(wl_layerbudget_hybrid, 6);
+            consider_ultra_stabilizer(layer_lift_wl_hybrid, 7);
+            consider_ultra_stabilizer(wl_corridor_hybrid, 8);
+            consider_ultra_stabilizer(length_adaptive_hybrid, 9);
+            consider_ultra_stabilizer(layer_compact_hybrid, 10);
+            consider_ultra_stabilizer(longhpwl_radical_hybrid, 11);
+
+            if (best_route == nullptr || best_score <= 1e-3) {
+              continue;
+            }
+
+            const bool wl_budget_ok
+                = ultra_total_wl_backoff + best_wl_backoff
+                  <= ultra_total_wl_backoff_budget;
+            const bool force_via_recovery
+                = ultra_total_via_gain < ultra_via_gain_target && best_via_gain >= 2L;
+            if (!wl_budget_ok && !force_via_recovery) {
+              ultra_wl_clamped_nets++;
+              continue;
+            }
+            if (best_via_gain > 0
+                && ultra_total_via_gain + best_via_gain > ultra_via_gain_cap) {
+              ultra_via_clamped_nets++;
+              continue;
+            }
+
+            selected_route = *best_route;
+            ultra_swapped_nets++;
+            ultra_total_wl_backoff += best_wl_backoff;
+            ultra_total_via_gain += best_via_gain;
+            ultra_total_detour_gain += best_detour_gain;
+            ultra_total_high_layer_gain += best_high_layer_gain;
+            if (best_donor == 1) {
+              ultra_from_hyper_abs++;
+            } else if (best_donor == 2) {
+              ultra_from_abs_recover++;
+            } else if (best_donor == 3) {
+              ultra_from_anchor_deep++;
+            } else if (best_donor == 4) {
+              ultra_from_drstable++;
+            } else if (best_donor == 5) {
+              ultra_from_budgeted++;
+            } else if (best_donor == 6) {
+              ultra_from_layerbudget++;
+            } else if (best_donor == 7) {
+              ultra_from_layerlift++;
+            } else if (best_donor == 8) {
+              ultra_from_corridor++;
+            } else if (best_donor == 9) {
+              ultra_from_adaptive++;
+            } else if (best_donor == 10) {
+              ultra_from_layercompact++;
+            } else if (best_donor == 11) {
+              ultra_from_longhpwl++;
+            }
+          }
+
           scenario_results.push_back(std::move(hyper_via_stabilized_result));
+
+          if (ultra_swapped_nets > 0) {
+            hyper_via_ultra_result.metrics
+                = compute_metrics(hyper_via_ultra_result.routes);
+            apply_routability_proxy(hyper_via_ultra_result.metrics);
+            logger_->info(
+                GNR,
+                7368,
+                "NEWGR hybrid-netmix-hyper-via-ultra-wl imported "
+                "hyperabs/absrecover/anchordeep/drstable/budgeted/layerbudget/"
+                "layerlift/corridor/adaptive/layercompact/longhpwl nets "
+                "{}/{}/{}/{}/{}/{}/{}/{}/{}/{}/{}, wirelength {:.0f} um, vias {}, "
+                "swapped nets {}, wl backoff {}/{}, via gain target {}/{}, "
+                "detour gain sum {}, high-layer gain sum {}, wl-clamped nets {}, "
+                "via-clamped nets {}, anchor '{}'",
+                ultra_from_hyper_abs,
+                ultra_from_abs_recover,
+                ultra_from_anchor_deep,
+                ultra_from_drstable,
+                ultra_from_budgeted,
+                ultra_from_layerbudget,
+                ultra_from_layerlift,
+                ultra_from_corridor,
+                ultra_from_adaptive,
+                ultra_from_layercompact,
+                ultra_from_longhpwl,
+                hyper_via_ultra_result.metrics.wirelength_um,
+                hyper_via_ultra_result.metrics.via_count,
+                ultra_swapped_nets,
+                ultra_total_wl_backoff,
+                ultra_total_wl_backoff_budget,
+                ultra_total_via_gain,
+                ultra_via_gain_target,
+                ultra_total_detour_gain,
+                ultra_total_high_layer_gain,
+                ultra_wl_clamped_nets,
+                ultra_via_clamped_nets,
+                hyper_via_anchor_hybrid->name);
+            scenario_results.push_back(std::move(hyper_via_ultra_result));
+          }
         }
       }
     }
@@ -6540,6 +6812,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     anchor_wl_deep_hybrid = find_scenario("hybrid-netmix-anchor-wl-deep");
     wl_corridor_hybrid = find_scenario("hybrid-netmix-wl-corridor");
     length_adaptive_hybrid = find_scenario("hybrid-netmix-length-adaptive");
+    const ScenarioResult* hyper_via_ultra_hybrid
+        = find_scenario("hybrid-netmix-hyper-via-ultra-wl");
     const ScenarioResult* hyper_via_stabilized_hybrid
         = find_scenario("hybrid-netmix-hyper-via-stabilized-wl");
 
@@ -6561,9 +6835,13 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     if (wl_hybrid != nullptr) {
       ScenarioResult patched_result;
       patched_result.name = "hybrid-netmix-cugr-patched";
-      patched_result.routes = hyper_via_stabilized_hybrid != nullptr
-                                  ? hyper_via_stabilized_hybrid->routes
-                                  : wl_hybrid->routes;
+      if (hyper_via_ultra_hybrid != nullptr) {
+        patched_result.routes = hyper_via_ultra_hybrid->routes;
+      } else if (hyper_via_stabilized_hybrid != nullptr) {
+        patched_result.routes = hyper_via_stabilized_hybrid->routes;
+      } else {
+        patched_result.routes = wl_hybrid->routes;
+      }
       const GuidePatchStats patch_stats = applyCugrGuidePatches(
           patched_result.routes,
           patch_alt_a != nullptr ? &patch_alt_a->routes : nullptr,
@@ -6754,6 +7032,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = find_scenario_by_name("hybrid-netmix-hyper-absolute-wl");
     const ScenarioResult* hyper_via_stabilized_ptr
         = find_scenario_by_name("hybrid-netmix-hyper-via-stabilized-wl");
+    const ScenarioResult* hyper_via_ultra_ptr
+        = find_scenario_by_name("hybrid-netmix-hyper-via-ultra-wl");
     const ScenarioResult* preferred_wl_ptr = nullptr;
 
     if (wl_anchor != nullptr && wl_layerbudget_ptr != nullptr) {
@@ -6831,7 +7111,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
       const ScenarioResult* radical_candidate = nullptr;
       for (const ScenarioResult* candidate :
-           std::array<const ScenarioResult*, 11>{budgeted_lift_ptr,
+           std::array<const ScenarioResult*, 12>{budgeted_lift_ptr,
                                                 layer_floor_wl_ptr,
                                                 layer_lift_wl_ptr,
                                                 absolute_wl_ptr,
@@ -6841,7 +7121,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                                                 wl_layerbudget_ptr,
                                                 radical_wl_fusion_ptr,
                                                 hyper_absolute_wl_ptr,
-                                                hyper_via_stabilized_ptr}) {
+                                                hyper_via_stabilized_ptr,
+                                                hyper_via_ultra_ptr}) {
         if (candidate == nullptr) {
           continue;
         }
@@ -7308,8 +7589,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     };
 
     std::vector<const ScenarioResult*> wl_champion_pool;
-    wl_champion_pool.reserve(25);
-    for (const char* name : std::array<const char*, 25>{
+    wl_champion_pool.reserve(26);
+    for (const char* name : std::array<const char*, 26>{
              "hybrid-netmix-anchor-wl-deep",
              "hybrid-netmix-anchor-wl-layerfloor",
              "hybrid-netmix-drt-elastic-wl",
@@ -7317,6 +7598,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
              "hybrid-netmix-radical-wl-fusion",
              "hybrid-netmix-hyper-absolute-wl",
              "hybrid-netmix-hyper-via-stabilized-wl",
+             "hybrid-netmix-hyper-via-ultra-wl",
              "hybrid-netmix-anchor-wl",
              "hybrid-netmix-wl-corridor",
              "hybrid-netmix-length-adaptive",
@@ -7624,7 +7906,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       };
 
       const ScenarioResult* strong_wl_upgrade = nullptr;
-      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 10>{
+      for (const ScenarioResult* candidate : std::array<const ScenarioResult*, 11>{
                budgeted_lift_ptr,
                layer_floor_wl_ptr,
                layer_lift_wl_ptr,
@@ -7634,7 +7916,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                cugr_sp_balance_ptr,
                radical_wl_fusion_ptr,
                hyper_absolute_wl_ptr,
-               hyper_via_stabilized_ptr}) {
+               hyper_via_stabilized_ptr,
+               hyper_via_ultra_ptr}) {
         if (!candidate_is_viable_wl_upgrade(candidate)) {
           continue;
         }
@@ -7957,7 +8240,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
               || forced_wl_ptr == wl_layerbudget_ptr
               || forced_wl_ptr == radical_wl_fusion_ptr
               || forced_wl_ptr == hyper_absolute_wl_ptr
-              || forced_wl_ptr == hyper_via_stabilized_ptr;
+              || forced_wl_ptr == hyper_via_stabilized_ptr
+              || forced_wl_ptr == hyper_via_ultra_ptr;
         const long radical_high_layer_floor = std::max<long>(
             tile_size * 10L,
             static_cast<long>(std::ceil(
@@ -8099,7 +8383,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                || name == "hybrid-netmix-absolute-wl-deep"
                || name == "hybrid-netmix-min-wl-wide"
                || name == "hybrid-netmix-cugr-sp-balance-wl"
-               || name == "hybrid-netmix-radical-wl-fusion";
+               || name == "hybrid-netmix-radical-wl-fusion"
+               || name == "hybrid-netmix-hyper-via-ultra-wl";
       };
 
       const ScenarioResult* wl_locked_ptr = forced_wl_ptr;
@@ -8321,6 +8606,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         = find_scenario_by_name("hybrid-netmix-hyper-absolute-wl");
     const ScenarioResult* hyper_via_lock_ptr
         = find_scenario_by_name("hybrid-netmix-hyper-via-stabilized-wl");
+    const ScenarioResult* hyper_via_ultra_lock_ptr
+        = find_scenario_by_name("hybrid-netmix-hyper-via-ultra-wl");
     if (forced_wl_ptr != nullptr && hyper_abs_lock_ptr != nullptr
         && hyper_via_lock_ptr != nullptr && forced_wl_ptr == hyper_abs_lock_ptr) {
       const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
@@ -8368,6 +8655,64 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 - hyper_abs_lock_ptr->metrics.high_layer_dbu,
             abs_proxy > 1e-9 ? (via_proxy - via_credit) / abs_proxy : 1.0);
         forced_wl_ptr = hyper_via_lock_ptr;
+      }
+    }
+    if (forced_wl_ptr != nullptr && hyper_via_lock_ptr != nullptr
+        && hyper_via_ultra_lock_ptr != nullptr
+        && forced_wl_ptr == hyper_via_lock_ptr) {
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
+      const long wl_backoff
+          = hyper_via_ultra_lock_ptr->metrics.wirelength_dbu
+            - hyper_via_lock_ptr->metrics.wirelength_dbu;
+      const long wl_guard = std::max<long>(tile_size * 3L, 1800L);
+      const long via_gain
+          = static_cast<long>(hyper_via_ultra_lock_ptr->metrics.via_count)
+            - static_cast<long>(hyper_via_lock_ptr->metrics.via_count);
+      const long min_via_gain = std::max<long>(
+          260L,
+          static_cast<long>(std::ceil(
+              static_cast<double>(hyper_via_lock_ptr->metrics.via_count) * 0.0024)));
+      const long detour_guard = std::max<long>(tile_size * 8L, 4200L);
+      const bool structural_guard
+          = hyper_via_ultra_lock_ptr->metrics.detour_dbu
+                 <= hyper_via_lock_ptr->metrics.detour_dbu + detour_guard
+            && hyper_via_ultra_lock_ptr->metrics.high_layer_dbu
+                   >= hyper_via_lock_ptr->metrics.high_layer_dbu
+                      - std::max<long>(tile_size * 3L, 1800L)
+            && hyper_via_ultra_lock_ptr->metrics.overflow_edges
+                   <= hyper_via_lock_ptr->metrics.overflow_edges;
+      const double via_proxy
+          = estimateDetailedRouteProxyCost(hyper_via_lock_ptr->metrics);
+      const double ultra_proxy
+          = estimateDetailedRouteProxyCost(hyper_via_ultra_lock_ptr->metrics);
+      const long high_layer_gain = std::max(
+          0L,
+          hyper_via_ultra_lock_ptr->metrics.high_layer_dbu
+              - hyper_via_lock_ptr->metrics.high_layer_dbu);
+      const double ultra_credit
+          = std::min(6800.0,
+                     std::max(0L, via_gain) * 1.35
+                         + static_cast<double>(high_layer_gain) * 0.006);
+      const bool proxy_guard
+          = ultra_proxy - ultra_credit + 1e-3 < via_proxy * 1.018;
+      if (wl_backoff <= wl_guard && via_gain >= min_via_gain && structural_guard
+          && proxy_guard) {
+        logger_->info(
+            GNR,
+            7369,
+            "NEWGR hyper-via ultra lock selecting '{}' over '{}' (wl backoff "
+            "{}, via gain {}, detour delta {}, high-layer delta {}, elastic "
+            "proxy ratio {:.3f}).",
+            hyper_via_ultra_lock_ptr->name,
+            hyper_via_lock_ptr->name,
+            wl_backoff,
+            via_gain,
+            hyper_via_ultra_lock_ptr->metrics.detour_dbu
+                - hyper_via_lock_ptr->metrics.detour_dbu,
+            hyper_via_ultra_lock_ptr->metrics.high_layer_dbu
+                - hyper_via_lock_ptr->metrics.high_layer_dbu,
+            via_proxy > 1e-9 ? (ultra_proxy - ultra_credit) / via_proxy : 1.0);
+        forced_wl_ptr = hyper_via_ultra_lock_ptr;
       }
     }
   }
