@@ -492,6 +492,82 @@ void MazeRoute::run()
                        output);
   };
 
+  // FastRoute-inspired multi-source/multi-sink reconnection:
+  // prebuild a shortest trunk between two distant pins, then grow the rest
+  // of the net from this seeded chain.
+  auto buildShortestPathSeed = [&](int startVertex, int targetVertex) {
+    if (startVertex < 0 || targetVertex < 0) {
+      return std::shared_ptr<Solution>(nullptr);
+    }
+    if (startVertex == targetVertex) {
+      return std::make_shared<Solution>(0, startVertex, nullptr);
+    }
+
+    const int numVertices = graph_.getNumVertices();
+    const CostT kInf = std::numeric_limits<CostT>::max() / 4;
+    std::vector<CostT> dist(numVertices, kInf);
+    std::vector<int> parent(numVertices, -1);
+    using QueueState = std::pair<CostT, int>;
+    std::priority_queue<QueueState,
+                        std::vector<QueueState>,
+                        std::greater<QueueState>>
+        queue;
+
+    dist[startVertex] = 0;
+    queue.emplace(0, startVertex);
+    while (!queue.empty()) {
+      const auto [cost, vertex] = queue.top();
+      queue.pop();
+      if (cost != dist[vertex]) {
+        continue;
+      }
+      if (vertex == targetVertex) {
+        break;
+      }
+      for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++) {
+        const int nextVertex = graph_.getNextVertex(vertex, edgeIndex);
+        if (nextVertex < 0) {
+          continue;
+        }
+        const CostT edgeCost = graph_.getEdgeCost(vertex, edgeIndex);
+        if (edgeCost < 0 || cost > kInf - edgeCost) {
+          continue;
+        }
+        const CostT nextCost = cost + edgeCost;
+        if (nextCost < dist[nextVertex]) {
+          dist[nextVertex] = nextCost;
+          parent[nextVertex] = vertex;
+          queue.emplace(nextCost, nextVertex);
+        }
+      }
+    }
+
+    if (dist[targetVertex] >= kInf) {
+      return std::shared_ptr<Solution>(nullptr);
+    }
+
+    std::vector<int> pathVertices;
+    for (int v = targetVertex; v != -1; v = parent[v]) {
+      pathVertices.push_back(v);
+      if (v == startVertex) {
+        break;
+      }
+    }
+    if (pathVertices.empty() || pathVertices.back() != startVertex) {
+      return std::shared_ptr<Solution>(nullptr);
+    }
+    std::reverse(pathVertices.begin(), pathVertices.end());
+
+    std::shared_ptr<Solution> path
+        = std::make_shared<Solution>(0, pathVertices.front(), nullptr);
+    for (size_t i = 1; i < pathVertices.size(); i++) {
+      path = std::make_shared<Solution>(dist[pathVertices[i]],
+                                        pathVertices[i],
+                                        path);
+    }
+    return path;
+  };
+
   struct CandidateScore
   {
     uint64_t unique_wire_length = std::numeric_limits<uint64_t>::max();
@@ -561,6 +637,106 @@ void MazeRoute::run()
   for (const int candidateStart : startCandidates) {
     std::vector<std::shared_ptr<Solution>> candidateSolutions;
     if (!runFromStartPin(candidateStart, candidateSolutions)) {
+      continue;
+    }
+    const CandidateScore candidateScore = scoreSolutions(candidateSolutions);
+    if (isBetterCandidate(candidateScore, bestScore)) {
+      bestScore = candidateScore;
+      bestSolutions = std::move(candidateSolutions);
+    }
+  }
+
+  std::vector<std::pair<int, int>> trunkPinPairs;
+  if (numPseudoPins >= 4) {
+    auto addTrunkPair = [&](int pinA, int pinB) {
+      if (pinA < 0 || pinB < 0 || pinA == pinB) {
+        return;
+      }
+      const int low = std::min(pinA, pinB);
+      const int high = std::max(pinA, pinB);
+      for (const auto& pair : trunkPinPairs) {
+        if (pair.first == low && pair.second == high) {
+          return;
+        }
+      }
+      trunkPinPairs.emplace_back(low, high);
+    };
+
+    int farthestA = -1;
+    int farthestB = -1;
+    int64_t farthestDist = -1;
+    int minXPin = -1;
+    int maxXPin = -1;
+    int minYPin = -1;
+    int maxYPin = -1;
+    int minDiagPin = -1;
+    int maxDiagPin = -1;
+
+    for (int i = 0; i < numPseudoPins; i++) {
+      const auto& pinI = graph_.getPseudoPin(i).point;
+      const int64_t diag = static_cast<int64_t>(pinI.x()) + pinI.y();
+      if (minXPin == -1
+          || pinI.x() < graph_.getPseudoPin(minXPin).point.x()) {
+        minXPin = i;
+      }
+      if (maxXPin == -1
+          || pinI.x() > graph_.getPseudoPin(maxXPin).point.x()) {
+        maxXPin = i;
+      }
+      if (minYPin == -1
+          || pinI.y() < graph_.getPseudoPin(minYPin).point.y()) {
+        minYPin = i;
+      }
+      if (maxYPin == -1
+          || pinI.y() > graph_.getPseudoPin(maxYPin).point.y()) {
+        maxYPin = i;
+      }
+      if (minDiagPin == -1
+          || diag < static_cast<int64_t>(graph_.getPseudoPin(minDiagPin)
+                                             .point.x())
+                         + graph_.getPseudoPin(minDiagPin).point.y()) {
+        minDiagPin = i;
+      }
+      if (maxDiagPin == -1
+          || diag > static_cast<int64_t>(graph_.getPseudoPin(maxDiagPin)
+                                             .point.x())
+                         + graph_.getPseudoPin(maxDiagPin).point.y()) {
+        maxDiagPin = i;
+      }
+      for (int j = i + 1; j < numPseudoPins; j++) {
+        const auto& pinJ = graph_.getPseudoPin(j).point;
+        const int64_t dist
+            = std::llabs(static_cast<int64_t>(pinI.x()) - pinJ.x())
+              + std::llabs(static_cast<int64_t>(pinI.y()) - pinJ.y());
+        if (dist > farthestDist) {
+          farthestDist = dist;
+          farthestA = i;
+          farthestB = j;
+        }
+      }
+    }
+
+    addTrunkPair(farthestA, farthestB);
+    addTrunkPair(minXPin, maxXPin);
+    addTrunkPair(minYPin, maxYPin);
+    addTrunkPair(minDiagPin, maxDiagPin);
+
+    const int maxTrunkCandidates
+        = numPseudoPins >= 12 ? 4 : (numPseudoPins >= 8 ? 3 : 2);
+    if (trunkPinPairs.size() > static_cast<size_t>(maxTrunkCandidates)) {
+      trunkPinPairs.resize(maxTrunkCandidates);
+    }
+  }
+
+  for (const auto& trunkPair : trunkPinPairs) {
+    const int startVertex = graph_.getPinVertex(trunkPair.first);
+    const int endVertex = graph_.getPinVertex(trunkPair.second);
+    const auto trunkSeed = buildShortestPathSeed(startVertex, endVertex);
+    if (!trunkSeed || !trunkSeed->prev) {
+      continue;
+    }
+    std::vector<std::shared_ptr<Solution>> candidateSolutions;
+    if (!runFromSeed(trunkSeed, candidateSolutions)) {
       continue;
     }
     const CandidateScore candidateScore = scoreSolutions(candidateSolutions);
