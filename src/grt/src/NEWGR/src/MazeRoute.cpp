@@ -647,8 +647,8 @@ void MazeRoute::run()
   }
 
   std::vector<std::pair<int, int>> trunkPinPairs;
-  const bool enableTrunkSeeds = numPseudoPins >= 4
-                                && (numPseudoPins >= 6 || box.hp() >= 120);
+  const bool enableTrunkSeeds = numPseudoPins >= 5
+                                && (numPseudoPins >= 7 || box.hp() >= 90);
   if (enableTrunkSeeds) {
     auto addTrunkPair = [&](int pinA, int pinB) {
       if (pinA < 0 || pinB < 0 || pinA == pinB) {
@@ -664,19 +664,19 @@ void MazeRoute::run()
       trunkPinPairs.emplace_back(low, high);
     };
 
-    int farthestA = -1;
-    int farthestB = -1;
-    int64_t farthestDist = -1;
+    int centerPin = -1;
+    int64_t nearestCenterDistance = std::numeric_limits<int64_t>::max();
     int minXPin = -1;
     int maxXPin = -1;
     int minYPin = -1;
     int maxYPin = -1;
-    int minDiagPin = -1;
-    int maxDiagPin = -1;
 
     for (int i = 0; i < numPseudoPins; i++) {
       const auto& pinI = graph_.getPseudoPin(i).point;
-      const int64_t diag = static_cast<int64_t>(pinI.x()) + pinI.y();
+      if (centerDistances[i] < nearestCenterDistance) {
+        nearestCenterDistance = centerDistances[i];
+        centerPin = i;
+      }
       if (minXPin == -1
           || pinI.x() < graph_.getPseudoPin(minXPin).point.x()) {
         minXPin = i;
@@ -693,38 +693,53 @@ void MazeRoute::run()
           || pinI.y() > graph_.getPseudoPin(maxYPin).point.y()) {
         maxYPin = i;
       }
-      if (minDiagPin == -1
-          || diag < static_cast<int64_t>(graph_.getPseudoPin(minDiagPin)
-                                             .point.x())
-                         + graph_.getPseudoPin(minDiagPin).point.y()) {
-        minDiagPin = i;
+    }
+
+    // Mix FastRoute multi-source trunking with CUGR-style local compaction:
+    // seed from the center toward directional extremes to avoid forcing a
+    // full net-diameter backbone on congestion-clean nets.
+    std::vector<int> directionalPins;
+    auto addDirectionalPin = [&](int pin) {
+      if (pin < 0) {
+        return;
       }
-      if (maxDiagPin == -1
-          || diag > static_cast<int64_t>(graph_.getPseudoPin(maxDiagPin)
-                                             .point.x())
-                         + graph_.getPseudoPin(maxDiagPin).point.y()) {
-        maxDiagPin = i;
+      if (std::find(directionalPins.begin(), directionalPins.end(), pin)
+          == directionalPins.end()) {
+        directionalPins.push_back(pin);
       }
-      for (int j = i + 1; j < numPseudoPins; j++) {
-        const auto& pinJ = graph_.getPseudoPin(j).point;
-        const int64_t dist
-            = std::llabs(static_cast<int64_t>(pinI.x()) - pinJ.x())
-              + std::llabs(static_cast<int64_t>(pinI.y()) - pinJ.y());
-        if (dist > farthestDist) {
-          farthestDist = dist;
-          farthestA = i;
-          farthestB = j;
-        }
+    };
+    addDirectionalPin(minXPin);
+    addDirectionalPin(maxXPin);
+    addDirectionalPin(minYPin);
+    addDirectionalPin(maxYPin);
+
+    if (centerPin >= 0) {
+      std::sort(directionalPins.begin(),
+                directionalPins.end(),
+                [&](int lhs, int rhs) {
+                  const auto& lhsPin = graph_.getPseudoPin(lhs).point;
+                  const auto& rhsPin = graph_.getPseudoPin(rhs).point;
+                  const auto& cPin = graph_.getPseudoPin(centerPin).point;
+                  const int64_t lhsDist
+                      = std::llabs(static_cast<int64_t>(lhsPin.x()) - cPin.x())
+                        + std::llabs(static_cast<int64_t>(lhsPin.y())
+                                     - cPin.y());
+                  const int64_t rhsDist
+                      = std::llabs(static_cast<int64_t>(rhsPin.x()) - cPin.x())
+                        + std::llabs(static_cast<int64_t>(rhsPin.y())
+                                     - cPin.y());
+                  if (lhsDist != rhsDist) {
+                    return lhsDist > rhsDist;
+                  }
+                  return lhs < rhs;
+                });
+      for (const int pin : directionalPins) {
+        addTrunkPair(centerPin, pin);
       }
     }
 
-    addTrunkPair(farthestA, farthestB);
-    addTrunkPair(minXPin, maxXPin);
-    addTrunkPair(minYPin, maxYPin);
-    addTrunkPair(minDiagPin, maxDiagPin);
-
     const int maxTrunkCandidates
-        = numPseudoPins >= 12 ? 3 : (numPseudoPins >= 8 ? 2 : 1);
+        = numPseudoPins >= 12 ? 4 : (numPseudoPins >= 8 ? 3 : 2);
     if (trunkPinPairs.size() > static_cast<size_t>(maxTrunkCandidates)) {
       trunkPinPairs.resize(maxTrunkCandidates);
     }

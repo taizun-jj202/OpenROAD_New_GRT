@@ -84,17 +84,21 @@ bool isBetterScore(const RouteScore& candidate, const RouteScore& baseline)
   }
   if (candidate.overflow_edges < baseline.overflow_edges) {
     const int overflowGain = baseline.overflow_edges - candidate.overflow_edges;
-    // Keep overflow reduction, but tightly cap wire inflation. This borrows
-    // FastRoute-style RRR acceptance pressure to prevent long detours from
-    // being admitted early and then requiring expensive cleanup later.
+    // Keep overflow reduction, but enforce a wirelength budget relative to the
+    // current tree. This combines FastRoute RRR gating with CUGR-style
+    // congestion awareness so sparse maze updates do not keep long detours.
+    const uint64_t overflowAllowance
+        = static_cast<uint64_t>(overflowGain) * 2ULL;
+    const uint64_t relativeAllowance
+        = std::max<uint64_t>(4ULL, baseline.wire_length / 320ULL);
     const uint64_t allowedIncrease
-        = static_cast<uint64_t>(overflowGain) * 5ULL;
+        = std::min<uint64_t>(overflowAllowance, relativeAllowance);
     const uint64_t allowedWireLength
         = baseline.wire_length + allowedIncrease;
     if (candidate.wire_length > allowedWireLength) {
       return false;
     }
-    const int viaSlack = std::max(1, overflowGain / 7);
+    const int viaSlack = std::max(1, overflowGain / 9);
     return candidate.via_count <= baseline.via_count + viaSlack;
   }
   if (candidate.overflow_edges > baseline.overflow_edges) {
