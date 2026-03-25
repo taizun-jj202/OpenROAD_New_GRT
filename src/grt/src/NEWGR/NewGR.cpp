@@ -7887,10 +7887,11 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
       }
     }
 
-    // SPRoute-style deterministic WL-plateau collapse:
-    // once we have an overflow-free candidate pool, lock to the absolute
-    // shortest-WL plateau and choose the most compact route (vias first),
-    // then use DR-proxy tie-breakers.
+    // SPRoute-style deterministic WL-plateau collapse with CUGR-style
+    // routability preservation:
+    // keep the shortest overflow-free WL plateau, but avoid low-layer
+    // collapses by preferring lower detour and stronger upper-layer
+    // guide elasticity before via minimization.
     int min_overflow_edges = std::numeric_limits<int>::max();
     long min_plateau_wl = std::numeric_limits<long>::max();
     for (const ScenarioResult& candidate : scenario_results) {
@@ -7904,25 +7905,43 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     }
     if (min_overflow_edges != std::numeric_limits<int>::max()
         && min_plateau_wl != std::numeric_limits<long>::max()) {
+      const int tile_size = std::max(grouter_->grid_->getTileSize(), 1);
       const long wl_plateau_band
           = std::max<long>(4L, static_cast<long>(std::ceil(
                                    static_cast<double>(min_plateau_wl) * 0.00001)));
-      const ScenarioResult* plateau_pick = nullptr;
+      const long detour_rise_guard = std::max<long>(tile_size * 14L, 5600L);
+      long via_rise_guard = std::numeric_limits<long>::max();
+      long high_layer_drop_guard = std::numeric_limits<long>::max();
+      if (forced_wl_ptr != nullptr) {
+        via_rise_guard = std::max<long>(
+            240L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(forced_wl_ptr->metrics.via_count) * 0.0025)));
+        high_layer_drop_guard = std::max<long>(
+            tile_size * 44L,
+            static_cast<long>(std::ceil(
+                static_cast<double>(forced_wl_ptr->metrics.high_layer_dbu) * 0.10)));
+      }
+
+      const ScenarioResult* plateau_pick = forced_wl_ptr;
       auto plateau_better = [&](const ScenarioResult& lhs,
                                 const ScenarioResult& rhs) {
-        if (lhs.metrics.via_count != rhs.metrics.via_count) {
-          return lhs.metrics.via_count < rhs.metrics.via_count;
+        if (lhs.metrics.wirelength_dbu != rhs.metrics.wirelength_dbu) {
+          return lhs.metrics.wirelength_dbu < rhs.metrics.wirelength_dbu;
+        }
+        if (lhs.metrics.detour_dbu != rhs.metrics.detour_dbu) {
+          return lhs.metrics.detour_dbu < rhs.metrics.detour_dbu;
+        }
+        if (lhs.metrics.high_layer_dbu != rhs.metrics.high_layer_dbu) {
+          return lhs.metrics.high_layer_dbu > rhs.metrics.high_layer_dbu;
         }
         const double lhs_proxy = estimateDetailedRouteProxyCost(lhs.metrics);
         const double rhs_proxy = estimateDetailedRouteProxyCost(rhs.metrics);
         if (std::abs(lhs_proxy - rhs_proxy) > 1e-3) {
           return lhs_proxy < rhs_proxy;
         }
-        if (lhs.metrics.detour_dbu != rhs.metrics.detour_dbu) {
-          return lhs.metrics.detour_dbu < rhs.metrics.detour_dbu;
-        }
-        if (lhs.metrics.high_layer_dbu != rhs.metrics.high_layer_dbu) {
-          return lhs.metrics.high_layer_dbu < rhs.metrics.high_layer_dbu;
+        if (lhs.metrics.via_count != rhs.metrics.via_count) {
+          return lhs.metrics.via_count < rhs.metrics.via_count;
         }
         return lhs.name < rhs.name;
       };
@@ -7934,6 +7953,27 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         if (candidate.metrics.wirelength_dbu > min_plateau_wl + wl_plateau_band) {
           continue;
         }
+        if (forced_wl_ptr != nullptr) {
+          const long via_rise
+              = static_cast<long>(candidate.metrics.via_count)
+                - static_cast<long>(forced_wl_ptr->metrics.via_count);
+          const long detour_rise
+              = candidate.metrics.detour_dbu - forced_wl_ptr->metrics.detour_dbu;
+          const long high_layer_drop
+              = forced_wl_ptr->metrics.high_layer_dbu
+                - candidate.metrics.high_layer_dbu;
+          const bool strong_wl_gain = candidate.metrics.wirelength_dbu + wl_plateau_band / 2
+                                      < forced_wl_ptr->metrics.wirelength_dbu;
+          if (!strong_wl_gain && via_rise > via_rise_guard) {
+            continue;
+          }
+          if (!strong_wl_gain && detour_rise > detour_rise_guard) {
+            continue;
+          }
+          if (!strong_wl_gain && high_layer_drop > high_layer_drop_guard) {
+            continue;
+          }
+        }
         if (plateau_pick == nullptr || plateau_better(candidate, *plateau_pick)) {
           plateau_pick = &candidate;
         }
@@ -7941,15 +7981,17 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
 
       if (plateau_pick != nullptr
           && (forced_wl_ptr == nullptr
-              || wirelength_first_better(*plateau_pick, *forced_wl_ptr))) {
+              || plateau_better(*plateau_pick, *forced_wl_ptr))) {
         logger_->info(
             GNR,
             7364,
-            "NEWGR WL-plateau lock selecting '{}' (min WL {}, band {}, vias {}) "
-            "over '{}'.",
+            "NEWGR WL-plateau lock selecting '{}' (min WL {}, band {}, "
+            "detour {}, high-layer {}, vias {}) over '{}'.",
             plateau_pick->name,
             min_plateau_wl,
             wl_plateau_band,
+            plateau_pick->metrics.detour_dbu,
+            plateau_pick->metrics.high_layer_dbu,
             plateau_pick->metrics.via_count,
             forced_wl_ptr != nullptr ? forced_wl_ptr->name : std::string("none"));
         forced_wl_ptr = plateau_pick;
