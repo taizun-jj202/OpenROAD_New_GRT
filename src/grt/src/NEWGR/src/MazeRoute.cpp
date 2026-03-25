@@ -647,7 +647,9 @@ void MazeRoute::run()
   }
 
   std::vector<std::pair<int, int>> trunkPinPairs;
-  if (numPseudoPins >= 4) {
+  const bool enableTrunkSeeds = numPseudoPins >= 4
+                                && (numPseudoPins >= 6 || box.hp() >= 120);
+  if (enableTrunkSeeds) {
     auto addTrunkPair = [&](int pinA, int pinB) {
       if (pinA < 0 || pinB < 0 || pinA == pinB) {
         return;
@@ -722,7 +724,7 @@ void MazeRoute::run()
     addTrunkPair(minDiagPin, maxDiagPin);
 
     const int maxTrunkCandidates
-        = numPseudoPins >= 12 ? 4 : (numPseudoPins >= 8 ? 3 : 2);
+        = numPseudoPins >= 12 ? 3 : (numPseudoPins >= 8 ? 2 : 1);
     if (trunkPinPairs.size() > static_cast<size_t>(maxTrunkCandidates)) {
       trunkPinPairs.resize(maxTrunkCandidates);
     }
