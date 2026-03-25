@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <queue>
@@ -114,6 +115,16 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   if (!preserveOldTopologyAnchors) {
     margin = shortestTopologyMode ? std::max(2, margin - 5)
                                   : std::max(4, margin - 2);
+  }
+  if (grid.interval.x() == 1 || grid.interval.y() == 1) {
+    // Full-resolution sparse grid is already expressive; shrink the corridor to
+    // aggressively collapse legacy detours toward bbox-local shortest paths.
+    const int compactMargin
+        = std::clamp(hp / (pins >= 10 ? 20 : 16), 2, 12);
+    margin = std::min(margin, compactMargin);
+    if (!preserveOldTopologyAnchors) {
+      margin = std::max(2, margin - 1);
+    }
   }
   margin += std::max(1, std::max(grid.interval.x(), grid.interval.y()) / 2);
   int xLow = std::max(0, box.lx() - margin);
@@ -532,6 +543,191 @@ void MazeRoute::run()
     return lhs.via_steps < rhs.via_steps;
   };
 
+  const CostT kInfCost = std::numeric_limits<CostT>::max();
+  const CostT kCostEps = 1e-9;
+  auto edgeCostBetweenVertices = [&](int u, int v) {
+    for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++) {
+      if (graph_.getNextVertex(u, edgeIndex) == v) {
+        return graph_.getEdgeCost(u, edgeIndex);
+      }
+    }
+    for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++) {
+      if (graph_.getNextVertex(v, edgeIndex) == u) {
+        return graph_.getEdgeCost(v, edgeIndex);
+      }
+    }
+    return kInfCost;
+  };
+
+  auto runMstCandidate = [&](std::vector<std::shared_ptr<Solution>>& output) {
+    output.clear();
+
+    const int numVertices = graph_.getNumVertices();
+    const auto& box = net_->getBoundingBox();
+    const bool criticalNet = numPseudoPins >= 6 || box.hp() >= 90;
+    if (numPseudoPins < 3 || !criticalNet || numPseudoPins > 48
+        || numVertices <= 0 || numVertices > 28000) {
+      return false;
+    }
+
+    std::vector<int> pinVertices(numPseudoPins, -1);
+    for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
+      pinVertices[pinIndex] = graph_.getPinVertex(pinIndex);
+      if (pinVertices[pinIndex] < 0) {
+        return false;
+      }
+    }
+
+    auto runDijkstra = [&](int sourceVertex,
+                           std::vector<CostT>& dist,
+                           std::vector<int>& prev) {
+      dist.assign(numVertices, kInfCost);
+      prev.assign(numVertices, -1);
+      using QueueNode = std::pair<CostT, int>;
+      std::priority_queue<QueueNode, std::vector<QueueNode>, std::greater<>>
+          queue;
+      dist[sourceVertex] = 0;
+      queue.emplace(0, sourceVertex);
+      while (!queue.empty()) {
+        const auto [cost, vertex] = queue.top();
+        queue.pop();
+        if (cost > dist[vertex] + kCostEps) {
+          continue;
+        }
+        for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++) {
+          const int nextVertex = graph_.getNextVertex(vertex, edgeIndex);
+          if (nextVertex == -1) {
+            continue;
+          }
+          const CostT edgeCost = graph_.getEdgeCost(vertex, edgeIndex);
+          if (edgeCost >= kInfCost / 4) {
+            continue;
+          }
+          const CostT nextCost = cost + edgeCost;
+          if (nextCost + kCostEps < dist[nextVertex]) {
+            dist[nextVertex] = nextCost;
+            prev[nextVertex] = vertex;
+            queue.emplace(nextCost, nextVertex);
+          }
+        }
+      }
+    };
+
+    std::vector<std::vector<CostT>> pinDistances(
+        numPseudoPins,
+        std::vector<CostT>(numPseudoPins, kInfCost));
+    for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
+      pinDistances[pinIndex][pinIndex] = 0;
+    }
+    for (int sourcePin = 0; sourcePin < numPseudoPins; sourcePin++) {
+      std::vector<CostT> dist;
+      std::vector<int> prev;
+      runDijkstra(pinVertices[sourcePin], dist, prev);
+      for (int targetPin = sourcePin + 1; targetPin < numPseudoPins;
+           targetPin++) {
+        const CostT distance = dist[pinVertices[targetPin]];
+        pinDistances[sourcePin][targetPin] = distance;
+        pinDistances[targetPin][sourcePin] = distance;
+      }
+    }
+
+    // FastRoute-style multi-source reconnection converted to an MST over
+    // pseudo pins using sparse-graph shortest-path costs.
+    std::vector<CostT> bestEdge(numPseudoPins, kInfCost);
+    std::vector<int> parent(numPseudoPins, -1);
+    std::vector<bool> inMst(numPseudoPins, false);
+    bestEdge[0] = 0;
+    for (int iter = 0; iter < numPseudoPins; iter++) {
+      int bestPin = -1;
+      CostT minCost = kInfCost;
+      for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
+        if (!inMst[pinIndex] && bestEdge[pinIndex] < minCost) {
+          minCost = bestEdge[pinIndex];
+          bestPin = pinIndex;
+        }
+      }
+      if (bestPin < 0 || minCost >= kInfCost / 4) {
+        return false;
+      }
+      inMst[bestPin] = true;
+      for (int pinIndex = 0; pinIndex < numPseudoPins; pinIndex++) {
+        const CostT edgeCost = pinDistances[bestPin][pinIndex];
+        if (!inMst[pinIndex] && edgeCost + kCostEps < bestEdge[pinIndex]) {
+          bestEdge[pinIndex] = edgeCost;
+          parent[pinIndex] = bestPin;
+        }
+      }
+    }
+
+    std::vector<bool> cachedSource(numPseudoPins, false);
+    std::vector<std::vector<CostT>> cachedDist(numPseudoPins);
+    std::vector<std::vector<int>> cachedPrev(numPseudoPins);
+    auto ensureSourceData = [&](int sourcePin) {
+      if (!cachedSource[sourcePin]) {
+        runDijkstra(pinVertices[sourcePin],
+                    cachedDist[sourcePin],
+                    cachedPrev[sourcePin]);
+        cachedSource[sourcePin] = true;
+      }
+      return true;
+    };
+
+    auto buildSolutionFromPinPair = [&](int sourcePin, int targetPin) {
+      if (!ensureSourceData(sourcePin)) {
+        return std::shared_ptr<Solution>();
+      }
+      const int sourceVertex = pinVertices[sourcePin];
+      const int targetVertex = pinVertices[targetPin];
+      if (cachedDist[sourcePin][targetVertex] >= kInfCost / 4) {
+        return std::shared_ptr<Solution>();
+      }
+
+      std::vector<int> reversedPath;
+      reversedPath.reserve(64);
+      int current = targetVertex;
+      while (current != -1
+             && reversedPath.size() <= static_cast<size_t>(numVertices + 4)) {
+        reversedPath.push_back(current);
+        if (current == sourceVertex) {
+          break;
+        }
+        current = cachedPrev[sourcePin][current];
+      }
+      if (reversedPath.empty() || reversedPath.back() != sourceVertex) {
+        return std::shared_ptr<Solution>();
+      }
+      std::reverse(reversedPath.begin(), reversedPath.end());
+
+      CostT cumulativeCost = 0;
+      std::shared_ptr<Solution> pathSolution
+          = std::make_shared<Solution>(0, reversedPath.front(), nullptr);
+      for (size_t idx = 1; idx < reversedPath.size(); idx++) {
+        const CostT edgeCost
+            = edgeCostBetweenVertices(reversedPath[idx - 1], reversedPath[idx]);
+        if (edgeCost >= kInfCost / 4) {
+          return std::shared_ptr<Solution>();
+        }
+        cumulativeCost += edgeCost;
+        pathSolution = std::make_shared<Solution>(
+            cumulativeCost, reversedPath[idx], pathSolution);
+      }
+      return pathSolution;
+    };
+
+    output.reserve(numPseudoPins - 1);
+    for (int pinIndex = 1; pinIndex < numPseudoPins; pinIndex++) {
+      if (parent[pinIndex] < 0) {
+        return false;
+      }
+      auto pairSolution = buildSolutionFromPinPair(parent[pinIndex], pinIndex);
+      if (!pairSolution) {
+        return false;
+      }
+      output.emplace_back(pairSolution);
+    }
+    return !output.empty();
+  };
+
   std::vector<std::shared_ptr<Solution>> bestSolutions;
   CandidateScore bestScore;
   for (const int candidateStart : startCandidates) {
@@ -543,6 +739,14 @@ void MazeRoute::run()
     if (isBetterCandidate(candidateScore, bestScore)) {
       bestScore = candidateScore;
       bestSolutions = std::move(candidateSolutions);
+    }
+  }
+  std::vector<std::shared_ptr<Solution>> mstSolutions;
+  if (runMstCandidate(mstSolutions)) {
+    const CandidateScore mstScore = scoreSolutions(mstSolutions);
+    if (isBetterCandidate(mstScore, bestScore)) {
+      bestScore = mstScore;
+      bestSolutions = std::move(mstSolutions);
     }
   }
 
