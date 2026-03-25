@@ -1792,16 +1792,22 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     build_portfolio(ordered_net);
   }
 
+  const NetRouteMap pre_negotiation_routes = routes;
+  const EdgeUsageMap pre_negotiation_usage = selected_usage;
+  const int64_t pre_negotiation_overflow = totalSoftOverflow(
+      selected_usage, grid, soft_capacities);
+  const int64_t pre_negotiation_cumulative_wl_gain = cumulative_wl_gain;
+  const int64_t pre_negotiation_cumulative_extra_vias = cumulative_extra_vias;
+
   int negotiated_swaps = 0;
   int64_t negotiated_wl_gain = 0;
   int64_t negotiated_via_delta = 0;
-  int64_t negotiated_final_overflow = totalSoftOverflow(
-      selected_usage, grid, soft_capacities);
+  int64_t negotiated_final_overflow = pre_negotiation_overflow;
   EdgeHistoryMap edge_history;
   edge_history.reserve(std::max<size_t>(selected_usage.size(), 4096));
-  double congestion_weight = 0.12;
-  double history_weight = 0.08;
-  constexpr int kNegotiationRounds = 3;
+  double congestion_weight = 0.24;
+  double history_weight = 0.18;
+  constexpr int kNegotiationRounds = 2;
 
   for (int round = 0; round < kNegotiationRounds; round++) {
     int round_swaps = 0;
@@ -1860,8 +1866,9 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                            int candidate_support) {
         const int64_t candidate_extra_vias
             = std::max<int64_t>(0, candidate_score.vias - baseline_score.vias);
-        const double support_bonus = trunk_priority ? 2.0 : 1.2;
-        return static_cast<double>(candidate_extra_vias) * via_weight
+        const double support_bonus = trunk_priority ? 0.35 : 0.22;
+        return static_cast<double>(candidate_score.wirelength)
+               + static_cast<double>(candidate_extra_vias) * via_weight
                + static_cast<double>(candidate_score.bends) * bend_weight
                + static_cast<double>(candidate_congestion_cost) * congestion_weight
                + candidate_history_cost * history_weight
@@ -1914,33 +1921,35 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
             0, best_score.wirelength - candidate.score.wirelength);
         const int64_t congestion_delta_vs_best
             = candidate_congestion_cost - best_congestion_cost;
-        if (wl_gain_vs_best > 0) {
-          const int64_t allowed_congestion_delta
-              = trunk_priority
-                    ? std::max<int64_t>(48,
-                                        best_congestion_cost * 2 + wl_gain_vs_best / 2)
-                : policy.long_net
-                    ? std::max<int64_t>(28,
-                                        best_congestion_cost + wl_gain_vs_best / 3)
-                    : std::max<int64_t>(16,
-                                        best_congestion_cost / 2 + wl_gain_vs_best / 4);
-          const int64_t force_wl_gain = trunk_priority
-                                            ? std::max<int64_t>(1, tile_size / 22)
-                                        : policy.long_net
-                                            ? std::max<int64_t>(1, tile_size / 18)
-                                            : std::max<int64_t>(1, tile_size / 14);
-          if (congestion_delta_vs_best > allowed_congestion_delta
-              && wl_gain_vs_best < force_wl_gain) {
-            continue;
-          }
-        } else {
-          const int64_t allowed_tie_congestion_delta
-              = std::max<int64_t>(10, best_congestion_cost / 3);
-          if (candidate_congestion_cost
-                  > best_congestion_cost + allowed_tie_congestion_delta
-              && candidate.support <= best_support) {
-            continue;
-          }
+        if (wl_gain_vs_best == 0) {
+          continue;
+        }
+
+        const bool aggressive_profile_source
+            = candidate.source == RouteSource::kNewgrLegacySqueeze
+              || candidate.source == RouteSource::kNewgrDirectWirelength
+              || candidate.source == RouteSource::kNewgrUltraDirectWirelength;
+
+        if (aggressive_profile_source && wl_gain_vs_best < std::max<int64_t>(1, tile_size / 24)) {
+          continue;
+        }
+        const int64_t allowed_congestion_delta
+            = trunk_priority
+                  ? std::max<int64_t>(48,
+                                      best_congestion_cost * 2 + wl_gain_vs_best / 2)
+              : policy.long_net
+                  ? std::max<int64_t>(28,
+                                      best_congestion_cost + wl_gain_vs_best / 3)
+                  : std::max<int64_t>(16,
+                                      best_congestion_cost / 2 + wl_gain_vs_best / 4);
+        const int64_t force_wl_gain = trunk_priority
+                                          ? std::max<int64_t>(1, tile_size / 22)
+                                      : policy.long_net
+                                          ? std::max<int64_t>(1, tile_size / 18)
+                                          : std::max<int64_t>(1, tile_size / 14);
+        if (congestion_delta_vs_best > allowed_congestion_delta
+            && wl_gain_vs_best < force_wl_gain) {
+          continue;
         }
 
         const double candidate_objective = objective(candidate.score,
@@ -1951,16 +1960,18 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
         bool take_candidate = false;
         if (candidate.score.wirelength < best_score.wirelength) {
           take_candidate = true;
+        } else if (candidate_congestion_cost != best_congestion_cost) {
+          take_candidate = candidate_congestion_cost < best_congestion_cost;
+        } else if (std::abs(candidate_history_cost - best_history_cost) > 1e-9) {
+          take_candidate = candidate_history_cost < best_history_cost;
+        } else if (candidate.score.vias != best_score.vias) {
+          take_candidate = candidate.score.vias < best_score.vias;
+        } else if (candidate.score.bends != best_score.bends) {
+          take_candidate = candidate.score.bends < best_score.bends;
         } else if (candidate.support != best_support) {
           take_candidate = candidate.support > best_support;
         } else if (std::abs(candidate_objective - best_objective) > 1e-9) {
           take_candidate = candidate_objective < best_objective;
-        } else if (candidate.score.vias != best_score.vias) {
-          take_candidate = candidate.score.vias < best_score.vias;
-        } else if (candidate_congestion_cost != best_congestion_cost) {
-          take_candidate = candidate_congestion_cost < best_congestion_cost;
-        } else if (candidate.score.bends != best_score.bends) {
-          take_candidate = candidate.score.bends < best_score.bends;
         }
 
         if (take_candidate) {
@@ -2070,16 +2081,36 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
     negotiated_final_overflow = round_overflow;
 
     if (round_overflow > 0) {
-      congestion_weight = std::min(0.72, congestion_weight * 1.12 + 0.02);
-      history_weight = std::min(0.56, history_weight * 1.10 + 0.015);
+      congestion_weight = std::min(1.10, congestion_weight * 1.18 + 0.04);
+      history_weight = std::min(0.86, history_weight * 1.14 + 0.03);
     } else {
-      congestion_weight = std::max(0.08, congestion_weight * 0.95);
-      history_weight = std::max(0.05, history_weight * 0.93);
+      congestion_weight = std::max(0.20, congestion_weight * 0.94);
+      history_weight = std::max(0.14, history_weight * 0.92);
     }
 
     if (round_swaps == 0) {
       break;
     }
+  }
+
+  bool negotiation_rolled_back = false;
+  const bool overflow_regressed
+      = negotiated_final_overflow > std::max<int64_t>(
+            pre_negotiation_overflow + 6, pre_negotiation_overflow * 2 + 3);
+  const bool churn_without_wl_gain
+      = negotiated_wl_gain == 0
+        && negotiated_swaps
+               > std::max<int>(2000, static_cast<int>(ordered_nets.size() / 6));
+  if (overflow_regressed || churn_without_wl_gain) {
+    routes = pre_negotiation_routes;
+    selected_usage = pre_negotiation_usage;
+    cumulative_wl_gain = pre_negotiation_cumulative_wl_gain;
+    cumulative_extra_vias = pre_negotiation_cumulative_extra_vias;
+    negotiated_swaps = 0;
+    negotiated_wl_gain = 0;
+    negotiated_via_delta = 0;
+    negotiated_final_overflow = pre_negotiation_overflow;
+    negotiation_rolled_back = true;
   }
 
   for (const auto& [db_net, route] : balanced_routes) {
@@ -2211,7 +2242,7 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 "Trunk polish swaps={} wl-gain={} via-delta={}. "
                 "WL crush swaps={} wl-gain={} via-delta={}. "
                 "Negotiated swaps={} wl-gain={} via-delta={} "
-                "final-soft-overflow={}. "
+                "final-soft-overflow={} pre-soft-overflow={} rollback={}. "
                 "Global WL gain={} "
                 "extra-vias={} (base via budget={} + gain/{}) out of {} total.",
                 selected_from_balanced,
@@ -2263,6 +2294,8 @@ NetRouteMap NewGR::run(std::vector<Net*>& nets,
                 negotiated_wl_gain,
                 negotiated_via_delta,
                 negotiated_final_overflow,
+                pre_negotiation_overflow,
+                negotiation_rolled_back,
                 cumulative_wl_gain,
                 cumulative_extra_vias,
                 global_base_via_budget,
