@@ -313,12 +313,10 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
   const bool compactLongNet
       = (pins >= 6 || hp >= 95) && rank < 4096;
   const bool extremeLongNet = (pins >= 12 || hp >= 180) && rank < 1536;
-  const bool superCriticalLongNet
-      = (pins >= 10 || hp >= 150) && rank < 1024;
   std::vector<int> intervals{
       base_interval,
-      std::max(1, base_interval - 1),
-      std::max(1, base_interval - 2),
+      std::max(2, base_interval - 1),
+      std::max(2, base_interval - 2),
       std::min(12, base_interval + 1)};
   if (compactLongNet) {
     intervals.emplace_back(2);
@@ -329,15 +327,10 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
     // all nets.
     intervals.emplace_back(2);
   }
-  if (superCriticalLongNet) {
-    // Aggressive full-resolution sparse grid for top-ranked detour-heavy nets.
-    intervals.emplace_back(1);
-  }
   if (pins >= 12 || hp >= 160) {
     intervals.emplace_back(3);
   }
   if (extremeLongNet) {
-    intervals.emplace_back(1);
     intervals.emplace_back(2);
     intervals.emplace_back(3);
     intervals.emplace_back(4);
@@ -349,7 +342,7 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
   std::vector<SparseGrid> grids;
   grids.reserve(max_candidates);
   auto addGrid = [&](int interval, int x_offset, int y_offset) {
-    interval = std::clamp(interval, 1, 12);
+    interval = std::clamp(interval, 2, 12);
     x_offset = ((x_offset % interval) + interval) % interval;
     y_offset = ((y_offset % interval) + interval) % interval;
     for (const auto& grid : grids) {
@@ -367,7 +360,7 @@ std::vector<SparseGrid> buildMazeCandidateGrids(int base_interval,
        idx < intervals.size()
        && grids.size() < static_cast<size_t>(max_candidates);
        idx++) {
-    const int clamped_interval = std::clamp(intervals[idx], 1, 12);
+    const int clamped_interval = std::clamp(intervals[idx], 2, 12);
     const int idx_int = static_cast<int>(idx);
     const int x_offset
         = (rank * (3 + idx_int * 2) + hp + idx_int * 5) % clamped_interval;
@@ -1232,9 +1225,6 @@ void CUGR::strictWirelengthCompaction()
     const int pins = net->getNumPins();
     const bool criticalWirelengthNet
         = oldScore.wire_length >= longWireThreshold || pins >= 8 || hp >= 130;
-    const bool superCriticalWirelengthNet
-        = criticalWirelengthNet && (pins >= 10 || hp >= 160)
-          && rank < denseMazeBudget * 2 / 3;
 
     // FastRoute-style topology optimization for critical nets: re-evaluate
     // with high-accuracy FLUTE before maze refinement.
@@ -1274,17 +1264,12 @@ void CUGR::strictWirelengthCompaction()
       } else if (pins <= 3 && hp <= 80) {
         interval = 5;
       }
-      if (superCriticalWirelengthNet && rank < denseMazeBudget / 8) {
-        interval = 1;
-      }
       const int maxMazeCandidates
-          = superCriticalWirelengthNet
-                ? 12
-                : (ultraDenseSearch
-                       ? 10
+          = ultraDenseSearch
+                ? 10
                 : (rank < denseMazeBudget / 5
                        ? 7
-                       : (rank < denseMazeBudget / 2 ? 6 : 5)));
+                       : (rank < denseMazeBudget / 2 ? 6 : 5));
       const auto candidateGrids
           = buildMazeCandidateGrids(
               interval,
