@@ -1128,17 +1128,18 @@ CUGR::CUGR(odb::dbDatabase* db,
     : db_(db), logger_(log), stt_builder_(stt_builder)
 {
   // Radical wirelength-first policy:
-  // permit extra vias and reduce short-area pressure so long trunks stay direct.
+  // keep soft-cap shaping but bias it much closer to hard capacity so the
+  // search can keep direct trunks instead of spilling into long detours.
   constants_.weight_wire_length = 2.4;
   constants_.weight_via_number = 1.4;
   constants_.weight_short_area = 150.0;
   constants_.cost_logistic_slope = 0.22;
   constants_.maze_logistic_slope = 0.20;
-  constants_.soft_cap_min_ratio = 0.68;
-  constants_.soft_cap_max_ratio = 0.95;
-  constants_.soft_cap_mid_util = 0.78;
-  constants_.soft_cap_slope = 5.6;
-  constants_.soft_cap_neighbor_weight = 0.28;
+  constants_.soft_cap_min_ratio = 0.82;
+  constants_.soft_cap_max_ratio = 0.99;
+  constants_.soft_cap_mid_util = 0.91;
+  constants_.soft_cap_slope = 4.8;
+  constants_.soft_cap_neighbor_weight = 0.22;
   constants_.maze_bbox_penalty = 1.85;
   constants_.maze_bbox_padding = 10;
   constants_.max_detour_ratio = 0.04;
@@ -1284,10 +1285,11 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
 void CUGR::wirelengthRefine()
 {
-  constexpr int kMaxRefineNets = 920;
-  constexpr int kViaGrowthLimit = 180;
-  constexpr int kOverflowSlack = 1;
-  constexpr uint64_t kMinWireImprovement = 1;
+  constexpr int kMaxRefineNets = 1200;
+  constexpr int kViaGrowthLimit = 360;
+  constexpr int kOverflowSlack = 3;
+  constexpr uint64_t kMinWireImprovement = 3;
+  constexpr uint64_t kStrongWireImprovement = 12;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
   // Radical pass: test multiple topology families and keep only local wins.
@@ -1325,14 +1327,14 @@ void CUGR::wirelengthRefine()
   std::sort(candidates.begin(),
             candidates.end(),
             [](const Candidate& lhs, const Candidate& rhs) {
-              if (lhs.overflow != rhs.overflow) {
-                return lhs.overflow > rhs.overflow;
-              }
               if (lhs.stretch != rhs.stretch) {
                 return lhs.stretch > rhs.stretch;
               }
               if (lhs.hpwl != rhs.hpwl) {
                 return lhs.hpwl > rhs.hpwl;
+              }
+              if (lhs.overflow != rhs.overflow) {
+                return lhs.overflow > rhs.overflow;
               }
               if (lhs.pins != rhs.pins) {
                 return lhs.pins > rhs.pins;
@@ -1399,19 +1401,20 @@ void CUGR::wirelengthRefine()
         return false;
       }
       const bool improveWire
-          = result.stats.wire_length + kMinWireImprovement <= oldStats.wire_length;
-      const bool improveViaWithNoWireLoss
-          = result.stats.wire_length <= oldStats.wire_length
-            && result.stats.via_count + 8 < oldStats.via_count;
+          = result.stats.wire_length + kMinWireImprovement
+            <= oldStats.wire_length;
+      const bool strongWireImprovement
+          = result.stats.wire_length + kStrongWireImprovement
+            <= oldStats.wire_length;
       const bool relieveOverflow
           = result.overflow + 2 < oldOverflow
-            && result.stats.wire_length <= oldStats.wire_length + 2;
+            && result.stats.wire_length <= oldStats.wire_length + 6;
       const bool keepOverflow = result.overflow <= oldOverflow + kOverflowSlack;
       const bool boundedVia
           = result.stats.via_count <= oldStats.via_count + kViaGrowthLimit;
       return boundedVia
-             && keepOverflow
-             && (improveWire || improveViaWithNoWireLoss || relieveOverflow);
+             && ((improveWire && keepOverflow) || strongWireImprovement
+                 || relieveOverflow);
     };
 
     RerouteResult bestResult;
@@ -1477,9 +1480,10 @@ void CUGR::wirelengthRefine()
 
 void CUGR::mazeWirelengthCollapse()
 {
-  constexpr int kMaxCriticalNets = 480;
-  constexpr int kViaGrowthLimit = 120;
+  constexpr int kMaxCriticalNets = 640;
+  constexpr int kViaGrowthLimit = 220;
   constexpr uint64_t kMinWireImprovement = 1;
+  constexpr uint64_t kStrongWireImprovement = 10;
   constexpr int kOverflowPriorityWeight = 900;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
@@ -1599,15 +1603,19 @@ void CUGR::mazeWirelengthCollapse()
 
     const bool improveWire = candidateStats.wire_length + kMinWireImprovement
                              < oldStats.wire_length;
+    const bool strongWireImprove
+        = candidateStats.wire_length + kStrongWireImprovement
+          < oldStats.wire_length;
     const bool viaGrowthBound
         = candidateStats.via_count <= oldStats.via_count + kViaGrowthLimit;
-    const bool keepOverflow = candidateOverflow <= oldOverflow;
+    const bool keepOverflow = candidateOverflow <= oldOverflow + 2;
     const bool relieveOverflowWithoutWireRegression
         = (candidateOverflow + 2 < oldOverflow
            && candidateStats.wire_length <= oldStats.wire_length);
 
     if (viaGrowthBound
-        && ((improveWire && keepOverflow) || relieveOverflowWithoutWireRegression)) {
+        && (((improveWire && keepOverflow) || strongWireImprove)
+            || relieveOverflowWithoutWireRegression)) {
       accepted++;
     } else {
       grid_graph_->commitTree(candidateTree, /*rip_up*/ true);
@@ -3247,8 +3255,8 @@ void CUGR::mstBackboneSurgery()
 
 void CUGR::route()
 {
-  constexpr int kMaxDetourNets = 2200;
-  constexpr int kMaxMazeNets = 760;
+  constexpr int kMaxDetourNets = 2000;
+  constexpr int kMaxMazeNets = 680;
   constexpr double kLongNetRatio = 0.72;
 
   auto trimOverflowSet = [&](std::vector<int>& netIndices,
@@ -3340,15 +3348,15 @@ void CUGR::route()
   trimOverflowSet(netIndices, kMaxMazeNets, "maze");
   mazeRoute(netIndices);
 
+  // Collapse-only strategy: remove low-yield late surgeries and spend the
+  // budget on two aggressive collapse pulses.
   hybridTopologySurgery();
-  hubTopologySurgery();
-  dualHubBackboneSurgery();
-  crossbarBackboneSurgery();
-  quadrantHubHierarchySurgery();
-  ladderBackboneSurgery();
-  mstBackboneSurgery();
   mazeWirelengthCollapse();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
+  wirelengthRefine();
+  grid_graph_->setCongestionPenaltyScales(0.04, 0.08);
+  mazeWirelengthCollapse();
+  grid_graph_->setCongestionPenaltyScales(0.04, 0.08);
   wirelengthRefine();
 
   printStatistics();
