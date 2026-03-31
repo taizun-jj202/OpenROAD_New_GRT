@@ -1127,28 +1127,30 @@ CUGR::CUGR(odb::dbDatabase* db,
            stt::SteinerTreeBuilder* stt_builder)
     : db_(db), logger_(log), stt_builder_(stt_builder)
 {
-  // Iteration 24 radical policy:
-  // 1) aggressively prioritize direct wirelength over detours,
-  // 2) push soft caps close to hard caps (SPRoute-style reserve is minimal),
-  // 3) slim guide patching so detailed routing stays near global trunks.
-  constants_.weight_wire_length = 3.2;
-  constants_.weight_via_number = 0.9;
-  constants_.weight_short_area = 120.0;
-  constants_.cost_logistic_slope = 0.18;
-  constants_.maze_logistic_slope = 0.15;
-  constants_.soft_cap_min_ratio = 0.88;
-  constants_.soft_cap_max_ratio = 1.00;
-  constants_.soft_cap_mid_util = 0.94;
-  constants_.soft_cap_slope = 4.2;
-  constants_.soft_cap_neighbor_weight = 0.18;
-  constants_.maze_bbox_penalty = 2.70;
-  constants_.maze_bbox_padding = 6;
-  constants_.max_detour_ratio = 0.02;
-  constants_.target_detour_count = 2;
-  constants_.via_multiplier = 0.45;
-  constants_.pin_patch_threshold = -1000000.0;
-  constants_.wire_patch_threshold = -1000000.0;
-  constants_.wire_patch_inflation_rate = 1.0;
+  // Iteration 25 radical policy:
+  // 1) restore a broad topology tournament (hub/crossbar/ladder/MST cascades),
+  // 2) enforce SPRoute-style soft-cap reserve with layer-aware scaling, and
+  // 3) re-enable guide patching so detailed routing can shorten detours.
+  constants_.weight_wire_length = 2.2;
+  constants_.weight_via_number = 1.4;
+  constants_.weight_short_area = 170.0;
+  constants_.cost_logistic_slope = 0.28;
+  constants_.maze_logistic_slope = 0.24;
+  constants_.soft_cap_min_ratio = 0.72;
+  constants_.soft_cap_max_ratio = 0.98;
+  constants_.soft_cap_mid_util = 0.80;
+  constants_.soft_cap_slope = 6.2;
+  constants_.soft_cap_neighbor_weight = 0.36;
+  constants_.soft_cap_bottom_layer_factor = 0.84;
+  constants_.soft_cap_top_layer_factor = 1.03;
+  constants_.maze_bbox_penalty = 1.40;
+  constants_.maze_bbox_padding = 14;
+  constants_.max_detour_ratio = 0.10;
+  constants_.target_detour_count = 12;
+  constants_.via_multiplier = 1.05;
+  constants_.pin_patch_threshold = 8.0;
+  constants_.wire_patch_threshold = 1.20;
+  constants_.wire_patch_inflation_rate = 1.10;
 }
 
 CUGR::~CUGR() = default;
@@ -3482,8 +3484,8 @@ void CUGR::massiveMstWirelengthRewrite()
 
 void CUGR::route()
 {
-  constexpr int kMaxDetourNets = 2000;
-  constexpr int kMaxMazeNets = 680;
+  constexpr int kMaxDetourNets = 2400;
+  constexpr int kMaxMazeNets = 760;
   constexpr double kLongNetRatio = 0.72;
 
   auto trimOverflowSet = [&](std::vector<int>& netIndices,
@@ -3575,16 +3577,25 @@ void CUGR::route()
   trimOverflowSet(netIndices, kMaxMazeNets, "maze");
   mazeRoute(netIndices);
 
-  // Iteration 24 cascade:
-  //   1) one focused topology surgery pass for critical overflow nets
-  //   2) broad MST rewrite to move many nets at once
-  //   3) lightweight wirelength cleanup
+  // Iteration 25 cascade:
+  //   1) broad topology tournament (hub/crossbar/quadrant/ladder),
+  //   2) MST bulk rewrites, then
+  //   3) alternating wirelength and maze collapse cleanup.
   hybridTopologySurgery();
+  hubTopologySurgery();
+  dualHubBackboneSurgery();
+  crossbarBackboneSurgery();
+  quadrantHubHierarchySurgery();
+  ladderBackboneSurgery();
   massiveMstWirelengthRewrite();
+  mazeWirelengthCollapse();
+  mstBackboneSurgery();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
   wirelengthRefine();
   grid_graph_->setCongestionPenaltyScales(0.04, 0.08);
   mazeWirelengthCollapse();
+  grid_graph_->setCongestionPenaltyScales(0.04, 0.08);
+  wirelengthRefine();
 
   printStatistics();
   if (constants_.write_heatmap) {

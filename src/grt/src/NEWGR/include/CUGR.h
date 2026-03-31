@@ -51,6 +51,8 @@ struct Constants
   double soft_cap_mid_util = 0.72;
   double soft_cap_slope = 5.0;
   double soft_cap_neighbor_weight = 0.30;
+  double soft_cap_bottom_layer_factor = 0.88;
+  double soft_cap_top_layer_factor = 1.02;
 
   // FastRoute-like preference for short maze corridors around net HPWL.
   double maze_bbox_penalty = 1.60;

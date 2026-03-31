@@ -352,6 +352,19 @@ CapacityT GridGraph::getSoftCapacity(const int layer_index,
               / (1.0
                  + std::exp((localCongestion - constants_.soft_cap_mid_util)
                             * constants_.soft_cap_slope));
+  const int routingLayers
+      = std::max(1, num_layers_ - constants_.min_routing_layer - 1);
+  const double layerProgress
+      = std::clamp((layer_index - constants_.min_routing_layer)
+                       / static_cast<double>(routingLayers),
+                   0.0,
+                   1.0);
+  const double layerFactor
+      = constants_.soft_cap_bottom_layer_factor
+        + (constants_.soft_cap_top_layer_factor
+           - constants_.soft_cap_bottom_layer_factor)
+              * layerProgress;
+  ratio *= layerFactor;
   ratio = std::clamp(ratio,
                      constants_.soft_cap_min_ratio,
                      constants_.soft_cap_max_ratio);
