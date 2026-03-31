@@ -1127,24 +1127,25 @@ CUGR::CUGR(odb::dbDatabase* db,
            stt::SteinerTreeBuilder* stt_builder)
     : db_(db), logger_(log), stt_builder_(stt_builder)
 {
-  // Radical wirelength-first policy:
-  // keep soft-cap shaping but bias it much closer to hard capacity so the
-  // search can keep direct trunks instead of spilling into long detours.
-  constants_.weight_wire_length = 2.4;
-  constants_.weight_via_number = 1.4;
-  constants_.weight_short_area = 150.0;
-  constants_.cost_logistic_slope = 0.22;
-  constants_.maze_logistic_slope = 0.20;
-  constants_.soft_cap_min_ratio = 0.82;
-  constants_.soft_cap_max_ratio = 0.99;
-  constants_.soft_cap_mid_util = 0.91;
-  constants_.soft_cap_slope = 4.8;
-  constants_.soft_cap_neighbor_weight = 0.22;
-  constants_.maze_bbox_penalty = 1.85;
-  constants_.maze_bbox_padding = 10;
-  constants_.max_detour_ratio = 0.04;
-  constants_.target_detour_count = 4;
-  constants_.via_multiplier = 0.7;
+  // Iteration 20 policy:
+  // push the search harder toward shortest-path trunks, reserve fewer tracks,
+  // and keep detours tight so late topology surgeries can collapse stem
+  // overlap instead of preserving long maze escapes.
+  constants_.weight_wire_length = 2.9;
+  constants_.weight_via_number = 1.0;
+  constants_.weight_short_area = 95.0;
+  constants_.cost_logistic_slope = 0.18;
+  constants_.maze_logistic_slope = 0.17;
+  constants_.soft_cap_min_ratio = 0.86;
+  constants_.soft_cap_max_ratio = 0.995;
+  constants_.soft_cap_mid_util = 0.93;
+  constants_.soft_cap_slope = 4.2;
+  constants_.soft_cap_neighbor_weight = 0.18;
+  constants_.maze_bbox_penalty = 2.10;
+  constants_.maze_bbox_padding = 7;
+  constants_.max_detour_ratio = 0.025;
+  constants_.target_detour_count = 2;
+  constants_.via_multiplier = 0.55;
 }
 
 CUGR::~CUGR() = default;
@@ -3348,15 +3349,18 @@ void CUGR::route()
   trimOverflowSet(netIndices, kMaxMazeNets, "maze");
   mazeRoute(netIndices);
 
-  // Collapse-only strategy: remove low-yield late surgeries and spend the
-  // budget on two aggressive collapse pulses.
+  // Backbone cascade strategy:
+  // 1) median-spine cleanup to remove obvious redundant stems
+  // 2) ladder templates to compress high-pin fanout into shared lanes
+  // 3) Manhattan-MST rebuild to snap remaining long branches to short trunks
+  // 4) single collapse + refine pulse for bounded runtime
   hybridTopologySurgery();
+  ladderBackboneSurgery();
+  mstBackboneSurgery();
+
+  grid_graph_->setCongestionPenaltyScales(0.04, 0.09);
   mazeWirelengthCollapse();
-  grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
-  wirelengthRefine();
-  grid_graph_->setCongestionPenaltyScales(0.04, 0.08);
-  mazeWirelengthCollapse();
-  grid_graph_->setCongestionPenaltyScales(0.04, 0.08);
+  grid_graph_->setCongestionPenaltyScales(0.035, 0.075);
   wirelengthRefine();
 
   printStatistics();
