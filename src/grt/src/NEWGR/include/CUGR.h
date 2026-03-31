@@ -87,6 +87,7 @@ class CUGR
   void wirelengthRefine();
   void mazeWirelengthCollapse();
   void hybridTopologySurgery();
+  void massiveMstWirelengthRewrite();
   void hubTopologySurgery();
   void dualHubBackboneSurgery();
   void crossbarBackboneSurgery();

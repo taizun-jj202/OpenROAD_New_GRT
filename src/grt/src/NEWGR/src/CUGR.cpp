@@ -1127,24 +1127,28 @@ CUGR::CUGR(odb::dbDatabase* db,
            stt::SteinerTreeBuilder* stt_builder)
     : db_(db), logger_(log), stt_builder_(stt_builder)
 {
-  // Radical wirelength-first policy:
-  // keep soft-cap shaping but bias it much closer to hard capacity so the
-  // search can keep direct trunks instead of spilling into long detours.
-  constants_.weight_wire_length = 2.4;
-  constants_.weight_via_number = 1.4;
-  constants_.weight_short_area = 150.0;
-  constants_.cost_logistic_slope = 0.22;
-  constants_.maze_logistic_slope = 0.20;
-  constants_.soft_cap_min_ratio = 0.82;
-  constants_.soft_cap_max_ratio = 0.99;
-  constants_.soft_cap_mid_util = 0.91;
-  constants_.soft_cap_slope = 4.8;
-  constants_.soft_cap_neighbor_weight = 0.22;
-  constants_.maze_bbox_penalty = 1.85;
-  constants_.maze_bbox_padding = 10;
-  constants_.max_detour_ratio = 0.04;
-  constants_.target_detour_count = 4;
-  constants_.via_multiplier = 0.7;
+  // Iteration 24 radical policy:
+  // 1) aggressively prioritize direct wirelength over detours,
+  // 2) push soft caps close to hard caps (SPRoute-style reserve is minimal),
+  // 3) slim guide patching so detailed routing stays near global trunks.
+  constants_.weight_wire_length = 3.2;
+  constants_.weight_via_number = 0.9;
+  constants_.weight_short_area = 120.0;
+  constants_.cost_logistic_slope = 0.18;
+  constants_.maze_logistic_slope = 0.15;
+  constants_.soft_cap_min_ratio = 0.88;
+  constants_.soft_cap_max_ratio = 1.00;
+  constants_.soft_cap_mid_util = 0.94;
+  constants_.soft_cap_slope = 4.2;
+  constants_.soft_cap_neighbor_weight = 0.18;
+  constants_.maze_bbox_penalty = 2.70;
+  constants_.maze_bbox_padding = 6;
+  constants_.max_detour_ratio = 0.02;
+  constants_.target_detour_count = 2;
+  constants_.via_multiplier = 0.45;
+  constants_.pin_patch_threshold = -1000000.0;
+  constants_.wire_patch_threshold = -1000000.0;
+  constants_.wire_patch_inflation_rate = 1.0;
 }
 
 CUGR::~CUGR() = default;
@@ -3253,6 +3257,229 @@ void CUGR::mstBackboneSurgery()
                                           original_maze_scale);
 }
 
+void CUGR::massiveMstWirelengthRewrite()
+{
+  constexpr int kMaxRewriteNets = 480;
+  constexpr int kViaGrowthLimit = 420;
+  constexpr int kOverflowSlack = 6;
+  constexpr uint64_t kMinWireImprovement = 1;
+  constexpr uint64_t kStrongWireImprovement = 6;
+  const double original_wire_scale = grid_graph_->getWireCongestionScale();
+  const double original_maze_scale = grid_graph_->getMazeCongestionScale();
+
+  // Iteration 24 radical move:
+  // run a large-batch Manhattan MST rewrite on many nets, with relaxed
+  // overflow bounds, to force broad topology replacement instead of tiny
+  // localized surgeries.
+  grid_graph_->setCongestionPenaltyScales(0.004, 0.009);
+
+  struct Candidate
+  {
+    int net_index;
+    int score;
+    int overflow;
+    int hpwl;
+    int pins;
+    double stretch;
+  };
+
+  std::vector<Candidate> candidates;
+  candidates.reserve(gr_nets_.size());
+  for (const auto& net : gr_nets_) {
+    const std::shared_ptr<GRTreeNode> routing_tree = net->getRoutingTree();
+    if (!routing_tree || net->getNumPins() < 3) {
+      continue;
+    }
+    const int hpwl = std::max(1, net->getBoundingBox().hp());
+    if (hpwl < 25) {
+      continue;
+    }
+    const TreeStats stats = getTreeStats(routing_tree, grid_graph_.get());
+    const int overflow = grid_graph_->checkOverflow(routing_tree);
+    const double stretch = static_cast<double>(stats.wire_length) / hpwl;
+    const int score = overflow * 1700 + hpwl + net->getNumPins() * 12
+                      + static_cast<int>(stretch * 140.0);
+    candidates.push_back(
+        {net->getIndex(), score, overflow, hpwl, net->getNumPins(), stretch});
+  }
+
+  if (candidates.empty()) {
+    grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                            original_maze_scale);
+    return;
+  }
+
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const Candidate& lhs, const Candidate& rhs) {
+              if (lhs.score != rhs.score) {
+                return lhs.score > rhs.score;
+              }
+              if (lhs.overflow != rhs.overflow) {
+                return lhs.overflow > rhs.overflow;
+              }
+              if (lhs.stretch != rhs.stretch) {
+                return lhs.stretch > rhs.stretch;
+              }
+              if (lhs.pins != rhs.pins) {
+                return lhs.pins > rhs.pins;
+              }
+              if (lhs.hpwl != rhs.hpwl) {
+                return lhs.hpwl > rhs.hpwl;
+              }
+              return lhs.net_index < rhs.net_index;
+            });
+
+  if (static_cast<int>(candidates.size()) > kMaxRewriteNets) {
+    candidates.resize(kMaxRewriteNets);
+  }
+
+  struct RerouteResult
+  {
+    std::shared_ptr<GRTreeNode> tree;
+    TreeStats stats;
+    int overflow{std::numeric_limits<int>::max()};
+    bool valid{false};
+  };
+
+  auto isBetter = [](const RerouteResult& lhs, const RerouteResult& rhs) {
+    if (lhs.stats.wire_length != rhs.stats.wire_length) {
+      return lhs.stats.wire_length < rhs.stats.wire_length;
+    }
+    if (lhs.overflow != rhs.overflow) {
+      return lhs.overflow < rhs.overflow;
+    }
+    return lhs.stats.via_count < rhs.stats.via_count;
+  };
+
+  int attempted = 0;
+  int accepted = 0;
+  logger_->report("stage 7: bulk MST wirelength rewrite on {} nets",
+                  candidates.size());
+
+  for (const auto& candidate : candidates) {
+    GRNet* net = gr_nets_[candidate.net_index].get();
+    const std::shared_ptr<GRTreeNode> old_tree = net->getRoutingTree();
+    if (!old_tree) {
+      continue;
+    }
+
+    attempted++;
+    const TreeStats old_stats = getTreeStats(old_tree, grid_graph_.get());
+    const int old_overflow = grid_graph_->checkOverflow(old_tree);
+    grid_graph_->commitTree(old_tree, /*rip_up*/ true);
+
+    const AccessPointSet selected_access_points
+        = grid_graph_->selectAccessPoints(net);
+    const std::vector<AccessPoint> access_points
+        = materializeAccessPoints(selected_access_points);
+    if (access_points.size() < 2) {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+      continue;
+    }
+
+    std::vector<int> xs;
+    std::vector<int> ys;
+    xs.reserve(access_points.size());
+    ys.reserve(access_points.size());
+    for (const AccessPoint& access_point : access_points) {
+      xs.push_back(access_point.point.x());
+      ys.push_back(access_point.point.y());
+    }
+    const PointT center(net->getBoundingBox().cx(), net->getBoundingBox().cy());
+    const PointT median_hub(getMedian(xs), getMedian(ys));
+
+    auto evaluate = [&](const std::shared_ptr<GRTreeNode>& tree) {
+      RerouteResult result;
+      if (!tree) {
+        return result;
+      }
+      result.tree = tree;
+      result.stats = getTreeStats(tree, grid_graph_.get());
+      grid_graph_->commitTree(tree);
+      result.overflow = grid_graph_->checkOverflow(tree);
+      result.valid = true;
+      grid_graph_->commitTree(tree, /*rip_up*/ true);
+      return result;
+    };
+
+    auto isAcceptable = [&](const RerouteResult& result) {
+      if (!result.valid) {
+        return false;
+      }
+      const bool improve_wire
+          = result.stats.wire_length + kMinWireImprovement <= old_stats.wire_length;
+      const bool strong_improve
+          = result.stats.wire_length + kStrongWireImprovement
+            <= old_stats.wire_length;
+      const bool keep_overflow = result.overflow <= old_overflow + kOverflowSlack;
+      const bool bounded_via
+          = result.stats.via_count <= old_stats.via_count + kViaGrowthLimit;
+      const bool overflow_rescue
+          = result.overflow + 3 < old_overflow
+            && result.stats.wire_length <= old_stats.wire_length;
+      return bounded_via
+             && ((improve_wire && keep_overflow) || strong_improve
+                 || overflow_rescue);
+    };
+
+    RerouteResult best_result;
+    auto tryTree = [&](const std::shared_ptr<SteinerTreeNode>& steiner_tree) {
+      if (!steiner_tree) {
+        return;
+      }
+      PatternRoute pattern_route(
+          net, grid_graph_.get(), stt_builder_, constants_, logger_);
+      pattern_route.setSteinerTree(steiner_tree);
+      pattern_route.constructRoutingDAG();
+      pattern_route.run();
+      const RerouteResult result = evaluate(net->getRoutingTree());
+      if (isAcceptable(result)
+          && (!best_result.valid || isBetter(result, best_result))) {
+        best_result = result;
+      }
+    };
+
+    for (const bool prefer_horizontal_first : {true, false}) {
+      tryTree(buildRectilinearMstSteinerTree(access_points,
+                                             center,
+                                             /*include_hub=*/false,
+                                             center,
+                                             prefer_horizontal_first));
+      tryTree(buildRectilinearMstSteinerTree(access_points,
+                                             center,
+                                             /*include_hub=*/true,
+                                             median_hub,
+                                             prefer_horizontal_first));
+      if (median_hub != center) {
+        tryTree(buildRectilinearMstSteinerTree(access_points,
+                                               center,
+                                               /*include_hub=*/true,
+                                               center,
+                                               prefer_horizontal_first));
+      }
+    }
+    tryTree(buildMedianTrunkSteinerTree(access_points, /*horizontal_trunk=*/true));
+    tryTree(buildMedianTrunkSteinerTree(access_points, /*horizontal_trunk=*/false));
+
+    if (best_result.valid) {
+      net->setRoutingTree(best_result.tree);
+      grid_graph_->commitTree(best_result.tree);
+      accepted++;
+    } else {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+    }
+  }
+
+  logger_->report("bulk MST wirelength rewrite accepted {} / {} nets",
+                  accepted,
+                  attempted);
+  grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                          original_maze_scale);
+}
+
 void CUGR::route()
 {
   constexpr int kMaxDetourNets = 2000;
@@ -3348,25 +3575,16 @@ void CUGR::route()
   trimOverflowSet(netIndices, kMaxMazeNets, "maze");
   mazeRoute(netIndices);
 
-  // Backbone tournament cascade:
-  //   1) median-spine and hub sweeps
-  //   2) dual-hub / crossbar / quadrant / ladder rewrites
-  //   3) maze collapse + MST rebuild
-  //   4) two wirelength cleanup pulses
+  // Iteration 24 cascade:
+  //   1) one focused topology surgery pass for critical overflow nets
+  //   2) broad MST rewrite to move many nets at once
+  //   3) lightweight wirelength cleanup
   hybridTopologySurgery();
-  hubTopologySurgery();
-  dualHubBackboneSurgery();
-  crossbarBackboneSurgery();
-  quadrantHubHierarchySurgery();
-  ladderBackboneSurgery();
-  mazeWirelengthCollapse();
-  mstBackboneSurgery();
+  massiveMstWirelengthRewrite();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
   wirelengthRefine();
   grid_graph_->setCongestionPenaltyScales(0.04, 0.08);
   mazeWirelengthCollapse();
-  grid_graph_->setCongestionPenaltyScales(0.04, 0.08);
-  wirelengthRefine();
 
   printStatistics();
   if (constants_.write_heatmap) {
