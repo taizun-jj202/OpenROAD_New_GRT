@@ -1846,18 +1846,18 @@ void CUGR::hybridTopologySurgery()
 
 void CUGR::hubTopologySurgery()
 {
-  constexpr int kMaxSurgeryNets = 90;
-  constexpr int kMaxHubCandidates = 14;
+  constexpr int kMaxSurgeryNets = 28;
+  constexpr int kMaxHubCandidates = 10;
   constexpr int kViaGrowthLimit = 160;
   constexpr int kOverflowSlack = 1;
-  constexpr uint64_t kMinWireImprovement = 8;
+  constexpr uint64_t kMinWireImprovement = 4;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
 
   // Radical move: sweep multiple hub locations and rebuild large nets using
   // hub-centered shared spines; keep only wirelength wins under tight
   // overflow/via constraints.
-  grid_graph_->setCongestionPenaltyScales(0.010, 0.018);
+  grid_graph_->setCongestionPenaltyScales(0.008, 0.016);
 
   struct Candidate
   {
@@ -3348,10 +3348,15 @@ void CUGR::route()
   trimOverflowSet(netIndices, kMaxMazeNets, "maze");
   mazeRoute(netIndices);
 
-  // Collapse-only strategy: remove low-yield late surgeries and spend the
-  // budget on two aggressive collapse pulses.
+  // Backbone cascade strategy:
+  //   1) median-spine collapse
+  //   2) hub-sweep trunk sharing
+  //   3) maze collapse + MST rebuild
+  //   4) two wirelength-only cleanup pulses
   hybridTopologySurgery();
+  hubTopologySurgery();
   mazeWirelengthCollapse();
+  mstBackboneSurgery();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
   wirelengthRefine();
   grid_graph_->setCongestionPenaltyScales(0.04, 0.08);
