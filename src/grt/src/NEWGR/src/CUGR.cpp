@@ -1448,18 +1448,18 @@ void CUGR::hubTopologySurgery()
 
 void CUGR::dualHubBackboneSurgery()
 {
-  constexpr int kMaxSurgeryNets = 28;
-  constexpr int kMaxHubCandidates = 6;
-  constexpr int kMaxHubPairs = 10;
-  constexpr int kViaGrowthLimit = 220;
+  constexpr int kMaxSurgeryNets = 36;
+  constexpr int kMaxHubCandidates = 8;
+  constexpr int kMaxHubPairs = 14;
+  constexpr int kViaGrowthLimit = 240;
   constexpr int kOverflowSlack = 1;
-  constexpr uint64_t kMinWireImprovement = 10;
+  constexpr uint64_t kMinWireImprovement = 4;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
 
   // Radical move: build two-hub shared backbones so high-degree nets can
   // collapse multiple long branches into a small number of long trunks.
-  grid_graph_->setCongestionPenaltyScales(0.009, 0.018);
+  grid_graph_->setCongestionPenaltyScales(0.007, 0.015);
 
   struct Candidate
   {
@@ -1485,7 +1485,7 @@ void CUGR::dualHubBackboneSurgery()
     const TreeStats stats = getTreeStats(routing_tree, grid_graph_.get());
     const int overflow = grid_graph_->checkOverflow(routing_tree);
     const double stretch = static_cast<double>(stats.wire_length) / hpwl;
-    const int score = overflow * 3200 + hpwl + net->getNumPins() * 8
+    const int score = overflow * 2200 + hpwl + net->getNumPins() * 10
                       + static_cast<int>(stretch * 100.0);
     candidates.push_back(
         {net->getIndex(), score, overflow, hpwl, net->getNumPins(), stretch});
@@ -1795,7 +1795,7 @@ void CUGR::crossbarBackboneSurgery()
 
   int attempted = 0;
   int accepted = 0;
-  logger_->report("stage 8: crossbar backbone surgery on {} nets",
+  logger_->report("stage 9: crossbar backbone surgery on {} nets",
                   candidates.size());
 
   for (const auto& candidate : candidates) {
@@ -2036,6 +2036,7 @@ void CUGR::route()
 
   hybridTopologySurgery();
   hubTopologySurgery();
+  dualHubBackboneSurgery();
   crossbarBackboneSurgery();
   mazeWirelengthCollapse();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
