@@ -947,6 +947,179 @@ std::shared_ptr<SteinerTreeNode> buildQuadrantHubSteinerTree(
   return root;
 }
 
+std::shared_ptr<SteinerTreeNode> buildLadderBackboneSteinerTree(
+    const std::vector<AccessPoint>& access_points,
+    const int spine_coord,
+    const int lane_a,
+    const int lane_b,
+    const bool vertical_spine)
+{
+  if (access_points.empty()) {
+    return nullptr;
+  }
+  if (access_points.size() == 1) {
+    return std::make_shared<SteinerTreeNode>(access_points.front().point,
+                                             access_points.front().layers);
+  }
+
+  if (vertical_spine) {
+    std::shared_ptr<SteinerTreeNode> root_a
+        = std::make_shared<SteinerTreeNode>(PointT(spine_coord, lane_a));
+    std::shared_ptr<SteinerTreeNode> root_b = root_a;
+    if (lane_b != lane_a) {
+      root_b = std::make_shared<SteinerTreeNode>(PointT(spine_coord, lane_b));
+      attachChildUnique(root_a, root_b);
+    }
+
+    std::unordered_map<int, std::shared_ptr<SteinerTreeNode>> lane_a_nodes;
+    std::unordered_map<int, std::shared_ptr<SteinerTreeNode>> lane_b_nodes;
+    lane_a_nodes.reserve(access_points.size() + 1);
+    lane_b_nodes.reserve(access_points.size() + 1);
+    lane_a_nodes.emplace(spine_coord, root_a);
+    lane_b_nodes.emplace(spine_coord, root_b);
+
+    std::vector<bool> use_lane_a;
+    use_lane_a.reserve(access_points.size());
+    for (const AccessPoint& access_point : access_points) {
+      const int dist_a = std::abs(access_point.point.y() - lane_a);
+      const int dist_b = std::abs(access_point.point.y() - lane_b);
+      const bool pick_a = dist_a <= dist_b;
+      use_lane_a.push_back(pick_a);
+      auto& lane_nodes = pick_a ? lane_a_nodes : lane_b_nodes;
+      if (lane_nodes.find(access_point.point.x()) == lane_nodes.end()) {
+        lane_nodes.emplace(
+            access_point.point.x(),
+            std::make_shared<SteinerTreeNode>(
+                PointT(access_point.point.x(), pick_a ? lane_a : lane_b)));
+      }
+    }
+
+    auto connectLane = [&](std::unordered_map<int,
+                                               std::shared_ptr<SteinerTreeNode>>&
+                               lane_nodes) {
+      std::vector<int> coords;
+      coords.reserve(lane_nodes.size());
+      for (const auto& [coord, _] : lane_nodes) {
+        coords.push_back(coord);
+      }
+      std::sort(coords.begin(), coords.end());
+      const auto root_it = std::find(coords.begin(), coords.end(), spine_coord);
+      if (root_it == coords.end()) {
+        return;
+      }
+      const int root_idx = std::distance(coords.begin(), root_it);
+      for (int i = root_idx - 1; i >= 0; i--) {
+        attachChildUnique(lane_nodes[coords[i + 1]], lane_nodes[coords[i]]);
+      }
+      for (int i = root_idx + 1; i < static_cast<int>(coords.size()); i++) {
+        attachChildUnique(lane_nodes[coords[i - 1]], lane_nodes[coords[i]]);
+      }
+    };
+    connectLane(lane_a_nodes);
+    connectLane(lane_b_nodes);
+
+    for (int pin_idx = 0; pin_idx < static_cast<int>(access_points.size());
+         pin_idx++) {
+      const AccessPoint& access_point = access_points[pin_idx];
+      const bool pick_a = use_lane_a[pin_idx];
+      auto& lane_nodes = pick_a ? lane_a_nodes : lane_b_nodes;
+      auto anchor_it = lane_nodes.find(access_point.point.x());
+      if (anchor_it == lane_nodes.end()) {
+        continue;
+      }
+
+      std::shared_ptr<SteinerTreeNode> anchor = anchor_it->second;
+      if (anchor->x() == access_point.point.x()
+          && anchor->y() == access_point.point.y()) {
+        mergeFixedLayers(access_point.layers, anchor);
+        continue;
+      }
+
+      anchor->addChild(std::make_shared<SteinerTreeNode>(access_point.point,
+                                                          access_point.layers));
+    }
+
+    return root_a;
+  }
+
+  std::shared_ptr<SteinerTreeNode> root_a
+      = std::make_shared<SteinerTreeNode>(PointT(lane_a, spine_coord));
+  std::shared_ptr<SteinerTreeNode> root_b = root_a;
+  if (lane_b != lane_a) {
+    root_b = std::make_shared<SteinerTreeNode>(PointT(lane_b, spine_coord));
+    attachChildUnique(root_a, root_b);
+  }
+
+  std::unordered_map<int, std::shared_ptr<SteinerTreeNode>> lane_a_nodes;
+  std::unordered_map<int, std::shared_ptr<SteinerTreeNode>> lane_b_nodes;
+  lane_a_nodes.reserve(access_points.size() + 1);
+  lane_b_nodes.reserve(access_points.size() + 1);
+  lane_a_nodes.emplace(spine_coord, root_a);
+  lane_b_nodes.emplace(spine_coord, root_b);
+
+  std::vector<bool> use_lane_a;
+  use_lane_a.reserve(access_points.size());
+  for (const AccessPoint& access_point : access_points) {
+    const int dist_a = std::abs(access_point.point.x() - lane_a);
+    const int dist_b = std::abs(access_point.point.x() - lane_b);
+    const bool pick_a = dist_a <= dist_b;
+    use_lane_a.push_back(pick_a);
+    auto& lane_nodes = pick_a ? lane_a_nodes : lane_b_nodes;
+    if (lane_nodes.find(access_point.point.y()) == lane_nodes.end()) {
+      lane_nodes.emplace(
+          access_point.point.y(),
+          std::make_shared<SteinerTreeNode>(
+              PointT(pick_a ? lane_a : lane_b, access_point.point.y())));
+    }
+  }
+
+  auto connectLane = [&](std::unordered_map<int, std::shared_ptr<SteinerTreeNode>>&
+                             lane_nodes) {
+    std::vector<int> coords;
+    coords.reserve(lane_nodes.size());
+    for (const auto& [coord, _] : lane_nodes) {
+      coords.push_back(coord);
+    }
+    std::sort(coords.begin(), coords.end());
+    const auto root_it = std::find(coords.begin(), coords.end(), spine_coord);
+    if (root_it == coords.end()) {
+      return;
+    }
+    const int root_idx = std::distance(coords.begin(), root_it);
+    for (int i = root_idx - 1; i >= 0; i--) {
+      attachChildUnique(lane_nodes[coords[i + 1]], lane_nodes[coords[i]]);
+    }
+    for (int i = root_idx + 1; i < static_cast<int>(coords.size()); i++) {
+      attachChildUnique(lane_nodes[coords[i - 1]], lane_nodes[coords[i]]);
+    }
+  };
+  connectLane(lane_a_nodes);
+  connectLane(lane_b_nodes);
+
+  for (int pin_idx = 0; pin_idx < static_cast<int>(access_points.size());
+       pin_idx++) {
+    const AccessPoint& access_point = access_points[pin_idx];
+    const bool pick_a = use_lane_a[pin_idx];
+    auto& lane_nodes = pick_a ? lane_a_nodes : lane_b_nodes;
+    auto anchor_it = lane_nodes.find(access_point.point.y());
+    if (anchor_it == lane_nodes.end()) {
+      continue;
+    }
+
+    std::shared_ptr<SteinerTreeNode> anchor = anchor_it->second;
+    if (anchor->x() == access_point.point.x()
+        && anchor->y() == access_point.point.y()) {
+      mergeFixedLayers(access_point.layers, anchor);
+      continue;
+    }
+
+    anchor->addChild(std::make_shared<SteinerTreeNode>(access_point.point,
+                                                        access_point.layers));
+  }
+
+  return root_a;
+}
+
 }  // namespace
 
 CUGR::CUGR(odb::dbDatabase* db,
@@ -2534,6 +2707,332 @@ void CUGR::quadrantHubHierarchySurgery()
                                           original_maze_scale);
 }
 
+void CUGR::ladderBackboneSurgery()
+{
+  constexpr int kMaxSurgeryNets = 48;
+  constexpr int kMaxConfigs = 14;
+  constexpr int kViaGrowthLimit = 300;
+  constexpr int kOverflowSlack = 1;
+  constexpr uint64_t kMinWireImprovement = 2;
+  const double original_wire_scale = grid_graph_->getWireCongestionScale();
+  const double original_maze_scale = grid_graph_->getMazeCongestionScale();
+
+  // Radical move: rebuild selected high-pin nets with a two-lane ladder
+  // backbone (parallel trunks + connecting spine). This is intentionally
+  // different from hub/crossbar/MST topologies and targets stem collapse.
+  grid_graph_->setCongestionPenaltyScales(0.006, 0.013);
+
+  struct Candidate
+  {
+    int net_index;
+    int score;
+    int overflow;
+    int hpwl;
+    int pins;
+    double stretch;
+  };
+
+  std::vector<Candidate> candidates;
+  candidates.reserve(gr_nets_.size());
+  for (const auto& net : gr_nets_) {
+    const std::shared_ptr<GRTreeNode> routing_tree = net->getRoutingTree();
+    if (!routing_tree || net->getNumPins() < 7) {
+      continue;
+    }
+    const int hpwl = std::max(1, net->getBoundingBox().hp());
+    if (hpwl < 70) {
+      continue;
+    }
+    const TreeStats stats = getTreeStats(routing_tree, grid_graph_.get());
+    const int overflow = grid_graph_->checkOverflow(routing_tree);
+    const double stretch = static_cast<double>(stats.wire_length) / hpwl;
+    const int score = overflow * 4200 + hpwl + net->getNumPins() * 18
+                      + static_cast<int>(stretch * 200.0);
+    candidates.push_back(
+        {net->getIndex(), score, overflow, hpwl, net->getNumPins(), stretch});
+  }
+
+  if (candidates.empty()) {
+    grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                            original_maze_scale);
+    return;
+  }
+
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const Candidate& lhs, const Candidate& rhs) {
+              if (lhs.score != rhs.score) {
+                return lhs.score > rhs.score;
+              }
+              if (lhs.overflow != rhs.overflow) {
+                return lhs.overflow > rhs.overflow;
+              }
+              if (lhs.stretch != rhs.stretch) {
+                return lhs.stretch > rhs.stretch;
+              }
+              if (lhs.pins != rhs.pins) {
+                return lhs.pins > rhs.pins;
+              }
+              if (lhs.hpwl != rhs.hpwl) {
+                return lhs.hpwl > rhs.hpwl;
+              }
+              return lhs.net_index < rhs.net_index;
+            });
+
+  if (static_cast<int>(candidates.size()) > kMaxSurgeryNets) {
+    candidates.resize(kMaxSurgeryNets);
+  }
+
+  struct LadderConfig
+  {
+    bool vertical_spine;
+    int spine_coord;
+    int lane_a;
+    int lane_b;
+    int estimate;
+  };
+
+  struct RerouteResult
+  {
+    std::shared_ptr<GRTreeNode> tree;
+    TreeStats stats;
+    int overflow{std::numeric_limits<int>::max()};
+    bool valid{false};
+  };
+
+  auto isBetter = [](const RerouteResult& lhs, const RerouteResult& rhs) {
+    if (lhs.stats.wire_length != rhs.stats.wire_length) {
+      return lhs.stats.wire_length < rhs.stats.wire_length;
+    }
+    if (lhs.overflow != rhs.overflow) {
+      return lhs.overflow < rhs.overflow;
+    }
+    return lhs.stats.via_count < rhs.stats.via_count;
+  };
+
+  int attempted = 0;
+  int accepted = 0;
+  logger_->report("stage 11: ladder-backbone surgery on {} nets",
+                  candidates.size());
+
+  for (const auto& candidate : candidates) {
+    GRNet* net = gr_nets_[candidate.net_index].get();
+    const std::shared_ptr<GRTreeNode> old_tree = net->getRoutingTree();
+    if (!old_tree) {
+      continue;
+    }
+
+    attempted++;
+    const TreeStats old_stats = getTreeStats(old_tree, grid_graph_.get());
+    const int old_overflow = grid_graph_->checkOverflow(old_tree);
+    grid_graph_->commitTree(old_tree, /*rip_up*/ true);
+
+    const AccessPointSet selected_access_points
+        = grid_graph_->selectAccessPoints(net);
+    const std::vector<AccessPoint> access_points
+        = materializeAccessPoints(selected_access_points);
+    if (access_points.size() < 4) {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+      continue;
+    }
+
+    std::vector<int> xs;
+    std::vector<int> ys;
+    xs.reserve(access_points.size());
+    ys.reserve(access_points.size());
+    int min_x = std::numeric_limits<int>::max();
+    int max_x = std::numeric_limits<int>::min();
+    int min_y = std::numeric_limits<int>::max();
+    int max_y = std::numeric_limits<int>::min();
+    for (const AccessPoint& access_point : access_points) {
+      xs.push_back(access_point.point.x());
+      ys.push_back(access_point.point.y());
+      min_x = std::min(min_x, access_point.point.x());
+      max_x = std::max(max_x, access_point.point.x());
+      min_y = std::min(min_y, access_point.point.y());
+      max_y = std::max(max_y, access_point.point.y());
+    }
+    std::sort(xs.begin(), xs.end());
+    std::sort(ys.begin(), ys.end());
+
+    const int q1_x = xs[xs.size() / 4];
+    const int median_x = xs[xs.size() / 2];
+    const int q3_x = xs[(3 * xs.size()) / 4];
+    const int q1_y = ys[ys.size() / 4];
+    const int median_y = ys[ys.size() / 2];
+    const int q3_y = ys[(3 * ys.size()) / 4];
+    const BoxT& bbox = net->getBoundingBox();
+
+    std::vector<int> x_spines{median_x, bbox.cx(), q1_x, q3_x};
+    std::vector<int> y_spines{median_y, bbox.cy(), q1_y, q3_y};
+    std::vector<std::pair<int, int>> horizontal_lanes{
+        {q1_y, q3_y}, {bbox.ly(), bbox.hy()}, {q1_y, median_y}, {median_y, q3_y}};
+    std::vector<std::pair<int, int>> vertical_lanes{
+        {q1_x, q3_x}, {bbox.lx(), bbox.hx()}, {q1_x, median_x}, {median_x, q3_x}};
+
+    auto normalizeLanes = [](std::vector<std::pair<int, int>>& lanes) {
+      for (auto& lane_pair : lanes) {
+        if (lane_pair.first > lane_pair.second) {
+          std::swap(lane_pair.first, lane_pair.second);
+        }
+      }
+      std::sort(lanes.begin(), lanes.end());
+      lanes.erase(std::unique(lanes.begin(), lanes.end()), lanes.end());
+    };
+    normalizeLanes(horizontal_lanes);
+    normalizeLanes(vertical_lanes);
+
+    std::vector<LadderConfig> configs;
+    configs.reserve(48);
+    auto appendConfigs = [&](const bool vertical_spine) {
+      const auto& spines = vertical_spine ? x_spines : y_spines;
+      const auto& lane_pairs = vertical_spine ? horizontal_lanes : vertical_lanes;
+      for (const int spine_coord : spines) {
+        for (const auto& [lane_a, lane_b] : lane_pairs) {
+          int stem_cost = 0;
+          for (const AccessPoint& access_point : access_points) {
+            if (vertical_spine) {
+              stem_cost += std::min(std::abs(access_point.point.y() - lane_a),
+                                    std::abs(access_point.point.y() - lane_b));
+            } else {
+              stem_cost += std::min(std::abs(access_point.point.x() - lane_a),
+                                    std::abs(access_point.point.x() - lane_b));
+            }
+          }
+          const int trunk_span = vertical_spine
+                                     ? ((lane_a == lane_b ? 1 : 2) * (max_x - min_x)
+                                        + std::abs(lane_b - lane_a))
+                                     : ((lane_a == lane_b ? 1 : 2) * (max_y - min_y)
+                                        + std::abs(lane_b - lane_a));
+          const int spine_bias = vertical_spine ? std::abs(spine_coord - bbox.cx())
+                                                : std::abs(spine_coord - bbox.cy());
+          configs.push_back(
+              {vertical_spine, spine_coord, lane_a, lane_b, stem_cost * 2 + trunk_span
+                                                             + spine_bias});
+        }
+      }
+    };
+    appendConfigs(/*vertical_spine=*/true);
+    appendConfigs(/*vertical_spine=*/false);
+    if (configs.empty()) {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+      continue;
+    }
+
+    std::sort(configs.begin(),
+              configs.end(),
+              [](const LadderConfig& lhs, const LadderConfig& rhs) {
+                if (lhs.estimate != rhs.estimate) {
+                  return lhs.estimate < rhs.estimate;
+                }
+                if (lhs.vertical_spine != rhs.vertical_spine) {
+                  return lhs.vertical_spine < rhs.vertical_spine;
+                }
+                if (lhs.spine_coord != rhs.spine_coord) {
+                  return lhs.spine_coord < rhs.spine_coord;
+                }
+                if (lhs.lane_a != rhs.lane_a) {
+                  return lhs.lane_a < rhs.lane_a;
+                }
+                return lhs.lane_b < rhs.lane_b;
+              });
+
+    std::vector<LadderConfig> filtered_configs;
+    filtered_configs.reserve(kMaxConfigs);
+    std::unordered_set<uint64_t> seen;
+    seen.reserve(configs.size());
+    for (const LadderConfig& config : configs) {
+      const uint64_t key = (static_cast<uint64_t>(config.vertical_spine) << 48)
+                           | (static_cast<uint64_t>(static_cast<uint16_t>(
+                                  config.spine_coord))
+                              << 32)
+                           | (static_cast<uint64_t>(static_cast<uint16_t>(
+                                  config.lane_a))
+                              << 16)
+                           | static_cast<uint16_t>(config.lane_b);
+      if (!seen.insert(key).second) {
+        continue;
+      }
+      filtered_configs.push_back(config);
+      if (static_cast<int>(filtered_configs.size()) >= kMaxConfigs) {
+        break;
+      }
+    }
+
+    auto evaluate = [&](const std::shared_ptr<GRTreeNode>& tree) {
+      RerouteResult result;
+      if (!tree) {
+        return result;
+      }
+      result.tree = tree;
+      result.stats = getTreeStats(tree, grid_graph_.get());
+      grid_graph_->commitTree(tree);
+      result.overflow = grid_graph_->checkOverflow(tree);
+      result.valid = true;
+      grid_graph_->commitTree(tree, /*rip_up*/ true);
+      return result;
+    };
+
+    auto isAcceptable = [&](const RerouteResult& result) {
+      if (!result.valid) {
+        return false;
+      }
+      const bool improve_wire
+          = result.stats.wire_length + kMinWireImprovement <= old_stats.wire_length;
+      const bool keep_overflow = result.overflow <= old_overflow + kOverflowSlack;
+      const bool bounded_via
+          = result.stats.via_count <= old_stats.via_count + kViaGrowthLimit;
+      const bool overflow_rescue
+          = result.overflow + 3 < old_overflow
+            && result.stats.wire_length <= old_stats.wire_length;
+      return bounded_via
+             && ((improve_wire && keep_overflow) || overflow_rescue);
+    };
+
+    RerouteResult best_result;
+    for (const LadderConfig& config : filtered_configs) {
+      std::shared_ptr<SteinerTreeNode> ladder_tree
+          = buildLadderBackboneSteinerTree(access_points,
+                                           config.spine_coord,
+                                           config.lane_a,
+                                           config.lane_b,
+                                           config.vertical_spine);
+      if (!ladder_tree) {
+        continue;
+      }
+
+      PatternRoute pattern_route(
+          net, grid_graph_.get(), stt_builder_, constants_, logger_);
+      pattern_route.setSteinerTree(ladder_tree);
+      pattern_route.constructRoutingDAG();
+      pattern_route.run();
+
+      RerouteResult result = evaluate(net->getRoutingTree());
+      if (isAcceptable(result)
+          && (!best_result.valid || isBetter(result, best_result))) {
+        best_result = result;
+      }
+    }
+
+    if (best_result.valid) {
+      net->setRoutingTree(best_result.tree);
+      grid_graph_->commitTree(best_result.tree);
+      accepted++;
+    } else {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+    }
+  }
+
+  logger_->report("ladder-backbone surgery accepted {} / {} nets",
+                  accepted,
+                  attempted);
+  grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                          original_maze_scale);
+}
+
 void CUGR::mstBackboneSurgery()
 {
   constexpr int kMaxSurgeryNets = 40;
@@ -2628,7 +3127,7 @@ void CUGR::mstBackboneSurgery()
 
   int attempted = 0;
   int accepted = 0;
-  logger_->report("stage 11: Manhattan-MST backbone surgery on {} nets",
+  logger_->report("stage 12: Manhattan-MST backbone surgery on {} nets",
                   candidates.size());
 
   for (const auto& candidate : candidates) {
@@ -2846,6 +3345,7 @@ void CUGR::route()
   dualHubBackboneSurgery();
   crossbarBackboneSurgery();
   quadrantHubHierarchySurgery();
+  ladderBackboneSurgery();
   mstBackboneSurgery();
   mazeWirelengthCollapse();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);

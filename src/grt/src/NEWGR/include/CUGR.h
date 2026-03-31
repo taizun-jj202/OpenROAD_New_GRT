@@ -91,6 +91,7 @@ class CUGR
   void dualHubBackboneSurgery();
   void crossbarBackboneSurgery();
   void quadrantHubHierarchySurgery();
+  void ladderBackboneSurgery();
   void mstBackboneSurgery();
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
