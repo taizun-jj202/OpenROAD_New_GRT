@@ -1408,7 +1408,7 @@ void CUGR::wirelengthRefine()
             <= oldStats.wire_length;
       const bool relieveOverflow
           = result.overflow + 2 < oldOverflow
-            && result.stats.wire_length <= oldStats.wire_length + 6;
+            && result.stats.wire_length <= oldStats.wire_length;
       const bool keepOverflow = result.overflow <= oldOverflow + kOverflowSlack;
       const bool boundedVia
           = result.stats.via_count <= oldStats.via_count + kViaGrowthLimit;
@@ -2027,12 +2027,12 @@ void CUGR::hubTopologySurgery()
 
 void CUGR::dualHubBackboneSurgery()
 {
-  constexpr int kMaxSurgeryNets = 36;
-  constexpr int kMaxHubCandidates = 8;
-  constexpr int kMaxHubPairs = 14;
+  constexpr int kMaxSurgeryNets = 18;
+  constexpr int kMaxHubCandidates = 6;
+  constexpr int kMaxHubPairs = 8;
   constexpr int kViaGrowthLimit = 240;
   constexpr int kOverflowSlack = 1;
-  constexpr uint64_t kMinWireImprovement = 4;
+  constexpr uint64_t kMinWireImprovement = 2;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
 
@@ -2272,12 +2272,12 @@ void CUGR::dualHubBackboneSurgery()
 
 void CUGR::crossbarBackboneSurgery()
 {
-  constexpr int kMaxSurgeryNets = 52;
-  constexpr int kMaxAxisCandidates = 10;
-  constexpr int kMaxCrossbarPairs = 18;
+  constexpr int kMaxSurgeryNets = 22;
+  constexpr int kMaxAxisCandidates = 7;
+  constexpr int kMaxCrossbarPairs = 9;
   constexpr int kViaGrowthLimit = 260;
   constexpr int kOverflowSlack = 1;
-  constexpr uint64_t kMinWireImprovement = 6;
+  constexpr uint64_t kMinWireImprovement = 2;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
 
@@ -2520,11 +2520,11 @@ void CUGR::crossbarBackboneSurgery()
 
 void CUGR::quadrantHubHierarchySurgery()
 {
-  constexpr int kMaxSurgeryNets = 64;
-  constexpr int kMaxRootCandidates = 6;
+  constexpr int kMaxSurgeryNets = 24;
+  constexpr int kMaxRootCandidates = 4;
   constexpr int kViaGrowthLimit = 280;
   constexpr int kOverflowSlack = 1;
-  constexpr uint64_t kMinWireImprovement = 4;
+  constexpr uint64_t kMinWireImprovement = 2;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
 
@@ -2717,8 +2717,8 @@ void CUGR::quadrantHubHierarchySurgery()
 
 void CUGR::ladderBackboneSurgery()
 {
-  constexpr int kMaxSurgeryNets = 48;
-  constexpr int kMaxConfigs = 14;
+  constexpr int kMaxSurgeryNets = 20;
+  constexpr int kMaxConfigs = 8;
   constexpr int kViaGrowthLimit = 300;
   constexpr int kOverflowSlack = 1;
   constexpr uint64_t kMinWireImprovement = 2;
@@ -3043,10 +3043,10 @@ void CUGR::ladderBackboneSurgery()
 
 void CUGR::mstBackboneSurgery()
 {
-  constexpr int kMaxSurgeryNets = 40;
+  constexpr int kMaxSurgeryNets = 28;
   constexpr int kViaGrowthLimit = 320;
   constexpr int kOverflowSlack = 1;
-  constexpr uint64_t kMinWireImprovement = 4;
+  constexpr uint64_t kMinWireImprovement = 2;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
 
@@ -3197,7 +3197,7 @@ void CUGR::mstBackboneSurgery()
           = result.stats.via_count <= old_stats.via_count + kViaGrowthLimit;
       const bool overflow_rescue
           = result.overflow + 3 < old_overflow
-            && result.stats.wire_length <= old_stats.wire_length + 2;
+            && result.stats.wire_length <= old_stats.wire_length;
       return bounded_via
              && ((improve_wire && keep_overflow) || overflow_rescue);
     };
@@ -3348,13 +3348,17 @@ void CUGR::route()
   trimOverflowSet(netIndices, kMaxMazeNets, "maze");
   mazeRoute(netIndices);
 
-  // Backbone cascade strategy:
-  //   1) median-spine collapse
-  //   2) hub-sweep trunk sharing
+  // Backbone tournament cascade:
+  //   1) median-spine and hub sweeps
+  //   2) dual-hub / crossbar / quadrant / ladder rewrites
   //   3) maze collapse + MST rebuild
-  //   4) two wirelength-only cleanup pulses
+  //   4) two wirelength cleanup pulses
   hybridTopologySurgery();
   hubTopologySurgery();
+  dualHubBackboneSurgery();
+  crossbarBackboneSurgery();
+  quadrantHubHierarchySurgery();
+  ladderBackboneSurgery();
   mazeWirelengthCollapse();
   mstBackboneSurgery();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
