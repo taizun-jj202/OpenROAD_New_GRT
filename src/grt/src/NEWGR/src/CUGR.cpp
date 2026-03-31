@@ -323,11 +323,138 @@ void CUGR::wirelengthRefine()
                                           original_maze_scale);
 }
 
+void CUGR::mazeWirelengthCollapse()
+{
+  constexpr int kMaxCollapseNets = 900;
+  constexpr int kViaGrowthLimit = 64;
+  constexpr uint64_t kMinWireImprovement = 1;
+  const double original_wire_scale = grid_graph_->getWireCongestionScale();
+  const double original_maze_scale = grid_graph_->getMazeCongestionScale();
+
+  // Run an explicit wirelength squeeze pass with a fine sparse grid:
+  // congestion is still respected through acceptance checks, but the search
+  // is biased toward short trunk reconnections.
+  grid_graph_->setCongestionPenaltyScales(0.015, 0.035);
+
+  std::vector<int> candidates;
+  candidates.reserve(gr_nets_.size());
+  for (const auto& net : gr_nets_) {
+    if (net->getNumPins() >= 3 && net->getRoutingTree()) {
+      candidates.push_back(net->getIndex());
+    }
+  }
+
+  if (candidates.empty()) {
+    grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                            original_maze_scale);
+    return;
+  }
+
+  std::sort(candidates.begin(), candidates.end(), [&](const int lhs, const int rhs) {
+    const GRNet* lhsNet = gr_nets_[lhs].get();
+    const GRNet* rhsNet = gr_nets_[rhs].get();
+    const int lhsHpwl = lhsNet->getBoundingBox().hp();
+    const int rhsHpwl = rhsNet->getBoundingBox().hp();
+    if (lhsHpwl != rhsHpwl) {
+      return lhsHpwl > rhsHpwl;
+    }
+    if (lhsNet->getNumPins() != rhsNet->getNumPins()) {
+      return lhsNet->getNumPins() > rhsNet->getNumPins();
+    }
+    return lhs < rhs;
+  });
+
+  if ((int) candidates.size() > kMaxCollapseNets) {
+    candidates.resize(kMaxCollapseNets);
+  }
+
+  GridGraphView<CostT> wireCostView;
+  grid_graph_->extractWireCostView(wireCostView);
+  SparseGrid sparseGrid(8, 8, 0, 0);
+  int accepted = 0;
+  int attempted = 0;
+  logger_->report("stage 5: maze wirelength collapse on {} nets",
+                  candidates.size());
+
+  for (const int netIndex : candidates) {
+    GRNet* net = gr_nets_[netIndex].get();
+    const std::shared_ptr<GRTreeNode> oldTree = net->getRoutingTree();
+    if (!oldTree) {
+      continue;
+    }
+
+    attempted++;
+    const TreeStats oldStats = getTreeStats(oldTree, grid_graph_.get());
+    const int oldOverflow = grid_graph_->checkOverflow(oldTree);
+
+    grid_graph_->commitTree(oldTree, /*rip_up*/ true);
+    grid_graph_->updateWireCostView(wireCostView, oldTree);
+
+    MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+    mazeRoute.constructSparsifiedGraph(wireCostView, sparseGrid);
+    mazeRoute.run();
+    std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();
+
+    if (!steinerTree) {
+      net->setRoutingTree(oldTree);
+      grid_graph_->commitTree(oldTree);
+      grid_graph_->updateWireCostView(wireCostView, oldTree);
+      sparseGrid.step();
+      continue;
+    }
+
+    PatternRoute patternRoute(
+        net, grid_graph_.get(), stt_builder_, constants_, logger_);
+    patternRoute.setSteinerTree(steinerTree);
+    patternRoute.constructRoutingDAG();
+    patternRoute.run();
+
+    const std::shared_ptr<GRTreeNode> candidateTree = net->getRoutingTree();
+    if (!candidateTree) {
+      net->setRoutingTree(oldTree);
+      grid_graph_->commitTree(oldTree);
+      grid_graph_->updateWireCostView(wireCostView, oldTree);
+      sparseGrid.step();
+      continue;
+    }
+
+    const TreeStats candidateStats = getTreeStats(candidateTree, grid_graph_.get());
+
+    grid_graph_->commitTree(candidateTree);
+    grid_graph_->updateWireCostView(wireCostView, candidateTree);
+    const int candidateOverflow = grid_graph_->checkOverflow(candidateTree);
+
+    const bool improveWire = candidateStats.wire_length + kMinWireImprovement
+                             < oldStats.wire_length;
+    const bool viaGrowthBound
+        = candidateStats.via_count <= oldStats.via_count + kViaGrowthLimit;
+    const bool keepOverflow = candidateOverflow <= oldOverflow;
+
+    if (improveWire && viaGrowthBound && keepOverflow) {
+      accepted++;
+    } else {
+      grid_graph_->commitTree(candidateTree, /*rip_up*/ true);
+      grid_graph_->updateWireCostView(wireCostView, candidateTree);
+      net->setRoutingTree(oldTree);
+      grid_graph_->commitTree(oldTree);
+      grid_graph_->updateWireCostView(wireCostView, oldTree);
+    }
+
+    sparseGrid.step();
+  }
+
+  logger_->report("maze wirelength collapse accepted {} / {} nets",
+                  accepted,
+                  attempted);
+  grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                          original_maze_scale);
+}
+
 void CUGR::route()
 {
   constexpr int kMaxDetourNets = 2600;
   constexpr int kMaxMazeNets = 900;
-  constexpr double kLongNetRatio = 0.45;
+  constexpr double kLongNetRatio = 0.55;
 
   auto trimOverflowSet = [&](std::vector<int>& netIndices,
                              const int limit,
@@ -420,6 +547,7 @@ void CUGR::route()
 
   grid_graph_->setCongestionPenaltyScales(0.06, 0.12);
   wirelengthRefine();
+  mazeWirelengthCollapse();
 
   printStatistics();
   if (constants_.write_heatmap) {
