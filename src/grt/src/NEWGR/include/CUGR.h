@@ -90,6 +90,7 @@ class CUGR
   void hubTopologySurgery();
   void dualHubBackboneSurgery();
   void crossbarBackboneSurgery();
+  void quadrantHubHierarchySurgery();
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);

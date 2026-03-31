@@ -1,6 +1,7 @@
 #include "CUGR.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -204,6 +205,20 @@ uint64_t pointKey(const PointT& point)
 {
   return (static_cast<uint64_t>(static_cast<uint32_t>(point.x())) << 32)
          | static_cast<uint32_t>(point.y());
+}
+
+void attachChildUnique(const std::shared_ptr<SteinerTreeNode>& parent,
+                       const std::shared_ptr<SteinerTreeNode>& child)
+{
+  if (!parent || !child || parent == child) {
+    return;
+  }
+  for (const auto& existing : parent->getChildren()) {
+    if (existing == child) {
+      return;
+    }
+  }
+  parent->addChild(child);
 }
 
 std::shared_ptr<SteinerTreeNode> buildHubSpineSteinerTree(
@@ -631,6 +646,77 @@ std::shared_ptr<SteinerTreeNode> buildCrossbarSteinerTree(
                                             access_point.layers);
     anchor_it->second->addChild(pin_node);
     node_by_point.emplace(point_key, pin_node);
+  }
+
+  return root;
+}
+
+std::shared_ptr<SteinerTreeNode> buildQuadrantHubSteinerTree(
+    const std::vector<AccessPoint>& access_points,
+    const PointT& root_point)
+{
+  if (access_points.empty()) {
+    return nullptr;
+  }
+  if (access_points.size() == 1) {
+    return std::make_shared<SteinerTreeNode>(access_points.front().point,
+                                             access_points.front().layers);
+  }
+
+  std::shared_ptr<SteinerTreeNode> root
+      = std::make_shared<SteinerTreeNode>(root_point);
+  std::unordered_map<uint64_t, std::shared_ptr<SteinerTreeNode>> node_by_point;
+  node_by_point.reserve(access_points.size() + 8);
+  node_by_point.emplace(pointKey(root_point), root);
+
+  std::array<std::vector<const AccessPoint*>, 4> clusters;
+  for (const AccessPoint& access_point : access_points) {
+    const int x_side = access_point.point.x() >= root_point.x() ? 1 : 0;
+    const int y_side = access_point.point.y() >= root_point.y() ? 1 : 0;
+    const int cluster_index = (x_side << 1) | y_side;
+    clusters[cluster_index].push_back(&access_point);
+  }
+
+  for (const auto& cluster : clusters) {
+    if (cluster.empty()) {
+      continue;
+    }
+
+    std::vector<int> xs;
+    std::vector<int> ys;
+    xs.reserve(cluster.size());
+    ys.reserve(cluster.size());
+    for (const AccessPoint* access_point : cluster) {
+      xs.push_back(access_point->point.x());
+      ys.push_back(access_point->point.y());
+    }
+    const PointT hub_point(getMedian(xs), getMedian(ys));
+
+    const uint64_t hub_key = pointKey(hub_point);
+    auto [hub_it, inserted]
+        = node_by_point.emplace(hub_key,
+                                std::make_shared<SteinerTreeNode>(hub_point));
+    std::shared_ptr<SteinerTreeNode> hub = hub_it->second;
+    if (inserted) {
+      attachChildUnique(root, hub);
+    } else if (hub != root) {
+      attachChildUnique(root, hub);
+    }
+
+    for (const AccessPoint* access_point : cluster) {
+      const uint64_t pin_key = pointKey(access_point->point);
+      auto existing = node_by_point.find(pin_key);
+      if (existing != node_by_point.end()) {
+        mergeFixedLayers(access_point->layers, existing->second);
+        continue;
+      }
+
+      std::shared_ptr<SteinerTreeNode> pin_node
+          = std::make_shared<SteinerTreeNode>(access_point->point,
+                                              access_point->layers);
+      attachChildUnique(hub, pin_node);
+      node_by_point.emplace(pin_key, pin_node);
+    }
   }
 
   return root;
@@ -2026,6 +2112,203 @@ void CUGR::crossbarBackboneSurgery()
                                           original_maze_scale);
 }
 
+void CUGR::quadrantHubHierarchySurgery()
+{
+  constexpr int kMaxSurgeryNets = 64;
+  constexpr int kMaxRootCandidates = 6;
+  constexpr int kViaGrowthLimit = 280;
+  constexpr int kOverflowSlack = 1;
+  constexpr uint64_t kMinWireImprovement = 4;
+  const double original_wire_scale = grid_graph_->getWireCongestionScale();
+  const double original_maze_scale = grid_graph_->getMazeCongestionScale();
+
+  // Radical move: rebuild high-pin nets using a two-level hierarchy
+  // (quadrant hubs + root trunk) to force branch sharing and collapse stems.
+  grid_graph_->setCongestionPenaltyScales(0.006, 0.014);
+
+  struct Candidate
+  {
+    int net_index;
+    int score;
+    int overflow;
+    int hpwl;
+    int pins;
+    double stretch;
+  };
+
+  std::vector<Candidate> candidates;
+  candidates.reserve(gr_nets_.size());
+  for (const auto& net : gr_nets_) {
+    const std::shared_ptr<GRTreeNode> routing_tree = net->getRoutingTree();
+    if (!routing_tree || net->getNumPins() < 8) {
+      continue;
+    }
+    const int hpwl = std::max(1, net->getBoundingBox().hp());
+    if (hpwl < 90) {
+      continue;
+    }
+    const TreeStats stats = getTreeStats(routing_tree, grid_graph_.get());
+    const int overflow = grid_graph_->checkOverflow(routing_tree);
+    const double stretch = static_cast<double>(stats.wire_length) / hpwl;
+    const int score = overflow * 3600 + hpwl + net->getNumPins() * 12
+                      + static_cast<int>(stretch * 140.0);
+    candidates.push_back(
+        {net->getIndex(), score, overflow, hpwl, net->getNumPins(), stretch});
+  }
+
+  if (candidates.empty()) {
+    grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                            original_maze_scale);
+    return;
+  }
+
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const Candidate& lhs, const Candidate& rhs) {
+              if (lhs.score != rhs.score) {
+                return lhs.score > rhs.score;
+              }
+              if (lhs.overflow != rhs.overflow) {
+                return lhs.overflow > rhs.overflow;
+              }
+              if (lhs.stretch != rhs.stretch) {
+                return lhs.stretch > rhs.stretch;
+              }
+              if (lhs.pins != rhs.pins) {
+                return lhs.pins > rhs.pins;
+              }
+              if (lhs.hpwl != rhs.hpwl) {
+                return lhs.hpwl > rhs.hpwl;
+              }
+              return lhs.net_index < rhs.net_index;
+            });
+
+  if (static_cast<int>(candidates.size()) > kMaxSurgeryNets) {
+    candidates.resize(kMaxSurgeryNets);
+  }
+
+  struct RerouteResult
+  {
+    std::shared_ptr<GRTreeNode> tree;
+    TreeStats stats;
+    int overflow{std::numeric_limits<int>::max()};
+    bool valid{false};
+  };
+
+  auto isBetter = [](const RerouteResult& lhs, const RerouteResult& rhs) {
+    if (lhs.stats.wire_length != rhs.stats.wire_length) {
+      return lhs.stats.wire_length < rhs.stats.wire_length;
+    }
+    if (lhs.overflow != rhs.overflow) {
+      return lhs.overflow < rhs.overflow;
+    }
+    return lhs.stats.via_count < rhs.stats.via_count;
+  };
+
+  int attempted = 0;
+  int accepted = 0;
+  logger_->report("stage 10: quadrant-hub hierarchy surgery on {} nets",
+                  candidates.size());
+
+  for (const auto& candidate : candidates) {
+    GRNet* net = gr_nets_[candidate.net_index].get();
+    const std::shared_ptr<GRTreeNode> old_tree = net->getRoutingTree();
+    if (!old_tree) {
+      continue;
+    }
+
+    attempted++;
+    const TreeStats old_stats = getTreeStats(old_tree, grid_graph_.get());
+    const int old_overflow = grid_graph_->checkOverflow(old_tree);
+    grid_graph_->commitTree(old_tree, /*rip_up*/ true);
+
+    const AccessPointSet selected_access_points
+        = grid_graph_->selectAccessPoints(net);
+    const std::vector<AccessPoint> access_points
+        = materializeAccessPoints(selected_access_points);
+    if (access_points.size() < 4) {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+      continue;
+    }
+
+    std::vector<PointT> root_candidates
+        = buildHubCandidates(access_points,
+                             net->getBoundingBox(),
+                             kMaxRootCandidates);
+    if (root_candidates.empty()) {
+      root_candidates.push_back(
+          PointT(net->getBoundingBox().cx(), net->getBoundingBox().cy()));
+    }
+
+    auto evaluate = [&](const std::shared_ptr<GRTreeNode>& tree) {
+      RerouteResult result;
+      if (!tree) {
+        return result;
+      }
+      result.tree = tree;
+      result.stats = getTreeStats(tree, grid_graph_.get());
+      grid_graph_->commitTree(tree);
+      result.overflow = grid_graph_->checkOverflow(tree);
+      result.valid = true;
+      grid_graph_->commitTree(tree, /*rip_up*/ true);
+      return result;
+    };
+
+    auto isAcceptable = [&](const RerouteResult& result) {
+      if (!result.valid) {
+        return false;
+      }
+      const bool improve_wire
+          = result.stats.wire_length + kMinWireImprovement <= old_stats.wire_length;
+      const bool keep_overflow = result.overflow <= old_overflow + kOverflowSlack;
+      const bool bounded_via
+          = result.stats.via_count <= old_stats.via_count + kViaGrowthLimit;
+      const bool overflow_rescue
+          = result.overflow + 3 < old_overflow
+            && result.stats.wire_length <= old_stats.wire_length;
+      return bounded_via
+             && ((improve_wire && keep_overflow) || overflow_rescue);
+    };
+
+    RerouteResult best_result;
+    for (const PointT& root_point : root_candidates) {
+      std::shared_ptr<SteinerTreeNode> hierarchy_tree
+          = buildQuadrantHubSteinerTree(access_points, root_point);
+      if (!hierarchy_tree) {
+        continue;
+      }
+
+      PatternRoute pattern_route(
+          net, grid_graph_.get(), stt_builder_, constants_, logger_);
+      pattern_route.setSteinerTree(hierarchy_tree);
+      pattern_route.constructRoutingDAG();
+      pattern_route.run();
+
+      RerouteResult result = evaluate(net->getRoutingTree());
+      if (isAcceptable(result)
+          && (!best_result.valid || isBetter(result, best_result))) {
+        best_result = result;
+      }
+    }
+
+    if (best_result.valid) {
+      net->setRoutingTree(best_result.tree);
+      grid_graph_->commitTree(best_result.tree);
+      accepted++;
+    } else {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+    }
+  }
+
+  logger_->report("quadrant-hub hierarchy surgery accepted {} / {} nets",
+                  accepted,
+                  attempted);
+  grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                          original_maze_scale);
+}
+
 void CUGR::route()
 {
   constexpr int kMaxDetourNets = 2200;
@@ -2125,6 +2408,7 @@ void CUGR::route()
   hubTopologySurgery();
   dualHubBackboneSurgery();
   crossbarBackboneSurgery();
+  quadrantHubHierarchySurgery();
   mazeWirelengthCollapse();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
   wirelengthRefine();
