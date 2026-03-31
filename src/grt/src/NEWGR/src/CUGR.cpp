@@ -800,19 +800,35 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
 void CUGR::wirelengthRefine()
 {
-  constexpr int kMaxRefineNets = 1400;
-  constexpr int kViaMargin = 10;
-  const uint64_t kMinWireImprovement = 0;
+  constexpr int kMaxRefineNets = 920;
+  constexpr int kViaGrowthLimit = 180;
+  constexpr int kOverflowSlack = 1;
+  constexpr uint64_t kMinWireImprovement = 1;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
-  // Collapse detours first, then keep only overflow-safe improvements.
-  grid_graph_->setCongestionPenaltyScales(0.01, original_maze_scale);
+  // Radical pass: test multiple topology families and keep only local wins.
+  grid_graph_->setCongestionPenaltyScales(0.006, original_maze_scale);
 
-  std::vector<int> candidates;
+  struct Candidate
+  {
+    int net_index;
+    int hpwl;
+    int overflow;
+    int pins;
+    double stretch;
+  };
+
+  std::vector<Candidate> candidates;
   candidates.reserve(gr_nets_.size());
   for (const auto& net : gr_nets_) {
-    if (net->getNumPins() >= 2 && net->getRoutingTree()) {
-      candidates.push_back(net->getIndex());
+    const std::shared_ptr<GRTreeNode> routing_tree = net->getRoutingTree();
+    if (net->getNumPins() >= 3 && routing_tree) {
+      const int hpwl = std::max(1, net->getBoundingBox().hp());
+      const int overflow = grid_graph_->checkOverflow(routing_tree);
+      const TreeStats stats = getTreeStats(routing_tree, grid_graph_.get());
+      const double stretch = static_cast<double>(stats.wire_length) / hpwl;
+      candidates.push_back(
+          {net->getIndex(), hpwl, overflow, net->getNumPins(), stretch});
     }
   }
 
@@ -822,31 +838,53 @@ void CUGR::wirelengthRefine()
     return;
   }
 
-  std::sort(candidates.begin(), candidates.end(), [&](const int lhs, const int rhs) {
-    const GRNet* lhsNet = gr_nets_[lhs].get();
-    const GRNet* rhsNet = gr_nets_[rhs].get();
-    const int lhsHpwl = lhsNet->getBoundingBox().hp();
-    const int rhsHpwl = rhsNet->getBoundingBox().hp();
-    if (lhsHpwl != rhsHpwl) {
-      return lhsHpwl > rhsHpwl;
-    }
-    if (lhsNet->getNumPins() != rhsNet->getNumPins()) {
-      return lhsNet->getNumPins() > rhsNet->getNumPins();
-    }
-    return lhs < rhs;
-  });
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const Candidate& lhs, const Candidate& rhs) {
+              if (lhs.overflow != rhs.overflow) {
+                return lhs.overflow > rhs.overflow;
+              }
+              if (lhs.stretch != rhs.stretch) {
+                return lhs.stretch > rhs.stretch;
+              }
+              if (lhs.hpwl != rhs.hpwl) {
+                return lhs.hpwl > rhs.hpwl;
+              }
+              if (lhs.pins != rhs.pins) {
+                return lhs.pins > rhs.pins;
+              }
+              return lhs.net_index < rhs.net_index;
+            });
 
-  if ((int) candidates.size() > kMaxRefineNets) {
+  if (static_cast<int>(candidates.size()) > kMaxRefineNets) {
     candidates.resize(kMaxRefineNets);
   }
 
+  struct RerouteResult
+  {
+    std::shared_ptr<GRTreeNode> tree;
+    TreeStats stats;
+    int overflow{std::numeric_limits<int>::max()};
+    bool valid{false};
+  };
+
   int accepted = 0;
   int attempted = 0;
-  logger_->report("stage 4: wirelength rescue on {} long nets",
+  logger_->report("stage 4: multi-topology wirelength collapse on {} nets",
                   candidates.size());
 
-  for (const int netIndex : candidates) {
-    GRNet* net = gr_nets_[netIndex].get();
+  auto isBetter = [](const RerouteResult& lhs, const RerouteResult& rhs) {
+    if (lhs.stats.wire_length != rhs.stats.wire_length) {
+      return lhs.stats.wire_length < rhs.stats.wire_length;
+    }
+    if (lhs.overflow != rhs.overflow) {
+      return lhs.overflow < rhs.overflow;
+    }
+    return lhs.stats.via_count < rhs.stats.via_count;
+  };
+
+  for (const Candidate& candidate : candidates) {
+    GRNet* net = gr_nets_[candidate.net_index].get();
     const std::shared_ptr<GRTreeNode> oldTree = net->getRoutingTree();
     if (!oldTree) {
       continue;
@@ -855,49 +893,98 @@ void CUGR::wirelengthRefine()
     attempted++;
     const TreeStats oldStats = getTreeStats(oldTree, grid_graph_.get());
 
-    // Evaluate old overflow with existing committed demands.
     const int oldOverflow = grid_graph_->checkOverflow(oldTree);
-
     grid_graph_->commitTree(oldTree, /*rip_up*/ true);
 
-    PatternRoute patternRoute(
-        net, grid_graph_.get(), stt_builder_, constants_, logger_);
-    patternRoute.constructSteinerTree();
-    patternRoute.constructRoutingDAG();
-    patternRoute.run();
+    auto evaluate = [&](const std::shared_ptr<GRTreeNode>& tree) {
+      RerouteResult result;
+      if (!tree) {
+        return result;
+      }
+      result.tree = tree;
+      result.stats = getTreeStats(tree, grid_graph_.get());
+      grid_graph_->commitTree(tree);
+      result.overflow = grid_graph_->checkOverflow(tree);
+      result.valid = true;
+      grid_graph_->commitTree(tree, /*rip_up*/ true);
+      return result;
+    };
 
-    const std::shared_ptr<GRTreeNode> candidateTree = net->getRoutingTree();
-    if (!candidateTree) {
-      net->setRoutingTree(oldTree);
-      grid_graph_->commitTree(oldTree);
-      continue;
+    auto isAcceptable = [&](const RerouteResult& result) {
+      if (!result.valid) {
+        return false;
+      }
+      const bool improveWire
+          = result.stats.wire_length + kMinWireImprovement <= oldStats.wire_length;
+      const bool improveViaWithNoWireLoss
+          = result.stats.wire_length <= oldStats.wire_length
+            && result.stats.via_count + 8 < oldStats.via_count;
+      const bool relieveOverflow
+          = result.overflow + 2 < oldOverflow
+            && result.stats.wire_length <= oldStats.wire_length + 2;
+      const bool keepOverflow = result.overflow <= oldOverflow + kOverflowSlack;
+      const bool boundedVia
+          = result.stats.via_count <= oldStats.via_count + kViaGrowthLimit;
+      return boundedVia
+             && keepOverflow
+             && (improveWire || improveViaWithNoWireLoss || relieveOverflow);
+    };
+
+    RerouteResult bestResult;
+    auto considerCurrent = [&]() {
+      const RerouteResult result = evaluate(net->getRoutingTree());
+      if (isAcceptable(result)
+          && (!bestResult.valid || isBetter(result, bestResult))) {
+        bestResult = result;
+      }
+    };
+
+    PatternRoute flutePattern(
+        net, grid_graph_.get(), stt_builder_, constants_, logger_);
+    flutePattern.constructSteinerTree();
+    flutePattern.constructRoutingDAG();
+    flutePattern.run();
+    considerCurrent();
+
+    const AccessPointSet selectedAccessPoints = grid_graph_->selectAccessPoints(net);
+    const std::vector<AccessPoint> accessPoints
+        = materializeAccessPoints(selectedAccessPoints);
+    if (accessPoints.size() >= 2) {
+      auto trySteinerTemplate
+          = [&](const std::shared_ptr<SteinerTreeNode>& steinerTree) {
+              if (!steinerTree) {
+                return;
+              }
+              PatternRoute pattern(
+                  net, grid_graph_.get(), stt_builder_, constants_, logger_);
+              pattern.setSteinerTree(steinerTree);
+              pattern.constructRoutingDAG();
+              pattern.run();
+              considerCurrent();
+            };
+
+      trySteinerTemplate(buildMedianTrunkSteinerTree(accessPoints, true));
+      trySteinerTemplate(buildMedianTrunkSteinerTree(accessPoints, false));
+
+      const PointT center(net->getBoundingBox().cx(), net->getBoundingBox().cy());
+      trySteinerTemplate(
+          buildCrossbarSteinerTree(accessPoints, center, true));
+      trySteinerTemplate(
+          buildCrossbarSteinerTree(accessPoints, center, false));
     }
 
-    const TreeStats candidateStats = getTreeStats(candidateTree, grid_graph_.get());
-
-    // Temporarily commit candidate to evaluate overflow on its used edges.
-    grid_graph_->commitTree(candidateTree);
-    const int candidateOverflow = grid_graph_->checkOverflow(candidateTree);
-
-    const bool improveWire = candidateStats.wire_length + kMinWireImprovement
-                             < oldStats.wire_length;
-    const bool improveComposite
-        = (candidateStats.wire_length <= oldStats.wire_length
-           && candidateStats.via_count + kViaMargin < oldStats.via_count);
-    const bool keepOverflow = candidateOverflow <= oldOverflow;
-
-    if (keepOverflow && (improveWire || improveComposite)) {
+    if (bestResult.valid) {
+      net->setRoutingTree(bestResult.tree);
+      grid_graph_->commitTree(bestResult.tree);
       accepted++;
       continue;
     }
 
-    // Reject candidate and restore previous tree/demand.
-    grid_graph_->commitTree(candidateTree, /*rip_up*/ true);
     net->setRoutingTree(oldTree);
     grid_graph_->commitTree(oldTree);
   }
 
-  logger_->report("wirelength rescue accepted {} / {} nets",
+  logger_->report("multi-topology collapse accepted {} / {} nets",
                   accepted,
                   attempted);
   grid_graph_->setCongestionPenaltyScales(original_wire_scale,
