@@ -26,6 +26,10 @@
 
 namespace grt::newgr {
 
+namespace {
+constexpr double kCongestionPenaltyScale = 0.20;
+}  // namespace
+
 GridGraph::GridGraph(const Design* design,
                      const Constants& constants,
                      utl::Logger* logger)
@@ -310,6 +314,7 @@ CostT GridGraph::getWireCost(const int layer_index,
   const auto& edge = graph_edges_[layer_index][lower.x()][lower.y()];
   CostT cost = demandLength * unit_length_wire_cost_;
   cost += demandLength * unit_length_short_costs_[layer_index]
+          * kCongestionPenaltyScale
           * (edge.capacity < 1.0 ? 1.0
                                  : logistic(edge.capacity - edge.demand,
                                             constants_.cost_logistic_slope));
@@ -678,7 +683,7 @@ void GridGraph::extractWireCostView(GridGraphView<CostT>& view) const
         view[direction][x][y]
             = length
               * (unit_length_wire_cost_
-                 + unitLengthShortCost
+                 + unitLengthShortCost * kCongestionPenaltyScale
                        * (capacity < 1.0
                               ? 1.0
                               : logistic(capacity - demand,
@@ -721,7 +726,7 @@ void GridGraph::updateWireCostView(
     view[direction][x][y]
         = length
           * (unit_length_wire_cost_
-             + unitLengthShortCost[direction]
+             + unitLengthShortCost[direction] * kCongestionPenaltyScale
                    * (capacity < 1.0
                           ? 1.0
                           : logistic(capacity - demand,

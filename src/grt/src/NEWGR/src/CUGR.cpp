@@ -33,6 +33,13 @@ CUGR::CUGR(odb::dbDatabase* db,
            stt::SteinerTreeBuilder* stt_builder)
     : db_(db), logger_(log), stt_builder_(stt_builder)
 {
+  // Wirelength-first policy:
+  // keep detours conservative and reduce congestion sensitivity.
+  constants_.cost_logistic_slope = 0.35;
+  constants_.maze_logistic_slope = 0.35;
+  constants_.max_detour_ratio = 0.08;
+  constants_.target_detour_count = 6;
+  constants_.via_multiplier = 1.0;
 }
 
 CUGR::~CUGR() = default;
@@ -120,7 +127,8 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
   sortNetIndices(netIndices);
-  SparseGrid grid(10, 10, 0, 0);
+  // Coarser sparse grid to speed up maze rerouting.
+  SparseGrid grid(16, 16, 0, 0);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
     MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
@@ -145,6 +153,68 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
 void CUGR::route()
 {
+  constexpr int kMaxDetourNets = 1200;
+  constexpr int kMaxMazeNets = 350;
+
+  auto trimOverflowSet = [&](std::vector<int>& netIndices,
+                             const int limit,
+                             const char* stage) {
+    if ((int) netIndices.size() <= limit) {
+      return;
+    }
+
+    struct OverflowStat
+    {
+      int net_index;
+      int overflow;
+      int hpwl;
+    };
+
+    std::vector<OverflowStat> overflowStats;
+    overflowStats.reserve(netIndices.size());
+    for (const int netIndex : netIndices) {
+      const int overflow
+          = grid_graph_->checkOverflow(gr_nets_[netIndex]->getRoutingTree());
+      if (overflow <= 0) {
+        continue;
+      }
+      overflowStats.push_back(
+          {netIndex, overflow, gr_nets_[netIndex]->getBoundingBox().hp()});
+    }
+
+    if ((int) overflowStats.size() <= limit) {
+      netIndices.clear();
+      netIndices.reserve(overflowStats.size());
+      for (const auto& stat : overflowStats) {
+        netIndices.push_back(stat.net_index);
+      }
+      return;
+    }
+
+    std::sort(overflowStats.begin(),
+              overflowStats.end(),
+              [](const OverflowStat& lhs, const OverflowStat& rhs) {
+                if (lhs.overflow != rhs.overflow) {
+                  return lhs.overflow > rhs.overflow;
+                }
+                if (lhs.hpwl != rhs.hpwl) {
+                  return lhs.hpwl < rhs.hpwl;
+                }
+                return lhs.net_index < rhs.net_index;
+              });
+
+    netIndices.clear();
+    netIndices.reserve(limit);
+    for (int i = 0; i < limit; i++) {
+      netIndices.push_back(overflowStats[i].net_index);
+    }
+
+    logger_->report("runtime guard [{}]: rerouting {} / {} overflow nets",
+                    stage,
+                    netIndices.size(),
+                    overflowStats.size());
+  };
+
   std::vector<int> netIndices;
   netIndices.reserve(gr_nets_.size());
   for (const auto& net : gr_nets_) {
@@ -153,8 +223,10 @@ void CUGR::route()
 
   patternRoute(netIndices);
 
+  trimOverflowSet(netIndices, kMaxDetourNets, "detour");
   patternRouteWithDetours(netIndices);
 
+  trimOverflowSet(netIndices, kMaxMazeNets, "maze");
   mazeRoute(netIndices);
 
   printStatistics();
