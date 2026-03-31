@@ -947,6 +947,131 @@ std::shared_ptr<SteinerTreeNode> buildQuadrantHubSteinerTree(
   return root;
 }
 
+IntervalT getLayersAtPoint(const std::vector<AccessPoint>& access_points,
+                           const PointT& point)
+{
+  IntervalT layers;
+  for (const AccessPoint& access_point : access_points) {
+    if (access_point.point != point) {
+      continue;
+    }
+    if (!layers.IsValid()) {
+      layers = access_point.layers;
+    } else {
+      layers = layers.UnionWith(access_point.layers);
+    }
+  }
+  return layers;
+}
+
+std::shared_ptr<SteinerTreeNode> buildQuadrantMstFusionSteinerTree(
+    const std::vector<AccessPoint>& access_points,
+    const PointT& root_point,
+    const bool prefer_horizontal_first)
+{
+  if (access_points.empty()) {
+    return nullptr;
+  }
+  if (access_points.size() == 1) {
+    return std::make_shared<SteinerTreeNode>(access_points.front().point,
+                                             access_points.front().layers);
+  }
+
+  std::array<std::vector<AccessPoint>, 4> clusters;
+  for (const AccessPoint& access_point : access_points) {
+    const int x_side = access_point.point.x() >= root_point.x() ? 1 : 0;
+    const int y_side = access_point.point.y() >= root_point.y() ? 1 : 0;
+    clusters[(x_side << 1) | y_side].push_back(access_point);
+  }
+
+  std::vector<PointT> cluster_hubs;
+  std::vector<std::shared_ptr<SteinerTreeNode>> cluster_roots;
+  cluster_hubs.reserve(4);
+  cluster_roots.reserve(4);
+  for (const auto& cluster : clusters) {
+    if (cluster.empty()) {
+      continue;
+    }
+    std::vector<int> xs;
+    std::vector<int> ys;
+    xs.reserve(cluster.size());
+    ys.reserve(cluster.size());
+    for (const AccessPoint& access_point : cluster) {
+      xs.push_back(access_point.point.x());
+      ys.push_back(access_point.point.y());
+    }
+    const PointT hub_point(getMedian(xs), getMedian(ys));
+    std::shared_ptr<SteinerTreeNode> local_root
+        = buildRectilinearMstSteinerTree(cluster,
+                                         hub_point,
+                                         /*include_hub=*/true,
+                                         hub_point,
+                                         prefer_horizontal_first);
+    if (!local_root) {
+      continue;
+    }
+    cluster_hubs.push_back(hub_point);
+    cluster_roots.push_back(local_root);
+  }
+
+  if (cluster_hubs.empty()) {
+    return buildRectilinearMstSteinerTree(access_points,
+                                          root_point,
+                                          /*include_hub=*/true,
+                                          root_point,
+                                          prefer_horizontal_first);
+  }
+
+  std::vector<AccessPoint> skeleton_points;
+  skeleton_points.reserve(cluster_hubs.size() + 1);
+  std::unordered_set<uint64_t> seen;
+  seen.reserve(cluster_hubs.size() + 1);
+  auto emitSkeletonPoint = [&](const PointT& point) {
+    const uint64_t key = pointKey(point);
+    if (!seen.insert(key).second) {
+      return;
+    }
+    skeleton_points.push_back({point, getLayersAtPoint(access_points, point)});
+  };
+  emitSkeletonPoint(root_point);
+  for (const PointT& hub_point : cluster_hubs) {
+    emitSkeletonPoint(hub_point);
+  }
+
+  std::shared_ptr<SteinerTreeNode> fused_tree
+      = buildRectilinearMstSteinerTree(skeleton_points,
+                                       root_point,
+                                       /*include_hub=*/true,
+                                       root_point,
+                                       prefer_horizontal_first);
+  if (!fused_tree) {
+    return nullptr;
+  }
+
+  std::unordered_map<uint64_t, std::shared_ptr<SteinerTreeNode>> fused_nodes;
+  fused_nodes.reserve(skeleton_points.size() * 2);
+  SteinerTreeNode::preorder(
+      fused_tree, [&](const std::shared_ptr<SteinerTreeNode>& node) {
+        fused_nodes.emplace(pointKey(*node), node);
+      });
+
+  for (int cluster_idx = 0; cluster_idx < static_cast<int>(cluster_hubs.size());
+       cluster_idx++) {
+    const auto hub_it = fused_nodes.find(pointKey(cluster_hubs[cluster_idx]));
+    if (hub_it == fused_nodes.end()) {
+      continue;
+    }
+    std::shared_ptr<SteinerTreeNode> fused_hub = hub_it->second;
+    const std::shared_ptr<SteinerTreeNode>& local_root = cluster_roots[cluster_idx];
+    mergeFixedLayers(local_root->getFixedLayers(), fused_hub);
+    for (const auto& child : local_root->getChildren()) {
+      attachChildUnique(fused_hub, child);
+    }
+  }
+
+  return fused_tree;
+}
+
 std::shared_ptr<SteinerTreeNode> buildLadderBackboneSteinerTree(
     const std::vector<AccessPoint>& access_points,
     const int spine_coord,
@@ -1291,7 +1416,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
 void CUGR::wirelengthRefine()
 {
-  constexpr int kMaxRefineNets = 1200;
+  constexpr int kMaxRefineNets = 1050;
   constexpr int kViaGrowthLimit = 360;
   constexpr int kOverflowSlack = 3;
   constexpr uint64_t kMinWireImprovement = 3;
@@ -2526,17 +2651,20 @@ void CUGR::crossbarBackboneSurgery()
 
 void CUGR::quadrantHubHierarchySurgery()
 {
-  constexpr int kMaxSurgeryNets = 24;
+  constexpr int kMaxSurgeryNets = 36;
   constexpr int kMaxRootCandidates = 4;
-  constexpr int kViaGrowthLimit = 280;
-  constexpr int kOverflowSlack = 1;
-  constexpr uint64_t kMinWireImprovement = 2;
+  constexpr int kViaGrowthLimit = 320;
+  constexpr int kOverflowSlack = 2;
+  constexpr uint64_t kMinWireImprovement = 1;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
 
-  // Radical move: rebuild high-pin nets using a two-level hierarchy
-  // (quadrant hubs + root trunk) to force branch sharing and collapse stems.
-  grid_graph_->setCongestionPenaltyScales(0.006, 0.014);
+  // Iteration 26 radical move:
+  // rebuild high-pin nets as a fused hierarchy:
+  //   1) local Manhattan MST per quadrant,
+  //   2) global MST spine across quadrant hubs.
+  // This forces aggressive branch sharing while retaining local flexibility.
+  grid_graph_->setCongestionPenaltyScales(0.005, 0.012);
 
   struct Candidate
   {
@@ -2619,7 +2747,7 @@ void CUGR::quadrantHubHierarchySurgery()
 
   int attempted = 0;
   int accepted = 0;
-  logger_->report("stage 10: quadrant-hub hierarchy surgery on {} nets",
+  logger_->report("stage 10: quadrant-MST fusion surgery on {} nets",
                   candidates.size());
 
   for (const auto& candidate : candidates) {
@@ -2687,20 +2815,40 @@ void CUGR::quadrantHubHierarchySurgery()
     for (const PointT& root_point : root_candidates) {
       std::shared_ptr<SteinerTreeNode> hierarchy_tree
           = buildQuadrantHubSteinerTree(access_points, root_point);
-      if (!hierarchy_tree) {
-        continue;
+      if (hierarchy_tree) {
+        PatternRoute pattern_route(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        pattern_route.setSteinerTree(hierarchy_tree);
+        pattern_route.constructRoutingDAG();
+        pattern_route.run();
+
+        RerouteResult result = evaluate(net->getRoutingTree());
+        if (isAcceptable(result)
+            && (!best_result.valid || isBetter(result, best_result))) {
+          best_result = result;
+        }
       }
 
-      PatternRoute pattern_route(
-          net, grid_graph_.get(), stt_builder_, constants_, logger_);
-      pattern_route.setSteinerTree(hierarchy_tree);
-      pattern_route.constructRoutingDAG();
-      pattern_route.run();
+      for (const bool prefer_horizontal_first : {true, false}) {
+        std::shared_ptr<SteinerTreeNode> fusion_tree
+            = buildQuadrantMstFusionSteinerTree(access_points,
+                                                root_point,
+                                                prefer_horizontal_first);
+        if (!fusion_tree) {
+          continue;
+        }
 
-      RerouteResult result = evaluate(net->getRoutingTree());
-      if (isAcceptable(result)
-          && (!best_result.valid || isBetter(result, best_result))) {
-        best_result = result;
+        PatternRoute pattern_route(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        pattern_route.setSteinerTree(fusion_tree);
+        pattern_route.constructRoutingDAG();
+        pattern_route.run();
+
+        RerouteResult result = evaluate(net->getRoutingTree());
+        if (isAcceptable(result)
+            && (!best_result.valid || isBetter(result, best_result))) {
+          best_result = result;
+        }
       }
     }
 
@@ -2714,7 +2862,7 @@ void CUGR::quadrantHubHierarchySurgery()
     }
   }
 
-  logger_->report("quadrant-hub hierarchy surgery accepted {} / {} nets",
+  logger_->report("quadrant-MST fusion surgery accepted {} / {} nets",
                   accepted,
                   attempted);
   grid_graph_->setCongestionPenaltyScales(original_wire_scale,
@@ -3261,7 +3409,7 @@ void CUGR::mstBackboneSurgery()
 
 void CUGR::massiveMstWirelengthRewrite()
 {
-  constexpr int kMaxRewriteNets = 480;
+  constexpr int kMaxRewriteNets = 440;
   constexpr int kViaGrowthLimit = 420;
   constexpr int kOverflowSlack = 6;
   constexpr uint64_t kMinWireImprovement = 1;
