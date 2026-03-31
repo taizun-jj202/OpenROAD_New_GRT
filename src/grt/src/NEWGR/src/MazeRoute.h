@@ -40,8 +40,8 @@ struct SparseGrid
 class SparseGraph
 {
  public:
-  SparseGraph(GRNet* net, const GridGraph* graph)
-      : net_(net), grid_graph_(graph)
+  SparseGraph(GRNet* net, const GridGraph* graph, const Constants& constants)
+      : net_(net), grid_graph_(graph), constants_(constants)
   {
   }
 
@@ -77,9 +77,16 @@ class SparseGraph
   {
     return direction * xs_.size() * ys_.size() + yi * xs_.size() + xi;
   }
+  int getDistanceOutsideCorridor(const PointT& point) const;
+  CostT getCorridorPenalty(const PointT& u,
+                           const PointT& v,
+                           CostT base_cost) const;
 
   GRNet* net_;
   const GridGraph* grid_graph_;
+  const Constants& constants_;
+  BoxT corridor_box_;
+  CostT corridor_penalty_scale_{0.0};
 
   std::vector<AccessPoint> pseudo_pins_;
 
@@ -108,8 +115,14 @@ struct Solution
 class MazeRoute
 {
  public:
-  MazeRoute(GRNet* net, const GridGraph* graph, utl::Logger* logger)
-      : net_(net), grid_graph_(graph), graph_(net, graph), logger_(logger)
+  MazeRoute(GRNet* net,
+            const GridGraph* graph,
+            const Constants& constants,
+            utl::Logger* logger)
+      : net_(net),
+        grid_graph_(graph),
+        graph_(net, graph, constants),
+        logger_(logger)
   {
   }
 

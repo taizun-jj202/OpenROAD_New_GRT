@@ -1,6 +1,7 @@
 #include "GridGraph.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -300,6 +301,63 @@ double GridGraph::logistic(const CapacityT& input, const double slope) const
   return 1.0 / (1.0 + exp(input * slope));
 }
 
+double GridGraph::getEdgeUtilization(const int layer_index,
+                                     const int x,
+                                     const int y) const
+{
+  const auto& edge = graph_edges_[layer_index][x][y];
+  const CapacityT hardCapacity = std::max(edge.capacity, 1.0);
+  return std::max(edge.demand, 0.0) / hardCapacity;
+}
+
+CapacityT GridGraph::getSoftCapacity(const int layer_index,
+                                     const int x,
+                                     const int y) const
+{
+  const auto& edge = graph_edges_[layer_index][x][y];
+  if (edge.capacity <= 0.0) {
+    return edge.capacity;
+  }
+
+  double neighborUtil = 0.0;
+  int neighborCount = 0;
+  const std::array<PointT, 4> deltas{
+      PointT(-1, 0), PointT(1, 0), PointT(0, -1), PointT(0, 1)};
+  for (const PointT& delta : deltas) {
+    const int nx = x + delta.x();
+    const int ny = y + delta.y();
+    if (nx < 0 || nx >= x_size_ || ny < 0 || ny >= y_size_) {
+      continue;
+    }
+    const auto& neighborEdge = graph_edges_[layer_index][nx][ny];
+    if (neighborEdge.capacity <= 0.0) {
+      continue;
+    }
+    neighborUtil += getEdgeUtilization(layer_index, nx, ny);
+    neighborCount++;
+  }
+
+  const double avgNeighborUtil
+      = neighborCount > 0 ? neighborUtil / neighborCount : 0.0;
+  const double localCongestion
+      = getEdgeUtilization(layer_index, x, y)
+        + constants_.soft_cap_neighbor_weight * avgNeighborUtil;
+
+  // SPRoute-like logistic shrink: reserve more tracks as congestion rises.
+  const double ratioSpan
+      = constants_.soft_cap_max_ratio - constants_.soft_cap_min_ratio;
+  double ratio
+      = constants_.soft_cap_min_ratio
+        + ratioSpan
+              / (1.0
+                 + std::exp((localCongestion - constants_.soft_cap_mid_util)
+                            * constants_.soft_cap_slope));
+  ratio = std::clamp(ratio,
+                     constants_.soft_cap_min_ratio,
+                     constants_.soft_cap_max_ratio);
+  return edge.capacity * ratio;
+}
+
 CostT GridGraph::getWireCost(const int layer_index,
                              const PointT lower,
                              const CapacityT demand) const
@@ -308,11 +366,15 @@ CostT GridGraph::getWireCost(const int layer_index,
   const int edgeLength = getEdgeLength(direction, lower[direction]);
   const int demandLength = demand * edgeLength;
   const auto& edge = graph_edges_[layer_index][lower.x()][lower.y()];
+  const CapacityT softCapacity
+      = getSoftCapacity(layer_index, lower.x(), lower.y());
+  const CapacityT projectedDemand = edge.demand + demand;
+  const CapacityT softResource = softCapacity - projectedDemand;
   CostT cost = demandLength * unit_length_wire_cost_;
   cost += demandLength * unit_length_short_costs_[layer_index]
           * wire_congestion_scale_
-          * (edge.capacity < 1.0 ? 1.0
-                                 : logistic(edge.capacity - edge.demand,
+          * (softCapacity < 1.0 ? 1.0
+                                : logistic(softResource,
                                             constants_.cost_logistic_slope));
   return cost;
 }
@@ -672,7 +734,7 @@ void GridGraph::extractWireCostView(GridGraphView<CostT>& view) const
         CapacityT demand = 0;
         for (int layer_index : layerIndices) {
           const auto& edge = getEdge(layer_index, x, y);
-          capacity += edge.capacity;
+          capacity += getSoftCapacity(layer_index, x, y);
           demand += edge.demand;
         }
         const int length = getEdgeLength(direction, edge_index);
@@ -715,7 +777,7 @@ void GridGraph::updateWireCostView(
         continue;
       }
       const auto& edge = getEdge(layer_index, x, y);
-      capacity += edge.capacity;
+      capacity += getSoftCapacity(layer_index, x, y);
       demand += edge.demand;
     }
     const int length = getEdgeLength(direction, edge_index);

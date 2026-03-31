@@ -76,6 +76,13 @@ CUGR::CUGR(odb::dbDatabase* db,
   constants_.weight_short_area = 150.0;
   constants_.cost_logistic_slope = 0.22;
   constants_.maze_logistic_slope = 0.20;
+  constants_.soft_cap_min_ratio = 0.68;
+  constants_.soft_cap_max_ratio = 0.95;
+  constants_.soft_cap_mid_util = 0.78;
+  constants_.soft_cap_slope = 5.6;
+  constants_.soft_cap_neighbor_weight = 0.28;
+  constants_.maze_bbox_penalty = 1.85;
+  constants_.maze_bbox_padding = 10;
   constants_.max_detour_ratio = 0.04;
   constants_.target_detour_count = 4;
   constants_.via_multiplier = 0.7;
@@ -197,7 +204,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   SparseGrid grid(16, 16, 0, 0);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
-    MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+    MazeRoute mazeRoute(net, grid_graph_.get(), constants_, logger_);
     mazeRoute.constructSparsifiedGraph(wireCostView, grid);
     mazeRoute.run();
     std::shared_ptr<SteinerTreeNode> tree = mazeRoute.getSteinerTree();
@@ -411,7 +418,7 @@ void CUGR::mazeWirelengthCollapse()
     grid_graph_->commitTree(oldTree, /*rip_up*/ true);
     grid_graph_->updateWireCostView(wireCostView, oldTree);
 
-    MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+    MazeRoute mazeRoute(net, grid_graph_.get(), constants_, logger_);
     mazeRoute.constructSparsifiedGraph(wireCostView, sparseGrid);
     mazeRoute.run();
     std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();
@@ -595,7 +602,7 @@ void CUGR::hybridTopologySurgery()
 
     // Candidate B: maze-driven topology rebuild, then pattern legalization.
     RerouteResult mazeResult;
-    MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+    MazeRoute mazeRoute(net, grid_graph_.get(), constants_, logger_);
     mazeRoute.constructSparsifiedGraph(wireCostView, sparseGrid);
     mazeRoute.run();
     std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();

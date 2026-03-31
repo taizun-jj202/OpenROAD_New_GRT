@@ -158,6 +158,8 @@ class GridGraph
     return unit_length_short_costs_[layer_index];
   }
 
+  double getEdgeUtilization(int layer_index, int x, int y) const;
+  CapacityT getSoftCapacity(int layer_index, int x, int y) const;
   double logistic(const CapacityT& input, double slope) const;
   CostT getWireCost(int layer_index,
                     PointT lower,

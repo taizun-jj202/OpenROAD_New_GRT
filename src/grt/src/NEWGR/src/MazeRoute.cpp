@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -23,6 +24,16 @@ namespace grt::newgr {
 void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
                        const SparseGrid& grid)
 {
+  const BoxT& netBbox = net_->getBoundingBox();
+  const int hpwl = std::max(1, netBbox.hp());
+  const int xPad = std::max(constants_.maze_bbox_padding, hpwl / 18);
+  const int yPad = std::max(constants_.maze_bbox_padding, hpwl / 18);
+  corridor_box_.Set(std::max(0, netBbox.lx() - xPad),
+                    std::max(0, netBbox.ly() - yPad),
+                    std::min(grid_graph_->getSize(0) - 1, netBbox.hx() + xPad),
+                    std::min(grid_graph_->getSize(1) - 1, netBbox.hy() + yPad));
+  corridor_penalty_scale_ = constants_.maze_bbox_penalty;
+
   // 0. Create pseudo pins
   const auto selectedAccessPoints = grid_graph_->selectAccessPoints(net_);
   pseudo_pins_.reserve(selectedAccessPoints.size());
@@ -96,7 +107,9 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
 
     edges_[u][0] = v;
     edges_[v][1] = u;
-    costs_[u][0] = costs_[v][1] = wire_cost_view.sum(U, V);
+    const CostT baseCost = wire_cost_view.sum(U, V);
+    const CostT corridorPenalty = getCorridorPenalty(U, V, baseCost);
+    costs_[u][0] = costs_[v][1] = baseCost + corridorPenalty;
   };
 
   for (int direction = 0; direction < 2; direction++) {
@@ -155,6 +168,38 @@ void SparseGraph::init(const GridGraphView<CostT>& wire_cost_view,
   }
 }
 
+int SparseGraph::getDistanceOutsideCorridor(const PointT& point) const
+{
+  int dx = 0;
+  if (point.x() < corridor_box_.lx()) {
+    dx = corridor_box_.lx() - point.x();
+  } else if (point.x() > corridor_box_.hx()) {
+    dx = point.x() - corridor_box_.hx();
+  }
+  int dy = 0;
+  if (point.y() < corridor_box_.ly()) {
+    dy = corridor_box_.ly() - point.y();
+  } else if (point.y() > corridor_box_.hy()) {
+    dy = point.y() - corridor_box_.hy();
+  }
+  return dx + dy;
+}
+
+CostT SparseGraph::getCorridorPenalty(const PointT& u,
+                                      const PointT& v,
+                                      const CostT base_cost) const
+{
+  const int outsideU = getDistanceOutsideCorridor(u);
+  const int outsideV = getDistanceOutsideCorridor(v);
+  if (outsideU == 0 && outsideV == 0) {
+    return 0.0;
+  }
+  const int span
+      = std::max(1, std::abs(u.x() - v.x()) + std::abs(u.y() - v.y()));
+  const double outsideWeight = (outsideU + outsideV + 1.0) / span;
+  return base_cost * corridor_penalty_scale_ * outsideWeight;
+}
+
 void MazeRoute::run()
 {
   std::vector<CostT> minCosts(graph_.getNumVertices(),
@@ -182,7 +227,19 @@ void MazeRoute::run()
   solutions_.reserve(net_->getNumPins());
 
   std::vector<bool> visited(net_->getNumPins(), false);
-  const int startPinIndex = 0;
+  int startPinIndex = 0;
+  int bestDist = std::numeric_limits<int>::max();
+  const BoxT& bbox = net_->getBoundingBox();
+  const PointT center(bbox.cx(), bbox.cy());
+  for (int pinIndex = 0; pinIndex < graph_.getNumPseudoPins(); pinIndex++) {
+    const PointT pinLoc = graph_.getPseudoPin(pinIndex).point;
+    const int dist
+        = std::abs(pinLoc.x() - center.x()) + std::abs(pinLoc.y() - center.y());
+    if (dist < bestDist) {
+      bestDist = dist;
+      startPinIndex = pinIndex;
+    }
+  }
   visited[startPinIndex] = true;
   int numDetached = graph_.getNumPseudoPins() - 1;
   updateSolution(std::make_shared<Solution>(

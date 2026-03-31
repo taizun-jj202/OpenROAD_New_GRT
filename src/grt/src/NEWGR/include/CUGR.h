@@ -45,6 +45,17 @@ struct Constants
 
   double maze_logistic_slope = 0.5;
 
+  // SPRoute-inspired soft-capacity shaping.
+  double soft_cap_min_ratio = 0.60;
+  double soft_cap_max_ratio = 0.96;
+  double soft_cap_mid_util = 0.72;
+  double soft_cap_slope = 5.0;
+  double soft_cap_neighbor_weight = 0.30;
+
+  // FastRoute-like preference for short maze corridors around net HPWL.
+  double maze_bbox_penalty = 1.60;
+  int maze_bbox_padding = 8;
+
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
   double wire_patch_threshold = 2.0;
