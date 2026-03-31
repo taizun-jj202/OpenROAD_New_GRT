@@ -3197,16 +3197,19 @@ void CUGR::ladderBackboneSurgery()
 
 void CUGR::mstBackboneSurgery()
 {
-  constexpr int kMaxSurgeryNets = 28;
-  constexpr int kViaGrowthLimit = 320;
+  constexpr int kMaxSurgeryNets = 18;
+  constexpr int kViaGrowthLimit = 280;
   constexpr int kOverflowSlack = 1;
   constexpr uint64_t kMinWireImprovement = 2;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
 
-  // Radical move: replace tree templates with Manhattan MST backbones, with an
-  // optional synthetic hub to force long trunk sharing.
-  grid_graph_->setCongestionPenaltyScales(0.007, 0.014);
+  // Iteration 27 radical move:
+  // force high-pin nets through synthetic "portal corridors" (quartile lines)
+  // and run Manhattan MST on augmented terminal sets. This is a strong
+  // topological perturbation that can collapse stems into shared trunks.
+  // Runtime is guarded by a small candidate set and limited pattern count.
+  grid_graph_->setCongestionPenaltyScales(0.006, 0.012);
 
   struct Candidate
   {
@@ -3289,7 +3292,7 @@ void CUGR::mstBackboneSurgery()
 
   int attempted = 0;
   int accepted = 0;
-  logger_->report("stage 12: Manhattan-MST backbone surgery on {} nets",
+  logger_->report("stage 12: portal-augmented MST surgery on {} nets",
                   candidates.size());
 
   for (const auto& candidate : candidates) {
@@ -3323,8 +3326,23 @@ void CUGR::mstBackboneSurgery()
       ys.push_back(access_point.point.y());
     }
 
+    std::vector<int> xs_sorted = xs;
+    std::vector<int> ys_sorted = ys;
+    std::sort(xs_sorted.begin(), xs_sorted.end());
+    std::sort(ys_sorted.begin(), ys_sorted.end());
+
     const PointT center(net->getBoundingBox().cx(), net->getBoundingBox().cy());
     const PointT median_hub(getMedian(xs), getMedian(ys));
+    const int q1_x = xs_sorted[xs_sorted.size() / 4];
+    const int q3_x = xs_sorted[(3 * xs_sorted.size()) / 4];
+    const int q1_y = ys_sorted[ys_sorted.size() / 4];
+    const int q3_y = ys_sorted[(3 * ys_sorted.size()) / 4];
+    const bool horizontal_dominant
+        = net->getBoundingBox().width() >= net->getBoundingBox().height();
+    const PointT axis_hub_a = horizontal_dominant ? PointT(q1_x, median_hub.y())
+                                                  : PointT(median_hub.x(), q1_y);
+    const PointT axis_hub_b = horizontal_dominant ? PointT(q3_x, median_hub.y())
+                                                  : PointT(median_hub.x(), q3_y);
 
     auto evaluate = [&](const std::shared_ptr<GRTreeNode>& tree) {
       RerouteResult result;
@@ -3356,12 +3374,69 @@ void CUGR::mstBackboneSurgery()
              && ((improve_wire && keep_overflow) || overflow_rescue);
     };
 
+    std::vector<std::vector<PointT>> portal_patterns;
+    portal_patterns.reserve(5);
+    portal_patterns.push_back({median_hub,
+                               PointT(q1_x, median_hub.y()),
+                               PointT(q3_x, median_hub.y()),
+                               PointT(median_hub.x(), q1_y),
+                               PointT(median_hub.x(), q3_y)});
+    portal_patterns.push_back(horizontal_dominant
+                                  ? std::vector<PointT>{PointT(q1_x, median_hub.y()),
+                                                        PointT(q3_x, median_hub.y()),
+                                                        PointT(center.x(), median_hub.y())}
+                                  : std::vector<PointT>{PointT(median_hub.x(), q1_y),
+                                                        PointT(median_hub.x(), q3_y),
+                                                        PointT(median_hub.x(), center.y())});
+    portal_patterns.push_back(horizontal_dominant
+                                  ? std::vector<PointT>{PointT(median_hub.x(), q1_y),
+                                                        PointT(median_hub.x(), q3_y),
+                                                        PointT(median_hub.x(), center.y())}
+                                  : std::vector<PointT>{PointT(q1_x, median_hub.y()),
+                                                        PointT(q3_x, median_hub.y()),
+                                                        PointT(center.x(), median_hub.y())});
+    portal_patterns.push_back({PointT(q1_x, q1_y),
+                               PointT(q1_x, q3_y),
+                               PointT(q3_x, q1_y),
+                               PointT(q3_x, q3_y),
+                               median_hub});
+    portal_patterns.push_back(
+        {PointT(xs_sorted.front(), median_hub.y()),
+         PointT(xs_sorted.back(), median_hub.y()),
+         PointT(median_hub.x(), ys_sorted.front()),
+         PointT(median_hub.x(), ys_sorted.back()),
+         median_hub});
+
+    for (std::vector<PointT>& pattern : portal_patterns) {
+      std::unordered_set<uint64_t> seen;
+      std::vector<PointT> unique_points;
+      unique_points.reserve(pattern.size());
+      for (PointT point : pattern) {
+        point[0]
+            = std::clamp(point.x(), net->getBoundingBox().lx(), net->getBoundingBox().hx());
+        point[1]
+            = std::clamp(point.y(), net->getBoundingBox().ly(), net->getBoundingBox().hy());
+        const uint64_t key = pointKey(point);
+        if (seen.insert(key).second) {
+          unique_points.push_back(point);
+        }
+      }
+      pattern.swap(unique_points);
+    }
+
     RerouteResult best_result;
-    auto tryCandidate = [&](const bool include_hub,
-                            const PointT& hub,
-                            const bool prefer_horizontal_first) {
+    auto tryMstCandidate = [&](const std::vector<PointT>& portals,
+                               const bool include_hub,
+                               const PointT& hub,
+                               const bool prefer_horizontal_first) {
+      std::vector<AccessPoint> augmented_access_points = access_points;
+      augmented_access_points.reserve(access_points.size() + portals.size());
+      for (const PointT& portal : portals) {
+        augmented_access_points.push_back({portal, {}});
+      }
+
       std::shared_ptr<SteinerTreeNode> mst_tree
-          = buildRectilinearMstSteinerTree(access_points,
+          = buildRectilinearMstSteinerTree(augmented_access_points,
                                            center,
                                            include_hub,
                                            hub,
@@ -3383,10 +3458,41 @@ void CUGR::mstBackboneSurgery()
     };
 
     for (const bool prefer_horizontal_first : {true, false}) {
-      tryCandidate(/*include_hub=*/false, center, prefer_horizontal_first);
-      tryCandidate(/*include_hub=*/true, median_hub, prefer_horizontal_first);
+      tryMstCandidate({}, /*include_hub=*/false, center, prefer_horizontal_first);
+      tryMstCandidate({}, /*include_hub=*/true, median_hub, prefer_horizontal_first);
       if (median_hub != center) {
-        tryCandidate(/*include_hub=*/true, center, prefer_horizontal_first);
+        tryMstCandidate({}, /*include_hub=*/true, center, prefer_horizontal_first);
+      }
+
+      for (const std::vector<PointT>& pattern : portal_patterns) {
+        if (pattern.empty()) {
+          continue;
+        }
+        tryMstCandidate(
+            pattern, /*include_hub=*/true, median_hub, prefer_horizontal_first);
+        if (median_hub != center) {
+          tryMstCandidate(
+              pattern, /*include_hub=*/true, center, prefer_horizontal_first);
+        }
+      }
+
+      std::shared_ptr<SteinerTreeNode> dual_hub_tree
+          = buildDualHubBackboneSteinerTree(access_points,
+                                            axis_hub_a,
+                                            axis_hub_b,
+                                            prefer_horizontal_first);
+      if (dual_hub_tree) {
+        PatternRoute pattern_route(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        pattern_route.setSteinerTree(dual_hub_tree);
+        pattern_route.constructRoutingDAG();
+        pattern_route.run();
+
+        RerouteResult result = evaluate(net->getRoutingTree());
+        if (isAcceptable(result)
+            && (!best_result.valid || isBetter(result, best_result))) {
+          best_result = result;
+        }
       }
     }
 
@@ -3400,7 +3506,7 @@ void CUGR::mstBackboneSurgery()
     }
   }
 
-  logger_->report("Manhattan-MST backbone surgery accepted {} / {} nets",
+  logger_->report("portal-augmented MST surgery accepted {} / {} nets",
                   accepted,
                   attempted);
   grid_graph_->setCongestionPenaltyScales(original_wire_scale,
