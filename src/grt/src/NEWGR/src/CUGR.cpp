@@ -325,22 +325,33 @@ void CUGR::wirelengthRefine()
 
 void CUGR::mazeWirelengthCollapse()
 {
-  constexpr int kMaxCollapseNets = 900;
-  constexpr int kViaGrowthLimit = 64;
+  constexpr int kMaxCriticalNets = 480;
+  constexpr int kViaGrowthLimit = 120;
   constexpr uint64_t kMinWireImprovement = 1;
+  constexpr int kOverflowPriorityWeight = 900;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
 
-  // Run an explicit wirelength squeeze pass with a fine sparse grid:
-  // congestion is still respected through acceptance checks, but the search
-  // is biased toward short trunk reconnections.
-  grid_graph_->setCongestionPenaltyScales(0.015, 0.035);
+  // Radical phase: rebuild only critical long/overflowing nets on a very fine
+  // sparse maze to aggressively collapse trunks while preserving overflow.
+  grid_graph_->setCongestionPenaltyScales(0.008, 0.020);
 
-  std::vector<int> candidates;
+  struct CriticalCandidate
+  {
+    int net_index;
+    int hpwl;
+    int overflow;
+    int score;
+  };
+
+  std::vector<CriticalCandidate> candidates;
   candidates.reserve(gr_nets_.size());
   for (const auto& net : gr_nets_) {
     if (net->getNumPins() >= 3 && net->getRoutingTree()) {
-      candidates.push_back(net->getIndex());
+      const int hpwl = net->getBoundingBox().hp();
+      const int overflow = grid_graph_->checkOverflow(net->getRoutingTree());
+      const int score = hpwl + overflow * kOverflowPriorityWeight;
+      candidates.push_back({net->getIndex(), hpwl, overflow, score});
     }
   }
 
@@ -350,36 +361,46 @@ void CUGR::mazeWirelengthCollapse()
     return;
   }
 
-  std::sort(candidates.begin(), candidates.end(), [&](const int lhs, const int rhs) {
-    const GRNet* lhsNet = gr_nets_[lhs].get();
-    const GRNet* rhsNet = gr_nets_[rhs].get();
-    const int lhsHpwl = lhsNet->getBoundingBox().hp();
-    const int rhsHpwl = rhsNet->getBoundingBox().hp();
-    if (lhsHpwl != rhsHpwl) {
-      return lhsHpwl > rhsHpwl;
-    }
-    if (lhsNet->getNumPins() != rhsNet->getNumPins()) {
-      return lhsNet->getNumPins() > rhsNet->getNumPins();
-    }
-    return lhs < rhs;
-  });
+  std::sort(
+      candidates.begin(),
+      candidates.end(),
+      [](const CriticalCandidate& lhs, const CriticalCandidate& rhs) {
+        if (lhs.score != rhs.score) {
+          return lhs.score > rhs.score;
+        }
+        if (lhs.overflow != rhs.overflow) {
+          return lhs.overflow > rhs.overflow;
+        }
+        if (lhs.hpwl != rhs.hpwl) {
+          return lhs.hpwl > rhs.hpwl;
+        }
+        return lhs.net_index < rhs.net_index;
+      });
 
-  if ((int) candidates.size() > kMaxCollapseNets) {
-    candidates.resize(kMaxCollapseNets);
+  if ((int) candidates.size() > kMaxCriticalNets) {
+    candidates.resize(kMaxCriticalNets);
+  }
+
+  std::vector<int> orderedIndices;
+  orderedIndices.reserve(candidates.size());
+  for (const auto& candidate : candidates) {
+    orderedIndices.push_back(candidate.net_index);
   }
 
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
-  SparseGrid sparseGrid(8, 8, 0, 0);
+  // Finer than the default maze stage to allow radical topology movement.
+  SparseGrid sparseGrid(4, 4, 0, 0);
   int accepted = 0;
   int attempted = 0;
-  logger_->report("stage 5: maze wirelength collapse on {} nets",
-                  candidates.size());
+  logger_->report("stage 5: critical-net spine rebuild on {} nets",
+                  orderedIndices.size());
 
-  for (const int netIndex : candidates) {
+  for (const int netIndex : orderedIndices) {
     GRNet* net = gr_nets_[netIndex].get();
     const std::shared_ptr<GRTreeNode> oldTree = net->getRoutingTree();
     if (!oldTree) {
+      sparseGrid.step();
       continue;
     }
 
@@ -429,8 +450,12 @@ void CUGR::mazeWirelengthCollapse()
     const bool viaGrowthBound
         = candidateStats.via_count <= oldStats.via_count + kViaGrowthLimit;
     const bool keepOverflow = candidateOverflow <= oldOverflow;
+    const bool relieveOverflowWithoutWireRegression
+        = (candidateOverflow + 2 < oldOverflow
+           && candidateStats.wire_length <= oldStats.wire_length);
 
-    if (improveWire && viaGrowthBound && keepOverflow) {
+    if (viaGrowthBound
+        && ((improveWire && keepOverflow) || relieveOverflowWithoutWireRegression)) {
       accepted++;
     } else {
       grid_graph_->commitTree(candidateTree, /*rip_up*/ true);
@@ -443,7 +468,7 @@ void CUGR::mazeWirelengthCollapse()
     sparseGrid.step();
   }
 
-  logger_->report("maze wirelength collapse accepted {} / {} nets",
+  logger_->report("critical-net spine rebuild accepted {} / {} nets",
                   accepted,
                   attempted);
   grid_graph_->setCongestionPenaltyScales(original_wire_scale,
@@ -452,9 +477,9 @@ void CUGR::mazeWirelengthCollapse()
 
 void CUGR::route()
 {
-  constexpr int kMaxDetourNets = 2600;
-  constexpr int kMaxMazeNets = 900;
-  constexpr double kLongNetRatio = 0.55;
+  constexpr int kMaxDetourNets = 2200;
+  constexpr int kMaxMazeNets = 760;
+  constexpr double kLongNetRatio = 0.72;
 
   auto trimOverflowSet = [&](std::vector<int>& netIndices,
                              const int limit,
@@ -545,9 +570,9 @@ void CUGR::route()
   trimOverflowSet(netIndices, kMaxMazeNets, "maze");
   mazeRoute(netIndices);
 
-  grid_graph_->setCongestionPenaltyScales(0.06, 0.12);
-  wirelengthRefine();
   mazeWirelengthCollapse();
+  grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
+  wirelengthRefine();
 
   printStatistics();
   if (constants_.write_heatmap) {
