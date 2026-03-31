@@ -434,6 +434,208 @@ std::shared_ptr<SteinerTreeNode> buildDualHubBackboneSteinerTree(
   return hub_a_node;
 }
 
+std::vector<int> buildAxisCandidates(const std::vector<AccessPoint>& access_points,
+                                     const BoxT& bbox,
+                                     const bool use_x_axis,
+                                     const int max_candidates)
+{
+  std::vector<int> candidates;
+  if (access_points.empty() || max_candidates <= 0) {
+    return candidates;
+  }
+
+  const int lower = use_x_axis ? bbox.lx() : bbox.ly();
+  const int upper = use_x_axis ? bbox.hx() : bbox.hy();
+
+  std::vector<int> coords;
+  coords.reserve(access_points.size());
+  std::unordered_map<int, int> frequency;
+  frequency.reserve(access_points.size());
+  for (const AccessPoint& access_point : access_points) {
+    const int coordinate = use_x_axis ? access_point.point.x()
+                                      : access_point.point.y();
+    coords.push_back(coordinate);
+    frequency[coordinate]++;
+  }
+
+  if (coords.empty()) {
+    return candidates;
+  }
+
+  std::vector<int> sorted = coords;
+  std::sort(sorted.begin(), sorted.end());
+  const int median = getMedian(coords);
+  const int q1 = sorted[sorted.size() / 4];
+  const int q3 = sorted[(3 * sorted.size()) / 4];
+  const int center = use_x_axis ? bbox.cx() : bbox.cy();
+  const int span = std::max(1, upper - lower);
+
+  auto pushCandidate = [&](const int coordinate) {
+    candidates.push_back(std::clamp(coordinate, lower, upper));
+  };
+
+  pushCandidate(median);
+  pushCandidate(center);
+  pushCandidate(q1);
+  pushCandidate(q3);
+  pushCandidate(lower);
+  pushCandidate(upper);
+  pushCandidate(lower + span / 3);
+  pushCandidate(upper - span / 3);
+
+  std::vector<std::pair<int, int>> ranked_frequency;
+  ranked_frequency.reserve(frequency.size());
+  for (const auto& [coordinate, count] : frequency) {
+    ranked_frequency.push_back({coordinate, count});
+  }
+  std::sort(
+      ranked_frequency.begin(),
+      ranked_frequency.end(),
+      [](const std::pair<int, int>& lhs, const std::pair<int, int>& rhs) {
+        if (lhs.second != rhs.second) {
+          return lhs.second > rhs.second;
+        }
+        return lhs.first < rhs.first;
+      });
+  for (int i = 0; i < static_cast<int>(ranked_frequency.size()) && i < 4; i++) {
+    pushCandidate(ranked_frequency[i].first);
+  }
+
+  std::sort(sorted.begin(), sorted.end());
+  sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+  if (!sorted.empty()) {
+    pushCandidate(sorted.front());
+    pushCandidate(sorted.back());
+    pushCandidate(sorted[sorted.size() / 2]);
+  }
+
+  std::vector<int> unique_candidates;
+  unique_candidates.reserve(candidates.size());
+  std::unordered_set<int> seen;
+  seen.reserve(candidates.size());
+  for (const int coordinate : candidates) {
+    if (seen.insert(coordinate).second) {
+      unique_candidates.push_back(coordinate);
+    }
+  }
+  if (static_cast<int>(unique_candidates.size()) > max_candidates) {
+    unique_candidates.resize(max_candidates);
+  }
+  return unique_candidates;
+}
+
+std::shared_ptr<SteinerTreeNode> buildCrossbarSteinerTree(
+    const std::vector<AccessPoint>& access_points,
+    const PointT& spine_origin,
+    const bool prefer_vertical)
+{
+  if (access_points.empty()) {
+    return nullptr;
+  }
+  if (access_points.size() == 1) {
+    return std::make_shared<SteinerTreeNode>(access_points.front().point,
+                                             access_points.front().layers);
+  }
+
+  const int spine_x = spine_origin.x();
+  const int spine_y = spine_origin.y();
+  std::shared_ptr<SteinerTreeNode> root
+      = std::make_shared<SteinerTreeNode>(spine_origin);
+
+  std::vector<int> x_coords;
+  std::vector<int> y_coords;
+  x_coords.reserve(access_points.size() + 1);
+  y_coords.reserve(access_points.size() + 1);
+  for (const AccessPoint& access_point : access_points) {
+    x_coords.push_back(access_point.point.x());
+    y_coords.push_back(access_point.point.y());
+  }
+  x_coords.push_back(spine_x);
+  y_coords.push_back(spine_y);
+  std::sort(x_coords.begin(), x_coords.end());
+  std::sort(y_coords.begin(), y_coords.end());
+  x_coords.erase(std::unique(x_coords.begin(), x_coords.end()), x_coords.end());
+  y_coords.erase(std::unique(y_coords.begin(), y_coords.end()), y_coords.end());
+
+  std::unordered_map<int, std::shared_ptr<SteinerTreeNode>> horizontal_nodes;
+  std::unordered_map<int, std::shared_ptr<SteinerTreeNode>> vertical_nodes;
+  horizontal_nodes.reserve(x_coords.size());
+  vertical_nodes.reserve(y_coords.size());
+  for (const int x : x_coords) {
+    std::shared_ptr<SteinerTreeNode> node
+        = (x == spine_x ? root
+                        : std::make_shared<SteinerTreeNode>(PointT(x, spine_y)));
+    horizontal_nodes.emplace(x, node);
+  }
+  for (const int y : y_coords) {
+    std::shared_ptr<SteinerTreeNode> node
+        = (y == spine_y ? root
+                        : std::make_shared<SteinerTreeNode>(PointT(spine_x, y)));
+    vertical_nodes.emplace(y, node);
+  }
+
+  auto connectLine = [](const std::vector<int>& coordinates,
+                        const int root_coordinate,
+                        std::unordered_map<int, std::shared_ptr<SteinerTreeNode>>&
+                            nodes) {
+    const auto root_it
+        = std::find(coordinates.begin(), coordinates.end(), root_coordinate);
+    if (root_it == coordinates.end()) {
+      return;
+    }
+    const int root_index = std::distance(coordinates.begin(), root_it);
+    for (int index = root_index - 1; index >= 0; index--) {
+      nodes[coordinates[index + 1]]->addChild(nodes[coordinates[index]]);
+    }
+    for (int index = root_index + 1; index < static_cast<int>(coordinates.size());
+         index++) {
+      nodes[coordinates[index - 1]]->addChild(nodes[coordinates[index]]);
+    }
+  };
+
+  connectLine(x_coords, spine_x, horizontal_nodes);
+  connectLine(y_coords, spine_y, vertical_nodes);
+
+  std::unordered_map<uint64_t, std::shared_ptr<SteinerTreeNode>> node_by_point;
+  node_by_point.reserve(horizontal_nodes.size() + vertical_nodes.size()
+                        + access_points.size());
+  node_by_point.emplace(pointKey(spine_origin), root);
+  for (const auto& [x, node] : horizontal_nodes) {
+    node_by_point.emplace(pointKey(PointT(x, spine_y)), node);
+  }
+  for (const auto& [y, node] : vertical_nodes) {
+    node_by_point.emplace(pointKey(PointT(spine_x, y)), node);
+  }
+
+  for (const AccessPoint& access_point : access_points) {
+    const uint64_t point_key = pointKey(access_point.point);
+    auto existing = node_by_point.find(point_key);
+    if (existing != node_by_point.end()) {
+      mergeFixedLayers(access_point.layers, existing->second);
+      continue;
+    }
+
+    const int dx = std::abs(access_point.point.x() - spine_x);
+    const int dy = std::abs(access_point.point.y() - spine_y);
+    const bool attach_vertical = dx < dy || (dx == dy && prefer_vertical);
+    const PointT anchor_point
+        = attach_vertical ? PointT(spine_x, access_point.point.y())
+                          : PointT(access_point.point.x(), spine_y);
+    auto anchor_it = node_by_point.find(pointKey(anchor_point));
+    if (anchor_it == node_by_point.end()) {
+      continue;
+    }
+
+    std::shared_ptr<SteinerTreeNode> pin_node
+        = std::make_shared<SteinerTreeNode>(access_point.point,
+                                            access_point.layers);
+    anchor_it->second->addChild(pin_node);
+    node_by_point.emplace(point_key, pin_node);
+  }
+
+  return root;
+}
+
 }  // namespace
 
 CUGR::CUGR(odb::dbDatabase* db,
@@ -1489,6 +1691,254 @@ void CUGR::dualHubBackboneSurgery()
                                           original_maze_scale);
 }
 
+void CUGR::crossbarBackboneSurgery()
+{
+  constexpr int kMaxSurgeryNets = 52;
+  constexpr int kMaxAxisCandidates = 10;
+  constexpr int kMaxCrossbarPairs = 18;
+  constexpr int kViaGrowthLimit = 260;
+  constexpr int kOverflowSlack = 1;
+  constexpr uint64_t kMinWireImprovement = 6;
+  const double original_wire_scale = grid_graph_->getWireCongestionScale();
+  const double original_maze_scale = grid_graph_->getMazeCongestionScale();
+
+  // Radical move: rebuild high-degree nets with a full X/Y shared backbone.
+  // This topology class differs from point-hub trees by forcing trunk reuse
+  // along two global axes, often reducing repeated branch overlap.
+  grid_graph_->setCongestionPenaltyScales(0.008, 0.017);
+
+  struct Candidate
+  {
+    int net_index;
+    int score;
+    int overflow;
+    int hpwl;
+    int pins;
+    double stretch;
+  };
+
+  std::vector<Candidate> candidates;
+  candidates.reserve(gr_nets_.size());
+  for (const auto& net : gr_nets_) {
+    const std::shared_ptr<GRTreeNode> routing_tree = net->getRoutingTree();
+    if (!routing_tree || net->getNumPins() < 5) {
+      continue;
+    }
+    const int hpwl = std::max(1, net->getBoundingBox().hp());
+    if (hpwl < 60) {
+      continue;
+    }
+    const TreeStats stats = getTreeStats(routing_tree, grid_graph_.get());
+    const int overflow = grid_graph_->checkOverflow(routing_tree);
+    const double stretch = static_cast<double>(stats.wire_length) / hpwl;
+    const int score = overflow * 3400 + hpwl + net->getNumPins() * 10
+                      + static_cast<int>(stretch * 120.0);
+    candidates.push_back(
+        {net->getIndex(), score, overflow, hpwl, net->getNumPins(), stretch});
+  }
+
+  if (candidates.empty()) {
+    grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                            original_maze_scale);
+    return;
+  }
+
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const Candidate& lhs, const Candidate& rhs) {
+              if (lhs.score != rhs.score) {
+                return lhs.score > rhs.score;
+              }
+              if (lhs.overflow != rhs.overflow) {
+                return lhs.overflow > rhs.overflow;
+              }
+              if (lhs.stretch != rhs.stretch) {
+                return lhs.stretch > rhs.stretch;
+              }
+              if (lhs.pins != rhs.pins) {
+                return lhs.pins > rhs.pins;
+              }
+              if (lhs.hpwl != rhs.hpwl) {
+                return lhs.hpwl > rhs.hpwl;
+              }
+              return lhs.net_index < rhs.net_index;
+            });
+
+  if (static_cast<int>(candidates.size()) > kMaxSurgeryNets) {
+    candidates.resize(kMaxSurgeryNets);
+  }
+
+  struct CrossbarPair
+  {
+    int x;
+    int y;
+    int score;
+  };
+
+  struct RerouteResult
+  {
+    std::shared_ptr<GRTreeNode> tree;
+    TreeStats stats;
+    int overflow{std::numeric_limits<int>::max()};
+    bool valid{false};
+  };
+
+  auto isBetter = [](const RerouteResult& lhs, const RerouteResult& rhs) {
+    if (lhs.stats.wire_length != rhs.stats.wire_length) {
+      return lhs.stats.wire_length < rhs.stats.wire_length;
+    }
+    if (lhs.overflow != rhs.overflow) {
+      return lhs.overflow < rhs.overflow;
+    }
+    return lhs.stats.via_count < rhs.stats.via_count;
+  };
+
+  int attempted = 0;
+  int accepted = 0;
+  logger_->report("stage 8: crossbar backbone surgery on {} nets",
+                  candidates.size());
+
+  for (const auto& candidate : candidates) {
+    GRNet* net = gr_nets_[candidate.net_index].get();
+    const std::shared_ptr<GRTreeNode> old_tree = net->getRoutingTree();
+    if (!old_tree) {
+      continue;
+    }
+
+    attempted++;
+    const TreeStats old_stats = getTreeStats(old_tree, grid_graph_.get());
+    const int old_overflow = grid_graph_->checkOverflow(old_tree);
+    grid_graph_->commitTree(old_tree, /*rip_up*/ true);
+
+    const AccessPointSet selected_access_points
+        = grid_graph_->selectAccessPoints(net);
+    const std::vector<AccessPoint> access_points
+        = materializeAccessPoints(selected_access_points);
+
+    const std::vector<int> x_candidates
+        = buildAxisCandidates(access_points,
+                              net->getBoundingBox(),
+                              /*use_x_axis=*/true,
+                              kMaxAxisCandidates);
+    const std::vector<int> y_candidates
+        = buildAxisCandidates(access_points,
+                              net->getBoundingBox(),
+                              /*use_x_axis=*/false,
+                              kMaxAxisCandidates);
+    if (x_candidates.empty() || y_candidates.empty()) {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+      continue;
+    }
+
+    std::vector<CrossbarPair> pairs;
+    pairs.reserve(x_candidates.size() * y_candidates.size());
+    const BoxT& bbox = net->getBoundingBox();
+    for (const int x : x_candidates) {
+      for (const int y : y_candidates) {
+        int estimated_stem = 0;
+        for (const AccessPoint& access_point : access_points) {
+          const int dx = std::abs(access_point.point.x() - x);
+          const int dy = std::abs(access_point.point.y() - y);
+          estimated_stem += std::min(dx, dy);
+        }
+        const int center_bias
+            = std::abs(x - bbox.cx()) + std::abs(y - bbox.cy());
+        pairs.push_back({x, y, estimated_stem * 2 + center_bias});
+      }
+    }
+    if (pairs.empty()) {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+      continue;
+    }
+
+    std::sort(pairs.begin(),
+              pairs.end(),
+              [](const CrossbarPair& lhs, const CrossbarPair& rhs) {
+                if (lhs.score != rhs.score) {
+                  return lhs.score < rhs.score;
+                }
+                if (lhs.x != rhs.x) {
+                  return lhs.x < rhs.x;
+                }
+                return lhs.y < rhs.y;
+              });
+    if (static_cast<int>(pairs.size()) > kMaxCrossbarPairs) {
+      pairs.resize(kMaxCrossbarPairs);
+    }
+
+    auto evaluate = [&](const std::shared_ptr<GRTreeNode>& tree) {
+      RerouteResult result;
+      if (!tree) {
+        return result;
+      }
+      result.tree = tree;
+      result.stats = getTreeStats(tree, grid_graph_.get());
+      grid_graph_->commitTree(tree);
+      result.overflow = grid_graph_->checkOverflow(tree);
+      result.valid = true;
+      grid_graph_->commitTree(tree, /*rip_up*/ true);
+      return result;
+    };
+
+    auto isAcceptable = [&](const RerouteResult& result) {
+      if (!result.valid) {
+        return false;
+      }
+      const bool improve_wire
+          = result.stats.wire_length + kMinWireImprovement <= old_stats.wire_length;
+      const bool keep_overflow = result.overflow <= old_overflow + kOverflowSlack;
+      const bool bounded_via
+          = result.stats.via_count <= old_stats.via_count + kViaGrowthLimit;
+      const bool overflow_rescue
+          = result.overflow + 3 < old_overflow
+            && result.stats.wire_length <= old_stats.wire_length;
+      return bounded_via
+             && ((improve_wire && keep_overflow) || overflow_rescue);
+    };
+
+    RerouteResult best_result;
+    for (const CrossbarPair& pair : pairs) {
+      for (const bool prefer_vertical : {true, false}) {
+        std::shared_ptr<SteinerTreeNode> crossbar_tree
+            = buildCrossbarSteinerTree(
+                access_points, PointT(pair.x, pair.y), prefer_vertical);
+        if (!crossbar_tree) {
+          continue;
+        }
+
+        PatternRoute pattern_route(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        pattern_route.setSteinerTree(crossbar_tree);
+        pattern_route.constructRoutingDAG();
+        pattern_route.run();
+
+        RerouteResult result = evaluate(net->getRoutingTree());
+        if (isAcceptable(result)
+            && (!best_result.valid || isBetter(result, best_result))) {
+          best_result = result;
+        }
+      }
+    }
+
+    if (best_result.valid) {
+      net->setRoutingTree(best_result.tree);
+      grid_graph_->commitTree(best_result.tree);
+      accepted++;
+    } else {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+    }
+  }
+
+  logger_->report("crossbar backbone surgery accepted {} / {} nets",
+                  accepted,
+                  attempted);
+  grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                          original_maze_scale);
+}
+
 void CUGR::route()
 {
   constexpr int kMaxDetourNets = 2200;
@@ -1586,7 +2036,7 @@ void CUGR::route()
 
   hybridTopologySurgery();
   hubTopologySurgery();
-  dualHubBackboneSurgery();
+  crossbarBackboneSurgery();
   mazeWirelengthCollapse();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
   wirelengthRefine();
