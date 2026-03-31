@@ -1072,6 +1072,149 @@ std::shared_ptr<SteinerTreeNode> buildQuadrantMstFusionSteinerTree(
   return fused_tree;
 }
 
+std::shared_ptr<SteinerTreeNode> buildTriHubCorridorSteinerTree(
+    const std::vector<AccessPoint>& access_points,
+    const PointT& root_point,
+    const bool split_by_x_axis,
+    const bool prefer_horizontal_first)
+{
+  if (access_points.empty()) {
+    return nullptr;
+  }
+  if (access_points.size() == 1) {
+    return std::make_shared<SteinerTreeNode>(access_points.front().point,
+                                             access_points.front().layers);
+  }
+  if (access_points.size() < 3) {
+    return buildRectilinearMstSteinerTree(access_points,
+                                          root_point,
+                                          /*include_hub=*/true,
+                                          root_point,
+                                          prefer_horizontal_first);
+  }
+
+  std::vector<AccessPoint> sorted_points = access_points;
+  std::sort(sorted_points.begin(),
+            sorted_points.end(),
+            [&](const AccessPoint& lhs, const AccessPoint& rhs) {
+              const int lhs_primary
+                  = split_by_x_axis ? lhs.point.x() : lhs.point.y();
+              const int rhs_primary
+                  = split_by_x_axis ? rhs.point.x() : rhs.point.y();
+              if (lhs_primary != rhs_primary) {
+                return lhs_primary < rhs_primary;
+              }
+
+              const int lhs_secondary
+                  = split_by_x_axis ? lhs.point.y() : lhs.point.x();
+              const int rhs_secondary
+                  = split_by_x_axis ? rhs.point.y() : rhs.point.x();
+              if (lhs_secondary != rhs_secondary) {
+                return lhs_secondary < rhs_secondary;
+              }
+              if (lhs.layers.low() != rhs.layers.low()) {
+                return lhs.layers.low() < rhs.layers.low();
+              }
+              return lhs.layers.high() < rhs.layers.high();
+            });
+
+  std::array<std::vector<AccessPoint>, 3> clusters;
+  const int count = static_cast<int>(sorted_points.size());
+  for (int index = 0; index < count; index++) {
+    const int cluster_idx = std::min(2, (3 * index) / count);
+    clusters[cluster_idx].push_back(sorted_points[index]);
+  }
+
+  std::vector<PointT> cluster_hubs;
+  std::vector<std::shared_ptr<SteinerTreeNode>> cluster_roots;
+  cluster_hubs.reserve(3);
+  cluster_roots.reserve(3);
+  for (const auto& cluster : clusters) {
+    if (cluster.empty()) {
+      continue;
+    }
+
+    std::vector<int> xs;
+    std::vector<int> ys;
+    xs.reserve(cluster.size());
+    ys.reserve(cluster.size());
+    for (const AccessPoint& access_point : cluster) {
+      xs.push_back(access_point.point.x());
+      ys.push_back(access_point.point.y());
+    }
+    const PointT hub(getMedian(xs), getMedian(ys));
+
+    std::shared_ptr<SteinerTreeNode> local_root
+        = buildRectilinearMstSteinerTree(cluster,
+                                         hub,
+                                         /*include_hub=*/true,
+                                         hub,
+                                         prefer_horizontal_first);
+    if (!local_root) {
+      continue;
+    }
+    cluster_hubs.push_back(hub);
+    cluster_roots.push_back(local_root);
+  }
+
+  if (cluster_hubs.size() < 2) {
+    return buildRectilinearMstSteinerTree(access_points,
+                                          root_point,
+                                          /*include_hub=*/true,
+                                          root_point,
+                                          prefer_horizontal_first);
+  }
+
+  std::vector<AccessPoint> skeleton_points;
+  skeleton_points.reserve(cluster_hubs.size() + 1);
+  std::unordered_set<uint64_t> seen;
+  seen.reserve(cluster_hubs.size() + 1);
+  auto emitPoint = [&](const PointT& point) {
+    const uint64_t key = pointKey(point);
+    if (!seen.insert(key).second) {
+      return;
+    }
+    skeleton_points.push_back({point, getLayersAtPoint(access_points, point)});
+  };
+  emitPoint(root_point);
+  for (const PointT& hub : cluster_hubs) {
+    emitPoint(hub);
+  }
+
+  std::shared_ptr<SteinerTreeNode> fused_tree
+      = buildRectilinearMstSteinerTree(skeleton_points,
+                                       root_point,
+                                       /*include_hub=*/true,
+                                       root_point,
+                                       prefer_horizontal_first);
+  if (!fused_tree) {
+    return nullptr;
+  }
+
+  std::unordered_map<uint64_t, std::shared_ptr<SteinerTreeNode>> fused_nodes;
+  fused_nodes.reserve(skeleton_points.size() * 2);
+  SteinerTreeNode::preorder(
+      fused_tree, [&](const std::shared_ptr<SteinerTreeNode>& node) {
+        fused_nodes.emplace(pointKey(*node), node);
+      });
+
+  for (int cluster_idx = 0; cluster_idx < static_cast<int>(cluster_hubs.size());
+       cluster_idx++) {
+    const auto hub_it = fused_nodes.find(pointKey(cluster_hubs[cluster_idx]));
+    if (hub_it == fused_nodes.end()) {
+      continue;
+    }
+    std::shared_ptr<SteinerTreeNode> fused_hub = hub_it->second;
+    const std::shared_ptr<SteinerTreeNode>& local_root = cluster_roots[cluster_idx];
+    mergeFixedLayers(local_root->getFixedLayers(), fused_hub);
+    for (const auto& child : local_root->getChildren()) {
+      attachChildUnique(fused_hub, child);
+    }
+  }
+
+  return fused_tree;
+}
+
 std::shared_ptr<SteinerTreeNode> buildLadderBackboneSteinerTree(
     const std::vector<AccessPoint>& access_points,
     const int spine_coord,
@@ -3513,6 +3656,223 @@ void CUGR::mstBackboneSurgery()
                                           original_maze_scale);
 }
 
+void CUGR::triHubCorridorSurgery()
+{
+  constexpr int kMaxSurgeryNets = 14;
+  constexpr int kMaxRootCandidates = 3;
+  constexpr int kViaGrowthLimit = 340;
+  constexpr int kOverflowSlack = 1;
+  constexpr uint64_t kMinWireImprovement = 2;
+  const double original_wire_scale = grid_graph_->getWireCongestionScale();
+  const double original_maze_scale = grid_graph_->getMazeCongestionScale();
+
+  // Iteration 28 radical move:
+  // split high-pin nets into 3 dominant-axis corridor clusters, build a local
+  // MST hub in each cluster, and fuse those hubs with a compact global MST.
+  // This targets branch sharing with bounded runtime by limiting candidates.
+  grid_graph_->setCongestionPenaltyScales(0.005, 0.010);
+
+  struct Candidate
+  {
+    int net_index;
+    int score;
+    int overflow;
+    int hpwl;
+    int pins;
+    double stretch;
+  };
+
+  std::vector<Candidate> candidates;
+  candidates.reserve(gr_nets_.size());
+  for (const auto& net : gr_nets_) {
+    const std::shared_ptr<GRTreeNode> routing_tree = net->getRoutingTree();
+    if (!routing_tree || net->getNumPins() < 9) {
+      continue;
+    }
+    const int hpwl = std::max(1, net->getBoundingBox().hp());
+    if (hpwl < 90) {
+      continue;
+    }
+    const TreeStats stats = getTreeStats(routing_tree, grid_graph_.get());
+    const int overflow = grid_graph_->checkOverflow(routing_tree);
+    const double stretch = static_cast<double>(stats.wire_length) / hpwl;
+    const int score = overflow * 4800 + hpwl + net->getNumPins() * 20
+                      + static_cast<int>(stretch * 220.0);
+    candidates.push_back(
+        {net->getIndex(), score, overflow, hpwl, net->getNumPins(), stretch});
+  }
+
+  if (candidates.empty()) {
+    grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                            original_maze_scale);
+    return;
+  }
+
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const Candidate& lhs, const Candidate& rhs) {
+              if (lhs.score != rhs.score) {
+                return lhs.score > rhs.score;
+              }
+              if (lhs.overflow != rhs.overflow) {
+                return lhs.overflow > rhs.overflow;
+              }
+              if (lhs.stretch != rhs.stretch) {
+                return lhs.stretch > rhs.stretch;
+              }
+              if (lhs.pins != rhs.pins) {
+                return lhs.pins > rhs.pins;
+              }
+              if (lhs.hpwl != rhs.hpwl) {
+                return lhs.hpwl > rhs.hpwl;
+              }
+              return lhs.net_index < rhs.net_index;
+            });
+
+  if (static_cast<int>(candidates.size()) > kMaxSurgeryNets) {
+    candidates.resize(kMaxSurgeryNets);
+  }
+
+  struct RerouteResult
+  {
+    std::shared_ptr<GRTreeNode> tree;
+    TreeStats stats;
+    int overflow{std::numeric_limits<int>::max()};
+    bool valid{false};
+  };
+
+  auto isBetter = [](const RerouteResult& lhs, const RerouteResult& rhs) {
+    if (lhs.stats.wire_length != rhs.stats.wire_length) {
+      return lhs.stats.wire_length < rhs.stats.wire_length;
+    }
+    if (lhs.overflow != rhs.overflow) {
+      return lhs.overflow < rhs.overflow;
+    }
+    return lhs.stats.via_count < rhs.stats.via_count;
+  };
+
+  int attempted = 0;
+  int accepted = 0;
+  logger_->report("stage 13: tri-hub corridor surgery on {} nets",
+                  candidates.size());
+
+  for (const auto& candidate : candidates) {
+    GRNet* net = gr_nets_[candidate.net_index].get();
+    const std::shared_ptr<GRTreeNode> old_tree = net->getRoutingTree();
+    if (!old_tree) {
+      continue;
+    }
+
+    attempted++;
+    const TreeStats old_stats = getTreeStats(old_tree, grid_graph_.get());
+    const int old_overflow = grid_graph_->checkOverflow(old_tree);
+    grid_graph_->commitTree(old_tree, /*rip_up=*/true);
+
+    const AccessPointSet selected_access_points
+        = grid_graph_->selectAccessPoints(net);
+    const std::vector<AccessPoint> access_points
+        = materializeAccessPoints(selected_access_points);
+    if (access_points.size() < 5) {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+      continue;
+    }
+
+    std::vector<PointT> root_candidates
+        = buildHubCandidates(access_points,
+                             net->getBoundingBox(),
+                             kMaxRootCandidates);
+    const PointT center(net->getBoundingBox().cx(), net->getBoundingBox().cy());
+    if (root_candidates.empty()) {
+      root_candidates.push_back(center);
+    } else {
+      bool has_center = false;
+      for (const PointT& root : root_candidates) {
+        if (root == center) {
+          has_center = true;
+          break;
+        }
+      }
+      if (!has_center) {
+        root_candidates.push_back(center);
+      }
+    }
+
+    auto evaluate = [&](const std::shared_ptr<GRTreeNode>& tree) {
+      RerouteResult result;
+      if (!tree) {
+        return result;
+      }
+      result.tree = tree;
+      result.stats = getTreeStats(tree, grid_graph_.get());
+      grid_graph_->commitTree(tree);
+      result.overflow = grid_graph_->checkOverflow(tree);
+      result.valid = true;
+      grid_graph_->commitTree(tree, /*rip_up=*/true);
+      return result;
+    };
+
+    auto isAcceptable = [&](const RerouteResult& result) {
+      if (!result.valid) {
+        return false;
+      }
+      const bool improve_wire
+          = result.stats.wire_length + kMinWireImprovement <= old_stats.wire_length;
+      const bool keep_overflow = result.overflow <= old_overflow + kOverflowSlack;
+      const bool bounded_via
+          = result.stats.via_count <= old_stats.via_count + kViaGrowthLimit;
+      const bool overflow_rescue
+          = result.overflow + 3 < old_overflow
+            && result.stats.wire_length <= old_stats.wire_length;
+      return bounded_via
+             && ((improve_wire && keep_overflow) || overflow_rescue);
+    };
+
+    RerouteResult best_result;
+    for (const PointT& root_point : root_candidates) {
+      for (const bool split_by_x_axis : {true, false}) {
+        for (const bool prefer_horizontal_first : {true, false}) {
+          std::shared_ptr<SteinerTreeNode> tri_hub_tree
+              = buildTriHubCorridorSteinerTree(access_points,
+                                               root_point,
+                                               split_by_x_axis,
+                                               prefer_horizontal_first);
+          if (!tri_hub_tree) {
+            continue;
+          }
+
+          PatternRoute pattern_route(
+              net, grid_graph_.get(), stt_builder_, constants_, logger_);
+          pattern_route.setSteinerTree(tri_hub_tree);
+          pattern_route.constructRoutingDAG();
+          pattern_route.run();
+
+          RerouteResult result = evaluate(net->getRoutingTree());
+          if (isAcceptable(result)
+              && (!best_result.valid || isBetter(result, best_result))) {
+            best_result = result;
+          }
+        }
+      }
+    }
+
+    if (best_result.valid) {
+      net->setRoutingTree(best_result.tree);
+      grid_graph_->commitTree(best_result.tree);
+      accepted++;
+    } else {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+    }
+  }
+
+  logger_->report("tri-hub corridor surgery accepted {} / {} nets",
+                  accepted,
+                  attempted);
+  grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                          original_maze_scale);
+}
+
 void CUGR::massiveMstWirelengthRewrite()
 {
   constexpr int kMaxRewriteNets = 440;
@@ -3831,9 +4191,9 @@ void CUGR::route()
   trimOverflowSet(netIndices, kMaxMazeNets, "maze");
   mazeRoute(netIndices);
 
-  // Iteration 25 cascade:
+  // Iteration 25-28 cascade:
   //   1) broad topology tournament (hub/crossbar/quadrant/ladder),
-  //   2) MST bulk rewrites, then
+  //   2) MST bulk rewrites + tri-hub corridor fusion, then
   //   3) alternating wirelength and maze collapse cleanup.
   hybridTopologySurgery();
   hubTopologySurgery();
@@ -3844,6 +4204,7 @@ void CUGR::route()
   massiveMstWirelengthRewrite();
   mazeWirelengthCollapse();
   mstBackboneSurgery();
+  triHubCorridorSurgery();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
   wirelengthRefine();
   grid_graph_->setCongestionPenaltyScales(0.04, 0.08);
