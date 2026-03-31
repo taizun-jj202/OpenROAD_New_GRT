@@ -127,6 +127,33 @@ void CUGR::patternRoute(std::vector<int>& netIndices)
   updateOverflowNets(netIndices);
 }
 
+void CUGR::patternRouteSubset(const std::vector<int>& netIndices,
+                              const char* stage_name)
+{
+  if (netIndices.empty()) {
+    return;
+  }
+
+  logger_->report("{} ({}, wire_scale {:.3f}, maze_scale {:.3f})",
+                  stage_name,
+                  netIndices.size(),
+                  grid_graph_->getWireCongestionScale(),
+                  grid_graph_->getMazeCongestionScale());
+  std::vector<int> ordered = netIndices;
+  sortNetIndices(ordered);
+  for (const int netIndex : ordered) {
+    PatternRoute patternRoute(gr_nets_[netIndex].get(),
+                              grid_graph_.get(),
+                              stt_builder_,
+                              constants_,
+                              logger_);
+    patternRoute.constructSteinerTree();
+    patternRoute.constructRoutingDAG();
+    patternRoute.run();
+    grid_graph_->commitTree(gr_nets_[netIndex]->getRoutingTree());
+  }
+}
+
 void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
 {
   if (netIndices.empty()) {
@@ -192,9 +219,13 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
 
 void CUGR::wirelengthRefine()
 {
-  constexpr int kMaxRefineNets = 280;
+  constexpr int kMaxRefineNets = 1400;
   constexpr int kViaMargin = 10;
-  const uint64_t kMinWireImprovement = grid_graph_->getM2Pitch();
+  const uint64_t kMinWireImprovement = 0;
+  const double original_wire_scale = grid_graph_->getWireCongestionScale();
+  const double original_maze_scale = grid_graph_->getMazeCongestionScale();
+  // Collapse detours first, then keep only overflow-safe improvements.
+  grid_graph_->setCongestionPenaltyScales(0.01, original_maze_scale);
 
   std::vector<int> candidates;
   candidates.reserve(gr_nets_.size());
@@ -205,6 +236,8 @@ void CUGR::wirelengthRefine()
   }
 
   if (candidates.empty()) {
+    grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                            original_maze_scale);
     return;
   }
 
@@ -286,12 +319,15 @@ void CUGR::wirelengthRefine()
   logger_->report("wirelength rescue accepted {} / {} nets",
                   accepted,
                   attempted);
+  grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                          original_maze_scale);
 }
 
 void CUGR::route()
 {
-  constexpr int kMaxDetourNets = 1200;
-  constexpr int kMaxMazeNets = 350;
+  constexpr int kMaxDetourNets = 2600;
+  constexpr int kMaxMazeNets = 900;
+  constexpr double kLongNetRatio = 0.45;
 
   auto trimOverflowSet = [&](std::vector<int>& netIndices,
                              const int limit,
@@ -335,7 +371,7 @@ void CUGR::route()
                   return lhs.overflow > rhs.overflow;
                 }
                 if (lhs.hpwl != rhs.hpwl) {
-                  return lhs.hpwl < rhs.hpwl;
+                  return lhs.hpwl > rhs.hpwl;
                 }
                 return lhs.net_index < rhs.net_index;
               });
@@ -357,14 +393,32 @@ void CUGR::route()
   for (const auto& net : gr_nets_) {
     netIndices.push_back(net->getIndex());
   }
+  if (netIndices.empty()) {
+    return;
+  }
 
-  patternRoute(netIndices);
+  sortNetIndices(netIndices);
+  int longNetCount = std::max(1, (int) (netIndices.size() * kLongNetRatio));
+  longNetCount = std::min(longNetCount, (int) netIndices.size());
+  std::vector<int> longNetSet(netIndices.begin(), netIndices.begin() + longNetCount);
+  std::vector<int> remainingNetSet(netIndices.begin() + longNetCount,
+                                   netIndices.end());
 
+  grid_graph_->setCongestionPenaltyScales(0.04, 0.12);
+  patternRouteSubset(longNetSet, "stage 1a: long-net trunk route");
+  grid_graph_->setCongestionPenaltyScales(0.12, 0.16);
+  patternRouteSubset(remainingNetSet, "stage 1b: congestion-aware fill route");
+  updateOverflowNets(netIndices);
+
+  grid_graph_->setCongestionPenaltyScales(0.22, 0.20);
   trimOverflowSet(netIndices, kMaxDetourNets, "detour");
   patternRouteWithDetours(netIndices);
 
+  grid_graph_->setCongestionPenaltyScales(0.14, 0.26);
   trimOverflowSet(netIndices, kMaxMazeNets, "maze");
   mazeRoute(netIndices);
+
+  grid_graph_->setCongestionPenaltyScales(0.06, 0.12);
   wirelengthRefine();
 
   printStatistics();

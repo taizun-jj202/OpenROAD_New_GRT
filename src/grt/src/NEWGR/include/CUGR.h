@@ -69,6 +69,8 @@ class CUGR
  private:
   void updateOverflowNets(std::vector<int>& netIndices);
   void patternRoute(std::vector<int>& netIndices);
+  void patternRouteSubset(const std::vector<int>& netIndices,
+                          const char* stage_name);
   void patternRouteWithDetours(std::vector<int>& netIndices);
   void mazeRoute(std::vector<int>& netIndices);
   void wirelengthRefine();

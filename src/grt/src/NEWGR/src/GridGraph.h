@@ -104,6 +104,13 @@ class GridGraph
   CostT getWireCost(int layer_index, PointT u, PointT v) const;
   CostT getViaCost(int layer_index, PointT loc) const;
   CostT getUnitViaCost() const { return unit_via_cost_; }
+  void setCongestionPenaltyScales(double wire_scale, double maze_scale)
+  {
+    wire_congestion_scale_ = wire_scale;
+    maze_congestion_scale_ = maze_scale;
+  }
+  double getWireCongestionScale() const { return wire_congestion_scale_; }
+  double getMazeCongestionScale() const { return maze_congestion_scale_; }
 
   // Misc
   AccessPointSet selectAccessPoints(const GRNet* net) const;
@@ -182,6 +189,8 @@ class GridGraph
 
   int total_length_ = 0;
   int total_num_vias_ = 0;
+  double wire_congestion_scale_ = 0.20;
+  double maze_congestion_scale_ = 0.20;
   // gridEdges[l][x][y] stores the edge {(l, x, y), (l, x+1, y)} or {(l, x, y),
   // (l, x, y+1)} depending on the routing direction of the layer
   std::vector<std::vector<std::vector<GraphEdge>>> graph_edges_;
