@@ -377,6 +377,63 @@ std::vector<PointT> buildHubCandidates(const std::vector<AccessPoint>& access_po
   return candidates;
 }
 
+int manhattanDistance(const PointT& lhs, const PointT& rhs)
+{
+  return std::abs(lhs.x() - rhs.x()) + std::abs(lhs.y() - rhs.y());
+}
+
+std::shared_ptr<SteinerTreeNode> buildDualHubBackboneSteinerTree(
+    const std::vector<AccessPoint>& access_points,
+    const PointT& hub_a,
+    const PointT& hub_b,
+    const bool horizontal_first)
+{
+  if (access_points.empty()) {
+    return nullptr;
+  }
+
+  std::shared_ptr<SteinerTreeNode> hub_a_node
+      = std::make_shared<SteinerTreeNode>(hub_a);
+  std::shared_ptr<SteinerTreeNode> hub_b_node = hub_a_node;
+
+  const bool same_hub = hub_a.x() == hub_b.x() && hub_a.y() == hub_b.y();
+  if (!same_hub) {
+    if (hub_a.x() == hub_b.x() || hub_a.y() == hub_b.y()) {
+      hub_b_node = std::make_shared<SteinerTreeNode>(hub_b);
+      hub_a_node->addChild(hub_b_node);
+    } else {
+      const PointT pivot
+          = horizontal_first ? PointT(hub_b.x(), hub_a.y())
+                             : PointT(hub_a.x(), hub_b.y());
+      std::shared_ptr<SteinerTreeNode> pivot_node
+          = std::make_shared<SteinerTreeNode>(pivot);
+      hub_b_node = std::make_shared<SteinerTreeNode>(hub_b);
+      hub_a_node->addChild(pivot_node);
+      pivot_node->addChild(hub_b_node);
+    }
+  }
+
+  for (const AccessPoint& access_point : access_points) {
+    if (access_point.point == hub_a) {
+      mergeFixedLayers(access_point.layers, hub_a_node);
+      continue;
+    }
+    if (access_point.point == hub_b) {
+      mergeFixedLayers(access_point.layers, hub_b_node);
+      continue;
+    }
+
+    const int dist_to_a = manhattanDistance(access_point.point, hub_a);
+    const int dist_to_b = manhattanDistance(access_point.point, hub_b);
+    const std::shared_ptr<SteinerTreeNode> attach_node
+        = dist_to_a <= dist_to_b ? hub_a_node : hub_b_node;
+    attach_node->addChild(std::make_shared<SteinerTreeNode>(access_point.point,
+                                                             access_point.layers));
+  }
+
+  return hub_a_node;
+}
+
 }  // namespace
 
 CUGR::CUGR(odb::dbDatabase* db,
@@ -1187,6 +1244,251 @@ void CUGR::hubTopologySurgery()
                                           original_maze_scale);
 }
 
+void CUGR::dualHubBackboneSurgery()
+{
+  constexpr int kMaxSurgeryNets = 28;
+  constexpr int kMaxHubCandidates = 6;
+  constexpr int kMaxHubPairs = 10;
+  constexpr int kViaGrowthLimit = 220;
+  constexpr int kOverflowSlack = 1;
+  constexpr uint64_t kMinWireImprovement = 10;
+  const double original_wire_scale = grid_graph_->getWireCongestionScale();
+  const double original_maze_scale = grid_graph_->getMazeCongestionScale();
+
+  // Radical move: build two-hub shared backbones so high-degree nets can
+  // collapse multiple long branches into a small number of long trunks.
+  grid_graph_->setCongestionPenaltyScales(0.009, 0.018);
+
+  struct Candidate
+  {
+    int net_index;
+    int score;
+    int overflow;
+    int hpwl;
+    int pins;
+    double stretch;
+  };
+
+  std::vector<Candidate> candidates;
+  candidates.reserve(gr_nets_.size());
+  for (const auto& net : gr_nets_) {
+    const std::shared_ptr<GRTreeNode> routing_tree = net->getRoutingTree();
+    if (!routing_tree || net->getNumPins() < 6) {
+      continue;
+    }
+    const int hpwl = std::max(1, net->getBoundingBox().hp());
+    if (hpwl < 80) {
+      continue;
+    }
+    const TreeStats stats = getTreeStats(routing_tree, grid_graph_.get());
+    const int overflow = grid_graph_->checkOverflow(routing_tree);
+    const double stretch = static_cast<double>(stats.wire_length) / hpwl;
+    const int score = overflow * 3200 + hpwl + net->getNumPins() * 8
+                      + static_cast<int>(stretch * 100.0);
+    candidates.push_back(
+        {net->getIndex(), score, overflow, hpwl, net->getNumPins(), stretch});
+  }
+
+  if (candidates.empty()) {
+    grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                            original_maze_scale);
+    return;
+  }
+
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const Candidate& lhs, const Candidate& rhs) {
+              if (lhs.score != rhs.score) {
+                return lhs.score > rhs.score;
+              }
+              if (lhs.overflow != rhs.overflow) {
+                return lhs.overflow > rhs.overflow;
+              }
+              if (lhs.stretch != rhs.stretch) {
+                return lhs.stretch > rhs.stretch;
+              }
+              if (lhs.pins != rhs.pins) {
+                return lhs.pins > rhs.pins;
+              }
+              if (lhs.hpwl != rhs.hpwl) {
+                return lhs.hpwl > rhs.hpwl;
+              }
+              return lhs.net_index < rhs.net_index;
+            });
+
+  if (static_cast<int>(candidates.size()) > kMaxSurgeryNets) {
+    candidates.resize(kMaxSurgeryNets);
+  }
+
+  struct HubPair
+  {
+    PointT hub_a;
+    PointT hub_b;
+    int span;
+  };
+
+  struct RerouteResult
+  {
+    std::shared_ptr<GRTreeNode> tree;
+    TreeStats stats;
+    int overflow{std::numeric_limits<int>::max()};
+    bool valid{false};
+  };
+
+  int attempted = 0;
+  int accepted = 0;
+  logger_->report("stage 8: dual-hub backbone surgery on {} nets",
+                  candidates.size());
+
+  for (const auto& candidate : candidates) {
+    GRNet* net = gr_nets_[candidate.net_index].get();
+    const std::shared_ptr<GRTreeNode> old_tree = net->getRoutingTree();
+    if (!old_tree) {
+      continue;
+    }
+
+    attempted++;
+    const TreeStats old_stats = getTreeStats(old_tree, grid_graph_.get());
+    const int old_overflow = grid_graph_->checkOverflow(old_tree);
+    grid_graph_->commitTree(old_tree, /*rip_up*/ true);
+
+    const AccessPointSet selected_access_points = grid_graph_->selectAccessPoints(net);
+    const std::vector<AccessPoint> access_points
+        = materializeAccessPoints(selected_access_points);
+    const std::vector<PointT> hub_candidates
+        = buildHubCandidates(access_points,
+                             net->getBoundingBox(),
+                             kMaxHubCandidates);
+    if (hub_candidates.size() < 2) {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+      continue;
+    }
+
+    std::vector<HubPair> hub_pairs;
+    hub_pairs.reserve(hub_candidates.size() * hub_candidates.size());
+    for (int lhs = 0; lhs < static_cast<int>(hub_candidates.size()); lhs++) {
+      for (int rhs = lhs + 1; rhs < static_cast<int>(hub_candidates.size());
+           rhs++) {
+        const int span
+            = manhattanDistance(hub_candidates[lhs], hub_candidates[rhs]);
+        if (span == 0) {
+          continue;
+        }
+        hub_pairs.push_back(
+            {hub_candidates[lhs], hub_candidates[rhs], span});
+      }
+    }
+    if (hub_pairs.empty()) {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+      continue;
+    }
+
+    std::sort(hub_pairs.begin(),
+              hub_pairs.end(),
+              [](const HubPair& lhs, const HubPair& rhs) {
+                if (lhs.span != rhs.span) {
+                  return lhs.span > rhs.span;
+                }
+                if (lhs.hub_a.x() != rhs.hub_a.x()) {
+                  return lhs.hub_a.x() < rhs.hub_a.x();
+                }
+                if (lhs.hub_a.y() != rhs.hub_a.y()) {
+                  return lhs.hub_a.y() < rhs.hub_a.y();
+                }
+                if (lhs.hub_b.x() != rhs.hub_b.x()) {
+                  return lhs.hub_b.x() < rhs.hub_b.x();
+                }
+                return lhs.hub_b.y() < rhs.hub_b.y();
+              });
+    if (static_cast<int>(hub_pairs.size()) > kMaxHubPairs) {
+      hub_pairs.resize(kMaxHubPairs);
+    }
+
+    auto evaluate = [&](const std::shared_ptr<GRTreeNode>& tree) {
+      RerouteResult result;
+      if (!tree) {
+        return result;
+      }
+      result.tree = tree;
+      result.stats = getTreeStats(tree, grid_graph_.get());
+      grid_graph_->commitTree(tree);
+      result.overflow = grid_graph_->checkOverflow(tree);
+      result.valid = true;
+      grid_graph_->commitTree(tree, /*rip_up*/ true);
+      return result;
+    };
+
+    auto isAcceptable = [&](const RerouteResult& result) {
+      if (!result.valid) {
+        return false;
+      }
+      const bool improve_wire
+          = result.stats.wire_length + kMinWireImprovement <= old_stats.wire_length;
+      const bool preserve_overflow = result.overflow <= old_overflow + kOverflowSlack;
+      const bool bounded_via
+          = result.stats.via_count <= old_stats.via_count + kViaGrowthLimit;
+      const bool overflow_rescue
+          = result.overflow + 3 < old_overflow
+            && result.stats.wire_length <= old_stats.wire_length;
+      return bounded_via
+             && ((improve_wire && preserve_overflow) || overflow_rescue);
+    };
+
+    auto isBetter = [](const RerouteResult& lhs, const RerouteResult& rhs) {
+      if (lhs.stats.wire_length != rhs.stats.wire_length) {
+        return lhs.stats.wire_length < rhs.stats.wire_length;
+      }
+      if (lhs.overflow != rhs.overflow) {
+        return lhs.overflow < rhs.overflow;
+      }
+      return lhs.stats.via_count < rhs.stats.via_count;
+    };
+
+    RerouteResult best_result;
+    for (const HubPair& hub_pair : hub_pairs) {
+      for (const bool horizontal_first : {true, false}) {
+        std::shared_ptr<SteinerTreeNode> dual_hub_tree
+            = buildDualHubBackboneSteinerTree(access_points,
+                                              hub_pair.hub_a,
+                                              hub_pair.hub_b,
+                                              horizontal_first);
+        if (!dual_hub_tree) {
+          continue;
+        }
+
+        PatternRoute pattern_route(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        pattern_route.setSteinerTree(dual_hub_tree);
+        pattern_route.constructRoutingDAG();
+        pattern_route.run();
+
+        RerouteResult result = evaluate(net->getRoutingTree());
+        if (isAcceptable(result)
+            && (!best_result.valid || isBetter(result, best_result))) {
+          best_result = result;
+        }
+      }
+    }
+
+    if (best_result.valid) {
+      net->setRoutingTree(best_result.tree);
+      grid_graph_->commitTree(best_result.tree);
+      accepted++;
+    } else {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+    }
+  }
+
+  logger_->report("dual-hub backbone surgery accepted {} / {} nets",
+                  accepted,
+                  attempted);
+  grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                          original_maze_scale);
+}
+
 void CUGR::route()
 {
   constexpr int kMaxDetourNets = 2200;
@@ -1284,6 +1586,7 @@ void CUGR::route()
 
   hybridTopologySurgery();
   hubTopologySurgery();
+  dualHubBackboneSurgery();
   mazeWirelengthCollapse();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
   wirelengthRefine();
