@@ -477,11 +477,10 @@ void CUGR::mazeWirelengthCollapse()
 
 void CUGR::hybridTopologySurgery()
 {
-  constexpr int kMaxSurgeryNets = 260;
-  constexpr int kViaGrowthLimit = 180;
-  constexpr uint64_t kMinWireImprovement = 1;
-  constexpr uint64_t kOverflowWeight = 1800000;
-  constexpr int kOverflowBonus = 3;
+  constexpr int kMaxSurgeryNets = 180;
+  constexpr int kViaGrowthLimit = 96;
+  constexpr uint64_t kMinWireImprovement = 8;
+  constexpr uint64_t kOverflowWeight = 2200000;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
 
@@ -614,14 +613,11 @@ void CUGR::hybridTopologySurgery()
         return false;
       }
       const bool improveWire
-          = result.stats.wire_length + kMinWireImprovement < oldStats.wire_length;
+          = result.stats.wire_length + kMinWireImprovement <= oldStats.wire_length;
       const bool keepOverflow = result.overflow <= oldOverflow;
-      const bool overflowRelief
-          = (result.overflow + kOverflowBonus < oldOverflow
-             && result.stats.wire_length <= oldStats.wire_length);
       const bool boundedVia
           = result.stats.via_count <= oldStats.via_count + kViaGrowthLimit;
-      return boundedVia && ((improveWire && keepOverflow) || overflowRelief);
+      return improveWire && keepOverflow && boundedVia;
     };
 
     const bool patternAcceptable = isAcceptable(patternResult);
@@ -761,8 +757,8 @@ void CUGR::route()
   trimOverflowSet(netIndices, kMaxMazeNets, "maze");
   mazeRoute(netIndices);
 
-  mazeWirelengthCollapse();
   hybridTopologySurgery();
+  mazeWirelengthCollapse();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
   wirelengthRefine();
 
