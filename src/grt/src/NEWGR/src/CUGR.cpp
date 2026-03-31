@@ -28,18 +28,57 @@
 
 namespace grt::newgr {
 
+namespace {
+
+struct TreeStats
+{
+  uint64_t wire_length{0};
+  int via_count{0};
+};
+
+TreeStats getTreeStats(const std::shared_ptr<GRTreeNode>& tree,
+                       const GridGraph* grid_graph)
+{
+  TreeStats stats;
+  if (!tree) {
+    return stats;
+  }
+
+  GRTreeNode::preorder(tree, [&](const std::shared_ptr<GRTreeNode>& node) {
+    for (const auto& child : node->getChildren()) {
+      if (node->getLayerIdx() == child->getLayerIdx()) {
+        const int direction = grid_graph->getLayerDirection(node->getLayerIdx());
+        const int l = std::min((*node)[direction], (*child)[direction]);
+        const int h = std::max((*node)[direction], (*child)[direction]);
+        for (int edge = l; edge < h; edge++) {
+          stats.wire_length += grid_graph->getEdgeLength(direction, edge);
+        }
+      } else {
+        stats.via_count += abs(node->getLayerIdx() - child->getLayerIdx());
+      }
+    }
+  });
+
+  return stats;
+}
+
+}  // namespace
+
 CUGR::CUGR(odb::dbDatabase* db,
            utl::Logger* log,
            stt::SteinerTreeBuilder* stt_builder)
     : db_(db), logger_(log), stt_builder_(stt_builder)
 {
-  // Wirelength-first policy:
-  // keep detours conservative and reduce congestion sensitivity.
-  constants_.cost_logistic_slope = 0.35;
-  constants_.maze_logistic_slope = 0.35;
-  constants_.max_detour_ratio = 0.08;
-  constants_.target_detour_count = 6;
-  constants_.via_multiplier = 1.0;
+  // Radical wirelength-first policy:
+  // permit extra vias and reduce short-area pressure so long trunks stay direct.
+  constants_.weight_wire_length = 2.4;
+  constants_.weight_via_number = 1.4;
+  constants_.weight_short_area = 150.0;
+  constants_.cost_logistic_slope = 0.22;
+  constants_.maze_logistic_slope = 0.20;
+  constants_.max_detour_ratio = 0.04;
+  constants_.target_detour_count = 4;
+  constants_.via_multiplier = 0.7;
 }
 
 CUGR::~CUGR() = default;
@@ -151,6 +190,104 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   updateOverflowNets(netIndices);
 }
 
+void CUGR::wirelengthRefine()
+{
+  constexpr int kMaxRefineNets = 280;
+  constexpr int kViaMargin = 10;
+  const uint64_t kMinWireImprovement = grid_graph_->getM2Pitch();
+
+  std::vector<int> candidates;
+  candidates.reserve(gr_nets_.size());
+  for (const auto& net : gr_nets_) {
+    if (net->getNumPins() >= 2 && net->getRoutingTree()) {
+      candidates.push_back(net->getIndex());
+    }
+  }
+
+  if (candidates.empty()) {
+    return;
+  }
+
+  std::sort(candidates.begin(), candidates.end(), [&](const int lhs, const int rhs) {
+    const GRNet* lhsNet = gr_nets_[lhs].get();
+    const GRNet* rhsNet = gr_nets_[rhs].get();
+    const int lhsHpwl = lhsNet->getBoundingBox().hp();
+    const int rhsHpwl = rhsNet->getBoundingBox().hp();
+    if (lhsHpwl != rhsHpwl) {
+      return lhsHpwl > rhsHpwl;
+    }
+    if (lhsNet->getNumPins() != rhsNet->getNumPins()) {
+      return lhsNet->getNumPins() > rhsNet->getNumPins();
+    }
+    return lhs < rhs;
+  });
+
+  if ((int) candidates.size() > kMaxRefineNets) {
+    candidates.resize(kMaxRefineNets);
+  }
+
+  int accepted = 0;
+  int attempted = 0;
+  logger_->report("stage 4: wirelength rescue on {} long nets",
+                  candidates.size());
+
+  for (const int netIndex : candidates) {
+    GRNet* net = gr_nets_[netIndex].get();
+    const std::shared_ptr<GRTreeNode> oldTree = net->getRoutingTree();
+    if (!oldTree) {
+      continue;
+    }
+
+    attempted++;
+    const TreeStats oldStats = getTreeStats(oldTree, grid_graph_.get());
+
+    // Evaluate old overflow with existing committed demands.
+    const int oldOverflow = grid_graph_->checkOverflow(oldTree);
+
+    grid_graph_->commitTree(oldTree, /*rip_up*/ true);
+
+    PatternRoute patternRoute(
+        net, grid_graph_.get(), stt_builder_, constants_, logger_);
+    patternRoute.constructSteinerTree();
+    patternRoute.constructRoutingDAG();
+    patternRoute.run();
+
+    const std::shared_ptr<GRTreeNode> candidateTree = net->getRoutingTree();
+    if (!candidateTree) {
+      net->setRoutingTree(oldTree);
+      grid_graph_->commitTree(oldTree);
+      continue;
+    }
+
+    const TreeStats candidateStats = getTreeStats(candidateTree, grid_graph_.get());
+
+    // Temporarily commit candidate to evaluate overflow on its used edges.
+    grid_graph_->commitTree(candidateTree);
+    const int candidateOverflow = grid_graph_->checkOverflow(candidateTree);
+
+    const bool improveWire = candidateStats.wire_length + kMinWireImprovement
+                             < oldStats.wire_length;
+    const bool improveComposite
+        = (candidateStats.wire_length <= oldStats.wire_length
+           && candidateStats.via_count + kViaMargin < oldStats.via_count);
+    const bool keepOverflow = candidateOverflow <= oldOverflow;
+
+    if (keepOverflow && (improveWire || improveComposite)) {
+      accepted++;
+      continue;
+    }
+
+    // Reject candidate and restore previous tree/demand.
+    grid_graph_->commitTree(candidateTree, /*rip_up*/ true);
+    net->setRoutingTree(oldTree);
+    grid_graph_->commitTree(oldTree);
+  }
+
+  logger_->report("wirelength rescue accepted {} / {} nets",
+                  accepted,
+                  attempted);
+}
+
 void CUGR::route()
 {
   constexpr int kMaxDetourNets = 1200;
@@ -228,6 +365,7 @@ void CUGR::route()
 
   trimOverflowSet(netIndices, kMaxMazeNets, "maze");
   mazeRoute(netIndices);
+  wirelengthRefine();
 
   printStatistics();
   if (constants_.write_heatmap) {
@@ -322,13 +460,21 @@ NetRouteMap CUGR::getRoutes()
 
 void CUGR::sortNetIndices(std::vector<int>& netIndices) const
 {
-  std::vector<int> halfParameters(gr_nets_.size());
-  for (int netIndex : netIndices) {
-    auto& net = gr_nets_[netIndex];
-    halfParameters[netIndex] = net->getBoundingBox().hp();
-  }
-  sort(netIndices.begin(), netIndices.end(), [&](int lhs, int rhs) {
-    return halfParameters[lhs] < halfParameters[rhs];
+  std::sort(netIndices.begin(),
+            netIndices.end(),
+            [&](const int lhs, const int rhs) {
+    const GRNet* lhsNet = gr_nets_[lhs].get();
+    const GRNet* rhsNet = gr_nets_[rhs].get();
+    const int lhsHpwl = lhsNet->getBoundingBox().hp();
+    const int rhsHpwl = rhsNet->getBoundingBox().hp();
+    if (lhsHpwl != rhsHpwl) {
+      // Route long nets first so they lock in near-Manhattan trunks.
+      return lhsHpwl > rhsHpwl;
+    }
+    if (lhsNet->getNumPins() != rhsNet->getNumPins()) {
+      return lhsNet->getNumPins() > rhsNet->getNumPins();
+    }
+    return lhs < rhs;
   });
 }
 

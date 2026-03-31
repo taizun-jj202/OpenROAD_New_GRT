@@ -71,6 +71,7 @@ class CUGR
   void patternRoute(std::vector<int>& netIndices);
   void patternRouteWithDetours(std::vector<int>& netIndices);
   void mazeRoute(std::vector<int>& netIndices);
+  void wirelengthRefine();
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
