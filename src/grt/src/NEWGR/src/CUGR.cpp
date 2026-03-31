@@ -9,6 +9,7 @@
 #include <limits>
 #include <memory>
 #include <sstream>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -60,6 +61,142 @@ TreeStats getTreeStats(const std::shared_ptr<GRTreeNode>& tree,
   });
 
   return stats;
+}
+
+int getMedian(std::vector<int> values)
+{
+  if (values.empty()) {
+    return 0;
+  }
+  const size_t middle = values.size() / 2;
+  std::nth_element(values.begin(), values.begin() + middle, values.end());
+  return values[middle];
+}
+
+void mergeFixedLayers(const IntervalT& layers,
+                      std::shared_ptr<SteinerTreeNode>& node)
+{
+  if (!layers.IsValid()) {
+    return;
+  }
+  if (node->getFixedLayers().IsValid()) {
+    node->setFixedLayers(node->getFixedLayers().UnionWith(layers));
+  } else {
+    node->setFixedLayers(layers);
+  }
+}
+
+std::vector<AccessPoint> materializeAccessPoints(
+    const AccessPointSet& access_points)
+{
+  std::vector<AccessPoint> points;
+  points.reserve(access_points.size());
+  for (const AccessPoint& access_point : access_points) {
+    points.push_back(access_point);
+  }
+  std::sort(points.begin(),
+            points.end(),
+            [](const AccessPoint& lhs, const AccessPoint& rhs) {
+              if (lhs.point.x() != rhs.point.x()) {
+                return lhs.point.x() < rhs.point.x();
+              }
+              if (lhs.point.y() != rhs.point.y()) {
+                return lhs.point.y() < rhs.point.y();
+              }
+              if (lhs.layers.low() != rhs.layers.low()) {
+                return lhs.layers.low() < rhs.layers.low();
+              }
+              return lhs.layers.high() < rhs.layers.high();
+            });
+  return points;
+}
+
+std::shared_ptr<SteinerTreeNode> buildMedianTrunkSteinerTree(
+    const std::vector<AccessPoint>& access_points,
+    const bool horizontal_trunk)
+{
+  if (access_points.empty()) {
+    return nullptr;
+  }
+  if (access_points.size() == 1) {
+    return std::make_shared<SteinerTreeNode>(access_points.front().point,
+                                             access_points.front().layers);
+  }
+
+  std::vector<int> primary_coords;
+  std::vector<int> secondary_coords;
+  primary_coords.reserve(access_points.size());
+  secondary_coords.reserve(access_points.size());
+  for (const AccessPoint& access_point : access_points) {
+    if (horizontal_trunk) {
+      primary_coords.push_back(access_point.point.x());
+      secondary_coords.push_back(access_point.point.y());
+    } else {
+      primary_coords.push_back(access_point.point.y());
+      secondary_coords.push_back(access_point.point.x());
+    }
+  }
+
+  const int trunk_axis = getMedian(secondary_coords);
+  const int root_coord = getMedian(primary_coords);
+  primary_coords.push_back(root_coord);
+  std::sort(primary_coords.begin(), primary_coords.end());
+  primary_coords.erase(
+      std::unique(primary_coords.begin(), primary_coords.end()),
+      primary_coords.end());
+
+  if (primary_coords.empty()) {
+    return nullptr;
+  }
+
+  const int root_index
+      = std::distance(primary_coords.begin(),
+                      std::find(primary_coords.begin(),
+                                primary_coords.end(),
+                                root_coord));
+  std::vector<std::shared_ptr<SteinerTreeNode>> trunk_nodes;
+  trunk_nodes.reserve(primary_coords.size());
+  std::unordered_map<int, std::shared_ptr<SteinerTreeNode>> anchor_nodes;
+  anchor_nodes.reserve(primary_coords.size());
+  for (const int coordinate : primary_coords) {
+    const PointT loc
+        = horizontal_trunk ? PointT(coordinate, trunk_axis)
+                           : PointT(trunk_axis, coordinate);
+    std::shared_ptr<SteinerTreeNode> node
+        = std::make_shared<SteinerTreeNode>(loc);
+    anchor_nodes.emplace(coordinate, node);
+    trunk_nodes.push_back(node);
+  }
+
+  const int trunk_count = static_cast<int>(trunk_nodes.size());
+  for (int index = root_index - 1; index >= 0; index--) {
+    trunk_nodes[index + 1]->addChild(trunk_nodes[index]);
+  }
+  for (int index = root_index + 1; index < trunk_count; index++) {
+    trunk_nodes[index - 1]->addChild(trunk_nodes[index]);
+  }
+
+  for (const AccessPoint& access_point : access_points) {
+    const int coordinate
+        = horizontal_trunk ? access_point.point.x() : access_point.point.y();
+    auto it = anchor_nodes.find(coordinate);
+    if (it == anchor_nodes.end()) {
+      continue;
+    }
+    std::shared_ptr<SteinerTreeNode>& anchor_node = it->second;
+    const bool on_trunk
+        = horizontal_trunk ? access_point.point.y() == trunk_axis
+                           : access_point.point.x() == trunk_axis;
+    if (on_trunk) {
+      mergeFixedLayers(access_point.layers, anchor_node);
+    } else {
+      anchor_node->addChild(
+          std::make_shared<SteinerTreeNode>(access_point.point,
+                                            access_point.layers));
+    }
+  }
+
+  return trunk_nodes[root_index];
 }
 
 }  // namespace
@@ -484,23 +621,22 @@ void CUGR::mazeWirelengthCollapse()
 
 void CUGR::hybridTopologySurgery()
 {
-  constexpr int kMaxSurgeryNets = 180;
-  constexpr int kViaGrowthLimit = 96;
-  constexpr uint64_t kMinWireImprovement = 8;
-  constexpr uint64_t kOverflowWeight = 2200000;
+  constexpr int kMaxSurgeryNets = 120;
+  constexpr int kViaGrowthLimit = 120;
+  constexpr uint64_t kMinWireImprovement = 12;
   const double original_wire_scale = grid_graph_->getWireCongestionScale();
   const double original_maze_scale = grid_graph_->getMazeCongestionScale();
 
-  // Radical policy: dual-route each critical net with two distinct engines
-  // (pattern-first vs maze-first) and keep only overflow-safe wirelength wins.
-  grid_graph_->setCongestionPenaltyScales(0.010, 0.018);
+  // Radical policy: replace FLUTE-first topology with median-spine templates
+  // and keep only wirelength wins that preserve or improve overflow.
+  grid_graph_->setCongestionPenaltyScales(0.008, 0.016);
 
   struct SurgeryCandidate
   {
     int net_index;
-    uint64_t score;
     int overflow;
     int hpwl;
+    double stretch;
   };
 
   std::vector<SurgeryCandidate> candidates;
@@ -512,10 +648,9 @@ void CUGR::hybridTopologySurgery()
     }
     const TreeStats stats = getTreeStats(routingTree, grid_graph_.get());
     const int overflow = grid_graph_->checkOverflow(routingTree);
-    const int hpwl = net->getBoundingBox().hp();
-    const uint64_t score
-        = stats.wire_length + (uint64_t) overflow * kOverflowWeight;
-    candidates.push_back({net->getIndex(), score, overflow, hpwl});
+    const int hpwl = std::max(1, net->getBoundingBox().hp());
+    const double stretch = static_cast<double>(stats.wire_length) / hpwl;
+    candidates.push_back({net->getIndex(), overflow, hpwl, stretch});
   }
 
   if (candidates.empty()) {
@@ -528,11 +663,11 @@ void CUGR::hybridTopologySurgery()
       candidates.begin(),
       candidates.end(),
       [](const SurgeryCandidate& lhs, const SurgeryCandidate& rhs) {
-        if (lhs.score != rhs.score) {
-          return lhs.score > rhs.score;
-        }
         if (lhs.overflow != rhs.overflow) {
           return lhs.overflow > rhs.overflow;
+        }
+        if (lhs.stretch != rhs.stretch) {
+          return lhs.stretch > rhs.stretch;
         }
         if (lhs.hpwl != rhs.hpwl) {
           return lhs.hpwl > rhs.hpwl;
@@ -546,7 +681,7 @@ void CUGR::hybridTopologySurgery()
 
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
-  SparseGrid sparseGrid(6, 6, 0, 0);
+  SparseGrid sparseGrid(5, 5, 0, 0);
 
   struct RerouteResult
   {
@@ -558,7 +693,7 @@ void CUGR::hybridTopologySurgery()
 
   int attempted = 0;
   int accepted = 0;
-  logger_->report("stage 6: hybrid topology surgery on {} critical nets",
+  logger_->report("stage 6: median-spine topology surgery on {} critical nets",
                   candidates.size());
 
   for (const auto& candidate : candidates) {
@@ -592,15 +727,31 @@ void CUGR::hybridTopologySurgery()
     grid_graph_->commitTree(oldTree, /*rip_up*/ true);
     grid_graph_->updateWireCostView(wireCostView, oldTree);
 
-    // Candidate A: direct pattern rebuild.
-    PatternRoute patternRoute(
-        net, grid_graph_.get(), stt_builder_, constants_, logger_);
-    patternRoute.constructSteinerTree();
-    patternRoute.constructRoutingDAG();
-    patternRoute.run();
-    RerouteResult patternResult = evaluateTree(net->getRoutingTree());
+    const AccessPointSet selectedAccessPoints = grid_graph_->selectAccessPoints(net);
+    const std::vector<AccessPoint> accessPoints
+        = materializeAccessPoints(selectedAccessPoints);
 
-    // Candidate B: maze-driven topology rebuild, then pattern legalization.
+    RerouteResult spineHorizontalResult;
+    RerouteResult spineVerticalResult;
+    if (accessPoints.size() >= 2) {
+      auto runSpineCandidate = [&](const bool horizontal, RerouteResult& result) {
+        std::shared_ptr<SteinerTreeNode> spineTree
+            = buildMedianTrunkSteinerTree(accessPoints, horizontal);
+        if (!spineTree) {
+          return;
+        }
+        PatternRoute spinePattern(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        spinePattern.setSteinerTree(spineTree);
+        spinePattern.constructRoutingDAG();
+        spinePattern.run();
+        result = evaluateTree(net->getRoutingTree());
+      };
+      runSpineCandidate(/*horizontal=*/true, spineHorizontalResult);
+      runSpineCandidate(/*horizontal=*/false, spineVerticalResult);
+    }
+
+    // Candidate C: maze-driven topology rebuild, then pattern legalization.
     RerouteResult mazeResult;
     MazeRoute mazeRoute(net, grid_graph_.get(), constants_, logger_);
     mazeRoute.constructSparsifiedGraph(wireCostView, sparseGrid);
@@ -624,10 +775,14 @@ void CUGR::hybridTopologySurgery()
       const bool keepOverflow = result.overflow <= oldOverflow;
       const bool boundedVia
           = result.stats.via_count <= oldStats.via_count + kViaGrowthLimit;
-      return improveWire && keepOverflow && boundedVia;
+      const bool overflowRescue
+          = result.overflow + 3 < oldOverflow
+            && result.stats.wire_length <= oldStats.wire_length;
+      return boundedVia && ((improveWire && keepOverflow) || overflowRescue);
     };
 
-    const bool patternAcceptable = isAcceptable(patternResult);
+    const bool spineHorizontalAcceptable = isAcceptable(spineHorizontalResult);
+    const bool spineVerticalAcceptable = isAcceptable(spineVerticalResult);
     const bool mazeAcceptable = isAcceptable(mazeResult);
 
     auto isBetter = [](const RerouteResult& lhs, const RerouteResult& rhs) {
@@ -641,8 +796,12 @@ void CUGR::hybridTopologySurgery()
     };
 
     const RerouteResult* best = nullptr;
-    if (patternAcceptable) {
-      best = &patternResult;
+    if (spineHorizontalAcceptable) {
+      best = &spineHorizontalResult;
+    }
+    if (spineVerticalAcceptable
+        && (!best || isBetter(spineVerticalResult, *best))) {
+      best = &spineVerticalResult;
     }
     if (mazeAcceptable && (!best || isBetter(mazeResult, *best))) {
       best = &mazeResult;
@@ -662,7 +821,7 @@ void CUGR::hybridTopologySurgery()
     sparseGrid.step();
   }
 
-  logger_->report("hybrid topology surgery accepted {} / {} nets",
+  logger_->report("median-spine topology surgery accepted {} / {} nets",
                   accepted,
                   attempted);
   grid_graph_->setCongestionPenaltyScales(original_wire_scale,
