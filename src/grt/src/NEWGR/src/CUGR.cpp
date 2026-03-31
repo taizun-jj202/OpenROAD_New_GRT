@@ -10,6 +10,7 @@
 #include <memory>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -197,6 +198,183 @@ std::shared_ptr<SteinerTreeNode> buildMedianTrunkSteinerTree(
   }
 
   return trunk_nodes[root_index];
+}
+
+uint64_t pointKey(const PointT& point)
+{
+  return (static_cast<uint64_t>(static_cast<uint32_t>(point.x())) << 32)
+         | static_cast<uint32_t>(point.y());
+}
+
+std::shared_ptr<SteinerTreeNode> buildHubSpineSteinerTree(
+    const std::vector<AccessPoint>& access_points,
+    const PointT& hub_point,
+    const bool horizontal_trunk)
+{
+  if (access_points.empty()) {
+    return nullptr;
+  }
+  if (access_points.size() == 1) {
+    return std::make_shared<SteinerTreeNode>(access_points.front().point,
+                                             access_points.front().layers);
+  }
+
+  std::vector<int> primary_coords;
+  primary_coords.reserve(access_points.size() + 1);
+  for (const AccessPoint& access_point : access_points) {
+    primary_coords.push_back(horizontal_trunk ? access_point.point.x()
+                                              : access_point.point.y());
+  }
+  const int root_coord = horizontal_trunk ? hub_point.x() : hub_point.y();
+  const int trunk_axis = horizontal_trunk ? hub_point.y() : hub_point.x();
+  primary_coords.push_back(root_coord);
+  std::sort(primary_coords.begin(), primary_coords.end());
+  primary_coords.erase(
+      std::unique(primary_coords.begin(), primary_coords.end()),
+      primary_coords.end());
+
+  if (primary_coords.empty()) {
+    return nullptr;
+  }
+
+  const int root_index
+      = std::distance(primary_coords.begin(),
+                      std::find(primary_coords.begin(),
+                                primary_coords.end(),
+                                root_coord));
+  std::vector<std::shared_ptr<SteinerTreeNode>> trunk_nodes;
+  trunk_nodes.reserve(primary_coords.size());
+  std::unordered_map<int, std::shared_ptr<SteinerTreeNode>> anchor_nodes;
+  anchor_nodes.reserve(primary_coords.size());
+  for (const int coordinate : primary_coords) {
+    const PointT loc
+        = horizontal_trunk ? PointT(coordinate, trunk_axis)
+                           : PointT(trunk_axis, coordinate);
+    std::shared_ptr<SteinerTreeNode> node
+        = std::make_shared<SteinerTreeNode>(loc);
+    anchor_nodes.emplace(coordinate, node);
+    trunk_nodes.push_back(node);
+  }
+
+  const int trunk_count = static_cast<int>(trunk_nodes.size());
+  for (int index = root_index - 1; index >= 0; index--) {
+    trunk_nodes[index + 1]->addChild(trunk_nodes[index]);
+  }
+  for (int index = root_index + 1; index < trunk_count; index++) {
+    trunk_nodes[index - 1]->addChild(trunk_nodes[index]);
+  }
+
+  std::unordered_set<uint64_t> emitted_stems;
+  emitted_stems.reserve(access_points.size());
+  for (const AccessPoint& access_point : access_points) {
+    const int coordinate
+        = horizontal_trunk ? access_point.point.x() : access_point.point.y();
+    auto it = anchor_nodes.find(coordinate);
+    if (it == anchor_nodes.end()) {
+      continue;
+    }
+    std::shared_ptr<SteinerTreeNode>& anchor_node = it->second;
+    const bool on_trunk
+        = horizontal_trunk ? access_point.point.y() == trunk_axis
+                           : access_point.point.x() == trunk_axis;
+    if (on_trunk) {
+      mergeFixedLayers(access_point.layers, anchor_node);
+      continue;
+    }
+    const uint64_t key = pointKey(access_point.point);
+    if (!emitted_stems.insert(key).second) {
+      continue;
+    }
+    anchor_node->addChild(
+        std::make_shared<SteinerTreeNode>(access_point.point,
+                                          access_point.layers));
+  }
+
+  return trunk_nodes[root_index];
+}
+
+std::vector<PointT> buildHubCandidates(const std::vector<AccessPoint>& access_points,
+                                       const BoxT& bbox,
+                                       const int max_candidates)
+{
+  std::vector<PointT> candidates;
+  if (access_points.empty() || max_candidates <= 0) {
+    return candidates;
+  }
+
+  std::vector<int> xs;
+  std::vector<int> ys;
+  xs.reserve(access_points.size());
+  ys.reserve(access_points.size());
+  for (const AccessPoint& access_point : access_points) {
+    xs.push_back(access_point.point.x());
+    ys.push_back(access_point.point.y());
+  }
+
+  std::vector<int> xs_sorted = xs;
+  std::vector<int> ys_sorted = ys;
+  std::sort(xs_sorted.begin(), xs_sorted.end());
+  std::sort(ys_sorted.begin(), ys_sorted.end());
+  const int median_x = getMedian(xs);
+  const int median_y = getMedian(ys);
+  const int q1_x = xs_sorted[xs_sorted.size() / 4];
+  const int q3_x = xs_sorted[(3 * xs_sorted.size()) / 4];
+  const int q1_y = ys_sorted[ys_sorted.size() / 4];
+  const int q3_y = ys_sorted[(3 * ys_sorted.size()) / 4];
+
+  std::unordered_set<uint64_t> seen;
+  seen.reserve(max_candidates * 2);
+  auto pushCandidate = [&](PointT point) {
+    point[0] = std::clamp(point.x(), bbox.lx(), bbox.hx());
+    point[1] = std::clamp(point.y(), bbox.ly(), bbox.hy());
+    const uint64_t key = pointKey(point);
+    if (seen.insert(key).second) {
+      candidates.push_back(point);
+    }
+  };
+
+  pushCandidate({median_x, median_y});
+  pushCandidate({bbox.cx(), bbox.cy()});
+  pushCandidate({q1_x, median_y});
+  pushCandidate({q3_x, median_y});
+  pushCandidate({median_x, q1_y});
+  pushCandidate({median_x, q3_y});
+
+  struct FarPin
+  {
+    int distance;
+    PointT point;
+  };
+  std::vector<FarPin> far_pins;
+  far_pins.reserve(access_points.size());
+  for (const AccessPoint& access_point : access_points) {
+    const int distance = std::abs(access_point.point.x() - median_x)
+                         + std::abs(access_point.point.y() - median_y);
+    far_pins.push_back({distance, access_point.point});
+  }
+  std::sort(far_pins.begin(),
+            far_pins.end(),
+            [](const FarPin& lhs, const FarPin& rhs) {
+              if (lhs.distance != rhs.distance) {
+                return lhs.distance > rhs.distance;
+              }
+              if (lhs.point.x() != rhs.point.x()) {
+                return lhs.point.x() < rhs.point.x();
+              }
+              return lhs.point.y() < rhs.point.y();
+            });
+
+  const int far_limit = std::min(6, static_cast<int>(far_pins.size()));
+  for (int idx = 0; idx < far_limit; idx++) {
+    pushCandidate(far_pins[idx].point);
+    pushCandidate({far_pins[idx].point.x(), median_y});
+    pushCandidate({median_x, far_pins[idx].point.y()});
+  }
+
+  if (static_cast<int>(candidates.size()) > max_candidates) {
+    candidates.resize(max_candidates);
+  }
+  return candidates;
 }
 
 }  // namespace
@@ -828,6 +1006,187 @@ void CUGR::hybridTopologySurgery()
                                           original_maze_scale);
 }
 
+void CUGR::hubTopologySurgery()
+{
+  constexpr int kMaxSurgeryNets = 90;
+  constexpr int kMaxHubCandidates = 14;
+  constexpr int kViaGrowthLimit = 160;
+  constexpr int kOverflowSlack = 1;
+  constexpr uint64_t kMinWireImprovement = 8;
+  const double original_wire_scale = grid_graph_->getWireCongestionScale();
+  const double original_maze_scale = grid_graph_->getMazeCongestionScale();
+
+  // Radical move: sweep multiple hub locations and rebuild large nets using
+  // hub-centered shared spines; keep only wirelength wins under tight
+  // overflow/via constraints.
+  grid_graph_->setCongestionPenaltyScales(0.010, 0.018);
+
+  struct Candidate
+  {
+    int net_index;
+    int overflow;
+    int hpwl;
+    int pins;
+    double stretch;
+  };
+
+  std::vector<Candidate> candidates;
+  candidates.reserve(gr_nets_.size());
+  for (const auto& net : gr_nets_) {
+    const auto routing_tree = net->getRoutingTree();
+    if (!routing_tree || net->getNumPins() < 4) {
+      continue;
+    }
+    const int hpwl = std::max(1, net->getBoundingBox().hp());
+    if (hpwl < 40) {
+      continue;
+    }
+    const TreeStats stats = getTreeStats(routing_tree, grid_graph_.get());
+    const int overflow = grid_graph_->checkOverflow(routing_tree);
+    const double stretch = static_cast<double>(stats.wire_length) / hpwl;
+    candidates.push_back(
+        {net->getIndex(), overflow, hpwl, net->getNumPins(), stretch});
+  }
+
+  if (candidates.empty()) {
+    grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                            original_maze_scale);
+    return;
+  }
+
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const Candidate& lhs, const Candidate& rhs) {
+              if (lhs.overflow != rhs.overflow) {
+                return lhs.overflow > rhs.overflow;
+              }
+              if (lhs.stretch != rhs.stretch) {
+                return lhs.stretch > rhs.stretch;
+              }
+              if (lhs.pins != rhs.pins) {
+                return lhs.pins > rhs.pins;
+              }
+              if (lhs.hpwl != rhs.hpwl) {
+                return lhs.hpwl > rhs.hpwl;
+              }
+              return lhs.net_index < rhs.net_index;
+            });
+
+  if (static_cast<int>(candidates.size()) > kMaxSurgeryNets) {
+    candidates.resize(kMaxSurgeryNets);
+  }
+
+  struct RerouteResult
+  {
+    std::shared_ptr<GRTreeNode> tree;
+    TreeStats stats;
+    int overflow{std::numeric_limits<int>::max()};
+    bool valid{false};
+  };
+
+  int attempted = 0;
+  int accepted = 0;
+  logger_->report("stage 7: hub-sweep topology surgery on {} nets",
+                  candidates.size());
+
+  for (const auto& candidate : candidates) {
+    GRNet* net = gr_nets_[candidate.net_index].get();
+    const std::shared_ptr<GRTreeNode> old_tree = net->getRoutingTree();
+    if (!old_tree) {
+      continue;
+    }
+
+    attempted++;
+    const TreeStats old_stats = getTreeStats(old_tree, grid_graph_.get());
+    const int old_overflow = grid_graph_->checkOverflow(old_tree);
+    grid_graph_->commitTree(old_tree, /*rip_up*/ true);
+
+    const AccessPointSet selected_access_points = grid_graph_->selectAccessPoints(net);
+    const std::vector<AccessPoint> access_points
+        = materializeAccessPoints(selected_access_points);
+    const std::vector<PointT> hub_candidates
+        = buildHubCandidates(access_points,
+                             net->getBoundingBox(),
+                             kMaxHubCandidates);
+
+    auto evaluate = [&](const std::shared_ptr<GRTreeNode>& tree) {
+      RerouteResult result;
+      if (!tree) {
+        return result;
+      }
+      result.tree = tree;
+      result.stats = getTreeStats(tree, grid_graph_.get());
+      grid_graph_->commitTree(tree);
+      result.overflow = grid_graph_->checkOverflow(tree);
+      result.valid = true;
+      grid_graph_->commitTree(tree, /*rip_up*/ true);
+      return result;
+    };
+
+    auto isAcceptable = [&](const RerouteResult& result) {
+      if (!result.valid) {
+        return false;
+      }
+      const bool improve_wire
+          = result.stats.wire_length + kMinWireImprovement <= old_stats.wire_length;
+      const bool preserve_overflow = result.overflow <= old_overflow + kOverflowSlack;
+      const bool bounded_via
+          = result.stats.via_count <= old_stats.via_count + kViaGrowthLimit;
+      const bool overflow_rescue
+          = result.overflow + 2 < old_overflow
+            && result.stats.wire_length <= old_stats.wire_length;
+      return bounded_via
+             && ((improve_wire && preserve_overflow) || overflow_rescue);
+    };
+
+    auto isBetter = [](const RerouteResult& lhs, const RerouteResult& rhs) {
+      if (lhs.stats.wire_length != rhs.stats.wire_length) {
+        return lhs.stats.wire_length < rhs.stats.wire_length;
+      }
+      if (lhs.overflow != rhs.overflow) {
+        return lhs.overflow < rhs.overflow;
+      }
+      return lhs.stats.via_count < rhs.stats.via_count;
+    };
+
+    RerouteResult best_result;
+    for (const PointT& hub : hub_candidates) {
+      for (const bool horizontal : {true, false}) {
+        std::shared_ptr<SteinerTreeNode> spine_tree
+            = buildHubSpineSteinerTree(access_points, hub, horizontal);
+        if (!spine_tree) {
+          continue;
+        }
+        PatternRoute pattern_route(
+            net, grid_graph_.get(), stt_builder_, constants_, logger_);
+        pattern_route.setSteinerTree(spine_tree);
+        pattern_route.constructRoutingDAG();
+        pattern_route.run();
+        RerouteResult result = evaluate(net->getRoutingTree());
+        if (isAcceptable(result)
+            && (!best_result.valid || isBetter(result, best_result))) {
+          best_result = result;
+        }
+      }
+    }
+
+    if (best_result.valid) {
+      net->setRoutingTree(best_result.tree);
+      grid_graph_->commitTree(best_result.tree);
+      accepted++;
+    } else {
+      net->setRoutingTree(old_tree);
+      grid_graph_->commitTree(old_tree);
+    }
+  }
+
+  logger_->report("hub-sweep topology surgery accepted {} / {} nets",
+                  accepted,
+                  attempted);
+  grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                          original_maze_scale);
+}
+
 void CUGR::route()
 {
   constexpr int kMaxDetourNets = 2200;
@@ -924,6 +1283,7 @@ void CUGR::route()
   mazeRoute(netIndices);
 
   hybridTopologySurgery();
+  hubTopologySurgery();
   mazeWirelengthCollapse();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
   wirelengthRefine();

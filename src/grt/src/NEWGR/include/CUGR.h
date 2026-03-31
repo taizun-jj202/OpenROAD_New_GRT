@@ -87,6 +87,7 @@ class CUGR
   void wirelengthRefine();
   void mazeWirelengthCollapse();
   void hybridTopologySurgery();
+  void hubTopologySurgery();
   void sortNetIndices(std::vector<int>& netIndices) const;
   void getGuides(const GRNet* net,
                  std::vector<std::pair<int, BoxT>>& guides);
