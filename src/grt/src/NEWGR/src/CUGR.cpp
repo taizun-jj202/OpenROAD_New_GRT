@@ -475,6 +475,197 @@ void CUGR::mazeWirelengthCollapse()
                                           original_maze_scale);
 }
 
+void CUGR::hybridTopologySurgery()
+{
+  constexpr int kMaxSurgeryNets = 260;
+  constexpr int kViaGrowthLimit = 180;
+  constexpr uint64_t kMinWireImprovement = 1;
+  constexpr uint64_t kOverflowWeight = 1800000;
+  constexpr int kOverflowBonus = 3;
+  const double original_wire_scale = grid_graph_->getWireCongestionScale();
+  const double original_maze_scale = grid_graph_->getMazeCongestionScale();
+
+  // Radical policy: dual-route each critical net with two distinct engines
+  // (pattern-first vs maze-first) and keep only overflow-safe wirelength wins.
+  grid_graph_->setCongestionPenaltyScales(0.010, 0.018);
+
+  struct SurgeryCandidate
+  {
+    int net_index;
+    uint64_t score;
+    int overflow;
+    int hpwl;
+  };
+
+  std::vector<SurgeryCandidate> candidates;
+  candidates.reserve(gr_nets_.size());
+  for (const auto& net : gr_nets_) {
+    const auto routingTree = net->getRoutingTree();
+    if (net->getNumPins() < 3 || !routingTree) {
+      continue;
+    }
+    const TreeStats stats = getTreeStats(routingTree, grid_graph_.get());
+    const int overflow = grid_graph_->checkOverflow(routingTree);
+    const int hpwl = net->getBoundingBox().hp();
+    const uint64_t score
+        = stats.wire_length + (uint64_t) overflow * kOverflowWeight;
+    candidates.push_back({net->getIndex(), score, overflow, hpwl});
+  }
+
+  if (candidates.empty()) {
+    grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                            original_maze_scale);
+    return;
+  }
+
+  std::sort(
+      candidates.begin(),
+      candidates.end(),
+      [](const SurgeryCandidate& lhs, const SurgeryCandidate& rhs) {
+        if (lhs.score != rhs.score) {
+          return lhs.score > rhs.score;
+        }
+        if (lhs.overflow != rhs.overflow) {
+          return lhs.overflow > rhs.overflow;
+        }
+        if (lhs.hpwl != rhs.hpwl) {
+          return lhs.hpwl > rhs.hpwl;
+        }
+        return lhs.net_index < rhs.net_index;
+      });
+
+  if ((int) candidates.size() > kMaxSurgeryNets) {
+    candidates.resize(kMaxSurgeryNets);
+  }
+
+  GridGraphView<CostT> wireCostView;
+  grid_graph_->extractWireCostView(wireCostView);
+  SparseGrid sparseGrid(6, 6, 0, 0);
+
+  struct RerouteResult
+  {
+    std::shared_ptr<GRTreeNode> tree;
+    TreeStats stats;
+    int overflow{std::numeric_limits<int>::max()};
+    bool valid{false};
+  };
+
+  int attempted = 0;
+  int accepted = 0;
+  logger_->report("stage 6: hybrid topology surgery on {} critical nets",
+                  candidates.size());
+
+  for (const auto& candidate : candidates) {
+    GRNet* net = gr_nets_[candidate.net_index].get();
+    const std::shared_ptr<GRTreeNode> oldTree = net->getRoutingTree();
+    if (!oldTree) {
+      sparseGrid.step();
+      continue;
+    }
+
+    attempted++;
+    const TreeStats oldStats = getTreeStats(oldTree, grid_graph_.get());
+    const int oldOverflow = grid_graph_->checkOverflow(oldTree);
+
+    auto evaluateTree = [&](const std::shared_ptr<GRTreeNode>& tree) {
+      RerouteResult result;
+      if (!tree) {
+        return result;
+      }
+      result.tree = tree;
+      result.stats = getTreeStats(tree, grid_graph_.get());
+      grid_graph_->commitTree(tree);
+      grid_graph_->updateWireCostView(wireCostView, tree);
+      result.overflow = grid_graph_->checkOverflow(tree);
+      result.valid = true;
+      grid_graph_->commitTree(tree, /*rip_up*/ true);
+      grid_graph_->updateWireCostView(wireCostView, tree);
+      return result;
+    };
+
+    grid_graph_->commitTree(oldTree, /*rip_up*/ true);
+    grid_graph_->updateWireCostView(wireCostView, oldTree);
+
+    // Candidate A: direct pattern rebuild.
+    PatternRoute patternRoute(
+        net, grid_graph_.get(), stt_builder_, constants_, logger_);
+    patternRoute.constructSteinerTree();
+    patternRoute.constructRoutingDAG();
+    patternRoute.run();
+    RerouteResult patternResult = evaluateTree(net->getRoutingTree());
+
+    // Candidate B: maze-driven topology rebuild, then pattern legalization.
+    RerouteResult mazeResult;
+    MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
+    mazeRoute.constructSparsifiedGraph(wireCostView, sparseGrid);
+    mazeRoute.run();
+    std::shared_ptr<SteinerTreeNode> steinerTree = mazeRoute.getSteinerTree();
+    if (steinerTree) {
+      PatternRoute patternFromMaze(
+          net, grid_graph_.get(), stt_builder_, constants_, logger_);
+      patternFromMaze.setSteinerTree(steinerTree);
+      patternFromMaze.constructRoutingDAG();
+      patternFromMaze.run();
+      mazeResult = evaluateTree(net->getRoutingTree());
+    }
+
+    auto isAcceptable = [&](const RerouteResult& result) {
+      if (!result.valid) {
+        return false;
+      }
+      const bool improveWire
+          = result.stats.wire_length + kMinWireImprovement < oldStats.wire_length;
+      const bool keepOverflow = result.overflow <= oldOverflow;
+      const bool overflowRelief
+          = (result.overflow + kOverflowBonus < oldOverflow
+             && result.stats.wire_length <= oldStats.wire_length);
+      const bool boundedVia
+          = result.stats.via_count <= oldStats.via_count + kViaGrowthLimit;
+      return boundedVia && ((improveWire && keepOverflow) || overflowRelief);
+    };
+
+    const bool patternAcceptable = isAcceptable(patternResult);
+    const bool mazeAcceptable = isAcceptable(mazeResult);
+
+    auto isBetter = [](const RerouteResult& lhs, const RerouteResult& rhs) {
+      if (lhs.stats.wire_length != rhs.stats.wire_length) {
+        return lhs.stats.wire_length < rhs.stats.wire_length;
+      }
+      if (lhs.overflow != rhs.overflow) {
+        return lhs.overflow < rhs.overflow;
+      }
+      return lhs.stats.via_count < rhs.stats.via_count;
+    };
+
+    const RerouteResult* best = nullptr;
+    if (patternAcceptable) {
+      best = &patternResult;
+    }
+    if (mazeAcceptable && (!best || isBetter(mazeResult, *best))) {
+      best = &mazeResult;
+    }
+
+    if (best) {
+      net->setRoutingTree(best->tree);
+      grid_graph_->commitTree(best->tree);
+      grid_graph_->updateWireCostView(wireCostView, best->tree);
+      accepted++;
+    } else {
+      net->setRoutingTree(oldTree);
+      grid_graph_->commitTree(oldTree);
+      grid_graph_->updateWireCostView(wireCostView, oldTree);
+    }
+
+    sparseGrid.step();
+  }
+
+  logger_->report("hybrid topology surgery accepted {} / {} nets",
+                  accepted,
+                  attempted);
+  grid_graph_->setCongestionPenaltyScales(original_wire_scale,
+                                          original_maze_scale);
+}
+
 void CUGR::route()
 {
   constexpr int kMaxDetourNets = 2200;
@@ -571,6 +762,7 @@ void CUGR::route()
   mazeRoute(netIndices);
 
   mazeWirelengthCollapse();
+  hybridTopologySurgery();
   grid_graph_->setCongestionPenaltyScales(0.05, 0.10);
   wirelengthRefine();
 
