@@ -31,7 +31,7 @@ struct Constants
 {
   // Wirelength-first tuning: reduce congestion over-penalization and let
   // the solver preserve shorter trees unless overflow is severe.
-  double weight_wire_length = 1.0;
+  double weight_wire_length = 1.2;
   double weight_via_number = 0.8;
   double weight_short_area = 90.0;
 
@@ -43,7 +43,7 @@ struct Constants
   double max_detour_ratio = 0.03;
   int target_detour_count = 4;
 
-  double via_multiplier = 2.0;
+  double via_multiplier = 1.2;
 
   double maze_logistic_slope = 0.2;
 

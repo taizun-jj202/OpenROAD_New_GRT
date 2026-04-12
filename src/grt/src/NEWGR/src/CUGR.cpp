@@ -97,12 +97,9 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
   std::vector<int> detourNets;
   detourNets.reserve(netIndices.size());
   const int net_count = static_cast<int>(netIndices.size());
-  const int start_idx = net_count <= 8 ? 0 : (3 * net_count) / 4;
+  const int start_idx = net_count <= 20 ? net_count : (95 * net_count) / 100;
   for (int i = start_idx; i < net_count; i++) {
     detourNets.push_back(netIndices[i]);
-  }
-  if (detourNets.empty()) {
-    detourNets = netIndices;
   }
   logger_->report(
       "detour reroute applied to {} / {} overflowed nets",
