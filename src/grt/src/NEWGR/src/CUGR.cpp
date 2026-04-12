@@ -91,7 +91,25 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
   GridGraphView<bool> congestionView;
   grid_graph_->extractCongestionView(congestionView);
   sortNetIndices(netIndices);
-  for (const int netIndex : netIndices) {
+
+  // SPRoute-style filtering: reserve detour exploration for larger overflowed
+  // nets so short/local nets preserve compact trees.
+  std::vector<int> detourNets;
+  detourNets.reserve(netIndices.size());
+  const int net_count = static_cast<int>(netIndices.size());
+  const int start_idx = net_count <= 4 ? 0 : net_count / 2;
+  for (int i = start_idx; i < net_count; i++) {
+    detourNets.push_back(netIndices[i]);
+  }
+  if (detourNets.empty()) {
+    detourNets = netIndices;
+  }
+  logger_->report(
+      "detour reroute applied to {} / {} overflowed nets",
+      detourNets.size(),
+      netIndices.size());
+
+  for (const int netIndex : detourNets) {
     GRNet* net = gr_nets_[netIndex].get();
     grid_graph_->commitTree(net->getRoutingTree(), /*ripup*/ true);
     PatternRoute patternRoute(
