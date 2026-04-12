@@ -97,7 +97,7 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
   std::vector<int> detourNets;
   detourNets.reserve(netIndices.size());
   const int net_count = static_cast<int>(netIndices.size());
-  const int start_idx = net_count <= 300 ? net_count : (998 * net_count) / 1000;
+  const int start_idx = net_count <= 300 ? net_count : (997 * net_count) / 1000;
   for (int i = start_idx; i < net_count; i++) {
     detourNets.push_back(netIndices[i]);
   }
@@ -135,7 +135,7 @@ void CUGR::mazeRoute(std::vector<int>& netIndices)
   GridGraphView<CostT> wireCostView;
   grid_graph_->extractWireCostView(wireCostView);
   sortNetIndices(netIndices);
-  SparseGrid grid(10, 10, 0, 0);
+  SparseGrid grid(8, 8, 0, 0);
   for (const int netIndex : netIndices) {
     GRNet* net = gr_nets_[netIndex].get();
     MazeRoute mazeRoute(net, grid_graph_.get(), logger_);
