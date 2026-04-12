@@ -33,19 +33,19 @@ struct Constants
   // the solver preserve shorter trees unless overflow is severe.
   double weight_wire_length = 1.68;
   double weight_via_number = 0.58;
-  double weight_short_area = 68.0;
+  double weight_short_area = 66.0;
 
   int min_routing_layer = 1;
 
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.009;
+  double max_detour_ratio = 0.0085;
   int target_detour_count = 1;
 
   double via_multiplier = 1.0;
 
-  double maze_logistic_slope = 0.11;
+  double maze_logistic_slope = 0.10;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;
