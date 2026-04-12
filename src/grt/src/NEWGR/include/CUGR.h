@@ -31,9 +31,9 @@ struct Constants
 {
   // Wirelength-first tuning: reduce congestion over-penalization and let
   // the solver preserve shorter trees unless overflow is severe.
-  double weight_wire_length = 1.63;
-  double weight_via_number = 0.60;
-  double weight_short_area = 70.0;
+  double weight_wire_length = 1.68;
+  double weight_via_number = 0.58;
+  double weight_short_area = 68.0;
 
   int min_routing_layer = 1;
 
