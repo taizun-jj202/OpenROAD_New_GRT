@@ -32,20 +32,20 @@ struct Constants
   // Wirelength-first tuning: reduce congestion over-penalization and let
   // the solver preserve shorter trees unless overflow is severe.
   double weight_wire_length = 1.0;
-  double weight_via_number = 1.5;
-  double weight_short_area = 160.0;
+  double weight_via_number = 0.8;
+  double weight_short_area = 90.0;
 
   int min_routing_layer = 1;
 
   double cost_logistic_slope = 1.0;
 
   // allowed stem length increase to trunk length ratio
-  double max_detour_ratio = 0.08;
-  int target_detour_count = 8;
+  double max_detour_ratio = 0.03;
+  int target_detour_count = 4;
 
   double via_multiplier = 2.0;
 
-  double maze_logistic_slope = 0.35;
+  double maze_logistic_slope = 0.2;
 
   double pin_patch_threshold = 20.0;
   int pin_patch_padding = 1;

@@ -97,7 +97,7 @@ void CUGR::patternRouteWithDetours(std::vector<int>& netIndices)
   std::vector<int> detourNets;
   detourNets.reserve(netIndices.size());
   const int net_count = static_cast<int>(netIndices.size());
-  const int start_idx = net_count <= 4 ? 0 : net_count / 2;
+  const int start_idx = net_count <= 8 ? 0 : (3 * net_count) / 4;
   for (int i = start_idx; i < net_count; i++) {
     detourNets.push_back(netIndices[i]);
   }
