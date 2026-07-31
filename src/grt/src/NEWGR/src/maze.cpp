@@ -1155,21 +1155,31 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
     const int pos1 = (graph2d_.*usage_red)(p1_x, p1_y)
                      + L * (graph2d_.*last_usage)(p1_x, p1_y);
 
-    double cost1 = getCost(pos1, is_horizontal, cost_params);
+    const double congestion_weight
+        = iter < 10 ? 0.18 : (iter < 25 ? 0.35 : 0.60);
+    constexpr double wire_step_cost = 3.0;
+    const double raw_cost1 = getCost(pos1, is_horizontal, cost_params);
+    const double cost1
+        = wire_step_cost
+          + congestion_weight * std::max(0.0, raw_cost1 - 1.0);
 
     double tmp = d1[cur_y][cur_x] + cost1;
 
     if (add_via && d1[cur_y][cur_x] != 0) {
-      tmp += via;
+      const double bend_cost = std::max(8, via);
+      tmp += bend_cost;
 
       if (maybe_hyper) {
         const int pos2 = (graph2d_.*usage_red)(p2_x, p2_y)
                          + L * (graph2d_.*last_usage)(p2_x, p2_y);
 
-        double cost2 = getCost(pos2, is_horizontal, cost_params);
+        const double raw_cost2 = getCost(pos2, is_horizontal, cost_params);
+        const double cost2
+            = wire_step_cost
+              + congestion_weight * std::max(0.0, raw_cost2 - 1.0);
 
-        const int tmp_cost = d1[cur_y - d_y][cur_x - d_x] + cost2;
-        if (tmp_cost < d1[cur_y][cur_x] + via) {
+        const double tmp_cost = d1[cur_y - d_y][cur_x - d_x] + cost2;
+        if (tmp_cost < d1[cur_y][cur_x] + bend_cost) {
           hyper[cur_y][cur_x] = true;
         }
       }
@@ -1233,8 +1243,8 @@ void FastRouteCore::mazeRouteMSMD(const int iter,
 
       enlarge_ = std::min(origENG, (iter / 6 + 3) * treeedge->route.routelen);
       const int manhattan_len = treeedge->len;
-      const int min_local_expand = 3;
-      const double expand_ratio = 0.35;
+      const int min_local_expand = 2;
+      const double expand_ratio = 0.12;
       const int dynamic_cap
           = min_local_expand
             + static_cast<int>(std::round(manhattan_len * expand_ratio));
