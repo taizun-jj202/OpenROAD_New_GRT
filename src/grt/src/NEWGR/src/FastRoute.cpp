@@ -1646,7 +1646,7 @@ NetRouteMap FastRouteCore::run()
   }
 
   costheight_ = 3;
-  via_cost_ = 1;
+  via_cost_ = 8;
 
   if (past_cong == 0) {
     mazeRouteMSMDOrder3D(enlarge_, 0, long_edge_len);
